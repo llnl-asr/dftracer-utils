@@ -55,10 +55,12 @@ constexpr StructLimit PLUGIN_STRUCT_LIMITS[] = {
      static_cast<std::uint32_t>(offsetof(dftu_udf_desc, free_bound))},
     {"dftu_udaf_desc",
      static_cast<std::uint32_t>(offsetof(dftu_udaf_desc, free_bound))},
+    {"dftu_channel_desc",
+     static_cast<std::uint32_t>(sizeof(dftu_channel_desc))},  // no tail
 };
 
 static_assert(sizeof(PLUGIN_STRUCT_LIMITS) / sizeof(PLUGIN_STRUCT_LIMITS[0]) ==
-              12);
+              13);
 
 }  // namespace
 

@@ -30,6 +30,7 @@
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/host/fold_adapter/state.h>
 #include <dftracer/utils/plugins/host/frame_check.h>
+#include <dftracer/utils/plugins/host/port_hub.h>
 #include <dftracer/utils/plugins/task_abi.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -1109,23 +1110,6 @@ std::int32_t host_query_matches(void* h, const dftu_duql* q,
         *reinterpret_cast<const Query*>(q), df, row);
 }
 
-std::uint64_t host_port_key(void*, const char* cap_id) {
-    return cap_id ? dftracer::utils::dstd::hash::fnv1a_hash(cap_id) : 0;
-}
-
-void host_port_publish(void* h, std::uint64_t key, const void* data,
-                       std::uint32_t len) {
-    static_cast<PluginFold*>(h)->port_publish(key, data, len);
-}
-
-const void* host_port_consume(void* h, std::uint64_t key,
-                              std::uint32_t* out_size) {
-    return static_cast<PluginFold*>(h)->port_consume(key, out_size);
-}
-
-const dftu_svc_ports g_ports = {sizeof(dftu_svc_ports), host_port_key,
-                                host_port_publish, host_port_consume};
-
 const dftu_svc_duql g_query = {sizeof(dftu_svc_duql), host_query_compile,
                                host_query_matches};
 
@@ -1139,7 +1123,8 @@ const void* host_get_service(void*, const char* ext_id) {
     if (std::strcmp(ext_id, DFTU_SVC_FILEIO) == 0)
         return detail::fileio_ext_vtable();
     if (std::strcmp(ext_id, DFTU_SVC_TRACE) == 0) return &g_trace;
-    if (std::strcmp(ext_id, DFTU_SVC_PORTS) == 0) return &g_ports;
+    if (std::strcmp(ext_id, DFTU_SVC_PORTS) == 0)
+        return detail::ports_ext_vtable();
     if (std::strcmp(ext_id, DFTU_SVC_RESULT) == 0)
         return detail::result_ext_vtable();
     if (std::strcmp(ext_id, DFTU_SVC_AGG) == 0) return detail::agg_ext_vtable();
@@ -1346,6 +1331,14 @@ PluginFold::PluginFold(const dftu_plugin* plugin,
     }
 }
 
+void PluginFold::bind_ports(PortHub* hub, dstd::String port_namespace) {
+    port_hub_ = hub;
+    port_namespace_ = std::move(port_namespace);
+    port_names_ = hub != nullptr
+                      ? dstd::make_unique<PortNames>(hub, port_namespace_)
+                      : nullptr;
+}
+
 PluginFold::~PluginFold() {
     if (store_ != nullptr) ::dftu_store_free(store_);
     if (slice_) plugin_->destroy_slice(slice_);
@@ -1486,10 +1479,15 @@ dstd::Result<void> PluginFold::step(const FoldBatch& batch) {
     dftu_dataframe* cdf =
         dftu_dataframe_new(names.data(), handles.data(),
                            static_cast<std::int32_t>(handles.size()));
-    dstd::Result<void> stepped = states_update(cdf);
+    dstd::Result<void> stepped;
+    {
+        BatchCallbackScope in_batch;
+        stepped = states_update(cdf);
+    }
     if (stepped && has_transform) {
         plugins::AbiContext ctx;
         ::dftu_dataframe* out = nullptr;
+        BatchCallbackScope in_batch;
         const dftu_status status =
             plugin_->transform(ctx.get(), slice_, cdf, &host_, &out);
         if (status < 0) {
@@ -1519,6 +1517,7 @@ dstd::Result<void> PluginFold::step(const FoldBatch& batch) {
         }
     } else if (stepped && has_on_batch) {
         plugins::AbiContext ctx;
+        BatchCallbackScope in_batch;
         const dftu_status status =
             plugin_->on_batch(ctx.get(), slice_, cdf, &host_);
         if (status < 0) {

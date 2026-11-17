@@ -267,6 +267,49 @@ fold order still sees the scan as it was. Order it the same way as a port:
 a plugin that must see the rewrite ``consumes`` a name the transform
 ``provides``. Two transforms chain, each seeing the previous one's output.
 
+Channels between stages
+-----------------------
+
+A port lives for one batch. When a plugin needs a stream that outlives a
+batch, declare a channel in the plugin factory with ``Ports::open`` (the C ABI
+``channel_open``). A bare name is yours, and the host prefixes it with
+``plugin.<your name>.``. The plugin that reads it opens
+``plugin.<owner>.<name>`` with the same credits, overflow mode and message
+size. A ``Block`` channel adds an edge to the order graph from each plugin that
+sets ``sends`` to each plugin that sets ``receives``, so the cycle rule covers
+blocking channels. ``Fail`` and ``DropOldest`` channels never wait and add no
+edge, so a request channel and a response channel between two plugins are
+fine.
+
+.. code-block:: cpp
+
+   // factory of "owner"
+   plugins::ChannelOptions options;
+   options.credits = 8;
+   options.overflow = plugins::Overflow::DropOldest;  // never a silent default
+   options.max_msg_bytes = sizeof(Reading);
+   DFTRACER_UTILS_TRY(plugins::ChannelId id,
+                      host.ports().open("readings", options));
+
+   // a task of "reader"
+   plugins::Channel<Reading> readings(h.ports(), id);
+   auto op = readings.recv();
+   dstd::Result<Reading> got = co_await op;
+
+Pick the overflow mode on purpose. ``Fail`` reports ``PortError::Full``;
+``DropOldest`` keeps the newest messages; ``Block`` makes the sender wait for
+a credit, and the host accepts it only when every end sets ``task_end``, so
+that no end runs in the fused ``on_batch`` loop, and ``sends`` or ``receives``.
+A ``Block`` send that starts from ``on_batch`` anyway fails at once with an
+error that names the channel. ``Channel<T>::recv`` drops a message whose size
+is not ``sizeof(T)`` and gives ``PortError::TooBig`` with both sizes, so one
+wrong message never blocks the channel. For a value that many readers
+poll, use a latest port (``latest_set``, ``latest_get``); it is a hint, and
+``NotReady`` means nothing was set yet. To merge a value over all slices, use
+a phase result: declare each generation in the factory, ``phase_contribute``
+from the slices, ``phase_seal`` the generation, and read it with
+``phase_result``. See :doc:`../../plugins` for the full list of rules.
+
 See also
 --------
 

@@ -10,6 +10,7 @@ set(PLUGINS_TEST_SOURCES
     test_plugin_cxx_wrappers.cpp
     test_plugin_abi_features.cpp
     test_plugin_ports.cpp
+    test_plugin_ports_sdk.cpp
     test_plugin_results.cpp
     test_plugin_agg.cpp
     test_plugin_agg_spill.cpp
@@ -143,6 +144,23 @@ target_set_warnings(${store_target})
 set_target_properties(${store_target} PROPERTIES OUTPUT_NAME test_plugin_store
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 add_test(NAME plugins/test_plugin_store COMMAND ${store_target})
+
+# +++++++++++++++++++++++++++++++++++++++++
+# dftu.svc.ports: a C consumer calls the channel, latest and phase members and
+# a C++ test sequences them on folds that share one hub.
+# +++++++++++++++++++++++++++++++++++++++++
+
+set(ports_abi_target plugins_test_plugin_ports_abi)
+add_executable(${ports_abi_target} test_plugin_ports_abi.cpp
+                                   ports_abi_c_consumer.c)
+target_include_directories(${ports_abi_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(${ports_abi_target} PRIVATE doctest::doctest dftracer_utils
+                                                  testing_utilities)
+target_enable_coroutine(${ports_abi_target})
+target_set_warnings(${ports_abi_target})
+set_target_properties(${ports_abi_target} PROPERTIES OUTPUT_NAME test_plugin_ports_abi
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+add_test(NAME plugins/test_plugin_ports_abi COMMAND ${ports_abi_target})
 
 # +++++++++++++++++++++++++++++++++++++++++
 # ABI gate: real .so files loaded by plugins/test_plugin_abi_gate through a

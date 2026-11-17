@@ -187,6 +187,47 @@ dftu_status dftu_test_size(dftu_ctx*, const dftu_plugin_host*, const char*,
 dftu_status dftu_test_sampled_hash(dftu_ctx*, const dftu_plugin_host*,
                                    const char*, uint64_t*);
 
+/* Ports service consumers; each is one call of dftu_svc_ports. */
+dftu_status dftu_test_ports_open(dftu_ctx*, const dftu_plugin_host*,
+                                 const char*, uint32_t, uint32_t, dftu_overflow,
+                                 uint32_t, uint64_t*);
+dftu_status dftu_test_ports_send(dftu_ctx*, const dftu_plugin_host*, uint64_t,
+                                 const void*, uint32_t, dftu_port_status*,
+                                 dftu_task**);
+dftu_status dftu_test_ports_recv(dftu_ctx*, const dftu_plugin_host*, uint64_t,
+                                 void*, uint32_t, uint32_t*, dftu_port_status*,
+                                 dftu_task**);
+dftu_status dftu_test_ports_try_send(dftu_ctx*, const dftu_plugin_host*,
+                                     uint64_t, const void*, uint32_t,
+                                     dftu_port_status*);
+dftu_status dftu_test_ports_close(dftu_ctx*, const dftu_plugin_host*, uint64_t);
+dftu_status dftu_test_ports_latest_set(dftu_ctx*, const dftu_plugin_host*,
+                                       const char*, const void*, uint32_t,
+                                       uint64_t*);
+dftu_status dftu_test_ports_latest_get(dftu_ctx*, const dftu_plugin_host*,
+                                       const char*, void*, uint32_t, uint32_t*,
+                                       uint64_t*, dftu_port_status*);
+dftu_status dftu_test_ports_phase_declare(dftu_ctx*, const dftu_plugin_host*,
+                                          const char*, dftu_merge_op, dftu_type,
+                                          uint64_t, uint64_t*);
+dftu_status dftu_test_ports_phase_contribute(dftu_ctx*, const dftu_plugin_host*,
+                                             const char*, uint64_t,
+                                             dftu_merge_op, dftu_type,
+                                             const void*, uint32_t,
+                                             dftu_port_status*);
+dftu_status dftu_test_ports_phase_seal(dftu_ctx*, const dftu_plugin_host*,
+                                       const char*, uint64_t);
+dftu_status dftu_test_ports_phase_result(dftu_ctx*, const dftu_plugin_host*,
+                                         const char*, uint64_t, void*, uint32_t,
+                                         uint32_t*, dftu_port_status*);
+dftu_status dftu_test_ports_try_publish(dftu_ctx*, const dftu_plugin_host*,
+                                        uint64_t, const void*, uint32_t,
+                                        dftu_port_status*);
+dftu_status dftu_test_ports_try_consume(dftu_ctx*, const dftu_plugin_host*,
+                                        uint64_t, void*, uint32_t, uint32_t*,
+                                        dftu_port_status*);
+uint64_t dftu_test_ports_key(const dftu_plugin_host*, const char*);
+
 #ifdef __cplusplus
 }
 #endif

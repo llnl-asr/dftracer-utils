@@ -32,6 +32,13 @@ namespace plugins {
 /// validate every frame and column a plugin hands back, and fail the run
 /// naming the plugin, the callback and the broken rule.
 inline constexpr const char* CHECK_ENV = "DFTRACER_UTILS_PLUGIN_CHECK";
+/// What a channel declaration that leaves a field out gets.
+inline constexpr std::uint32_t CHANNEL_DEFAULT_CREDITS = 16;
+inline constexpr std::uint32_t CHANNEL_DEFAULT_MAX_MSG_BYTES = 65536;
+/// The most bytes the batch-scoped ports of one scan worker hold at once.
+inline constexpr std::size_t PORT_BATCH_BYTES = std::size_t{16} << 20;
+/// The longest value of a latest port or a phase contribution.
+inline constexpr std::uint32_t PORT_VALUE_MAX_BYTES = std::uint32_t{1} << 20;
 }  // namespace plugins
 
 /// Repeated in memory/detail/constants.h. A test keeps the two equal. The

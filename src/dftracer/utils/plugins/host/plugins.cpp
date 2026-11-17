@@ -25,6 +25,7 @@
 #include <dftracer/utils/plugins/host/plugin_memory.h>
 #include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/plugins/host/plugins_internal.h>
+#include <dftracer/utils/plugins/host/port_hub.h>
 #include <dftracer/utils/plugins/host/reserved_names.h>
 #include <dftracer/utils/plugins/host/state_registry.h>
 #include <dftracer/utils/trace/index/extensions/extension_registry.h>
@@ -98,6 +99,8 @@ struct Plugins::Impl {
            name falls back to the load-path stem when it declares none. */
         dstd::String declared_name;
         dstd::String version;
+        /* The channel ends and phase results the factory declared. */
+        PortDecls ports;
     };
 
     ~Impl() {
@@ -137,6 +140,10 @@ struct Plugins::Impl {
     // The union prune, settled once at build. run() applies it directly;
     // attach() only offers it to the session (see Plugins::attach()).
     dstd::Optional<Query> prune;
+    // The channels and phase results of the settled plan: every owner's
+    // declarations, which the hub of each scan is built from.
+    dstd::Vector<ChannelDecl> channels;
+    dstd::Vector<PhaseDecl> phases;
 };
 
 struct Plugins::Builder::State {
@@ -495,7 +502,8 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
         build_host.take_registered_index_extensions(),
         build_host.memory(),
         build_host.declared_name(),
-        dstd::String(info_copy.version ? info_copy.version : "")};
+        dstd::String(info_copy.version ? info_copy.version : ""),
+        build_host.take_ports()};
 }
 
 // Kahn topological sort of `n` nodes over `from -> to` edges (from must precede
@@ -532,6 +540,11 @@ dstd::String plugin_label(const Plugins::Impl& impl, std::size_t i) {
     return name.empty() ? dstd::fmt<"plugin {}">(i) : dstd::fmt<"'{}'">(name);
 }
 
+// The name a plugin's channels and phase results are declared under.
+dstd::String port_namespace(const Plugins::Impl::Loaded& loaded) {
+    return loaded.declared_name.empty() ? loaded.name : loaded.declared_name;
+}
+
 dstd::Vector<dstd::String> name_list(const char* const* (*slot)(void*),
                                      void* self) {
     dstd::Vector<dstd::String> out;
@@ -541,6 +554,172 @@ dstd::Vector<dstd::String> name_list(const char* const* (*slot)(void*),
     for (; *names; ++names)
         if (**names) out.emplace_back(*names);
     return out;
+}
+
+const char* overflow_name(std::int32_t overflow) {
+    switch (overflow) {
+        case DFTU_OVERFLOW_BLOCK:
+            return "Block";
+        case DFTU_OVERFLOW_FAIL:
+            return "Fail";
+        default:
+            return "DropOldest";
+    }
+}
+
+/// The plan-time rules of the ports the factories declared: one namespace per
+/// plugin, every channel end agrees with its owner, a Block channel has its
+/// ends in separately scheduled tasks, and a Block channel adds an edge from
+/// each sending plugin to each receiving plugin to the order graph, as its ends
+/// declared them, so a cycle of Block channels is refused with the
+/// provides/consumes cycles. A Fail or DropOldest channel never waits and adds
+/// no edge.
+dstd::Result<void> settle_ports(
+    Plugins::Impl& impl,
+    dstd::Vector<dstd::Pair<std::size_t, std::size_t>>& edges,
+    dstd::Vector<dstd::String>& labels) {
+    impl.channels.clear();
+    impl.phases.clear();
+    dstd::HashMap<dstd::String, std::size_t> spaces;
+    for (std::size_t i = 0; i < impl.plugins.size(); ++i) {
+        const auto& loaded = impl.plugins[i];
+        if (loaded.ports.empty()) continue;
+        auto [it, fresh] = spaces.emplace(loaded.declared_name, i);
+        if (!fresh) {
+            return common::make_error<
+                "plugins {} and {} both declare ports under the namespace "
+                "'plugin.{}.'; each plugin needs a name of its own">(
+                common::ErrorCode::InvalidArgument,
+                plugin_label(impl, it->second), plugin_label(impl, i),
+                loaded.declared_name);
+        }
+        for (const PhaseDecl& phase : loaded.ports.phases)
+            impl.phases.push_back(phase);
+    }
+
+    struct Owner {
+        std::size_t plugin;
+        const ChannelDecl* decl;
+    };
+    dstd::HashMap<dstd::String, Owner> owners;
+    for (std::size_t i = 0; i < impl.plugins.size(); ++i) {
+        for (const ChannelDecl& decl : impl.plugins[i].ports.channels) {
+            if (decl.is_ref) continue;
+            owners.emplace(decl.name, Owner{i, &decl});
+            impl.channels.push_back(decl);
+        }
+    }
+
+    dstd::HashMap<dstd::String, bool> ends_in_tasks;
+    for (const auto& [name, owner] : owners)
+        ends_in_tasks.emplace(name, owner.decl->task_end);
+    for (std::size_t i = 0; i < impl.plugins.size(); ++i) {
+        for (const ChannelDecl& decl : impl.plugins[i].ports.channels) {
+            if (!decl.is_ref) continue;
+            const auto it = owners.find(decl.name);
+            if (it == owners.end()) {
+                return common::make_error<
+                    "plugin {} opens channel '{}' which no loaded plugin "
+                    "declares">(common::ErrorCode::NotFound,
+                                plugin_label(impl, i), decl.name);
+            }
+            const ChannelDecl& own = *it->second.decl;
+            if (own.credits != decl.credits || own.overflow != decl.overflow ||
+                own.max_msg_bytes != decl.max_msg_bytes) {
+                return common::make_error<
+                    "channel '{}': plugin {} declares {} credits, overflow {} "
+                    "and {} bytes a message, but its owner {} declares {}, {} "
+                    "and {}">(common::ErrorCode::InvalidArgument, decl.name,
+                              plugin_label(impl, i), decl.credits,
+                              overflow_name(decl.overflow), decl.max_msg_bytes,
+                              plugin_label(impl, it->second.plugin),
+                              own.credits, overflow_name(own.overflow),
+                              own.max_msg_bytes);
+            }
+            ends_in_tasks[decl.name] =
+                ends_in_tasks[decl.name] && decl.task_end;
+        }
+    }
+    for (const auto& [name, owner] : owners) {
+        if (owner.decl->overflow != DFTU_OVERFLOW_BLOCK ||
+            ends_in_tasks[name]) {
+            continue;
+        }
+        return common::make_error<
+            "channel '{}' has overflow Block, but its ends share the fused "
+            "scan stage, where a full channel would stop the loop that must "
+            "drain it. Declare DFTU_CHANNEL_F_TASK_END at every end that "
+            "runs in a task, or use Fail or DropOldest">(
+            common::ErrorCode::InvalidArgument, name);
+    }
+    for (const auto& [name, owner] : owners) {
+        if (owner.decl->overflow != DFTU_OVERFLOW_BLOCK) continue;
+        dstd::Vector<std::size_t> senders;
+        dstd::Vector<std::size_t> receivers;
+        for (std::size_t i = 0; i < impl.plugins.size(); ++i) {
+            for (const ChannelDecl& decl : impl.plugins[i].ports.channels) {
+                if (decl.name != name) continue;
+                if (!decl.sends && !decl.receives) {
+                    return common::make_error<
+                        "channel '{}' has overflow Block, but plugin {} "
+                        "declares its end without DFTU_CHANNEL_F_SENDS or "
+                        "DFTU_CHANNEL_F_RECEIVES; a blocking channel needs "
+                        "the direction of every end to order the plugins">(
+                        common::ErrorCode::InvalidArgument, name,
+                        plugin_label(impl, i));
+                }
+                if (decl.sends) senders.push_back(i);
+                if (decl.receives) receivers.push_back(i);
+            }
+        }
+        for (const std::size_t from : senders) {
+            for (const std::size_t to : receivers) {
+                if (from == to) continue;
+                edges.emplace_back(from, to);
+                labels.push_back(name);
+            }
+        }
+    }
+    return {};
+}
+
+// The cycle that keeps `sorted[i]` false: every node Kahn's sort could not
+// place has an unplaced predecessor, so walking back from one reaches a node
+// twice, and the nodes between the two visits are the cycle.
+dstd::String describe_cycle(
+    const Plugins::Impl& impl, const dstd::Vector<bool>& sorted,
+    const dstd::Vector<dstd::Pair<std::size_t, std::size_t>>& edges,
+    const dstd::Vector<dstd::String>& labels) {
+    std::size_t at = 0;
+    while (at < sorted.size() && sorted[at]) ++at;
+    dstd::Vector<std::size_t> walk;
+    dstd::Vector<std::size_t> via;
+    dstd::Vector<bool> seen(sorted.size(), false);
+    while (!seen[at]) {
+        seen[at] = true;
+        walk.push_back(at);
+        std::size_t edge = edges.size();
+        for (std::size_t e = 0; e < edges.size(); ++e) {
+            if (edges[e].second == at && !sorted[edges[e].first]) {
+                edge = e;
+                break;
+            }
+        }
+        via.push_back(edge);
+        at = edges[edge].first;
+    }
+    std::size_t start = 0;
+    while (walk[start] != at) ++start;
+    const std::size_t last = walk.size() - 1;
+    dstd::String text;
+    for (std::size_t k = last; k > start; --k) {
+        dstd::fmt_append<"{} -[{}]-> ">(text, plugin_label(impl, walk[k]),
+                                        labels[via[k - 1]]);
+    }
+    dstd::fmt_append<"{} -[{}]-> ">(text, plugin_label(impl, walk[start]),
+                                    labels[via[last]]);
+    text += plugin_label(impl, walk[last]);
+    return text;
 }
 
 /// Order the fold so every provider of a name runs before the plugins that
@@ -574,6 +753,7 @@ dstd::Result<void> settle_order(Plugins::Impl& impl) {
     }
 
     dstd::Vector<dstd::Pair<std::size_t, std::size_t>> edges;
+    dstd::Vector<dstd::String> labels;
     for (std::size_t i = 0; i < impl.plugins.size(); ++i) {
         const dftu_plugin* pl = impl.plugins[i].plugin;
         for (const dstd::String& name : name_list(pl->consumes, pl->self)) {
@@ -583,20 +763,24 @@ dstd::Result<void> settle_order(Plugins::Impl& impl) {
                     "plugin {} consumes '{}' which no loaded plugin "
                     "provides">(common::ErrorCode::NotFound,
                                 plugin_label(impl, i), name);
-            if (it->second != i) edges.emplace_back(it->second, i);
+            if (it->second != i) {
+                edges.emplace_back(it->second, i);
+                labels.push_back(name);
+            }
         }
     }
+
+    DFTRACER_UTILS_TRY_VOID(settle_ports(impl, edges, labels));
 
     impl.order = topo_sort(impl.plugins.size(), edges);
     if (impl.order.size() != impl.plugins.size()) {
         dstd::Vector<bool> sorted(impl.plugins.size(), false);
         for (std::size_t i : impl.order) sorted[i] = true;
-        std::size_t stuck = 0;
-        while (stuck < sorted.size() && sorted[stuck]) ++stuck;
         impl.order.clear();
         return common::make_error<
-            "plugin provides/consumes graph has a cycle through {}">(
-            common::ErrorCode::InvalidArgument, plugin_label(impl, stuck));
+            "plugin provides/consumes graph has a cycle: {}">(
+            common::ErrorCode::InvalidArgument,
+            describe_cycle(impl, sorted, edges, labels));
     }
     return {};
 }
@@ -758,6 +942,7 @@ coro::CoroTask<dstd::Result<PluginRun>> Plugins::run(const View& view) const {
     // One registry for the whole scan; every plugin's finalize publishes its
     // merged accumulators here and later plugins read them by name.
     SharedResultRegistry shared;
+    PortHub hub(impl_->channels, impl_->phases);
     dstd::Vector<dstd::UniquePtr<PluginFold>> owned;
     owned.reserve(impl_->plugins.size());
     dstd::Vector<Fold*> folds;
@@ -767,11 +952,13 @@ coro::CoroTask<dstd::Result<PluginRun>> Plugins::run(const View& view) const {
             impl_->plugins[i].plugin, intern, &shared, &out.results,
             impl_->plugins[i].name, view.memory_budget_bytes(),
             &impl_->plugins[i].states, impl_->plugins[i].memory));
+        owned.back()->bind_ports(&hub, port_namespace(impl_->plugins[i]));
         folds.push_back(owned.back().get());
     }
 
     const View pruned = prune(view);
     auto ran = co_await pruned.run_folds(folds, intern);
+    hub.close_all();
     if (!ran) co_return ran.error();
     out.stats = *ran;
     co_return out;
@@ -784,6 +971,7 @@ trace::views::Deferred<PluginRun> Plugins::attach(
     auto shared = dstd::make_shared<SharedResultRegistry>();
     auto out = dstd::make_shared<PluginRun>();
     auto executed = dstd::make_shared<bool>(false);
+    auto hub = dstd::make_shared<PortHub>(impl_->channels, impl_->phases);
     utils::plugins::NamedResultRegistry* named = &out->results;
     const std::size_t n = impl_->order.size();
     if (n == 0) {
@@ -798,27 +986,32 @@ trace::views::Deferred<PluginRun> Plugins::attach(
         std::size_t i = impl_->order[idx];
         const dftu_plugin* plugin = impl_->plugins[i].plugin;
         dstd::String name = impl_->plugins[i].name;
+        dstd::String space = port_namespace(impl_->plugins[i]);
         const StateRegistry* states = &impl_->plugins[i].states;
         dstd::SharedPtr<PluginMemory> memory = impl_->plugins[i].memory;
         // A session does not expose its plan's budget here, so an attached
         // plugin's accumulators spill on the auto policy rather than on an
         // explicit session budget.
         session.attach_fold_factory(
-            [plugin, shared, named, name, states,
-             memory](dftracer::utils::dstd::StringIntern& intern)
+            [plugin, shared, named, name, states, memory, hub,
+             space](dftracer::utils::dstd::StringIntern& intern)
                 -> dstd::UniquePtr<trace::views::detail::Fold> {
-                return dstd::make_unique<PluginFold>(plugin, intern,
-                                                     shared.get(), named, name,
-                                                     0, states, memory);
+                auto fold = dstd::make_unique<PluginFold>(
+                    plugin, intern, shared.get(), named, name, 0, states,
+                    memory);
+                fold->bind_ports(hub.get(), space);
+                return fold;
             },
             // The fused scan finalizes every attached fold together, so the
             // last one to finalize marks the handle resolved.
-            idx + 1 == n ? dstd::Function<dstd::Result<void>()>([executed]() {
-                *executed = true;
-                return dstd::Result<void>{};
-            })
-                         : dstd::Function<dstd::Result<void>()>(
-                               []() { return dstd::Result<void>{}; }));
+            idx + 1 == n
+                ? dstd::Function<dstd::Result<void>()>([executed, hub]() {
+                      hub->close_all();
+                      *executed = true;
+                      return dstd::Result<void>{};
+                  })
+                : dstd::Function<dstd::Result<void>()>(
+                      []() { return dstd::Result<void>{}; }));
     }
     return {out, executed};
 }
@@ -844,11 +1037,48 @@ dstd::Result<Plugins> build_injected_plugins(
                                  {},
                                  {},
                                  {},
+                                 {},
                                  {}});
     auto ordered = settle_order(*impl);
     if (!ordered) return dstd::Unexpected(std::move(ordered).error());
     settle_prune(*impl);
     return PluginsInternalAccess::make(std::move(impl));
+}
+
+dstd::Result<Plugins> build_injected_plugins_declaring(
+    dstd::Vector<InjectedPlugin> plugins) {
+    auto impl = dstd::make_unique<Plugins::Impl>();
+    impl->plugins.reserve(plugins.size());
+    for (const InjectedPlugin& injected : plugins) {
+        Plugins::Impl::Loaded loaded;
+        loaded.plugin = injected.plugin;
+        loaded.owned = false;
+        loaded.name = injected.name;
+        loaded.declared_name = injected.name;
+        if (injected.declare != nullptr) {
+            BuildHost build_host(injected.name);
+            plugins::AbiContext ctx;
+            const dftu_status declared =
+                injected.declare(ctx.get(), build_host.host());
+            if (declared < 0) {
+                return common::make_error<"plugin '{}' factory failed: {}">(
+                    common::ErrorCode::InvalidArgument, injected.name,
+                    ctx.error(declared, "declare").message());
+            }
+            loaded.ports = build_host.take_ports();
+            loaded.states = build_host.take_states();
+        }
+        impl->plugins.push_back(std::move(loaded));
+    }
+    auto ordered = settle_order(*impl);
+    if (!ordered) return dstd::Unexpected(std::move(ordered).error());
+    settle_prune(*impl);
+    return PluginsInternalAccess::make(std::move(impl));
+}
+
+dstd::UniquePtr<PortHub> make_port_hub(const Plugins& set) {
+    const Plugins::Impl& impl = PluginsInternalAccess::impl(set);
+    return dstd::make_unique<PortHub>(impl.channels, impl.phases);
 }
 
 dstd::Vector<std::size_t> fold_order(const Plugins& set) {

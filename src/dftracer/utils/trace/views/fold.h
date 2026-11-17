@@ -41,6 +41,8 @@ class FoldPortBus {
     /// NULL if `key` was not published since the last clear.
     const void* consume(std::uint64_t key, std::uint32_t* out_size) const;
     void clear();
+    /// The bytes published since the last clear.
+    std::size_t size_bytes() const { return arena_.size(); }
 
     /// The batch as a frame after the last transforming fold, for every fold
     /// stepped after it in the same batch; unset until a fold rewrites it,

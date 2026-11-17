@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/host/build_host.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
+#include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/host/state_registry.h>
 
 #include <cstdint>
@@ -123,9 +126,188 @@ const void* build_port_consume(void* h, std::uint64_t,
     return nullptr;
 }
 
-const ::dftu_svc_ports g_build_ports = {sizeof(::dftu_svc_ports),
-                                        build_port_key, build_port_publish,
-                                        build_port_consume};
+dftu_status build_port_try_publish(::dftu_ctx* ctx, void* h, std::uint64_t,
+                                   const void*, std::uint32_t,
+                                   ::dftu_port_status*) {
+    return denied(ctx, self_of(h), DFTU_SVC_PORTS "::try_publish");
+}
+
+dftu_status build_port_try_consume(::dftu_ctx* ctx, void* h, std::uint64_t,
+                                   void*, std::uint32_t, std::uint32_t*,
+                                   ::dftu_port_status*) {
+    return denied(ctx, self_of(h), DFTU_SVC_PORTS "::try_consume");
+}
+
+dftu_status build_channel_open(::dftu_ctx* ctx, void* h,
+                               const ::dftu_channel_desc* desc,
+                               std::uint64_t* out) {
+    BuildHost& bh = self_of(h);
+    if (desc == nullptr || out == nullptr) {
+        return host_fail(ctx, DFTU_E_INVALID,
+                         "channel_open: NULL descriptor or out");
+    }
+    if (!plugin_struct_size_ok(
+            PluginStruct::ChannelDesc, desc->struct_size,
+            static_cast<std::uint32_t>(sizeof(::dftu_channel_desc)))) {
+        return host_fail(
+            ctx, DFTU_E_INVALID,
+            dstd::fmt<"channel_open: struct_size {} is not {}">(
+                desc->struct_size,
+                static_cast<std::uint32_t>(sizeof(::dftu_channel_desc))));
+    }
+    bool is_own = false;
+    auto full = qualify_port_name(bh.declared_name(),
+                                  desc->name ? desc->name : "", &is_own);
+    if (!full) return host_fail(ctx, full.error());
+    ChannelDecl decl;
+    decl.name = std::move(*full);
+    decl.declarer = bh.declared_name();
+    decl.is_ref = !is_own;
+    decl.credits = (desc->field_mask & DFTU_CHANNEL_F_CREDITS)
+                       ? desc->credits
+                       : common::constants::plugins::CHANNEL_DEFAULT_CREDITS;
+    decl.overflow = (desc->field_mask & DFTU_CHANNEL_F_OVERFLOW)
+                        ? desc->overflow
+                        : DFTU_OVERFLOW_FAIL;
+    decl.max_msg_bytes =
+        (desc->field_mask & DFTU_CHANNEL_F_MAX_MSG_BYTES)
+            ? desc->max_msg_bytes
+            : common::constants::plugins::CHANNEL_DEFAULT_MAX_MSG_BYTES;
+    decl.task_end = (desc->field_mask & DFTU_CHANNEL_F_TASK_END) != 0;
+    decl.sends = (desc->field_mask & DFTU_CHANNEL_F_SENDS) != 0;
+    decl.receives = (desc->field_mask & DFTU_CHANNEL_F_RECEIVES) != 0;
+    if (decl.credits == 0 || decl.max_msg_bytes == 0 ||
+        decl.overflow < DFTU_OVERFLOW_BLOCK ||
+        decl.overflow > DFTU_OVERFLOW_DROP_OLDEST) {
+        return host_fail(ctx, DFTU_E_INVALID,
+                         dstd::fmt<"channel '{}': credits and max_msg_bytes "
+                                   "must be above zero and overflow one of "
+                                   "Block, Fail or DropOldest">(decl.name));
+    }
+    for (const ChannelDecl& seen : bh.ports().channels) {
+        if (seen.name == decl.name) {
+            return host_fail(
+                ctx, DFTU_E_INVALID,
+                dstd::fmt<"channel '{}' is declared twice by plugin '{}'">(
+                    decl.name, decl.declarer));
+        }
+    }
+    *out = dstd::hash::fnv1a_hash(decl.name);
+    bh.ports().channels.push_back(std::move(decl));
+    return DFTU_OK;
+}
+
+dftu_status build_channel_send(::dftu_ctx* ctx, void* h, std::uint64_t,
+                               const void*, std::uint32_t, ::dftu_port_status*,
+                               ::dftu_task**) {
+    return denied(ctx, self_of(h), DFTU_SVC_PORTS "::channel_send");
+}
+
+dftu_status build_channel_recv(::dftu_ctx* ctx, void* h, std::uint64_t, void*,
+                               std::uint32_t, std::uint32_t*,
+                               ::dftu_port_status*, ::dftu_task**) {
+    return denied(ctx, self_of(h), DFTU_SVC_PORTS "::channel_recv");
+}
+
+dftu_status build_channel_recv_exact(::dftu_ctx* ctx, void* h, std::uint64_t,
+                                     void*, std::uint32_t, std::uint32_t*,
+                                     ::dftu_port_status*, ::dftu_task**) {
+    return denied(ctx, self_of(h), DFTU_SVC_PORTS "::channel_recv_exact");
+}
+
+dftu_status build_channel_try_send(::dftu_ctx* ctx, void* h, std::uint64_t,
+                                   const void*, std::uint32_t,
+                                   ::dftu_port_status*) {
+    return denied(ctx, self_of(h), DFTU_SVC_PORTS "::channel_try_send");
+}
+
+dftu_status build_channel_close(::dftu_ctx* ctx, void* h, std::uint64_t) {
+    return denied(ctx, self_of(h), DFTU_SVC_PORTS "::channel_close");
+}
+
+dftu_status build_latest_set(::dftu_ctx* ctx, void* h, const char*, const void*,
+                             std::uint32_t, std::uint64_t*) {
+    return denied(ctx, self_of(h), DFTU_SVC_PORTS "::latest_set");
+}
+
+dftu_status build_latest_get(::dftu_ctx* ctx, void* h, const char*, void*,
+                             std::uint32_t, std::uint32_t*, std::uint64_t*,
+                             ::dftu_port_status*) {
+    return denied(ctx, self_of(h), DFTU_SVC_PORTS "::latest_get");
+}
+
+dftu_status build_phase_declare(::dftu_ctx* ctx, void* h, const char* name,
+                                ::dftu_merge_op op, ::dftu_type type,
+                                std::uint64_t generation,
+                                std::uint64_t* out_generation) {
+    BuildHost& bh = self_of(h);
+    if (name == nullptr || out_generation == nullptr) {
+        return host_fail(ctx, DFTU_E_INVALID,
+                         "phase_declare: NULL name or out_generation");
+    }
+    bool is_own = false;
+    auto full = qualify_port_name(bh.declared_name(), name, &is_own);
+    if (!full) return host_fail(ctx, full.error());
+    if (!is_own) {
+        return host_fail(
+            ctx, DFTU_E_INVALID,
+            dstd::fmt<"phase result '{}' belongs to another plugin; only its "
+                      "owner declares generations">(*full));
+    }
+    if (!phase_merge_accepts(op, type)) {
+        return host_fail(
+            ctx, DFTU_E_INVALID,
+            dstd::fmt<"phase result '{}': merge {} does not take value type "
+                      "{}">(*full, op, type));
+    }
+    std::uint64_t next = 1;
+    for (const PhaseDecl& seen : bh.ports().phases) {
+        if (seen.name != *full) continue;
+        next = seen.generation + 1;
+        if (seen.op != op || seen.type != type) {
+            return host_fail(
+                ctx, DFTU_E_INVALID,
+                dstd::fmt<"phase result '{}': every generation keeps one "
+                          "merge and one value type">(*full));
+        }
+    }
+    if (generation != 0 && generation != next) {
+        return host_fail(
+            ctx, DFTU_E_INVALID,
+            dstd::fmt<"phase result '{}': generation {} would skip {}; the "
+                      "host assigns generations in order from 1 and the next "
+                      "is {}">(*full, generation, next, next));
+    }
+    bh.ports().phases.push_back({std::move(*full), next, op, type});
+    *out_generation = next;
+    return DFTU_OK;
+}
+
+dftu_status build_phase_contribute(::dftu_ctx* ctx, void* h, const char*,
+                                   std::uint64_t, ::dftu_merge_op, ::dftu_type,
+                                   const void*, std::uint32_t,
+                                   ::dftu_port_status*) {
+    return denied(ctx, self_of(h), DFTU_SVC_PORTS "::phase_contribute");
+}
+
+dftu_status build_phase_seal(::dftu_ctx* ctx, void* h, const char*,
+                             std::uint64_t) {
+    return denied(ctx, self_of(h), DFTU_SVC_PORTS "::phase_seal");
+}
+
+dftu_status build_phase_result(::dftu_ctx* ctx, void* h, const char*,
+                               std::uint64_t, void*, std::uint32_t,
+                               std::uint32_t*, ::dftu_port_status*) {
+    return denied(ctx, self_of(h), DFTU_SVC_PORTS "::phase_result");
+}
+
+const ::dftu_svc_ports g_build_ports = {
+    sizeof(::dftu_svc_ports), build_port_key,         build_port_publish,
+    build_port_consume,       build_port_try_publish, build_port_try_consume,
+    build_channel_open,       build_channel_send,     build_channel_recv,
+    build_channel_try_send,   build_channel_close,    build_latest_set,
+    build_latest_get,         build_phase_declare,    build_phase_contribute,
+    build_phase_seal,         build_phase_result,     build_channel_recv_exact};
 
 dftu_status build_register_provider(::dftu_ctx* ctx, void* h, const char* name,
                                     const ::dftu_source_vt* vt, void* self) {
@@ -242,11 +424,12 @@ void build_task_discard(void* h, ::dftu_task*) {
 // run uses no host state, so a plugin may keep it past the factory: a node's
 // cursor pulls its input with it long after the build host is gone.
 const ::dftu_svc_task g_build_task = {
-    sizeof(::dftu_svc_task), build_task_job,    build_task_sleep,
-    build_task_then,         build_task_all,    build_task_any,
-    build_task_map,          build_task_start,  build_task_spawn,
-    build_task_drive,        build_task_status, build_task_discard,
-    detail::task_run};
+    sizeof(::dftu_svc_task), build_task_job,      build_task_sleep,
+    build_task_then,         build_task_all,      build_task_any,
+    build_task_map,          build_task_start,    build_task_spawn,
+    build_task_drive,        build_task_status,   build_task_discard,
+    detail::task_run,        detail::task_test,   detail::task_cancel,
+    detail::task_retain,     detail::task_release};
 
 const void* build_get_service(void* h, const char* ext_id) {
     if (!ext_id) return nullptr;

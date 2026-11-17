@@ -78,6 +78,12 @@ enum DFTU_APPLY_TOPN 4
 enum DFTU_ASOF_BACKWARD 0
 enum DFTU_ASOF_FORWARD 1
 enum DFTU_ASOF_NEAREST 2
+enum DFTU_CHANNEL_F_CREDITS 1
+enum DFTU_CHANNEL_F_MAX_MSG_BYTES 4
+enum DFTU_CHANNEL_F_OVERFLOW 2
+enum DFTU_CHANNEL_F_RECEIVES 32
+enum DFTU_CHANNEL_F_SENDS 16
+enum DFTU_CHANNEL_F_TASK_END 8
 enum DFTU_CMP_EQ 4
 enum DFTU_CMP_GE 1
 enum DFTU_CMP_GT 0
@@ -193,6 +199,11 @@ enum DFTU_LOG_ERROR 4
 enum DFTU_LOG_INFO 2
 enum DFTU_LOG_TRACE 0
 enum DFTU_LOG_WARN 3
+enum DFTU_MERGE_CONCAT 4
+enum DFTU_MERGE_MAX 2
+enum DFTU_MERGE_MIN 1
+enum DFTU_MERGE_SUM 0
+enum DFTU_MERGE_UNION 3
 enum DFTU_NORM_NFC 0
 enum DFTU_NORM_NFD 2
 enum DFTU_NORM_NFKC 1
@@ -202,12 +213,20 @@ enum DFTU_OP_KIND_AGGREGATE 1
 enum DFTU_OP_KIND_FRAME 2
 enum DFTU_OP_KIND_LAZY 3
 enum DFTU_OP_KIND_SERIES 0
+enum DFTU_OVERFLOW_BLOCK 0
+enum DFTU_OVERFLOW_DROP_OLDEST 2
+enum DFTU_OVERFLOW_FAIL 1
 enum DFTU_PENDING 2
 enum DFTU_PH_AGGREGATED 3
 enum DFTU_PH_COMPLETE 1
 enum DFTU_PH_COUNTER 2
 enum DFTU_PH_METADATA 4
 enum DFTU_PH_UNKNOWN 0
+enum DFTU_PORT_CLOSED 3
+enum DFTU_PORT_FULL 1
+enum DFTU_PORT_NOT_READY 4
+enum DFTU_PORT_OK 0
+enum DFTU_PORT_TOO_BIG 2
 enum DFTU_PRIM_BIT_WIDTH 1
 enum DFTU_PRIM_CLZ 3
 enum DFTU_PRIM_CTZ 4
@@ -475,6 +494,13 @@ field dftu_bytes.data offset 0 size 8
 field dftu_bytes.free_fn offset 16 size 8
 field dftu_bytes.len offset 8 size 8
 field dftu_bytes.ud offset 24 size 8
+field dftu_channel_desc.credits offset 16 size 4
+field dftu_channel_desc.field_mask offset 4 size 4
+field dftu_channel_desc.max_msg_bytes offset 24 size 4
+field dftu_channel_desc.name offset 8 size 8
+field dftu_channel_desc.overflow offset 20 size 4
+field dftu_channel_desc.reserved offset 28 size 4
+field dftu_channel_desc.struct_size offset 0 size 4
 field dftu_chunk_stats.rows offset 8 size 8
 field dftu_chunk_stats.struct_size offset 0 size 4
 field dftu_config_key.doc offset 16 size 8
@@ -840,10 +866,24 @@ field dftu_svc_ops.run_aggregate offset 16 size 8
 field dftu_svc_ops.run_frame offset 24 size 8
 field dftu_svc_ops.run_lazy offset 48 size 8
 field dftu_svc_ops.struct_size offset 0 size 4
+field dftu_svc_ports.channel_close offset 80 size 8
+field dftu_svc_ports.channel_open offset 48 size 8
+field dftu_svc_ports.channel_recv offset 64 size 8
+field dftu_svc_ports.channel_recv_exact offset 136 size 8
+field dftu_svc_ports.channel_send offset 56 size 8
+field dftu_svc_ports.channel_try_send offset 72 size 8
 field dftu_svc_ports.consume offset 24 size 8
+field dftu_svc_ports.latest_get offset 96 size 8
+field dftu_svc_ports.latest_set offset 88 size 8
+field dftu_svc_ports.phase_contribute offset 112 size 8
+field dftu_svc_ports.phase_declare offset 104 size 8
+field dftu_svc_ports.phase_result offset 128 size 8
+field dftu_svc_ports.phase_seal offset 120 size 8
 field dftu_svc_ports.port_key offset 8 size 8
 field dftu_svc_ports.publish offset 16 size 8
 field dftu_svc_ports.struct_size offset 0 size 4
+field dftu_svc_ports.try_consume offset 40 size 8
+field dftu_svc_ports.try_publish offset 32 size 8
 field dftu_svc_providers.register_provider offset 8 size 8
 field dftu_svc_providers.struct_size offset 0 size 4
 field dftu_svc_result.emit offset 8 size 8
@@ -881,16 +921,20 @@ field dftu_svc_store.value_list_count offset 176 size 8
 field dftu_svc_store.value_list_free offset 192 size 8
 field dftu_svc_task.all offset 32 size 8
 field dftu_svc_task.any offset 40 size 8
+field dftu_svc_task.cancel offset 112 size 8
 field dftu_svc_task.discard offset 88 size 8
 field dftu_svc_task.drive offset 72 size 8
 field dftu_svc_task.job offset 8 size 8
 field dftu_svc_task.map offset 48 size 8
+field dftu_svc_task.release offset 128 size 8
+field dftu_svc_task.retain offset 120 size 8
 field dftu_svc_task.run offset 96 size 8
 field dftu_svc_task.sleep offset 16 size 8
 field dftu_svc_task.spawn offset 64 size 8
 field dftu_svc_task.start offset 56 size 8
 field dftu_svc_task.status offset 80 size 8
 field dftu_svc_task.struct_size offset 0 size 4
+field dftu_svc_task.test offset 104 size 8
 field dftu_svc_task.then offset 24 size 8
 field dftu_svc_trace.struct_size offset 0 size 4
 field dftu_svc_trace.trace_close offset 24 size 8
@@ -1144,9 +1188,23 @@ fnptr dftu_svc_ops.run dftu_status (*)(dftu_ctx*, void*, const char*, const dftu
 fnptr dftu_svc_ops.run_aggregate dftu_status (*)(dftu_ctx*, void*, const char*, const dftu_series* const*, uint32_t, const dftu_op_arg*, dftu_scalar*)
 fnptr dftu_svc_ops.run_frame dftu_status (*)(dftu_ctx*, void*, const char*, const dftu_dataframe* const*, uint32_t, const dftu_op_arg*, dftu_dataframe**)
 fnptr dftu_svc_ops.run_lazy dftu_status (*)(dftu_ctx*, void*, const char*, const dftu_lazyframe* const*, uint32_t, const dftu_op_arg*, dftu_lazyframe**)
+fnptr dftu_svc_ports.channel_close dftu_status (*)(dftu_ctx*, void*, uint64_t)
+fnptr dftu_svc_ports.channel_open dftu_status (*)(dftu_ctx*, void*, const dftu_channel_desc*, uint64_t*)
+fnptr dftu_svc_ports.channel_recv dftu_status (*)(dftu_ctx*, void*, uint64_t, void*, uint32_t, uint32_t*, dftu_port_status*, dftu_task**)
+fnptr dftu_svc_ports.channel_recv_exact dftu_status (*)(dftu_ctx*, void*, uint64_t, void*, uint32_t, uint32_t*, dftu_port_status*, dftu_task**)
+fnptr dftu_svc_ports.channel_send dftu_status (*)(dftu_ctx*, void*, uint64_t, const void*, uint32_t, dftu_port_status*, dftu_task**)
+fnptr dftu_svc_ports.channel_try_send dftu_status (*)(dftu_ctx*, void*, uint64_t, const void*, uint32_t, dftu_port_status*)
 fnptr dftu_svc_ports.consume const void* (*)(void*, uint64_t, uint32_t*)
+fnptr dftu_svc_ports.latest_get dftu_status (*)(dftu_ctx*, void*, const char*, void*, uint32_t, uint32_t*, uint64_t*, dftu_port_status*)
+fnptr dftu_svc_ports.latest_set dftu_status (*)(dftu_ctx*, void*, const char*, const void*, uint32_t, uint64_t*)
+fnptr dftu_svc_ports.phase_contribute dftu_status (*)(dftu_ctx*, void*, const char*, uint64_t, dftu_merge_op, dftu_type, const void*, uint32_t, dftu_port_status*)
+fnptr dftu_svc_ports.phase_declare dftu_status (*)(dftu_ctx*, void*, const char*, dftu_merge_op, dftu_type, uint64_t, uint64_t*)
+fnptr dftu_svc_ports.phase_result dftu_status (*)(dftu_ctx*, void*, const char*, uint64_t, void*, uint32_t, uint32_t*, dftu_port_status*)
+fnptr dftu_svc_ports.phase_seal dftu_status (*)(dftu_ctx*, void*, const char*, uint64_t)
 fnptr dftu_svc_ports.port_key uint64_t (*)(void*, const char*)
 fnptr dftu_svc_ports.publish void (*)(void*, uint64_t, const void*, uint32_t)
+fnptr dftu_svc_ports.try_consume dftu_status (*)(dftu_ctx*, void*, uint64_t, void*, uint32_t, uint32_t*, dftu_port_status*)
+fnptr dftu_svc_ports.try_publish dftu_status (*)(dftu_ctx*, void*, uint64_t, const void*, uint32_t, dftu_port_status*)
 fnptr dftu_svc_providers.register_provider dftu_status (*)(dftu_ctx*, void*, const char*, const dftu_source_vt*, void*)
 fnptr dftu_svc_result.emit dftu_status (*)(dftu_ctx*, void*, const char*, dftu_result_value*)
 fnptr dftu_svc_sketch.sketch_add void (*)(void*, dftu_sketch*, double, double)
@@ -1180,15 +1238,19 @@ fnptr dftu_svc_store.value_list_count uint64_t (*)(const dftu_store_value_list_t
 fnptr dftu_svc_store.value_list_free void (*)(dftu_store_value_list_t*)
 fnptr dftu_svc_task.all dftu_status (*)(dftu_ctx*, void*, dftu_job* const*, uint32_t, dftu_job**)
 fnptr dftu_svc_task.any dftu_status (*)(dftu_ctx*, void*, dftu_job* const*, uint32_t, dftu_job**)
+fnptr dftu_svc_task.cancel void (*)(void*, dftu_task*)
 fnptr dftu_svc_task.discard void (*)(void*, dftu_task*)
 fnptr dftu_svc_task.drive dftu_status (*)(dftu_ctx*, void*, dftu_step_fn, void*, void (*)(void*), dftu_task**)
 fnptr dftu_svc_task.job dftu_status (*)(dftu_ctx*, void*, const dftu_job_desc*, dftu_job**)
 fnptr dftu_svc_task.map dftu_status (*)(dftu_ctx*, void*, dftu_job*, uint32_t, dftu_job**)
+fnptr dftu_svc_task.release void (*)(void*, dftu_task*)
+fnptr dftu_svc_task.retain void (*)(void*, dftu_task*)
 fnptr dftu_svc_task.run dftu_status (*)(dftu_ctx*, void*, dftu_task*)
 fnptr dftu_svc_task.sleep dftu_status (*)(dftu_ctx*, void*, uint64_t, dftu_job**)
 fnptr dftu_svc_task.spawn dftu_status (*)(dftu_ctx*, void*, dftu_status (*)(dftu_ctx*, void*), void*, dftu_job_where, dftu_task**)
 fnptr dftu_svc_task.start dftu_status (*)(dftu_ctx*, void*, dftu_job*, const void*, void*, dftu_task**)
 fnptr dftu_svc_task.status dftu_status (*)(dftu_ctx*, void*, const dftu_task*)
+fnptr dftu_svc_task.test dftu_status (*)(void*, const dftu_task*)
 fnptr dftu_svc_task.then dftu_status (*)(dftu_ctx*, void*, dftu_job*, dftu_job*, dftu_job**)
 fnptr dftu_svc_trace.trace_close dftu_status (*)(dftu_ctx*, void*, dftu_trace_writer*)
 fnptr dftu_svc_trace.trace_open_write dftu_status (*)(dftu_ctx*, void*, const char*, dftu_trace_writer**)
@@ -1222,6 +1284,7 @@ struct dftu_apply_sort_args size 24 align 8
 struct dftu_apply_tail_args size 8 align 8
 struct dftu_apply_topn_args size 32 align 8
 struct dftu_bytes size 32 align 8
+struct dftu_channel_desc size 32 align 8
 struct dftu_chunk_stats size 16 align 8
 struct dftu_config_key size 24 align 8
 struct dftu_ctx size 24 align 8
@@ -1272,12 +1335,12 @@ struct dftu_svc_index size 16 align 8
 struct dftu_svc_memory size 72 align 8
 struct dftu_svc_nodes size 16 align 8
 struct dftu_svc_ops size 72 align 8
-struct dftu_svc_ports size 32 align 8
+struct dftu_svc_ports size 144 align 8
 struct dftu_svc_providers size 16 align 8
 struct dftu_svc_result size 16 align 8
 struct dftu_svc_sketch size 48 align 8
 struct dftu_svc_store size 200 align 8
-struct dftu_svc_task size 104 align 8
+struct dftu_svc_task size 136 align 8
 struct dftu_svc_trace size 40 align 8
 struct dftu_type_info size 8 align 4
 struct dftu_udaf_desc size 128 align 8
@@ -1313,15 +1376,18 @@ typedef dftu_lazyframe struct dftu_lazyframe
 typedef dftu_line_reader struct dftu_line_reader
 typedef dftu_log_level int32_t
 typedef dftu_logical_op int32_t
+typedef dftu_merge_op int32_t
 typedef dftu_norm_form int32_t
 typedef dftu_op_arg struct dftu_op_arg
 typedef dftu_op_desc struct dftu_op_desc
 typedef dftu_op_kind int32_t
 typedef dftu_op_sig int64_t
 typedef dftu_op_tok int32_t
+typedef dftu_overflow int32_t
 typedef dftu_path_list struct dftu_path_list
 typedef dftu_phase int32_t
 typedef dftu_plugin_host struct dftu_plugin_host
+typedef dftu_port_status int32_t
 typedef dftu_prim_op int32_t
 typedef dftu_pushed int32_t
 typedef dftu_rank_flags int32_t

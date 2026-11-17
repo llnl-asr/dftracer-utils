@@ -254,6 +254,10 @@ TEST_SUITE("PluginFoldOrder") {
         auto set = plugins::host::build_injected_plugins({&pa, &pb});
         REQUIRE_FALSE(set.has_value());
         CHECK(set.error().message().find("cycle") != dstd::String::npos);
+        // The message names each plugin and the name that links it to the next.
+        CHECK(set.error().message().find("plugin 1 -[com.example.b]-> plugin "
+                                         "0 -[com.example.a]-> plugin 1") !=
+              dstd::String::npos);
     }
 
     TEST_CASE("a dftu.-prefixed provided name fails the build") {

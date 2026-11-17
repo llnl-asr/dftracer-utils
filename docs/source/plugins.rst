@@ -807,6 +807,96 @@ plugin provides a consumed name.
          uint32_t len = 0;
          const void* got = p->consume(host->h, key, &len); /* consumer */
 
+**Channels, latest values and phase results** are further members of
+``DFTU_SVC_PORTS``, in ``dftracer/utils/plugins/plugin/ports.h`` for C++. A
+payload is bytes, a fixed-size value or a frame, never a pointer, a ``size_t``
+or a ``long``. The host copies a payload before the call returns.
+
+Names are logical. A bare name belongs to the plugin that declares it, and the
+host prefixes it with ``plugin.<plugin name>.``. A plugin that reads another
+plugin's channel names it in full, ``plugin.<owner>.<name>``. A name is
+``[a-z0-9._/-]`` and stays out of the ``dftu.`` namespace. The host checks the
+plan before the scan and refuses it, naming the cause, when:
+
+- two plugins declare ports under one ``plugin.<name>.`` namespace, or one
+  plugin declares a channel twice;
+- a plugin opens a channel no loaded plugin declares, or declares another
+  credit count, overflow mode or message size than the owner;
+- a phase result skips a generation;
+- the ``DFTU_OVERFLOW_BLOCK`` channels and the ``provides`` / ``consumes``
+  names hold a cycle. A Block channel orders every plugin that declares
+  ``DFTU_CHANNEL_F_SENDS`` at one of its ends before every plugin that declares
+  ``DFTU_CHANNEL_F_RECEIVES``, and every end of a Block channel declares one of
+  the two or both. A Fail or DropOldest channel never waits, so it adds no
+  order, and a request channel with a response channel is not a cycle. The
+  message lists the plugins and the names on the cycle, such as
+  ``'a' -[plugin.a.x]-> 'b' -[plugin.b.y]-> 'a'``;
+- a ``DFTU_OVERFLOW_BLOCK`` channel has an end that shares the fused scan
+  stage. Declare ``DFTU_CHANNEL_F_TASK_END`` at every end, which says the
+  plugin touches the channel only from tasks it starts, never from
+  ``on_batch``; otherwise a full channel would stop the loop that must drain
+  it. Use ``DFTU_OVERFLOW_FAIL`` or ``DFTU_OVERFLOW_DROP_OLDEST`` otherwise.
+  The plan check trusts the ``TASK_END`` bit. At run time the host also
+  refuses a Block ``channel_send`` that starts from ``on_batch`` or
+  ``transform``, with an error that names the channel, so a plugin that set
+  the bit and broke it fails at once and does not deadlock.
+
+*Channels.* A plugin factory declares each end with ``channel_open`` and a
+``dftu_channel_desc`` (``credits``, ``overflow``, ``max_msg_bytes``, each with a
+``field_mask`` bit; the defaults are 16 credits, fail, 65536 bytes). A callback
+opens the declared channel by the same name to get its handle. ``channel_send``
+and ``channel_recv`` start a task. The task completes with ``DFTU_OK`` and
+sets the port status, ``DFTU_PORT_OK``, ``DFTU_PORT_FULL`` (fail mode, no
+credit), ``DFTU_PORT_TOO_BIG`` or ``DFTU_PORT_CLOSED``. A receive into a short
+buffer is ``DFTU_PORT_TOO_BIG`` with the needed length in ``*out_len``, and the
+message stays queued. ``channel_recv_exact`` is the receive of a channel of
+fixed-size values: a message whose length is not ``cap`` is taken off the queue
+and dropped, and the status is ``DFTU_PORT_TOO_BIG`` with the length it had. A send under ``DFTU_OVERFLOW_BLOCK`` waits for a credit,
+and ``DFTU_OVERFLOW_DROP_OLDEST`` drops the oldest message to make room.
+``channel_try_send`` never waits. ``channel_close`` ends the sends; a receive
+still drains the queue and then gives ``DFTU_PORT_CLOSED``. The host closes
+every channel when the scan ends, for a scan that ``Plugins::run`` drives and
+for one that ``Plugins::attach`` joins to a session.
+
+*Latest ports* are hints. ``latest_set`` stores the last value under a name and
+gives its generation, a 64-bit count of sets from 1 that the host assigns.
+``latest_get`` never waits: ``DFTU_PORT_NOT_READY`` before the first set.
+
+*Phase results* merge the values of many slices by a named op: ``DFTU_MERGE_SUM``,
+``MIN`` and ``MAX`` over ``DFTU_T_I64``, ``DFTU_T_U64`` or ``DFTU_T_F64``,
+``DFTU_MERGE_UNION`` over a set of ``DFTU_T_U64`` and ``DFTU_MERGE_CONCAT`` over
+``DFTU_T_BYTES``, appended in the order the host received them. A factory calls
+``phase_declare`` once for each generation; the host assigns generations in
+order from 1, and a request that skips one fails the load.
+``phase_contribute`` merges into an open generation, ``phase_seal`` closes
+generations in order, and ``phase_result`` gives the merged value of a sealed
+one (``DFTU_PORT_NOT_READY`` while it is open).
+
+``publish`` and ``consume`` keep their shape. ``try_publish`` and
+``try_consume`` are their status forms: ``DFTU_PORT_FULL`` when the batch's
+port bytes are used up, ``DFTU_PORT_CLOSED`` outside a scan,
+``DFTU_PORT_NOT_READY`` and ``DFTU_PORT_TOO_BIG`` with the size needed.
+
+.. code-block:: cpp
+
+   // in the factory of plugin "owner"
+   plugins::Ports ports = host.ports();
+   plugins::ChannelOptions options;
+   options.credits = 8;
+   options.max_msg_bytes = sizeof(Reading);
+   DFTRACER_UTILS_TRY(plugins::ChannelId id, ports.open("readings", options));
+
+   // in a task of plugin "reader", which declared "plugin.owner.readings"
+   plugins::Channel<Reading> readings(h.ports(), id);
+   auto op = readings.recv();
+   dstd::Result<Reading> got = co_await op;  // PortError::Closed at the end
+   if (!got && got.error().is_code(plugins::PortError::Closed)) co_return;
+
+``co_await ports.recv(id, buffer)`` gives a ``dstd::Result<std::uint32_t>``
+with the message length, or an error with a ``PortError`` code
+(``Full``, ``TooBig``, ``Closed``, ``NotReady``). ``Channel<T>`` accepts only a
+trivially copyable ``T``. The SDK has no exceptions.
+
 **Cross-worker accumulators (DFTU_SVC_AGG)** are the whole-scan channel: a
 producer accumulates into a named accumulator (section 6) and any plugin reads
 the cross-worker-merged, finalized result by that name at ``on_finalize``.
@@ -865,6 +955,12 @@ through ``*pending`` or a ``drive`` wait slot. A plugin must hand back every
 task it starts, also on an error return. The first error of a combinator
 cancels and awaits the tasks it no longer needs before it finishes, and a
 cancelled task reports ``DFTU_E_CANCELLED``.
+
+``dftu_svc_task::test`` tells without waiting whether a task has finished (1 or
+0). ``dftu_svc_task::cancel`` asks a task to stop and returns at once; the task
+still completes exactly once, with ``DFTU_OK``, ``DFTU_E_CANCELLED`` or another
+error, and its owner still awaits and frees it. Both are safe from any thread,
+and a cancel of a finished task does nothing.
 
 .. tab-set::
 
@@ -1989,6 +2085,10 @@ that covers it:
      - ``DFTU_SVC_SKETCH``
      - `7. Quantile sketches (DFTU_SVC_SKETCH)`_
    * - ``Host::publish_port`` / ``consume_port`` (``OutPort`` / ``InPort``)
+     - ``DFTU_SVC_PORTS``
+     - `8. Inter-plugin communication`_
+   * - ``Host::ports()`` (``Ports``, ``Channel<T>``: channels, latest values,
+       phase results)
      - ``DFTU_SVC_PORTS``
      - `8. Inter-plugin communication`_
    * - ``Host::emit_result``

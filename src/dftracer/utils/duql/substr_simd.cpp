@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/substr_simd.h>
 
 #include <cstddef>
@@ -29,9 +30,9 @@ inline std::uint8_t fold(std::uint8_t c) {
 // Whether the `m` bytes at `h` equal `needle`, ASCII letters folded when
 // `icase` (the needle is already lowercase then).
 template <bool ICASE>
-bool same(const std::uint8_t* h, const char* needle, std::int64_t m) {
+bool same(const std::uint8_t* h, dstd::StringView needle, std::int64_t m) {
     if constexpr (!ICASE) {
-        return std::memcmp(h, needle, static_cast<std::size_t>(m)) == 0;
+        return std::memcmp(h, needle.data(), static_cast<std::size_t>(m)) == 0;
     } else {
         for (std::int64_t k = 0; k < m; ++k)
             if (fold(h[k]) != static_cast<std::uint8_t>(needle[k]))
@@ -44,9 +45,10 @@ bool same(const std::uint8_t* h, const char* needle, std::int64_t m) {
 // -1. Callers handle the empty needle and needle-longer-than-haystack cases
 // before dispatch.
 template <bool ICASE>
-std::int64_t Find(const char* hay, std::int64_t hay_size, const char* needle,
-                  std::int64_t needle_size) {
-    const std::uint8_t* hp = reinterpret_cast<const std::uint8_t*>(hay);
+std::int64_t Find(dstd::StringView hay, dstd::StringView needle) {
+    const auto hay_size = static_cast<std::int64_t>(hay.size());
+    const auto needle_size = static_cast<std::int64_t>(needle.size());
+    const std::uint8_t* hp = reinterpret_cast<const std::uint8_t*>(hay.data());
     const std::int64_t last = hay_size - needle_size;  // inclusive last start
     const std::int64_t m = needle_size;
     const auto head = static_cast<std::uint8_t>(needle[0]);
@@ -101,14 +103,12 @@ std::int64_t Find(const char* hay, std::int64_t hay_size, const char* needle,
     return scalar_from(i);
 }
 
-std::int64_t SubstrFind(const char* hay, std::int64_t hay_size,
-                        const char* needle, std::int64_t needle_size) {
-    return Find<false>(hay, hay_size, needle, needle_size);
+std::int64_t SubstrFind(dstd::StringView hay, dstd::StringView needle) {
+    return Find<false>(hay, needle);
 }
 
-std::int64_t SubstrFindIcase(const char* hay, std::int64_t hay_size,
-                             const char* needle, std::int64_t needle_size) {
-    return Find<true>(hay, hay_size, needle, needle_size);
+std::int64_t SubstrFindIcase(dstd::StringView hay, dstd::StringView needle) {
+    return Find<true>(hay, needle);
 }
 
 std::size_t AsciiPrefix(const unsigned char* d, std::size_t n) {
@@ -141,20 +141,16 @@ HWY_EXPORT(SubstrFind);
 HWY_EXPORT(SubstrFindIcase);
 HWY_EXPORT(AsciiPrefix);
 
-std::int64_t substr_find(const char* hay, std::int64_t hay_size,
-                         const char* needle, std::int64_t needle_size) {
-    if (needle_size <= 0)
-        return 0;  // empty needle matches at 0 (find semantics)
-    if (needle_size > hay_size) return -1;
-    return HWY_DYNAMIC_DISPATCH(SubstrFind)(hay, hay_size, needle, needle_size);
+std::int64_t substr_find(dstd::StringView hay, dstd::StringView needle) {
+    if (needle.empty()) return 0;  // empty needle matches at 0 (find semantics)
+    if (needle.size() > hay.size()) return -1;
+    return HWY_DYNAMIC_DISPATCH(SubstrFind)(hay, needle);
 }
 
-std::int64_t substr_find_icase(const char* hay, std::int64_t hay_size,
-                               const char* needle, std::int64_t needle_size) {
-    if (needle_size <= 0) return 0;
-    if (needle_size > hay_size) return -1;
-    return HWY_DYNAMIC_DISPATCH(SubstrFindIcase)(hay, hay_size, needle,
-                                                 needle_size);
+std::int64_t substr_find_icase(dstd::StringView hay, dstd::StringView needle) {
+    if (needle.empty()) return 0;
+    if (needle.size() > hay.size()) return -1;
+    return HWY_DYNAMIC_DISPATCH(SubstrFindIcase)(hay, needle);
 }
 
 std::size_t ascii_prefix(const unsigned char* d, std::size_t n) {

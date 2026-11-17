@@ -96,14 +96,17 @@ bool is_space(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
-// Past the closing quote of the string whose opening quote is at `q`.
-const char* skip_string(const char* q, const char* end) {
-    ++q;
+// The bytes of the string that starts at `rest`, its closing quote included, or
+// all of `rest` when it never closes.
+std::size_t skip_string(dstd::StringView rest) {
+    const char* q = rest.data() + 1;
+    const char* const end = rest.data() + rest.size();
     while (q < end && *q != '"') {
         if (*q == '\\') ++q;
         ++q;
     }
-    return q < end ? q + 1 : end;
+    return q < end ? static_cast<std::size_t>(q + 1 - rest.data())
+                   : rest.size();
 }
 
 int hex_digit(char c) {
@@ -112,11 +115,11 @@ int hex_digit(char c) {
     return -1;
 }
 
-bool read_hex4(const char* p, const char* end, unsigned& out) {
-    if (end - p < 4) return false;
+bool read_hex4(dstd::StringView text, unsigned& out) {
+    if (text.size() < 4) return false;
     unsigned v = 0;
     for (int i = 0; i < 4; ++i) {
-        const int d = hex_digit(p[i]);
+        const int d = hex_digit(text[i]);
         if (d < 0) return false;
         v = (v << 4) | static_cast<unsigned>(d);
     }
@@ -182,13 +185,13 @@ bool unescape(dstd::StringView text, char* dst, std::size_t& length) {
                 break;
             case 'u': {
                 unsigned cp;
-                if (!read_hex4(p, end, cp)) return false;
+                if (!read_hex4(dstd::StringView(p, end - p), cp)) return false;
                 p += 4;
                 if (cp >= 0xD800 && cp < 0xDC00) {
                     unsigned low;
                     if (end - p < 6 || p[0] != '\\' || p[1] != 'u' ||
-                        !read_hex4(p + 2, end, low) || low < 0xDC00 ||
-                        low > 0xDFFF)
+                        !read_hex4(dstd::StringView(p + 2, end - p - 2), low) ||
+                        low < 0xDC00 || low > 0xDFFF)
                         return false;
                     p += 6;
                     cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
@@ -210,7 +213,9 @@ bool unescape(dstd::StringView text, char* dst, std::size_t& length) {
 
 namespace detail {
 
-dstd::StringView value_extent(const char* start, const char* end) {
+dstd::StringView value_extent(dstd::StringView rest) {
+    const char* const start = rest.data();
+    const char* const end = start + rest.size();
     const char* q = start;
     if (q >= end) return {};
     if (*q == '{' || *q == '[') {
@@ -218,7 +223,7 @@ dstd::StringView value_extent(const char* start, const char* end) {
         for (; q < end; ++q) {
             const char c = *q;
             if (c == '"') {
-                q = skip_string(q, end) - 1;
+                q += skip_string(dstd::StringView(q, end - q)) - 1;
             } else if (c == '{' || c == '[') {
                 ++depth;
             } else if (c == '}' || c == ']') {
@@ -229,7 +234,7 @@ dstd::StringView value_extent(const char* start, const char* end) {
             }
         }
     } else if (*q == '"') {
-        q = skip_string(q, end);
+        q += skip_string(dstd::StringView(q, end - q));
     } else {
         while (q < end && !is_space(*q) && *q != ',' && *q != '}' && *q != ']')
             ++q;
@@ -259,9 +264,10 @@ dstd::Optional<dstd::StringView> read_string(dstd::StringView token,
 }
 
 dstd::Optional<dstd::StringView> read_key(
-    simdjson::ondemand::raw_json_string key, const char* end,
+    simdjson::ondemand::raw_json_string key, dstd::StringView line,
     dstd::StringArena& arena) {
     const char* begin = key.raw();
+    const char* const end = line.data() + line.size();
     const char* q = begin;
     while (q < end && *q != '"') {
         if (*q == '\\') ++q;
@@ -338,7 +344,8 @@ dstd::Optional<dstd::StringView> raw_string(simdjson::ondemand::value& value) {
     return token.substr(1, token.size() - 2);
 }
 
-dstd::StringView raw_key(const char* begin) {
+dstd::StringView raw_key(simdjson::ondemand::raw_json_string key) {
+    const char* const begin = key.raw();
     const char* q = begin;
     while (*q != '"') {
         if (*q == '\\') ++q;
@@ -466,7 +473,8 @@ bool ValueAccess::event(const Value& v, EventView& out) {
         out.text = dstd::StringView(st.text, st.length);
         return true;
     }
-    const dstd::StringView text = value_extent(v.start_, st.end());
+    const dstd::StringView text = value_extent(dstd::StringView(
+        v.start_, static_cast<std::size_t>(st.end() - v.start_)));
     if (!st.child_parser)
         st.child_parser = dstd::make_unique<simdjson::ondemand::parser>();
     const char* const limit = st.text + st.capacity;
@@ -549,11 +557,11 @@ dstd::Result<Value> Document::parse(dstd::StringView line) {
     return open_line(st);
 }
 
-dstd::Result<Value> Document::parse_in_place(const char* line, std::size_t size,
+dstd::Result<Value> Document::parse_in_place(dstd::StringView line,
                                              std::size_t capacity) {
     detail::DocumentState& st = *state_;
-    st.text = line;
-    st.length = size;
+    st.text = line.data();
+    st.length = line.size();
     st.capacity = capacity;
     return open_line(st);
 }
@@ -576,7 +584,8 @@ Value::Type Value::type() {
         default:
             break;
     }
-    const dstd::StringView token = detail::value_extent(start_, owner_->end());
+    const dstd::StringView token = detail::value_extent(dstd::StringView(
+        start_, static_cast<std::size_t>(owner_->end() - start_)));
     if (token.empty()) return Type::Null;
     bool integer = true;
     for (char c : token) {
@@ -595,7 +604,8 @@ Value::Type Value::type() {
 }
 
 dstd::StringView Value::raw() {
-    return detail::value_extent(start_, owner_->end());
+    return detail::value_extent(dstd::StringView(
+        start_, static_cast<std::size_t>(owner_->end() - start_)));
 }
 
 dstd::Optional<Value> Value::find(dstd::StringView key) {
@@ -624,8 +634,9 @@ void Value::for_each_member(
     for (auto field_result : object) {
         simdjson::ondemand::field field;
         if (!note(*owner_, std::move(field_result).get(field))) break;
-        const auto name =
-            detail::read_key(field.key(), owner_->end(), owner_->strings);
+        const auto name = detail::read_key(
+            field.key(), dstd::StringView(owner_->text, owner_->length),
+            owner_->strings);
         const OnDemand member = field.value();
         if (!name) continue;
         fn(*name, Access::make(owner_, member, false));
@@ -688,7 +699,9 @@ dstd::Optional<double> Value::as_double() {
 dstd::Optional<dstd::StringView> Value::as_string() {
     if (*start_ != '"') return dstd::nullopt;
     const auto out = detail::read_string(
-        detail::value_extent(start_, owner_->end()), owner_->strings);
+        detail::value_extent(dstd::StringView(
+            start_, static_cast<std::size_t>(owner_->end() - start_))),
+        owner_->strings);
     if (!out) owner_->broken = true;
     return out;
 }

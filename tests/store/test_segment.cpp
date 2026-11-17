@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -23,7 +24,7 @@ using namespace dftracer::utils::store;
 constexpr std::uint64_t RANDOM_SEED = 0x5EC7105EED1234C0ULL;
 constexpr std::size_t PAIR_COUNT = 10000;
 
-int compare_strings(const dstd::String& a, const dstd::String& b) {
+int compare_strings(dstd::StringView a, dstd::StringView b) {
     const std::size_t common = a.size() < b.size() ? a.size() : b.size();
     if (common != 0) {
         const int cmp = std::memcmp(a.data(), b.data(), common);
@@ -35,18 +36,18 @@ int compare_strings(const dstd::String& a, const dstd::String& b) {
 }
 
 struct BytewiseLess {
-    bool operator()(const dstd::String& a, const dstd::String& b) const {
+    bool operator()(dstd::StringView a, dstd::StringView b) const {
         return compare_strings(a, b) < 0;
     }
 };
 
 using SortedMap = dstd::Map<dstd::String, dstd::String, BytewiseLess>;
 
-dstd::ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(dstd::StringView bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-dstd::ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {
+dstd::ByteView view_of(dstd::Span<const std::uint8_t> bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
@@ -305,8 +306,8 @@ TEST_SUITE("index store segment") {
         REQUIRE(opened.has_value());
         const engine::SegmentView& view = *opened;
 
-        const auto check_lower = [&](const dstd::String& key,
-                                     const char* expected) {
+        const auto check_lower = [&](dstd::StringView key,
+                                     dstd::StringView expected) {
             auto cursor = view.lower_bound(view_of(key));
             REQUIRE_FALSE(cursor.at_end());
             CHECK(as_string(cursor.entry().key()) == dstd::String(expected));
@@ -477,7 +478,7 @@ TEST_SUITE("index store segment") {
         REQUIRE(head_bytes < sealed->size());
         const dstd::ByteView head{sealed->data(), head_bytes};
 
-        const auto check = [&](const dstd::String& key) {
+        const auto check = [&](dstd::StringView key) {
             const auto expected = view.find(view_of(key));
             const auto granule =
                 engine::SegmentView::find_granule(head, length, view_of(key));
@@ -554,8 +555,8 @@ TEST_SUITE("index store segment") {
             bounds.push_back(dstd::fmt<"{}x">(keys[i]));
         }
 
-        const auto range_of = [&](const dstd::String& begin,
-                                  const dstd::String& end) {
+        const auto range_of = [&](dstd::StringView begin,
+                                  dstd::StringView end) {
             dstd::Vector<dstd::String> out;
             for (const dstd::String& key : keys) {
                 if (key >= begin && (end.empty() || key < end)) {
@@ -564,8 +565,8 @@ TEST_SUITE("index store segment") {
             }
             return out;
         };
-        const auto windowed = [&](const dstd::String& begin,
-                                  const dstd::String& end) {
+        const auto windowed = [&](dstd::StringView begin,
+                                  dstd::StringView end) {
             auto opened = engine::SegmentView::open_head(head, length);
             REQUIRE(opened.has_value());
             const engine::SegmentView::GranuleSpan span =
@@ -613,7 +614,7 @@ TEST_SUITE("index store segment") {
         REQUIRE(head_bytes > 0);
         const dstd::String key = "key-3";
 
-        const auto refuses = [&](const dstd::Vector<std::uint8_t>& bytes,
+        const auto refuses = [&](dstd::Span<const std::uint8_t> bytes,
                                  std::uint32_t head) {
             const dstd::ByteView head_view{bytes.data(), head};
             const auto granule = engine::SegmentView::find_granule(

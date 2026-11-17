@@ -161,12 +161,13 @@ int compare_drafts(const Draft& a, const Draft& b) {
     return 0;
 }
 
-template <class T>
-const T* find_local(const dstd::Vector<const T*>& sorted, std::uint32_t id) {
-    const auto at = std::lower_bound(sorted.begin(), sorted.end(), id,
-                                     [](const T* item, std::uint32_t wanted) {
-                                         return item->local_id < wanted;
-                                     });
+template <class V>
+typename V::value_type find_local(const V& sorted, std::uint32_t id) {
+    const auto at =
+        std::lower_bound(sorted.begin(), sorted.end(), id,
+                         [](typename V::value_type item, std::uint32_t wanted) {
+                             return item->local_id < wanted;
+                         });
     return at != sorted.end() && (*at)->local_id == id ? *at : nullptr;
 }
 
@@ -182,7 +183,7 @@ void append_view(dstd::Vector<std::uint8_t>& out, dstd::ByteView bytes) {
 }
 
 void append_vector(dstd::Vector<std::uint8_t>& out,
-                   const dstd::Vector<std::uint8_t>& bytes) {
+                   dstd::Span<const std::uint8_t> bytes) {
     encode_varint(out, bytes.size());
     out.insert(out.end(), bytes.begin(), bytes.end());
 }
@@ -595,7 +596,7 @@ dstd::Expected<DirectoryEntry, dstd::Error> ScopeDirectory::entry(
 
 namespace {
 
-dstd::ByteView bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
+dstd::ByteView bytes_of(dstd::Span<const std::uint8_t> bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 

@@ -459,8 +459,7 @@ class IndexRefusedRow {
                 if (batch_.size() == PIECE_EVENTS) batch_.clear();
             },
             [&](dstd::StringView line, std::size_t capacity) {
-                auto parsed =
-                    doc_.parse_in_place(line.data(), line.size(), capacity);
+                auto parsed = doc_.parse_in_place(line, capacity);
                 if (!parsed) return;
                 if (!trace::views::detail::append_dftracer_record(
                         batch_, *parsed, intern_, true, true, refused_hints_,

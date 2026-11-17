@@ -565,8 +565,7 @@ dftu_series* dftu_series_str_find(const dftu_series* v, const char* needle,
     dftracer::utils::dstd::StringView n(needle,
                                         static_cast<std::size_t>(needle_size));
     return string_int64(v, [n](dftracer::utils::dstd::StringView s) {
-        return substr_find(s.data(), static_cast<std::int64_t>(s.size()),
-                           n.data(), static_cast<std::int64_t>(n.size()));
+        return substr_find(s, n);
     });
 }
 

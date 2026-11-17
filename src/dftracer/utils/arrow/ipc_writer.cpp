@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <flatcc/flatcc_builder.h>
@@ -118,7 +119,7 @@ bool build_compressed_body(ArrowArrayView* view,
 /// A record batch message header: the encapsulated prefix, the flatbuffer and
 /// its padding, so the whole thing is a multiple of 8 bytes.
 bool build_message_header(ArrowArrayView* view,
-                          const dstd::Vector<BufferInfo>& info,
+                          dstd::Span<const BufferInfo> info,
                           std::int64_t body_length,
                           dstd::Vector<std::uint8_t>& header) {
     dstd::Vector<ns(FieldNode_t)> nodes;

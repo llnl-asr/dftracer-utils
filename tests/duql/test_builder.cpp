@@ -30,8 +30,8 @@ struct JsonDoc {
     simdjson::dom::element elem;
     bool valid = false;
 
-    explicit JsonDoc(const char* json) {
-        auto result = parser.parse(json, std::strlen(json));
+    explicit JsonDoc(dstd::StringView json) {
+        auto result = parser.parse(json.data(), json.size());
         if (!result.error()) {
             elem = result.value_unsafe();
             valid = true;
@@ -252,7 +252,7 @@ TEST_CASE("any() builds the same leaf from C++, the C ABI and the DSL") {
 
 namespace {
 
-void check_same_tree(const Pipe& built, const dstd::String& text) {
+void check_same_tree(const Pipe& built, dstd::StringView text) {
     CAPTURE(text);
     CAPTURE(built.raw());
     auto want = syntax::parse(text);

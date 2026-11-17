@@ -43,11 +43,11 @@ struct CountingCodec {
         deserialized.store(0);
     }
 
-    std::size_t serialized_size(const dstd::String& value) const noexcept {
+    std::size_t serialized_size(dstd::StringView value) const noexcept {
         return comm::StringCodec{}.serialized_size(value);
     }
 
-    dstd::Result<std::size_t> serialize(const dstd::String& value,
+    dstd::Result<std::size_t> serialize(dstd::StringView value,
                                         dstd::Span<std::byte> out) const {
         serialized.fetch_add(1);
         return comm::StringCodec{}.serialize(value, out);
@@ -64,11 +64,11 @@ static_assert(comm::Codec<CountingCodec, dstd::String>);
 
 /// The string codec, refusing to deserialize the text "bad".
 struct PickyCodec {
-    std::size_t serialized_size(const dstd::String& value) const noexcept {
+    std::size_t serialized_size(dstd::StringView value) const noexcept {
         return comm::StringCodec{}.serialized_size(value);
     }
 
-    dstd::Result<std::size_t> serialize(const dstd::String& value,
+    dstd::Result<std::size_t> serialize(dstd::StringView value,
                                         dstd::Span<std::byte> out) const {
         return comm::StringCodec{}.serialize(value, out);
     }

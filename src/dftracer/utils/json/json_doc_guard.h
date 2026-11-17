@@ -19,8 +19,8 @@ struct JsonDocGuard {
 
     JsonDocGuard() = default;
 
-    bool parse(const char* data, std::size_t len) {
-        auto result = parser.parse(data, len);
+    bool parse(dstd::StringView text) {
+        auto result = parser.parse(text.data(), text.size());
         valid = !result.error();
         return valid;
     }

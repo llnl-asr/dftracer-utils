@@ -47,8 +47,8 @@ comm::Communicator start(std::uint32_t ranks, coro::Executor& executor) {
 }
 
 /// The counters of one kind of call of one group, zero when none was made.
-comm::CallStats row(const dstd::Vector<comm::CallStats>& rows,
-                    std::uint64_t group, dstd::StringView kind) {
+comm::CallStats row(dstd::Span<const comm::CallStats> rows, std::uint64_t group,
+                    dstd::StringView kind) {
     comm::CallStats found;
     for (const comm::CallStats& one : rows) {
         if (one.group != group || one.kind != kind) continue;
@@ -62,7 +62,7 @@ comm::CallStats row(const dstd::Vector<comm::CallStats>& rows,
     return found;
 }
 
-std::size_t count_events(const dstd::String& text) {
+std::size_t count_events(dstd::StringView text) {
     std::size_t events = 0;
     dftu_utils_test::LineStream lines(text);
     dstd::String line;
@@ -72,7 +72,7 @@ std::size_t count_events(const dstd::String& text) {
 }
 
 /// The lines of @p text that hold @p needle.
-std::size_t count_lines_with(const dstd::String& text, const char* needle) {
+std::size_t count_lines_with(dstd::StringView text, dstd::StringView needle) {
     std::size_t found = 0;
     dftu_utils_test::LineStream lines(text);
     dstd::String line;

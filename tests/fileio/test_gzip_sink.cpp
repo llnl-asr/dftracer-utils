@@ -18,7 +18,7 @@ using namespace dftracer::utils;
 namespace {
 
 // Inflates a multi-member gzip; returns the bytes and each member's last byte.
-dstd::String decode(const dstd::String& path, dstd::String& last_bytes) {
+dstd::String decode(dstd::StringView path, dstd::String& last_bytes) {
     dstd::String gz =
         dstd::fs::read_file(dstd::PathView(path)).value_or(dstd::String());
     z_stream zs{};

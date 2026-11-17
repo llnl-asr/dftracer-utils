@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
@@ -53,11 +54,11 @@ using namespace dftracer::utils::store;
 
 constexpr std::size_t EXTENT_SIZE = 4096;
 
-dstd::ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(dstd::StringView bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-dstd::ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {
+dstd::ByteView view_of(dstd::Span<const std::uint8_t> bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
@@ -66,11 +67,11 @@ dstd::Vector<std::uint8_t> bytes_of(dstd::ByteView bytes) {
     return dstd::Vector<std::uint8_t>(begin, begin + bytes.size());
 }
 
-dstd::Vector<std::uint8_t> bytes_of_string(const dstd::String& value) {
+dstd::Vector<std::uint8_t> bytes_of_string(dstd::StringView value) {
     return bytes_of(view_of(value));
 }
 
-dstd::Vector<std::uint8_t> std_bytes(const dstd::Vector<std::uint8_t>& bytes) {
+dstd::Vector<std::uint8_t> std_bytes(dstd::Span<const std::uint8_t> bytes) {
     return dstd::Vector<std::uint8_t>(bytes.begin(), bytes.end());
 }
 
@@ -79,7 +80,7 @@ bool same_bytes(dstd::ByteView a, dstd::ByteView b) {
            (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
 }
 
-std::uint32_t read_u32_le_at(const dstd::Vector<std::uint8_t>& bytes,
+std::uint32_t read_u32_le_at(dstd::Span<const std::uint8_t> bytes,
                              std::size_t offset) {
     const auto* data = bytes.data();
     return static_cast<std::uint32_t>(data[offset]) |
@@ -88,7 +89,7 @@ std::uint32_t read_u32_le_at(const dstd::Vector<std::uint8_t>& bytes,
            (static_cast<std::uint32_t>(data[offset + 3U]) << 24U);
 }
 
-std::uint64_t read_u64_le_at(const dstd::Vector<std::uint8_t>& bytes,
+std::uint64_t read_u64_le_at(dstd::Span<const std::uint8_t> bytes,
                              std::size_t offset) {
     return static_cast<std::uint64_t>(read_u32_le_at(bytes, offset)) |
            (static_cast<std::uint64_t>(read_u32_le_at(bytes, offset + 4U))
@@ -105,7 +106,7 @@ void write_u64_le_at(dstd::Vector<std::uint8_t>& bytes, std::size_t offset,
     dstd::write_u64_le(bytes.data() + offset, value);
 }
 
-std::size_t header_tail_field_offset(const dstd::Vector<std::uint8_t>& file) {
+std::size_t header_tail_field_offset(dstd::Span<const std::uint8_t> file) {
     const std::size_t host_size =
         std::size_t{file[44]} | (std::size_t{file[45]} << 8U);
     const std::size_t label_size =
@@ -113,7 +114,7 @@ std::size_t header_tail_field_offset(const dstd::Vector<std::uint8_t>& file) {
     return 48U + host_size + label_size;
 }
 
-std::uint64_t header_tail_offset(const dstd::Vector<std::uint8_t>& file) {
+std::uint64_t header_tail_offset(dstd::Span<const std::uint8_t> file) {
     return read_u64_le_at(file, header_tail_field_offset(file));
 }
 
@@ -125,7 +126,7 @@ void rewrite_header_crc(dstd::Vector<std::uint8_t>& header) {
     write_u32_le_at(header, 12, crc);
 }
 
-std::size_t record_crc_offset(const dstd::Vector<std::uint8_t>& file,
+std::size_t record_crc_offset(dstd::Span<const std::uint8_t> file,
                               std::uint64_t record_offset) {
     const std::uint32_t body_size =
         read_u32_le_at(file, static_cast<std::size_t>(record_offset) + 12U);
@@ -143,8 +144,7 @@ void rewrite_record_crc(dstd::Vector<std::uint8_t>& file,
 
 // 40-byte record header, the body codec byte, then the one-byte varint item
 // tag and length. A test that edits the payload needs a body stored raw.
-std::size_t first_item_payload_offset(
-    const dstd::Vector<std::uint8_t>& record) {
+std::size_t first_item_payload_offset(dstd::Span<const std::uint8_t> record) {
     REQUIRE(record.size() > 40U);
     REQUIRE(record[40] == 0U);
     return 43U;
@@ -156,7 +156,7 @@ dstd::Vector<std::uint8_t> read_file(dstd::PathView path) {
     return dstd::Vector<std::uint8_t>(text.begin(), text.end());
 }
 
-void write_file(dstd::PathView path, const dstd::Vector<std::uint8_t>& bytes) {
+void write_file(dstd::PathView path, dstd::Span<const std::uint8_t> bytes) {
     const dstd::Path owned(path.str());
     dftu_utils_test::FileOut output(owned);
     output.write(reinterpret_cast<const char*>(bytes.data()),
@@ -180,7 +180,7 @@ struct TempDir {
 
     ~TempDir() { dstd::fs::remove_all(path).discard(); }
 
-    dstd::String file(const dstd::String& name) const {
+    dstd::String file(dstd::StringView name) const {
         return dstd::String((path / name).str());
     }
 };
@@ -540,7 +540,7 @@ struct RecordMeta {
 std::uint64_t commit_record_offset(std::uint32_t commit_id);
 
 dstd::Vector<RecordMeta> scan_record_metas(
-    const dstd::Vector<std::uint8_t>& file) {
+    dstd::Span<const std::uint8_t> file) {
     dstd::Vector<RecordMeta> records;
     for (std::size_t offset = store::engine::FILE_HEADER_BYTES;
          offset + 40U <= file.size();
@@ -569,7 +569,7 @@ dstd::Vector<RecordMeta> scan_record_metas(
     return records;
 }
 
-bool chain_is_valid(const dstd::Vector<RecordMeta>& records,
+bool chain_is_valid(dstd::Span<const RecordMeta> records,
                     std::uint64_t start_sequence,
                     std::uint64_t flipped_sequence) {
     std::uint64_t sequence = start_sequence;
@@ -589,7 +589,7 @@ bool chain_is_valid(const dstd::Vector<RecordMeta>& records,
     }
 }
 
-std::uint64_t newest_visible_sequence(const dstd::Vector<RecordMeta>& records,
+std::uint64_t newest_visible_sequence(dstd::Span<const RecordMeta> records,
                                       std::uint64_t flipped_sequence) {
     for (std::uint64_t sequence = records.back().sequence; sequence >= 1;
          --sequence) {
@@ -645,8 +645,9 @@ void add_five_commit(engine::DataFileWriter& writer,
 // Sets DFTRACER_UTILS_STORE_DIRECT_READS for one scope.
 class DirectReadsEnv {
    public:
-    explicit DirectReadsEnv(const char* value) {
-        ::setenv(common::constants::store::STORE_DIRECT_READS_ENV, value, 1);
+    explicit DirectReadsEnv(dstd::CStringView value) {
+        ::setenv(common::constants::store::STORE_DIRECT_READS_ENV,
+                 value.c_str(), 1);
     }
     DirectReadsEnv(const DirectReadsEnv&) = delete;
     DirectReadsEnv& operator=(const DirectReadsEnv&) = delete;
@@ -1219,7 +1220,7 @@ TEST_SUITE("index store file") {
     TEST_CASE("record item counts are bounded by the body size") {
         const std::uint64_t record_offset = store::engine::FILE_HEADER_BYTES;
         const auto decode_with_tracked_peak =
-            [](const dstd::Vector<std::uint8_t>& record) {
+            [](dstd::Span<const std::uint8_t> record) {
                 memory::PoolHandle pool =
                     memory::detail::Manager::get().general().child(
                         "record_count_bound", memory::PoolKind::Scratch);
@@ -1286,7 +1287,7 @@ TEST_SUITE("index store file") {
             REQUIRE(encoded.has_value());
             return std_bytes(*encoded);
         };
-        const auto decode = [](const dstd::Vector<std::uint8_t>& record) {
+        const auto decode = [](dstd::Span<const std::uint8_t> record) {
             return store::engine::decode_record(
                 dstd::ByteView{record.data(), record.size()});
         };
@@ -1364,7 +1365,7 @@ TEST_SUITE("index store file") {
             REQUIRE(encoded.has_value());
             return std_bytes(*encoded);
         };
-        const auto decode = [](const dstd::Vector<std::uint8_t>& record) {
+        const auto decode = [](dstd::Span<const std::uint8_t> record) {
             auto decoded = store::engine::decode_record(
                 dstd::ByteView{record.data(), record.size()});
             return decoded;

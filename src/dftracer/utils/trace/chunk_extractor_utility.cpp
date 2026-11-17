@@ -19,13 +19,9 @@ using fileio::ChunkWriter;
 using fileio::ChunkWriterConfig;
 
 dstd::StringView event_of_line(dstd::StringView line) {
-    const char* trimmed;
-    std::size_t trimmed_size;
-    if (json::trim_and_validate(line.data(), line.length(), trimmed,
-                                trimmed_size) &&
-        trimmed_size > 8) {
-        return dstd::StringView(trimmed, trimmed_size);
-    }
+    dstd::StringView trimmed;
+    if (json::trim_and_validate(line, trimmed) && trimmed.size() > 8)
+        return trimmed;
     return {};
 }
 

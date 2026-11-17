@@ -2922,9 +2922,7 @@ Series str_pred_col_kernel(const Series& sa, const Series& sb,
         else if (op == StrPredOp::EndsWith)
             hit = s.ends_with(n);
         else
-            hit = duql::detail::substr_find(
-                      s.data(), static_cast<std::int64_t>(s.size()), n.data(),
-                      static_cast<std::int64_t>(n.size())) >= 0;
+            hit = duql::detail::substr_find(s, n) >= 0;
         c.set(i, hit);
     }
     return c.finish();

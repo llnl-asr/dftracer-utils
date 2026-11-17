@@ -11,7 +11,7 @@ namespace dftracer::utils::duql {
 
 namespace {
 
-DuqlError input_error(const dstd::String& message) {
+DuqlError input_error(dstd::StringView message) {
     DuqlError error;
     error.message = message;
     return error;

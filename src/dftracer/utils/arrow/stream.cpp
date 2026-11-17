@@ -16,6 +16,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -447,7 +448,7 @@ dstd::Unexpected<dstd::Error> stream_error(ArrowArrayStream* in,
 
 /// The indexes of the columns `projection` names, in its order.
 dstd::Result<dstd::Vector<std::int64_t>> projection_of(
-    const Schema& schema, const dstd::Vector<dstd::String>& projection) {
+    const Schema& schema, dstd::Span<const dstd::String> projection) {
     dstd::Vector<std::int64_t> pick;
     pick.reserve(projection.size());
     for (const dstd::String& name : projection) {

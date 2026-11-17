@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/raw_buffer.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/yaml/line_index.h>
 #include <dftracer/utils/yaml/line_value.h>
@@ -198,19 +199,21 @@ bool RecordsImpl::find_chunk_end() {
 
 dstd::Result<void> RecordChunkImpl::parse() {
     is_parsed = true;
-    line_count = detail::count_newlines(begin, size);
-    const std::size_t bom = is_first ? bom_size(begin, size) : 0;
+    const dstd::StringView chunk(begin, size);
+    line_count = detail::count_newlines(chunk);
+    const std::size_t bom = is_first ? bom_size(chunk) : 0;
     storage.base = begin + bom;
     storage.size = size - bom;
     const auto fail = [&](const LineProblem& problem) {
         is_failed = true;
         const std::uint64_t first_line =
             batch_lines +
-            detail::count_newlines(
-                batch_begin, static_cast<std::size_t>(begin - batch_begin));
+            detail::count_newlines(dstd::StringView(
+                batch_begin, static_cast<std::size_t>(begin - batch_begin)));
         return line_problem_error(problem, owner->name, first_line + 1);
     };
-    if (storage.lines.build(storage.base, storage.size) == BuildResult::Invalid)
+    if (storage.lines.build(dstd::StringView(storage.base, storage.size)) ==
+        BuildResult::Invalid)
         return fail(storage.lines.problem);
     std::uint32_t pos = 0;
     std::uint32_t first = 0;
@@ -284,9 +287,10 @@ Load RecordsImpl::load_batch() {
     if (given > 0) {
         for (std::size_t i = 0; i < given; ++i) {
             RecordChunkImpl& chunk = *chunks[i];
-            lines_before += chunk.is_parsed ? chunk.line_count
-                                            : detail::count_newlines(
-                                                  chunk.begin, chunk.size);
+            lines_before += chunk.is_parsed
+                                ? chunk.line_count
+                                : detail::count_newlines(dstd::StringView(
+                                      chunk.begin, chunk.size));
         }
         begin = cuts[given - 1];
         cuts.clear();

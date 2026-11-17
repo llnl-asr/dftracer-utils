@@ -19,7 +19,7 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::fileio;
 
-static dstd::String read_file_content(const dstd::String& path) {
+static dstd::String read_file_content(dstd::StringView path) {
     return dstd::fs::read_file(dstd::PathView(path)).value_or(dstd::String());
 }
 

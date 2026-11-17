@@ -142,7 +142,7 @@ dstd::String compile_error(dstd::StringView text) {
     return p.error().message;
 }
 
-bool has(const dstd::String& text, dstd::StringView part) {
+bool has(dstd::StringView text, dstd::StringView part) {
     return text.find(part) != dstd::String::npos;
 }
 
@@ -829,7 +829,7 @@ TEST_CASE("parse - lookup kinds and inline sides print back") {
 }
 
 TEST_CASE("parse - lookup kind errors") {
-    const auto message = [](const char* text) {
+    const auto message = [](dstd::StringView text) {
         const auto r = duql::syntax::parse(text);
         REQUIRE_FALSE(r.has_value());
         return r.error().format();
@@ -1271,7 +1271,7 @@ TEST_CASE("lower - expression leaves print text that parses back to them") {
 }
 
 TEST_CASE("pipeline - reshaping stages") {
-    auto compiled = [](const char* text) {
+    auto compiled = [](dstd::StringView text) {
         auto p = compile_pipeline(
             text, {{"n", duql::LiteralValue{std::int64_t{2}}}}, nullptr);
         REQUIRE_MESSAGE(p.has_value(), (p ? "" : p.error().format()));

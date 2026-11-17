@@ -15,32 +15,26 @@ namespace dftracer::utils::arrow {
 
 namespace {
 
-bool cstr_eq(const char *a, const char *b) {
-    if (a == b) return true;
-    if (!a || !b) return false;
-    return std::strcmp(a, b) == 0;
-}
-
 // Unknown formats fall back to NA so we can still emit a safe null column.
 ArrowType type_from_format(const ArrowSchema *s) {
     if (!s || !s->format) return NANOARROW_TYPE_NA;
-    const char *f = s->format;
-    if (cstr_eq(f, "n")) return NANOARROW_TYPE_NA;
-    if (cstr_eq(f, "b")) return NANOARROW_TYPE_BOOL;
-    if (cstr_eq(f, "c")) return NANOARROW_TYPE_INT8;
-    if (cstr_eq(f, "s")) return NANOARROW_TYPE_INT16;
-    if (cstr_eq(f, "i")) return NANOARROW_TYPE_INT32;
-    if (cstr_eq(f, "l")) return NANOARROW_TYPE_INT64;
-    if (cstr_eq(f, "C")) return NANOARROW_TYPE_UINT8;
-    if (cstr_eq(f, "S")) return NANOARROW_TYPE_UINT16;
-    if (cstr_eq(f, "I")) return NANOARROW_TYPE_UINT32;
-    if (cstr_eq(f, "L")) return NANOARROW_TYPE_UINT64;
-    if (cstr_eq(f, "f")) return NANOARROW_TYPE_FLOAT;
-    if (cstr_eq(f, "g")) return NANOARROW_TYPE_DOUBLE;
-    if (cstr_eq(f, "u")) return NANOARROW_TYPE_STRING;
-    if (cstr_eq(f, "z")) return NANOARROW_TYPE_BINARY;
-    if (cstr_eq(f, "U")) return NANOARROW_TYPE_LARGE_STRING;
-    if (cstr_eq(f, "Z")) return NANOARROW_TYPE_LARGE_BINARY;
+    const dstd::StringView f = s->format;
+    if (f == "n") return NANOARROW_TYPE_NA;
+    if (f == "b") return NANOARROW_TYPE_BOOL;
+    if (f == "c") return NANOARROW_TYPE_INT8;
+    if (f == "s") return NANOARROW_TYPE_INT16;
+    if (f == "i") return NANOARROW_TYPE_INT32;
+    if (f == "l") return NANOARROW_TYPE_INT64;
+    if (f == "C") return NANOARROW_TYPE_UINT8;
+    if (f == "S") return NANOARROW_TYPE_UINT16;
+    if (f == "I") return NANOARROW_TYPE_UINT32;
+    if (f == "L") return NANOARROW_TYPE_UINT64;
+    if (f == "f") return NANOARROW_TYPE_FLOAT;
+    if (f == "g") return NANOARROW_TYPE_DOUBLE;
+    if (f == "u") return NANOARROW_TYPE_STRING;
+    if (f == "z") return NANOARROW_TYPE_BINARY;
+    if (f == "U") return NANOARROW_TYPE_LARGE_STRING;
+    if (f == "Z") return NANOARROW_TYPE_LARGE_BINARY;
     return NANOARROW_TYPE_NA;
 }
 
@@ -148,7 +142,8 @@ void append_json_scalar(const ArrowArrayView *view, ArrowType t,
 }
 
 bool same_format(const ArrowSchema *a, const ArrowSchema *b) {
-    return a && b && a->format && b->format && cstr_eq(a->format, b->format);
+    return a && b && a->format && b->format &&
+           dstd::StringView(a->format) == dstd::StringView(b->format);
 }
 
 }  // namespace

@@ -14,7 +14,7 @@ using namespace dftracer::utils::duql;
 
 namespace {
 
-dstd::Optional<Decorrelated> run(const dstd::String& text, bool scalar) {
+dstd::Optional<Decorrelated> run(dstd::StringView text, bool scalar) {
     auto tree = syntax::parse(text);
     REQUIRE(tree.has_value());
     auto d = decorrelate(*tree->pipeline, scalar);
@@ -22,7 +22,7 @@ dstd::Optional<Decorrelated> run(const dstd::String& text, bool scalar) {
     return std::move(*d);
 }
 
-dstd::String refusal(const dstd::String& text, bool scalar) {
+dstd::String refusal(dstd::StringView text, bool scalar) {
     auto tree = syntax::parse(text);
     REQUIRE(tree.has_value());
     const auto d = decorrelate(*tree->pipeline, scalar);
@@ -30,8 +30,8 @@ dstd::String refusal(const dstd::String& text, bool scalar) {
     return d.error().message;
 }
 
-bool has(const dstd::String& text, std::initializer_list<const char*> parts) {
-    for (const char* p : parts)
+bool has(dstd::StringView text, std::initializer_list<dstd::StringView> parts) {
+    for (dstd::StringView p : parts)
         if (text.find(p) == dstd::String::npos) {
             MESSAGE(text);
             return false;
@@ -138,7 +138,7 @@ TEST_SUITE("duql decorrelate") {
     }
 
     TEST_CASE("what a range sub-query gives") {
-        auto read = [](const dstd::String& agg) {
+        auto read = [](dstd::StringView agg) {
             return run(dstd::fmt<
                            "from data | where ts < ^.ts | agg { v = {} }">(agg),
                        true)

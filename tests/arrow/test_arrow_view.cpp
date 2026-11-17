@@ -27,7 +27,7 @@ struct ViewFixture {
     std::int64_t sizes[2] = {static_cast<std::int64_t>(blob_a.size()),
                              static_cast<std::int64_t>(blob_b.size())};
 
-    static void put(std::uint8_t* v, const dstd::String& s, std::int32_t index,
+    static void put(std::uint8_t* v, dstd::StringView s, std::int32_t index,
                     std::int32_t offset) {
         const auto size = static_cast<std::int32_t>(s.size());
         std::memset(v, 0, 16);

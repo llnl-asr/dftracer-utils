@@ -1115,8 +1115,8 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_write(
         dstd::Vector<dstd::String> rank_outs;
         rank_outs.reserve(gathered->size());
         for (const auto& out : *gathered) rank_outs.push_back(*out);
-        const auto merge_rc =
-            co_await fileio::parallel::merge_shards(final_output, rank_outs);
+        const auto merge_rc = co_await fileio::parallel::merge_shards(
+            final_output, std::move(rank_outs));
         if (merge_rc != 0) {
             DFTRACER_UTILS_LOG_ERROR("merge_shards failed for {}",
                                      final_output);

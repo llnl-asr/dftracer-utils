@@ -51,7 +51,7 @@ dstd::Vector<const TLookup*> lookups(const Pipeline& p) {
 }
 
 // `text`'s scan filter with every lookup bound to runs().
-Query bound(const dstd::String& text) {
+Query bound(dstd::StringView text) {
     auto p = compile_program(text, {}, nullptr);
     REQUIRE_MESSAGE(p.has_value(), (p ? dstd::String() : p.error().format()));
     REQUIRE(p->main.filter);
@@ -61,7 +61,7 @@ Query bound(const dstd::String& text) {
     return duql::detail::QueryAccess::from_node(clone(*p->main.filter));
 }
 
-bool on_json(const Query& q, const dstd::String& json) {
+bool on_json(const Query& q, dstd::StringView json) {
     simdjson::dom::parser parser;
     simdjson::dom::element doc;
     REQUIRE(parser.parse(json.data(), json.size()).get(doc) ==
@@ -202,7 +202,7 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     side->columns.push_back(dataframe::Series::flat_i64(pid, 6));
     side->columns.push_back(dataframe::Series::flat_i64(ts, 6, ts_valid));
 
-    auto lookup_of = [&](const dstd::String& text) {
+    auto lookup_of = [&](dstd::StringView text) {
         auto p = compile_program(text, {}, nullptr);
         REQUIRE_MESSAGE(p.has_value(),
                         (p ? dstd::String() : p.error().format()));
@@ -240,7 +240,7 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     const dataframe::Series a = dataframe::Series::flat_i64(lo, 6);
     const dataframe::Series b = dataframe::Series::flat_i64(hi, 6, hi_valid);
     const dstd::Vector<const dataframe::Series*> keys = {&k, &a, &b};
-    auto band = [&](const dstd::String& agg) {
+    auto band = [&](dstd::StringView agg) {
         const auto [bp, bl] = lookup_of(
             dstd::fmt<"derive v = (from data | where pid == ^.pid and ts "
                       "between ^.lo and ^.hi | agg { v = {} })">(agg));

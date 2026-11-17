@@ -93,10 +93,12 @@ class PaddedLines {
                                               from)
                    : len_ - pos_;
             pos_ += nl ? size + 1 : size;
-            const char* start;
-            std::size_t trimmed;
-            if (!json::trim_and_validate_with_comma(from, size, start, trimmed))
+            dstd::StringView view;
+            if (!json::trim_and_validate_with_comma(
+                    dstd::StringView(from, size), view))
                 continue;
+            const char* const start = view.data();
+            const std::size_t trimmed = view.size();
             const std::size_t capacity =
                 static_cast<std::size_t>(base_ + len_ - start) +
                 simdjson::SIMDJSON_PADDING;

@@ -175,15 +175,13 @@ class Detector {
 
     // Whether more lines are wanted.
     bool add(dstd::StringView line) {
-        const char* start = nullptr;
-        std::size_t length = 0;
-        if (!json::trim_and_validate_with_comma(line.data(), line.size(), start,
-                                                length))
-            return true;
+        dstd::StringView trimmed;
+        if (!json::trim_and_validate_with_comma(line, trimmed)) return true;
         simdjson::dom::element root;
-        if (parser_.parse(start, length).get(root) != simdjson::SUCCESS &&
-            json::parse_refused(parser_, dstd::StringView(start, length))
-                    .get(root) != simdjson::SUCCESS)
+        if (parser_.parse(trimmed.data(), trimmed.size()).get(root) !=
+                simdjson::SUCCESS &&
+            json::parse_refused(parser_, trimmed).get(root) !=
+                simdjson::SUCCESS)
             return true;
         if (!root.is_object()) return true;
         ++out_.objects;
@@ -471,7 +469,7 @@ dstd::Vector<RecordSchema> builtins() {
     {
         using namespace duql;
         const Col meta = c("ph").is_in(dstd::Vector<Col>{"M", 4});
-        const auto dict = [&](const char* tag) {
+        const auto dict = [&](dstd::StringView tag) {
             return Pipe().where(meta && c("name") == tag);
         };
         dft.source = built_merge(

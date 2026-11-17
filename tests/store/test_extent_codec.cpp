@@ -26,7 +26,7 @@ constexpr std::size_t ALIGN = 4096;
 constexpr std::uint32_t PAGE =
     static_cast<std::uint32_t>(store::engine::PAGE_BYTES);
 
-dstd::ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {
+dstd::ByteView view_of(dstd::Span<const std::uint8_t> bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
@@ -235,10 +235,10 @@ TEST_SUITE("store extent codec") {
         const dstd::Vector<std::uint8_t>& stored = *encoded;
         REQUIRE(store::engine::ExtentPages::open(view_of(stored)).has_value());
 
-        const auto refuses = [](const dstd::Vector<std::uint8_t>& bad) {
+        const auto refuses = [](dstd::Span<const std::uint8_t> bad) {
             auto pages = store::engine::ExtentPages::open(view_of(bad));
             if (pages.has_value()) {
-                dstd::Vector<std::uint8_t> decoded = bad;
+                dstd::Vector<std::uint8_t> decoded(bad.begin(), bad.end());
                 auto whole = store::engine::decode_extent(decoded);
                 return !whole.has_value() &&
                        whole.error().is(dstd::Condition::Parse);

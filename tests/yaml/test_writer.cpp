@@ -323,7 +323,7 @@ TEST_CASE("writer: every trap string is spelled exactly as expected") {
     for (const Trap& trap : TRAPS) {
         dstd::String as_value;
         Writer v(as_value);
-        v.value(trap.text);
+        v.value(dstd::StringView(trap.text));
         CAPTURE(trap.text);
         CHECK(as_value == trap.written);
 
@@ -381,7 +381,7 @@ TEST_CASE("writer: every trap string round-trips as an array element") {
     dstd::String out;
     Writer w(out);
     w.begin_array();
-    for (const Trap& trap : TRAPS) w.value(trap.text);
+    for (const Trap& trap : TRAPS) w.value(dstd::StringView(trap.text));
     w.end_array();
     auto doc = Document::parse(out, "");
     REQUIRE(doc.has_value());
@@ -434,7 +434,7 @@ TEST_CASE("writer: a key of 1024 bytes is the longest implicit key") {
 }
 
 TEST_CASE("writer: plain strings stay plain and traps get quotes") {
-    const auto text_of = [](const char* s) {
+    const auto text_of = [](dstd::StringView s) {
         dstd::String out;
         Writer w(out);
         w.value(s);

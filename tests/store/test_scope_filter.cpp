@@ -18,11 +18,11 @@ namespace {
 
 using namespace dftracer::utils::store;
 
-dstd::ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {
+dstd::ByteView view_of(dstd::Span<const std::uint8_t> bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
-std::uint64_t file_hash(const dstd::String& path) {
+std::uint64_t file_hash(dstd::StringView path) {
     const dstd::String held(path.data(), path.size());
     return store::engine::scope_hash("dftu.test", 1, ScopeKind::File,
                                      dstd::Span<const dstd::String>(&held, 1));
@@ -36,8 +36,7 @@ dstd::Vector<std::uint64_t> hashes_of(std::size_t first, std::size_t count) {
     return hashes;
 }
 
-dstd::Vector<std::uint8_t> filter_of(
-    const dstd::Vector<std::uint64_t>& hashes) {
+dstd::Vector<std::uint8_t> filter_of(dstd::Span<const std::uint64_t> hashes) {
     return store::engine::build_scope_filter(
         dstd::Span<const std::uint64_t>(hashes.data(), hashes.size()));
 }
@@ -90,7 +89,7 @@ TEST_SUITE("index store scope filter") {
         const dstd::String bc("bc");
         const dstd::String split_one[] = {ab, c};
         const dstd::String split_two[] = {a, bc};
-        const auto hash = [](const char* name, std::uint32_t version,
+        const auto hash = [](dstd::StringView name, std::uint32_t version,
                              ScopeKind kind,
                              dstd::Span<const dstd::String> paths) {
             return store::engine::scope_hash(name, version, kind, paths);

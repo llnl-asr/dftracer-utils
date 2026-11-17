@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -38,7 +39,7 @@ namespace dftracer::utils::store::engine {
 
 struct DataFileWriterTestHook {
     static void reopen_read_only(engine::DataFileWriter& writer,
-                                 const dstd::String& path) {
+                                 dstd::StringView path) {
         auto file = dstd::File::open(dstd::PathView(path), {});
         if (file) writer.fd_ = std::move(*file);
     }
@@ -276,7 +277,7 @@ void check_extent_layout(dstd::Vector<engine::WrittenExtent>& extents,
 }
 
 void check_extents_on_disk(int fd,
-                           const dstd::Vector<engine::WrittenExtent>& extents,
+                           dstd::Span<const engine::WrittenExtent> extents,
                            dstd::Vector<int>& seen) {
     for (const engine::WrittenExtent& extent : extents) {
         const dstd::Vector<std::uint8_t> bytes = read_extent_raw(fd, extent);

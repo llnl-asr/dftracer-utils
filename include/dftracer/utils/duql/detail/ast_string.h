@@ -36,7 +36,7 @@ inline const char* match_op_str(MatchOp op, bool negated) {
     return "??";
 }
 
-inline void string_to_string(dstd::String& os, const dstd::String& v) {
+inline void string_to_string(dstd::String& os, dstd::StringView v) {
     os += quote_string(v);
 }
 

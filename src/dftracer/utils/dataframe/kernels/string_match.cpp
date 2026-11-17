@@ -45,10 +45,7 @@ dftu_series* pattern_predicate(const dftu_series* v,
                     v, [lit](dstd::StringView s) { return s.ends_with(lit); });
             case duql::LiteralTest::Op::Contains:
                 return string_mask(v, [lit](dstd::StringView s) {
-                    return substr_find(
-                               s.data(), static_cast<std::int64_t>(s.size()),
-                               lit.data(),
-                               static_cast<std::int64_t>(lit.size())) >= 0;
+                    return substr_find(s, lit) >= 0;
                 });
         }
     }
@@ -81,10 +78,8 @@ dftu_series* mask_eq(const dftu_series* v, const char* rhs,
 dftu_series* mask_contains(const dftu_series* v, const char* needle,
                            std::int32_t needle_size) {
     dstd::StringView n(needle, static_cast<std::size_t>(needle_size));
-    return string_mask(v, [n](dstd::StringView s) {
-        return substr_find(s.data(), static_cast<std::int64_t>(s.size()),
-                           n.data(), static_cast<std::int64_t>(n.size())) >= 0;
-    });
+    return string_mask(
+        v, [n](dstd::StringView s) { return substr_find(s, n) >= 0; });
 }
 
 dftu_series* mask_starts_with(const dftu_series* v, const char* prefix,

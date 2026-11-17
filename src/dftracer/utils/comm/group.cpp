@@ -845,7 +845,7 @@ bool check_shape(const GroupState& group, const Slot& slot,
 /// The outcome of a data call: the table of the provider, or for a reduction
 /// that the group merges, the fold of its entries in rank order.
 Outcome make_outcome(const backend::SlotEnd& end,
-                     const dstd::Vector<backend::Combine>& folds) {
+                     dstd::Span<const backend::Combine> folds) {
     Outcome outcome;
     outcome.table = end.table;
     const backend::Record& base = end.records[0];

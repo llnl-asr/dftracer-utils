@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/variant.h>
@@ -76,7 +77,7 @@ struct RangeIndex {
 
 /// Lays out `leaves` (one per position of `index`) as each key's tree.
 void build_range_tree(RangeIndex& index, duql::RangeRead read,
-                      const dstd::Vector<RangeIndex::Node>& leaves);
+                      dstd::Span<const RangeIndex::Node> leaves);
 
 /// A collected row set with its rows by key. Its columns are FLAT.
 struct LookupTable {

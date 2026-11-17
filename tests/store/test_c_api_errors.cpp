@@ -18,9 +18,9 @@ using namespace dftracer::utils;
 
 namespace {
 
-dstd::String data_file_of(const char* dir) {
+dstd::String data_file_of(dstd::StringView dir) {
     dstd::String found;
-    for (const auto& entry : dftu_utils_test::list_dir(dstd::String(dir))) {
+    for (const auto& entry : dftu_utils_test::list_dir(dir)) {
         if (entry.path.view().extension() == ".dfs") {
             found = dstd::String(entry.path.str());
         }
@@ -30,7 +30,7 @@ dstd::String data_file_of(const char* dir) {
 
 // Cuts the footer and removes the summary, so that opening the store recovers
 // the commit chain by reading the file and keeps its descriptor.
-void drop_footer(const char* dir) {
+void drop_footer(dstd::StringView dir) {
     const dstd::String path = data_file_of(dir);
     REQUIRE_FALSE(path.empty());
     const dstd::String bytes = dftu_utils_test::read_text(path);
@@ -45,7 +45,7 @@ void drop_footer(const char* dir) {
                  .c_str());
 }
 
-int descriptor_of_data_file(const char* dir) {
+int descriptor_of_data_file(dstd::StringView dir) {
     const dstd::String found = data_file_of(dir);
     struct stat file_stat{};
     if (found.empty() || ::stat(found.c_str(), &file_stat) != 0) return -1;
@@ -89,7 +89,7 @@ TEST_CASE("cursor_next returns the failure of a scan that cannot read") {
     dftu_store_ns_free(ns);
     dftu_store_free(writer);
 
-    drop_footer(root.c_str());
+    drop_footer(root);
 
     dftu_store_t* store = nullptr;
     REQUIRE(dftu_store_open(root.c_str(), &store, nullptr) == DFTU_OK);
@@ -100,7 +100,7 @@ TEST_CASE("cursor_next returns the failure of a scan that cannot read") {
 
     // A directory in place of the data file's descriptor makes every read of
     // the file fail with EISDIR.
-    const int data_fd = descriptor_of_data_file(root.c_str());
+    const int data_fd = descriptor_of_data_file(root);
     REQUIRE(data_fd >= 0);
     const int saved_fd = ::dup(data_fd);
     REQUIRE(saved_fd >= 0);

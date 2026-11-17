@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -31,16 +33,52 @@ namespace dftracer::utils::duql {
 
 namespace detail {
 
+/// A borrowed list of @p T for the builder calls: a @ref dstd::Vector, an
+/// array, a span or a braced list. It holds no copy, so a call reads it and
+/// nothing keeps it past the call.
+template <class T>
+class List {
+   public:
+    List() = default;
+    List(std::initializer_list<T> items)
+        : items_(items.begin(), items.size()) {}
+    template <class R>
+        requires(!std::is_same_v<std::remove_cvref_t<R>, List> &&
+                 std::is_convertible_v<const R&, dstd::Span<const T>>)
+    List(const R& items) : items_(items) {}
+
+    const T* begin() const { return items_.data(); }
+    const T* end() const { return items_.data() + items_.size(); }
+    std::size_t size() const { return items_.size(); }
+    bool empty() const { return items_.empty(); }
+    const T& operator[](std::size_t i) const { return items_[i]; }
+
+   private:
+    dstd::Span<const T> items_;
+};
+
+/// A text that is neither a string literal nor a @ref dstd::StringView, such
+/// as a @ref dstd::String. The literal has its own array form, which keeps it
+/// from decaying to a pointer and then to bool.
+template <class S>
+concept TextLike = !std::is_array_v<S> && !std::is_pointer_v<S> &&
+                   !std::is_same_v<S, dstd::StringView> &&
+                   std::is_convertible_v<const S&, dstd::StringView>;
+
 /// Turn a scalar into a @ref LiteralNode, mirroring the parser's typing rules:
 /// non-negative integers become uint64_t, negatives int64_t.
 inline LiteralNode literal(bool v) { return LiteralNode{v}; }
-inline LiteralNode literal(const char* v) {
+template <std::size_t N>
+LiteralNode literal(const char (&v)[N]) {
     return LiteralNode{dstd::String(v)};
 }
 inline LiteralNode literal(dstd::StringView v) {
     return LiteralNode{dstd::String(v)};
 }
-inline LiteralNode literal(const dstd::String& v) { return LiteralNode{v}; }
+/// A pointer would convert to bool, so only a literal or a view gives text.
+template <class P>
+    requires std::is_pointer_v<P>
+LiteralNode literal(P) = delete;
 
 template <typename I,
           std::enable_if_t<std::is_integral_v<std::decay_t<I>> &&
@@ -116,8 +154,7 @@ DFTRACER_UTILS_DUQL_DEFINE_CMP(field_le, CompareOp::Le)
 #undef DFTRACER_UTILS_DUQL_DEFINE_CMP
 
 /// field in [values].
-inline Expr field_in(dstd::StringView name,
-                     const dstd::Vector<std::int64_t>& values) {
+inline Expr field_in(dstd::StringView name, detail::List<std::int64_t> values) {
     detail::ArrayNode arr;
     arr.elements.reserve(values.size());
     for (std::int64_t v : values) arr.elements.push_back(detail::literal(v));
@@ -125,8 +162,7 @@ inline Expr field_in(dstd::StringView name,
         detail::InNode{detail::field_node(name), std::move(arr)}));
 }
 
-inline Expr field_in(dstd::StringView name,
-                     const dstd::Vector<dstd::String>& values) {
+inline Expr field_in(dstd::StringView name, detail::List<dstd::String> values) {
     detail::ArrayNode arr;
     arr.elements.reserve(values.size());
     for (const auto& v : values) arr.elements.push_back(LiteralNode{v});
@@ -136,7 +172,7 @@ inline Expr field_in(dstd::StringView name,
 
 /// field not in [values].
 inline Expr field_not_in(dstd::StringView name,
-                         const dstd::Vector<std::int64_t>& values) {
+                         detail::List<std::int64_t> values) {
     detail::ArrayNode arr;
     arr.elements.reserve(values.size());
     for (std::int64_t v : values) arr.elements.push_back(detail::literal(v));
@@ -145,7 +181,7 @@ inline Expr field_not_in(dstd::StringView name,
 }
 
 inline Expr field_not_in(dstd::StringView name,
-                         const dstd::Vector<dstd::String>& values) {
+                         detail::List<dstd::String> values) {
     detail::ArrayNode arr;
     arr.elements.reserve(values.size());
     for (const auto& v : values) arr.elements.push_back(LiteralNode{v});
@@ -227,16 +263,16 @@ class Field {
         return field_le(name_, std::forward<T>(v));
     }
 
-    Expr in(const dstd::Vector<std::int64_t>& values) const {
+    Expr in(detail::List<std::int64_t> values) const {
         return field_in(name_, values);
     }
-    Expr in(const dstd::Vector<dstd::String>& values) const {
+    Expr in(detail::List<dstd::String> values) const {
         return field_in(name_, values);
     }
-    Expr not_in(const dstd::Vector<std::int64_t>& values) const {
+    Expr not_in(detail::List<std::int64_t> values) const {
         return field_not_in(name_, values);
     }
-    Expr not_in(const dstd::Vector<dstd::String>& values) const {
+    Expr not_in(detail::List<dstd::String> values) const {
         return field_not_in(name_, values);
     }
 
@@ -289,22 +325,25 @@ inline dstd::String number_text(double v, dstd::String& error) {
 /// when there is none.
 template <typename T>
 dstd::String error_of(const T& value) {
-    return value.error();
-}
-template <typename T>
-dstd::String error_of(const dstd::Vector<T>& values) {
-    for (const auto& v : values) {
-        dstd::String e = error_of(v);
-        if (!e.empty()) return e;
+    if constexpr (requires { value.error(); }) {
+        return value.error();
+    } else {
+        for (const auto& v : value) {
+            dstd::String e = error_of(v);
+            if (!e.empty()) return e;
+        }
+        return {};
     }
-    return {};
 }
 template <typename T>
 dstd::String error_of(const dstd::Optional<T>& value) {
     return value ? error_of(*value) : dstd::String();
 }
 
-inline dstd::String error_of(const dstd::String& error) { return error; }
+inline dstd::String error_of(dstd::String error) { return error; }
+inline dstd::String error_of(dstd::StringView error) {
+    return dstd::String(error);
+}
 
 /// The first non-empty input error among `values`, in argument order.
 inline dstd::String first_error() { return {}; }
@@ -336,9 +375,14 @@ class Col {
     template <typename D,
               std::enable_if_t<std::is_floating_point_v<D>, int> = 0>
     Col(D v) : text_(detail::number_text(static_cast<double>(v), error_)) {}
-    Col(const char* v) : text_(detail::string_literal(v)) {}
+    template <std::size_t N>
+    Col(const char (&v)[N]) : text_(detail::string_literal(v)) {}
     Col(dstd::StringView v) : text_(detail::string_literal(v)) {}
-    Col(const dstd::String& v) : text_(detail::string_literal(v)) {}
+    template <detail::TextLike S>
+    Col(const S& v) : text_(detail::string_literal(v)) {}
+    template <class P>
+        requires std::is_pointer_v<P>
+    Col(P) = delete;
 
     /// A value from its duql text, unchecked; the parser checks it. `error`
     /// is the input error the value starts with, empty for none.
@@ -361,8 +405,8 @@ class Col {
         return from_text(dstd::fmt<"{}[{}]">(text_, index.text_), std::move(e));
     }
 
-    Col is_in(const dstd::Vector<Col>& values) const;
-    Col not_in(const dstd::Vector<Col>& values) const;
+    Col is_in(detail::List<Col> values) const;
+    Col not_in(detail::List<Col> values) const;
     /// `x in $p`: `list` is `param("p")`, bound to a list.
     Col is_in(const Col& list) const {
         return wrap(dstd::fmt<"{} in {}">(text_, list.text_),
@@ -448,7 +492,7 @@ class Col {
     }
 
    private:
-    static Col wrap(const dstd::String& t, dstd::String error) {
+    static Col wrap(dstd::StringView t, dstd::String error) {
         return from_text(dstd::fmt<"({})">(t), std::move(error));
     }
     Col match(dstd::StringView op, const Col& pattern,
@@ -518,7 +562,7 @@ struct Named {
     const dstd::String& error() const { return value.error(); }
 };
 
-inline dstd::String join(const dstd::Vector<Col>& items) {
+inline dstd::String join(detail::List<Col> items) {
     dstd::String out;
     for (std::size_t i = 0; i < items.size(); ++i) {
         if (i) out += ", ";
@@ -528,8 +572,8 @@ inline dstd::String join(const dstd::Vector<Col>& items) {
 }
 
 /// `name(args, named = value, ...)`; `name` may be namespaced (`ns.f`).
-inline Col fn(dstd::StringView name, const dstd::Vector<Col>& args = {},
-              const dstd::Vector<Named>& named = {}) {
+inline Col fn(dstd::StringView name, detail::List<Col> args = {},
+              detail::List<Named> named = {}) {
     dstd::String t = dstd::fmt<"{}({}">(name, join(args));
     for (std::size_t i = 0; i < named.size(); ++i) {
         if (i || !args.empty()) t += ", ";
@@ -538,17 +582,17 @@ inline Col fn(dstd::StringView name, const dstd::Vector<Col>& args = {},
     return Col::from_text(dstd::fmt<"{})">(t),
                           detail::first_error(args, named));
 }
-inline Col tup(const dstd::Vector<Col>& items) {
+inline Col tup(detail::List<Col> items) {
     return Col::from_text(dstd::fmt<"({})">(join(items)),
                           detail::error_of(items));
 }
-inline Col list(const dstd::Vector<Col>& items) {
+inline Col list(detail::List<Col> items) {
     return Col::from_text(dstd::fmt<"[{}]">(join(items)),
                           detail::error_of(items));
 }
 /// `case { cond => value, ..., else => otherwise }`; a missing `otherwise`
 /// is null.
-inline Col case_(const dstd::Vector<dstd::Pair<Col, Col>>& pairs,
+inline Col case_(detail::List<dstd::Pair<Col, Col>> pairs,
                  const dstd::Optional<Col>& otherwise = dstd::nullopt) {
     dstd::Vector<Col> args;
     args.reserve(pairs.size() * 2 + 1);
@@ -586,9 +630,11 @@ inline Col operator-(const Col& a) {
 /// A `select`, `group`, `window` or `session` item: a path (from a string),
 /// an expression, or `name = expression`.
 struct Item {
-    Item(const char* path) : value(c(path)) {}
+    template <std::size_t N>
+    Item(const char (&path)[N]) : value(c(path)) {}
     Item(dstd::StringView path) : value(c(path)) {}
-    Item(const dstd::String& path) : value(c(path)) {}
+    template <detail::TextLike S>
+    Item(const S& path) : value(c(path)) {}
     Item(Col v) : value(std::move(v)) {}
     Item(dstd::String n, Col v) : value(std::move(v)), name(std::move(n)) {}
     Col value;
@@ -601,8 +647,10 @@ enum class Nulls : std::uint8_t { Default, First, Last };
 /// A sort key: a path (from a string) or an expression, ascending; `-x`
 /// sorts descending.
 struct SortKey {
-    SortKey(const char* path) : value(c(path)) {}
-    SortKey(const dstd::String& path) : value(c(path)) {}
+    template <std::size_t N>
+    SortKey(const char (&path)[N]) : value(c(path)) {}
+    template <detail::TextLike S>
+    SortKey(const S& path) : value(c(path)) {}
     SortKey(Col v, Nulls n = Nulls::Default) : value(std::move(v)), nulls(n) {}
     Col value;
     Nulls nulls = Nulls::Default;
@@ -611,8 +659,10 @@ struct SortKey {
 
 /// A lookup key: `left`, or `left == right` (`right` the row set's side).
 struct JoinKey {
-    JoinKey(const char* path) : left(c(path)) {}
-    JoinKey(const dstd::String& path) : left(c(path)) {}
+    template <std::size_t N>
+    JoinKey(const char (&path)[N]) : left(c(path)) {}
+    template <detail::TextLike S>
+    JoinKey(const S& path) : left(c(path)) {}
     JoinKey(Col l) : left(std::move(l)) {}
     JoinKey(Col l, Col r) : left(std::move(l)), right(std::move(r)) {}
     Col left;
@@ -664,27 +714,25 @@ class Pipe {
         return decl(dstd::fmt<"let {} = {}">(name, pipeline.inline_text()),
                     pipeline.error_);
     }
-    Pipe define(dstd::StringView name, const dstd::Vector<dstd::String>& params,
+    Pipe define(dstd::StringView name, detail::List<dstd::String> params,
                 const Col& body) const {
         return define_text(name, params, body.raw(), body.error());
     }
     /// `def name(params) = stages;`: a pipeline macro. `body` must not start
     /// with a source.
-    Pipe define(dstd::StringView name, const dstd::Vector<dstd::String>& params,
+    Pipe define(dstd::StringView name, detail::List<dstd::String> params,
                 const Pipe& body) const {
         return define_text(name, params, body.inline_text(), body.error_);
     }
     /// A stage that calls the pipeline macro `name` with `args`.
-    Pipe use(dstd::StringView name, const dstd::Vector<Col>& args = {}) const {
+    Pipe use(dstd::StringView name, detail::List<Col> args = {}) const {
         dstd::String t = dstd::fmt<"{}(">(name);
         for (std::size_t i = 0; i < args.size(); ++i)
             t += (i ? ", " : "") + args[i].raw();
         return stage(dstd::fmt<"{})">(t), detail::error_of(args));
     }
-    Pipe define_text(dstd::StringView name,
-                     const dstd::Vector<dstd::String>& params,
-                     const dstd::String& body,
-                     const dstd::String& error = {}) const {
+    Pipe define_text(dstd::StringView name, detail::List<dstd::String> params,
+                     dstd::StringView body, dstd::StringView error = {}) const {
         dstd::String t = dstd::fmt<"def {}">(name);
         if (!params.empty()) {
             t += "(";
@@ -701,45 +749,43 @@ class Pipe {
     Pipe where(const Expr& condition) const {
         return stage(dstd::fmt<"where ({})">(condition.to_string()));
     }
-    Pipe derive(const dstd::Vector<Named>& fields) const {
+    Pipe derive(detail::List<Named> fields) const {
         return stage(dstd::fmt<"derive {}">(assigns(fields)),
                      detail::error_of(fields));
     }
-    Pipe select(const dstd::Vector<Item>& items) const {
+    Pipe select(detail::List<Item> items) const {
         return stage(dstd::fmt<"select {}">(items_text(items)),
                      detail::error_of(items));
     }
-    Pipe drop(const dstd::Vector<dstd::String>& paths) const {
+    Pipe drop(detail::List<dstd::String> paths) const {
         return stage(dstd::fmt<"drop {}">(names(paths)));
     }
     /// `rename new = old, ...`.
-    Pipe rename(const dstd::Vector<dstd::Pair<dstd::String, dstd::String>>&
-                    pairs) const {
+    Pipe rename(
+        detail::List<dstd::Pair<dstd::String, dstd::String>> pairs) const {
         dstd::String t = "rename ";
         for (std::size_t i = 0; i < pairs.size(); ++i)
             t += dstd::fmt<"{}{} = {}">((i ? ", " : ""), pairs[i].first,
                                         pairs[i].second);
         return stage(t);
     }
-    Pipe distinct(const dstd::Vector<Item>& keys = {}) const {
+    Pipe distinct(detail::List<Item> keys = {}) const {
         return stage(keys.empty() ? "distinct"
                                   : dstd::fmt<"distinct {}">(items_text(keys)),
                      detail::error_of(keys));
     }
-    Pipe group(const dstd::Vector<Item>& keys,
-               const dstd::Vector<Named>& aggregates) const {
+    Pipe group(detail::List<Item> keys, detail::List<Named> aggregates) const {
         dstd::String t = "group ";
         if (!keys.empty()) t += dstd::fmt<"{} ">(items_text(keys));
         return stage(t + block(aggregates),
                      detail::first_error(keys, aggregates));
     }
-    Pipe agg(const dstd::Vector<Named>& aggregates) const {
+    Pipe agg(detail::List<Named> aggregates) const {
         return stage(dstd::fmt<"agg {}">(block(aggregates)),
                      detail::error_of(aggregates));
     }
-    Pipe window(const dstd::Vector<Item>& partition,
-                const dstd::Vector<SortKey>& order,
-                const dstd::Vector<Named>& fields) const {
+    Pipe window(detail::List<Item> partition, detail::List<SortKey> order,
+                detail::List<Named> fields) const {
         dstd::String t = "window ";
         if (!partition.empty()) t += dstd::fmt<"{} ">(items_text(partition));
         if (!order.empty()) t += dstd::fmt<"sort {} ">(sort_keys(order));
@@ -747,9 +793,9 @@ class Pipe {
                      detail::first_error(partition, order, fields));
     }
     /// `labels` pairs with `values`; a non-empty label names that column.
-    Pipe pivot(const Col& key, const dstd::Vector<Col>& values,
-               const dstd::Vector<Named>& aggregates,
-               const dstd::Vector<dstd::String>& labels = {}) const {
+    Pipe pivot(const Col& key, detail::List<Col> values,
+               detail::List<Named> aggregates,
+               detail::List<dstd::String> labels = {}) const {
         dstd::String t = dstd::fmt<"pivot {}">(key.raw());
         if (!values.empty()) {
             t += " in [";
@@ -764,17 +810,17 @@ class Pipe {
         return stage(dstd::fmt<"{} {}">(t, block(aggregates)),
                      detail::first_error(key, values, aggregates));
     }
-    Pipe unpivot(const dstd::Vector<dstd::String>& paths,
-                 dstd::StringView key_name, dstd::StringView value_name) const {
+    Pipe unpivot(detail::List<dstd::String> paths, dstd::StringView key_name,
+                 dstd::StringView value_name) const {
         return stage(dstd::fmt<"unpivot {} as {}, {}">(names(paths), key_name,
                                                        value_name));
     }
-    Pipe sort(const dstd::Vector<SortKey>& keys) const {
+    Pipe sort(detail::List<SortKey> keys) const {
         return stage(dstd::fmt<"sort {}">(sort_keys(keys)),
                      detail::error_of(keys));
     }
-    Pipe take(const Col& count, const dstd::Vector<Col>& by = {},
-              const dstd::Vector<SortKey>& order = {}) const {
+    Pipe take(const Col& count, detail::List<Col> by = {},
+              detail::List<SortKey> order = {}) const {
         dstd::String t = dstd::fmt<"take {}">(count.raw());
         if (!by.empty()) t += dstd::fmt<" by {}">(join(by));
         if (!order.empty()) t += dstd::fmt<" sort {}">(sort_keys(order));
@@ -810,35 +856,34 @@ class Pipe {
         return stage(dstd::fmt<"parse {} ~ {}">(col.raw(), pattern.raw()),
                      detail::first_error(col, pattern));
     }
-    Pipe lookup(dstd::StringView rowset, const dstd::Vector<JoinKey>& on,
+    Pipe lookup(dstd::StringView rowset, detail::List<JoinKey> on,
                 dstd::StringView into = {},
                 LookupHow how = LookupHow::Left) const {
         return lookup_text(dstd::String(rowset), {}, on, into, how);
     }
     /// `side` needs a source; it prints as `(from ...)`.
-    Pipe lookup(const Pipe& side, const dstd::Vector<JoinKey>& on,
+    Pipe lookup(const Pipe& side, detail::List<JoinKey> on,
                 dstd::StringView into = {},
                 LookupHow how = LookupHow::Left) const {
         return lookup_text(dstd::fmt<"({})">(side.inline_text()), side.error_,
                            on, into, how);
     }
-    Pipe lookup_asof(dstd::StringView rowset, const dstd::Vector<JoinKey>& on,
+    Pipe lookup_asof(dstd::StringView rowset, detail::List<JoinKey> on,
                      const JoinKey& time, Asof direction = Asof::Backward,
                      dstd::Optional<Col> within = dstd::nullopt) const {
         return asof_text(dstd::String(rowset), {}, on, time, direction, within);
     }
-    Pipe lookup_asof(const Pipe& side, const dstd::Vector<JoinKey>& on,
+    Pipe lookup_asof(const Pipe& side, detail::List<JoinKey> on,
                      const JoinKey& time, Asof direction = Asof::Backward,
                      dstd::Optional<Col> within = dstd::nullopt) const {
         return asof_text(dstd::fmt<"({})">(side.inline_text()), side.error_, on,
                          time, direction, within);
     }
-    Pipe lookup_overlap(dstd::StringView rowset,
-                        const dstd::Vector<JoinKey>& on,
+    Pipe lookup_overlap(dstd::StringView rowset, detail::List<JoinKey> on,
                         dstd::StringView into = {}) const {
         return overlap_text(dstd::String(rowset), {}, on, into);
     }
-    Pipe lookup_overlap(const Pipe& side, const dstd::Vector<JoinKey>& on,
+    Pipe lookup_overlap(const Pipe& side, detail::List<JoinKey> on,
                         dstd::StringView into = {}) const {
         return overlap_text(dstd::fmt<"({})">(side.inline_text()), side.error_,
                             on, into);
@@ -896,7 +941,7 @@ class Pipe {
         if (!as.empty()) t += dstd::fmt<" as {}">(as);
         return stage(t);
     }
-    Pipe session(const dstd::Vector<Item>& keys, const Col& gap,
+    Pipe session(detail::List<Item> keys, const Col& gap,
                  dstd::Optional<Col> max = dstd::nullopt,
                  dstd::StringView as = {}) const {
         dstd::String t = "session ";
@@ -919,18 +964,18 @@ class Pipe {
 
    private:
     friend Pipe source(dstd::StringView file);
-    friend Pipe sources(const dstd::Vector<dstd::String>& files);
+    friend Pipe sources(detail::List<dstd::String> files);
     friend Pipe rowset(dstd::StringView name);
     friend Pipe source_param(dstd::StringView name);
 
     // A call with an input error keeps the first one; the pipe still grows.
-    Pipe stage(dstd::String text, const dstd::String& error = {}) const {
+    Pipe stage(dstd::String text, dstd::StringView error = {}) const {
         Pipe p = *this;
         p.stages_.push_back(std::move(text));
         p.note(error);
         return p;
     }
-    Pipe decl(dstd::String text, const dstd::String& error = {}) const {
+    Pipe decl(dstd::String text, dstd::StringView error = {}) const {
         Pipe p = *this;
         p.decls_.push_back(std::move(text));
         p.note(error);
@@ -941,26 +986,26 @@ class Pipe {
         p.note(error);
         return p;
     }
-    void note(const dstd::String& error) {
+    void note(dstd::StringView error) {
         if (error_.empty()) error_ = error;
     }
-    static dstd::String names(const dstd::Vector<dstd::String>& list) {
+    static dstd::String names(detail::List<dstd::String> list) {
         dstd::String out;
         for (std::size_t i = 0; i < list.size(); ++i)
             out += (i ? ", " : "") + list[i];
         return out;
     }
-    static dstd::String assigns(const dstd::Vector<Named>& fields) {
+    static dstd::String assigns(detail::List<Named> fields) {
         dstd::String out;
         for (std::size_t i = 0; i < fields.size(); ++i)
             out += dstd::fmt<"{}{} = {}">((i ? ", " : ""), fields[i].name,
                                           fields[i].value.raw());
         return out;
     }
-    static dstd::String block(const dstd::Vector<Named>& fields) {
+    static dstd::String block(detail::List<Named> fields) {
         return fields.empty() ? "{ }" : dstd::fmt<"{ {} }">(assigns(fields));
     }
-    static dstd::String items_text(const dstd::Vector<Item>& items) {
+    static dstd::String items_text(detail::List<Item> items) {
         dstd::String out;
         for (std::size_t i = 0; i < items.size(); ++i) {
             if (i) out += ", ";
@@ -970,7 +1015,7 @@ class Pipe {
         }
         return out;
     }
-    static dstd::String sort_keys(const dstd::Vector<SortKey>& keys) {
+    static dstd::String sort_keys(detail::List<SortKey> keys) {
         dstd::String out;
         for (std::size_t i = 0; i < keys.size(); ++i) {
             if (i) out += ", ";
@@ -984,8 +1029,8 @@ class Pipe {
         return k.right ? dstd::fmt<"{} == {}">(k.left.raw(), k.right->raw())
                        : k.left.raw();
     }
-    Pipe lookup_text(const dstd::String& side, const dstd::String& side_error,
-                     const dstd::Vector<JoinKey>& on, dstd::StringView into,
+    Pipe lookup_text(dstd::StringView side, dstd::StringView side_error,
+                     detail::List<JoinKey> on, dstd::StringView into,
                      LookupHow how) const {
         dstd::String error = detail::first_error(side_error, on);
         if (error.empty() && how == LookupHow::Anti && !into.empty())
@@ -997,8 +1042,8 @@ class Pipe {
         if (!into.empty()) t += dstd::fmt<" into {}">(into);
         return stage(t);
     }
-    Pipe asof_text(const dstd::String& side, const dstd::String& side_error,
-                   const dstd::Vector<JoinKey>& on, const JoinKey& time,
+    Pipe asof_text(dstd::StringView side, dstd::StringView side_error,
+                   detail::List<JoinKey> on, const JoinKey& time,
                    Asof direction, const dstd::Optional<Col>& within) const {
         dstd::String t =
             dstd::fmt<"{} asof {}">(join_keys(side, on), key_text(time));
@@ -1007,15 +1052,14 @@ class Pipe {
         if (within) t += dstd::fmt<" within {}">(within->raw());
         return stage(t, detail::first_error(side_error, on, time, within));
     }
-    Pipe overlap_text(const dstd::String& side, const dstd::String& side_error,
-                      const dstd::Vector<JoinKey>& on,
-                      dstd::StringView into) const {
+    Pipe overlap_text(dstd::StringView side, dstd::StringView side_error,
+                      detail::List<JoinKey> on, dstd::StringView into) const {
         dstd::String t = dstd::fmt<"{} overlap">(join_keys(side, on));
         if (!into.empty()) t += dstd::fmt<" into {}">(into);
         return stage(t, detail::first_error(side_error, on));
     }
-    static dstd::String join_keys(const dstd::String& rowset,
-                                  const dstd::Vector<JoinKey>& on) {
+    static dstd::String join_keys(dstd::StringView rowset,
+                                  detail::List<JoinKey> on) {
         dstd::String t = dstd::fmt<"lookup {} on ">(rowset);
         for (std::size_t i = 0; i < on.size(); ++i)
             t += (i ? ", " : "") + key_text(on[i]);
@@ -1036,7 +1080,7 @@ inline Pipe source(dstd::StringView file) {
     return p;
 }
 /// A pipeline over several trace files.
-inline Pipe sources(const dstd::Vector<dstd::String>& files) {
+inline Pipe sources(detail::List<dstd::String> files) {
     Pipe p;
     p.from_ = "from ";
     for (std::size_t i = 0; i < files.size(); ++i)
@@ -1062,11 +1106,11 @@ inline Col sub(const Pipe& pipeline) {
                           pipeline.error());
 }
 
-inline Col Col::is_in(const dstd::Vector<Col>& values) const {
+inline Col Col::is_in(detail::List<Col> values) const {
     return wrap(dstd::fmt<"{} in [{}]">(text_, join(values)),
                 detail::first_error(*this, values));
 }
-inline Col Col::not_in(const dstd::Vector<Col>& values) const {
+inline Col Col::not_in(detail::List<Col> values) const {
     return wrap(dstd::fmt<"{} not in [{}]">(text_, join(values)),
                 detail::first_error(*this, values));
 }
@@ -1101,15 +1145,13 @@ class Source {
         return add(dstd::fmt<"{} = {}">(name, body), pipeline.error());
     }
     /// `def name(params) = body`: a column macro.
-    Source define(dstd::StringView name,
-                  const dstd::Vector<dstd::String>& params,
+    Source define(dstd::StringView name, detail::List<dstd::String> params,
                   const Col& body) const {
         return add(Pipe().define(name, params, body));
     }
     /// `def name(params) = stages`: a pipeline macro; `body` must not start
     /// with a source.
-    Source define(dstd::StringView name,
-                  const dstd::Vector<dstd::String>& params,
+    Source define(dstd::StringView name, detail::List<dstd::String> params,
                   const Pipe& body) const {
         return add(Pipe().define(name, params, body));
     }
@@ -1132,7 +1174,7 @@ class Source {
         t.resize(t.size() - 2);
         return add(std::move(t), decl.error());
     }
-    Source add(dstd::String member, const dstd::String& error = {}) const {
+    Source add(dstd::String member, dstd::StringView error = {}) const {
         Source s = *this;
         s.members_.push_back(std::move(member));
         s.note(error);
@@ -1143,7 +1185,7 @@ class Source {
         s.note(error);
         return s;
     }
-    void note(const dstd::String& error) {
+    void note(dstd::StringView error) {
         if (error_.empty()) error_ = error;
     }
     dstd::String error_;

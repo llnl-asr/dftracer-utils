@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/yaml/escape.h>
 
 #include <array>
@@ -37,9 +38,10 @@ struct Sequence {
 
 constexpr bool is_continuation(unsigned char b) { return (b & 0xC0) == 0x80; }
 
-Sequence classify(const char* p, const char* end) {
+Sequence classify(dstd::StringView rest) {
+    const char* const p = rest.data();
     const unsigned char b0 = static_cast<unsigned char>(*p);
-    const std::size_t left = static_cast<std::size_t>(end - p);
+    const std::size_t left = rest.size();
     std::size_t length = 0;
     std::uint32_t cp = 0;
     unsigned char low = 0x80;
@@ -90,7 +92,8 @@ std::size_t escaped_yaml_size(dstd::StringView s) {
             ++p;
             continue;
         }
-        const Sequence q = classify(p, end);
+        const Sequence q =
+            classify(dstd::StringView(p, static_cast<std::size_t>(end - p)));
         size += q.is_raw ? q.length : 6;
         p += q.length;
     }
@@ -112,7 +115,8 @@ char* escape_yaml_to(char* dst, dstd::StringView s) {
                 continue;
             }
         } else {
-            const Sequence q = classify(p, end);
+            const Sequence q = classify(
+                dstd::StringView(p, static_cast<std::size_t>(end - p)));
             if (q.is_raw) {
                 p += q.length;
                 continue;

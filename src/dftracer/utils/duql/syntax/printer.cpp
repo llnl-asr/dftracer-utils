@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/variant.h>
@@ -32,8 +33,10 @@ static bool eq(const PipelinePtr& a, const PipelinePtr& b) {
     return eq(*a, *b);
 }
 
-template <class T>
-static bool eq(const dstd::Vector<T>& a, const dstd::Vector<T>& b) {
+template <class V>
+    requires std::is_convertible_v<const V&,
+                                   dstd::Span<const typename V::value_type>>
+static bool eq(const V& a, const V& b) {
     if (a.size() != b.size()) return false;
     for (std::size_t i = 0; i < a.size(); ++i) {
         if (!eq(a[i], b[i])) return false;
@@ -281,7 +284,7 @@ bool is_reserved(dstd::StringView s) {
     return false;
 }
 
-void put_string(dstd::String& out, const dstd::String& raw) {
+void put_string(dstd::String& out, dstd::StringView raw) {
     out += duql::detail::quote_string(raw);
 }
 
@@ -300,7 +303,7 @@ void put_key(dstd::String& out, const PathStep& step, bool first) {
     }
 }
 
-void put_steps(dstd::String& out, const dstd::Vector<PathStep>& steps) {
+void put_steps(dstd::String& out, dstd::Span<const PathStep> steps) {
     bool first = true;
     for (const PathStep& step : steps) {
         if (step.wildcard()) {
@@ -360,7 +363,7 @@ class Printer {
         if (e) expr(*e, min_prec);
     }
 
-    void exprs(const dstd::Vector<ExprPtr>& items) {
+    void exprs(dstd::Span<const ExprPtr> items) {
         for (std::size_t i = 0; i < items.size(); ++i) {
             if (i) out += ", ";
             expr(items[i], Or);
@@ -652,7 +655,7 @@ class Printer {
         return Primary;
     }
 
-    void assigns(const dstd::Vector<Assign>& fields) {
+    void assigns(dstd::Span<const Assign> fields) {
         for (std::size_t i = 0; i < fields.size(); ++i) {
             if (i) out += ", ";
             out += fields[i].name;
@@ -661,13 +664,13 @@ class Printer {
         }
     }
 
-    void block(const dstd::Vector<Assign>& fields) {
+    void block(dstd::Span<const Assign> fields) {
         out += "{ ";
         assigns(fields);
         out += fields.empty() ? "}" : " }";
     }
 
-    void items(const dstd::Vector<Item>& list) {
+    void items(dstd::Span<const Item> list) {
         for (std::size_t i = 0; i < list.size(); ++i) {
             if (i) out += ", ";
             if (!list[i].name.empty()) {
@@ -678,7 +681,7 @@ class Printer {
         }
     }
 
-    void keys(const dstd::Vector<SortKey>& list) {
+    void keys(dstd::Span<const SortKey> list) {
         for (std::size_t i = 0; i < list.size(); ++i) {
             if (i) out += ", ";
             const SortKey& k = list[i];
@@ -698,7 +701,7 @@ class Printer {
         }
     }
 
-    void paths(const dstd::Vector<Path>& list) {
+    void paths(dstd::Span<const Path> list) {
         for (std::size_t i = 0; i < list.size(); ++i) {
             if (i) out += ", ";
             put_path(out, list[i]);
@@ -869,8 +872,8 @@ class Printer {
         }
     }
 
-    void join_keys(const dstd::String& rowset, const PipelinePtr& side,
-                   const dstd::Vector<dstd::Pair<ExprPtr, ExprPtr>>& keys) {
+    void join_keys(dstd::StringView rowset, const PipelinePtr& side,
+                   dstd::Span<const dstd::Pair<ExprPtr, ExprPtr>> keys) {
         out += "lookup ";
         if (side)
             subquery(side);
@@ -1142,7 +1145,7 @@ const char* match_text(MatchOp op, bool negated) {
 
 void put_term(dstd::String& out, const Term& t);
 
-void put_keys(dstd::String& out, const dstd::Vector<TermPtr>& keys,
+void put_keys(dstd::String& out, dstd::Span<const TermPtr> keys,
               std::size_t first = 0, std::size_t last = SIZE_MAX);
 
 void put_child(dstd::String& out, const Term& t) {
@@ -1301,7 +1304,7 @@ void put_term(dstd::String& out, const Term& t) {
         t.node);
 }
 
-void put_keys(dstd::String& out, const dstd::Vector<TermPtr>& keys,
+void put_keys(dstd::String& out, dstd::Span<const TermPtr> keys,
               std::size_t first, std::size_t last) {
     last = std::min(last, keys.size());
     if (last - first == 1) {

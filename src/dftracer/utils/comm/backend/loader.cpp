@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/versions.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
@@ -64,7 +65,7 @@ BackendKind resolve_kind(BackendKind kind) {
 }
 
 dstd::Result<Providers> load_backend(const StartOptions& options,
-                                     const char* symbol) {
+                                     dstd::CStringView symbol) {
     dstd::Vector<dstd::String> candidates;
 #if defined(__APPLE__)
     const char* const name = "libdftracer_utils_comm_mpi.dylib";
@@ -102,13 +103,13 @@ dstd::Result<Providers> load_backend(const StartOptions& options,
                 "not load; tried {}">(dstd::Condition::NotFound, tried));
     }
     using EntryFn = const BackendEntry* (*)();
-    void* found = dlsym(handle, symbol);
+    void* found = dlsym(handle, symbol.c_str());
     if (found == nullptr) {
         const char* why = dlerror();
         dlclose(handle);
         return dstd::Unexpected(
             dstd::Error::from_format<"the backend library has no entry {}: {}">(
-                dstd::Condition::Unsupported, dstd::StringView(symbol),
+                dstd::Condition::Unsupported, symbol.view(),
                 dstd::StringView(why != nullptr ? why : "unknown error")));
     }
     const BackendEntry* entry = reinterpret_cast<EntryFn>(found)();

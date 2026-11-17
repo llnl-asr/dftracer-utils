@@ -77,7 +77,8 @@ dftu_status invalid(::dftu_ctx* ctx, const char* op, const char* what) {
 coro::CoroTask<void> merge_shards_body(plugins::AbiTask* task,
                                        dstd::String target,
                                        dstd::Vector<dstd::String> shards) {
-    const int rc = co_await fileio::parallel::merge_shards(target, shards);
+    const int rc =
+        co_await fileio::parallel::merge_shards(target, std::move(shards));
     if (rc != 0) {
         task->fail(DFTU_E_IO,
                    dstd::fmt<"merge_shards: could not merge into '{}'">(

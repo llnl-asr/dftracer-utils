@@ -139,8 +139,7 @@ class StreamCounter {
                     ++count_;
             },
             [&](dstd::StringView line, std::size_t capacity) {
-                auto parsed = document_.parse_in_place(line.data(), line.size(),
-                                                       capacity);
+                auto parsed = document_.parse_in_place(line, capacity);
                 if (!parsed) {
                     ++dropped_;
                     return;

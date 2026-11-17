@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/json/dom_value.h>
 #include <simdjson.h>
@@ -41,7 +42,7 @@ constexpr int MAX_DEPTH = 1000;
 // refused the text: the reader does not say where.
 struct JsonFault {
     std::size_t offset = 0;
-    const char* reason = nullptr;
+    dstd::StringView reason;
 };
 
 class JsonChecker {
@@ -63,7 +64,7 @@ class JsonChecker {
     JsonFault fault() const { return fault_; }
 
    private:
-    bool fail(const char* reason) {
+    bool fail(dstd::StringView reason) {
         fault_ = {pos_, reason};
         return false;
     }
@@ -286,7 +287,7 @@ dstd::Unexpected<dstd::Error> refused(dstd::StringView text,
         }
     return common::make_error<"{}:{}: {}">(common::ErrorCode::Parse, line,
                                            fault.offset - line_start + 1,
-                                           dstd::StringView(fault.reason));
+                                           fault.reason);
 }
 
 }  // namespace

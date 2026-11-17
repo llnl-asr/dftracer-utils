@@ -44,9 +44,9 @@ void finalize_at_exit() {
     if (!done) MPI_Finalize();
 }
 
-dstd::Error mpi_error(const char* what) {
+dstd::Error mpi_error(dstd::StringView what) {
     return dstd::Error::from_format<"MPI could not {}">(
-        dstd::Condition::Unsupported, dstd::StringView(what));
+        dstd::Condition::Unsupported, what);
 }
 
 /// Waits for @p request with @p mpi held only while MPI is called, so the

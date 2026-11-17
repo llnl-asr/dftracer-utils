@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_JSON_VALUE_ACCESS_H
 
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/json/value.h>
 #include <simdjson.h>
@@ -87,9 +88,10 @@ struct ValueAccess {
     static void rewind(Value& v);
 };
 
-/// The text of the JSON value that starts at `start`, without surrounding
-/// whitespace, found by scanning and never past `end`.
-dstd::StringView value_extent(const char* start, const char* end);
+/// The text of the JSON value that `rest` starts with, without surrounding
+/// whitespace, found by scanning and never past the end of `rest`, which runs
+/// to the end of the line.
+dstd::StringView value_extent(dstd::StringView rest);
 
 /// `text`, the inside of a JSON string, with escapes decoded: a view of `text`
 /// when it has no backslash, else a copy in `arena`, which never moves a copy
@@ -141,10 +143,10 @@ dstd::Optional<dstd::StringView> read_string(dstd::StringView token,
                                              dstd::StringArena& arena);
 
 /// The decoded name of `key`, the raw key of an object member, never past
-/// `end`. It touches no simdjson string buffer, so it is safe to call any
-/// number of times and after a rewind.
+/// the end of `line`. It touches no simdjson string buffer, so it is safe to
+/// call any number of times and after a rewind.
 dstd::Optional<dstd::StringView> read_key(
-    simdjson::ondemand::raw_json_string key, const char* end,
+    simdjson::ondemand::raw_json_string key, dstd::StringView line,
     dstd::StringArena& arena);
 
 /// Whether `text` holds a backslash, eight bytes at a time. A name is short, so
@@ -179,9 +181,9 @@ inline dstd::Optional<dstd::StringView> read_key(
 /// string whose escape simdjson rejected. Empty when `value` is no string.
 dstd::Optional<dstd::StringView> raw_string(simdjson::ondemand::value& value);
 
-/// The raw key text that starts at `begin`, the byte after the opening quote.
-/// The closing quote is there because the document parsed.
-dstd::StringView raw_key(const char* begin);
+/// The raw key text of `key`, from the byte after the opening quote. The
+/// closing quote is there because the document parsed.
+dstd::StringView raw_key(simdjson::ondemand::raw_json_string key);
 
 /// The string `value` as @ref simdjson::ondemand::value::get_string reads it,
 /// or its raw text when simdjson rejects an escape in it. Empty when `value` is
@@ -209,18 +211,18 @@ inline dstd::Optional<double> get_double_or_refused(
 /// simdjson rejects an escape in it.
 template <class Field>
 inline dstd::Optional<dstd::StringView> get_key_or_raw(Field&& field) {
-    auto raw = field.key().raw();
-    const char* begin = nullptr;
+    auto raw = field.key();
+    simdjson::ondemand::raw_json_string key;
     if constexpr (requires { raw.error(); }) {
         if (raw.error()) return dstd::nullopt;
-        begin = raw.value_unsafe();
+        key = raw.value_unsafe();
     } else {
-        begin = raw;
+        key = raw;
     }
     auto result = field.unescaped_key();
     if (!result.error()) return dstd::StringView(result.value_unsafe());
     if (result.error() != simdjson::STRING_ERROR) return dstd::nullopt;
-    return raw_key(begin);
+    return raw_key(key);
 }
 
 }  // namespace dftracer::utils::json::detail

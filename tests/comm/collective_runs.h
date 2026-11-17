@@ -17,6 +17,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -135,7 +136,7 @@ void for_each_run(Body body) {
 }
 
 inline dftracer::utils::dstd::Span<const std::byte> bytes_of(
-    const std::string& text) {
+    dftracer::utils::dstd::StringView text) {
     return std::as_bytes(
         dftracer::utils::dstd::Span<const char>(text.data(), text.size()));
 }
@@ -201,9 +202,10 @@ inline dftracer::utils::comm::Communicator start_per_rank(
         });
 }
 
-inline bool
-all_ok(const dftracer::utils::dstd::Vector<
-       dftracer::utils::dstd::Optional<dftracer::utils::dstd::Error>>& errors) {
+inline bool all_ok(
+    dftracer::utils::dstd::Span<
+        const dftracer::utils::dstd::Optional<dftracer::utils::dstd::Error>>
+        errors) {
     bool ok = true;
     for (const auto& error : errors) {
         if (!error.has_value()) continue;

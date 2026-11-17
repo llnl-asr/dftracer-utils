@@ -279,8 +279,6 @@ void Writer::value(dstd::StringView v) {
     scalar_done();
 }
 
-void Writer::value(const char* v) { value(dstd::StringView(v)); }
-
 void Writer::value(double v) {
     scalar_token_begin();
     append_double(out_, v);

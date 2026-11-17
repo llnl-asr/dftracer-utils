@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/span.h>
 
 #include <algorithm>
 #include <chrono>
@@ -428,7 +429,7 @@ class Fault final : public FaultMessaging,
             });
     }
 
-    void abort_groups(const dstd::Vector<std::uint64_t>& groups,
+    void abort_groups(dstd::Span<const std::uint64_t> groups,
                       const dstd::Error& why) {
         dstd::SharedPtr<PeerAbort> handler;
         {

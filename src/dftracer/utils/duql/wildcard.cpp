@@ -70,12 +70,12 @@ bool is_ident(dstd::StringView s) {
 }
 
 // Numeric segments by value and before the others, which go by bytes.
-bool segment_less(const dstd::String& a, const dstd::String& b) {
+bool segment_less(dstd::StringView a, dstd::StringView b) {
     const bool na = all_digits(a);
     const bool nb = all_digits(b);
     if (na != nb) return na;
     if (!na) return a < b;
-    const auto skip = [](const dstd::String& s) {
+    const auto skip = [](dstd::StringView s) {
         const auto k = s.find_first_not_of('0');
         return k == dstd::String::npos ? dstd::StringView()
                                        : dstd::StringView(s).substr(k);

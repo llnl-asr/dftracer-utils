@@ -1858,9 +1858,11 @@ class OnDemandReader {
     // A container below the depth limit stays under its path as its JSON text.
     bool keep_raw(OnDemandValue& v, OnDemandType type) {
         const std::uint32_t id = plain_.get_or_insert(path_);
-        out_->args.emplace_back(id,
-                                plain_.get_or_insert(json::detail::value_extent(
-                                    v.raw_json_token().data(), end_)));
+        const char* const token = v.raw_json_token().data();
+        out_->args.emplace_back(
+            id,
+            plain_.get_or_insert(json::detail::value_extent(dstd::StringView(
+                token, static_cast<std::size_t>(end_ - token)))));
         note_leaf(id, path_, container_tag(type));
         return true;
     }
@@ -1890,9 +1892,11 @@ class OnDemandReader {
             (code == simdjson::NUMBER_ERROR && refused_big_integer(v))) {
             // Wider than 64 bits: kept exact as its digits.
             tag = static_cast<std::uint8_t>(PathType::NullValue);
+            const char* const token = v.raw_json_token().data();
             out_->args.emplace_back(
-                key_id, ids.get_or_insert(json::detail::value_extent(
-                            v.raw_json_token().data(), end_)));
+                key_id,
+                ids.get_or_insert(json::detail::value_extent(dstd::StringView(
+                    token, static_cast<std::size_t>(end_ - token)))));
             return true;
         }
         if (code == simdjson::NUMBER_ERROR) {
@@ -2579,7 +2583,8 @@ class PathReader {
 
     dstd::String canonical_text(const char* start) const {
         return dftracer::utils::json::canonical_json_text(
-            json::detail::value_extent(start, end_));
+            json::detail::value_extent(dstd::StringView(
+                start, static_cast<std::size_t>(end_ - start))));
     }
 
     // A declared json field at an object or array: its canonical text, keyed
@@ -2615,7 +2620,8 @@ class PathReader {
                 id, static_cast<std::uint8_t>(is_array ? PathType::Array
                                                        : PathType::Object));
         const dstd::String text =
-            raw ? dstd::String(json::detail::value_extent(start, end_))
+            raw ? dstd::String(json::detail::value_extent(dstd::StringView(
+                      start, static_cast<std::size_t>(end_ - start))))
                 : canonical_text(start);
         d_.ev.args.emplace_back(id, ids_.get_or_insert(text));
         d_.ev.specials.push_back({id, is_array

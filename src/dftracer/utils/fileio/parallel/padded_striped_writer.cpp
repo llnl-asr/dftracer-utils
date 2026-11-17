@@ -257,8 +257,12 @@ struct PaddedStripedImpl {
 
     coro::CoroTask<int> pwrite_bytes(const std::uint8_t* bytes,
                                      std::size_t size, off_t offset) {
-        co_return co_await pwrite_fully(file.native_handle(), path.c_str(),
-                                        bytes, size, offset);
+        const int rc =
+            co_await pwrite_fully(file.native_handle(), bytes, size, offset);
+        if (rc != 0)
+            DFTRACER_UTILS_LOG_ERROR("pwrite failed on {} at offset {}", path,
+                                     static_cast<long long>(offset));
+        co_return rc;
     }
 };
 

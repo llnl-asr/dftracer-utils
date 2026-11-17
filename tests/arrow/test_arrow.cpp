@@ -36,7 +36,7 @@ struct ViewFixture {
         ++static_cast<ViewFixture*>(ctx)->released;
     }
 
-    void put(int row, const dstd::String& s, std::int32_t index,
+    void put(int row, dstd::StringView s, std::int32_t index,
              std::int32_t offset) {
         std::uint8_t* v = views + row * 16;
         const auto size = static_cast<std::int32_t>(s.size());

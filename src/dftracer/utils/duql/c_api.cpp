@@ -32,7 +32,7 @@ dftu_duql* wrap_expr(const Expr& e) {
     return new dftu_duql{{}, std::move(*q)};
 }
 
-dftu_duql* wrap_string(const dftracer::utils::dstd::String& s) {
+dftu_duql* wrap_string(dftracer::utils::dstd::StringView s) {
     auto q = Query::from_string(s);
     if (!q) return nullptr;
     return new dftu_duql{{}, std::move(*q)};

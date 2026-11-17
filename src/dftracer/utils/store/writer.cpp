@@ -73,7 +73,7 @@ std::size_t encoded_entry_size(std::size_t key_size, std::uint64_t value_size) {
            key_size + static_cast<std::size_t>(stored);
 }
 
-bool same_name(const dstd::String& name, dstd::StringView other) {
+bool same_name(dstd::StringView name, dstd::StringView other) {
     return name.size() == other.size() &&
            (other.empty() ||
             std::memcmp(name.data(), other.data(), other.size()) == 0);
@@ -173,7 +173,7 @@ ScopeItem scope_item(const ScopeKey& key, std::uint32_t id) {
 CopyItem copy_item(std::uint32_t copy_id, std::uint32_t namespace_id,
                    std::uint32_t scope_id, std::uint64_t params_hash,
                    std::uint64_t generation, CopyState state,
-                   const dstd::Vector<SourceStat>& sources) {
+                   dstd::Vector<SourceStat> sources) {
     CopyItem item;
     item.local_id = copy_id;
     item.namespace_id = namespace_id;
@@ -181,12 +181,12 @@ CopyItem copy_item(std::uint32_t copy_id, std::uint32_t namespace_id,
     item.params_hash = params_hash;
     item.generation = generation;
     item.state = state;
-    item.sources = sources;
+    item.sources = std::move(sources);
     return item;
 }
 
-bool same_sources(const dstd::Vector<SourceStat>& a,
-                  const dstd::Vector<SourceStat>& b) {
+bool same_sources(dstd::Span<const SourceStat> a,
+                  dstd::Span<const SourceStat> b) {
     if (a.size() != b.size()) return false;
     for (std::size_t i = 0; i < a.size(); ++i) {
         if (a[i].mtime != b[i].mtime || a[i].size != b[i].size ||

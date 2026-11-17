@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/store/segment.h>
 #include <dftracer/utils/store/varint.h>
@@ -50,7 +51,7 @@ void append_bytes(dstd::Vector<std::uint8_t>& out, dstd::ByteView bytes) {
     out.insert(out.end(), begin, begin + bytes.size());
 }
 
-dstd::ByteView vector_view(const dstd::Vector<std::uint8_t>& bytes,
+dstd::ByteView vector_view(dstd::Span<const std::uint8_t> bytes,
                            std::size_t offset, std::size_t length) {
     if (length == 0) return {};
     return {bytes.data() + offset, length};

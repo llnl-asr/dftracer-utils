@@ -29,8 +29,8 @@ struct JsonDoc {
     simdjson::dom::element elem;
     bool valid = false;
 
-    JsonDoc(const char* json) {
-        auto result = parser.parse(json, std::strlen(json));
+    JsonDoc(dstd::StringView json) {
+        auto result = parser.parse(json.data(), json.size());
         if (!result.error()) {
             elem = result.value_unsafe();
             valid = true;
@@ -41,7 +41,7 @@ struct JsonDoc {
     }
 };
 
-bool eval(const char* query_str, const char* json_str) {
+bool eval(dstd::StringView query_str, dstd::StringView json_str) {
     auto ast = parse(query_str);
     REQUIRE(ast.has_value());
     JsonDoc doc(json_str);
@@ -49,7 +49,7 @@ bool eval(const char* query_str, const char* json_str) {
     return evaluate(**ast, doc.root());
 }
 
-Truth truth(const char* query_str, const char* json_str) {
+Truth truth(dstd::StringView query_str, dstd::StringView json_str) {
     auto ast = parse(query_str);
     REQUIRE(ast.has_value());
     JsonDoc doc(json_str);
@@ -57,13 +57,13 @@ Truth truth(const char* query_str, const char* json_str) {
     return evaluate_truth(**ast, doc.root());
 }
 
-Truth truth(const char* query_str, const ValueMap& fields) {
+Truth truth(dstd::StringView query_str, const ValueMap& fields) {
     auto ast = parse(query_str);
     REQUIRE(ast.has_value());
     return evaluate_truth(**ast, fields);
 }
 
-bool eval(const char* query_str, const ValueMap& fields) {
+bool eval(dstd::StringView query_str, const ValueMap& fields) {
     return truth(query_str, fields) == Truth::Yes;
 }
 
@@ -330,7 +330,8 @@ TEST_CASE("spec - in and not in") {
 namespace {
 
 // Keeps the records `query` selects, as their indexes in `records`.
-dstd::Vector<int> kept(const char* query, dstd::Vector<const char*> records) {
+dstd::Vector<int> kept(dstd::StringView query,
+                       dstd::Vector<const char*> records) {
     auto ast = parse(query);
     REQUIRE_MESSAGE(ast.has_value(), query);
     dstd::Vector<int> out;
@@ -342,7 +343,7 @@ dstd::Vector<int> kept(const char* query, dstd::Vector<const char*> records) {
     return out;
 }
 
-dstd::String compile_error(const char* query) {
+dstd::String compile_error(dstd::StringView query) {
     auto ast = parse(query);
     REQUIRE_FALSE(ast.has_value());
     return ast.error().message;
@@ -485,7 +486,7 @@ TEST_CASE("expressions - array index parameters fold to a literal step") {
     p.emplace("m", LiteralValue{std::int64_t{-1}});
     p.emplace("big", LiteralValue{std::uint64_t{1}});
     const char* r = R"({"xs":["a","b","c"],"o":[{"k":7}]})";
-    auto at = [&](const char* q) {
+    auto at = [&](dstd::StringView q) {
         auto ast = parse(q, p);
         REQUIRE_MESSAGE(ast.has_value(), q);
         JsonDoc doc(r);

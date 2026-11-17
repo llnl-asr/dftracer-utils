@@ -551,8 +551,7 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
                         cfg.skip_never_indexed);
                 },
                 [&](dstd::StringView line, std::size_t capacity) {
-                    auto parsed = document.parse_in_place(
-                        line.data(), line.size(), capacity);
+                    auto parsed = document.parse_in_place(line, capacity);
                     if (!parsed) {
                         ++c.dropped;
                         return;
@@ -587,8 +586,7 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
                             c.batch->events_mut().back(), root, intern, name);
                 },
                 [&](dstd::StringView line, std::size_t capacity) {
-                    auto parsed = document.parse_in_place(
-                        line.data(), line.size(), capacity);
+                    auto parsed = document.parse_in_place(line, capacity);
                     if (!parsed) {
                         ++c.dropped;
                         return;

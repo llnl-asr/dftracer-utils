@@ -19,15 +19,15 @@ namespace {
 
 using namespace dftracer::utils::store;
 
-dstd::ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(dstd::StringView bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-dstd::StringView sv(const dstd::String& text) {
+dstd::StringView sv(dstd::StringView text) {
     return dstd::StringView(text.data(), text.size());
 }
 
-NamespaceSpec spec_of(const dstd::String& name) {
+NamespaceSpec spec_of(dstd::StringView name) {
     NamespaceSpec spec;
     spec.name = dstd::String(name.data(), name.size());
     return spec;
@@ -38,14 +38,14 @@ dstd::Expected<void, dstd::Error> run(
     return dftracer::utils::default_runtime().submit(std::move(task)).get();
 }
 
-Store open_store(const dstd::String& dir) {
+Store open_store(dstd::StringView dir) {
     auto opened = Store::open(sv(dir));
     REQUIRE(opened.has_value());
     return std::move(*opened);
 }
 
-void write_scope(Store& store, const NamespaceSpec& spec,
-                 const dstd::String& path, const dstd::String& value) {
+void write_scope(Store& store, const NamespaceSpec& spec, dstd::StringView path,
+                 dstd::StringView value) {
     auto ns = store.ns(spec);
     REQUIRE(ns.has_value());
     auto batch = store.batch(
@@ -56,7 +56,7 @@ void write_scope(Store& store, const NamespaceSpec& spec,
 }
 
 dstd::Optional<dstd::String> read_scope(Store& store, const NamespaceSpec& spec,
-                                        const dstd::String& path) {
+                                        dstd::StringView path) {
     auto ns = store.ns(spec);
     REQUIRE(ns.has_value());
     auto snapshot = store.snapshot();

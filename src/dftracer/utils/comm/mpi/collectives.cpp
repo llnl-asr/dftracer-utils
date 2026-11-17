@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <mpi.h>
@@ -205,9 +206,9 @@ struct Run {
 
 using RunPtr = dstd::SharedPtr<Run>;
 
-dstd::Error mpi_failure(const char* call, int code) {
+dstd::Error mpi_failure(dstd::StringView call, int code) {
     return dstd::Error::from_format<"{} failed with MPI error {}">(
-        dstd::Condition::Internal, dstd::StringView(call), code);
+        dstd::Condition::Internal, call, code);
 }
 
 /// The MPI type of element code @p code, or MPI_DATATYPE_NULL.

@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/gzip_rechunker.h>
@@ -64,7 +65,7 @@ dstd::String hex_lines(std::size_t bytes, std::uint32_t seed) {
     return s;
 }
 
-dstd::Vector<std::uint8_t> gzip_member(const dstd::String& text) {
+dstd::Vector<std::uint8_t> gzip_member(dstd::StringView text) {
     fileio::compress::GzipMemberCompressor c;
     dstd::Vector<std::uint8_t> out;
     REQUIRE(c.compress_member_into(out, text.data(), text.size()));
@@ -109,7 +110,7 @@ struct TempFile {
     dstd::String dir;
     dstd::String path;
 
-    explicit TempFile(const dstd::Vector<std::uint8_t>& bytes) {
+    explicit TempFile(dstd::Span<const std::uint8_t> bytes) {
         char tmpl[] = "/tmp/dftu_gzcrc_XXXXXX";
         REQUIRE(::mkdtemp(tmpl) != nullptr);
         dir = tmpl;
@@ -123,7 +124,7 @@ struct TempFile {
 };
 
 // Whole-file reference decode with the system zlib.
-dstd::String zlib_decode_all(const dstd::String& path) {
+dstd::String zlib_decode_all(dstd::CStringView path) {
     std::FILE* f = std::fopen(path.c_str(), "rb");
     REQUIRE(f != nullptr);
     dstd::Vector<unsigned char> in;
@@ -158,7 +159,7 @@ dstd::String zlib_decode_all(const dstd::String& path) {
 // Each path returns the decoded text, or nullopt when it rejected the input.
 using PathResult = dstd::Optional<dstd::String>;
 
-PathResult read_with_inflater(const dstd::String& path,
+PathResult read_with_inflater(dstd::CStringView path,
                               trace::index::gzip::GzipRecordKind kind) {
     auto fd_file = dstd::File::open(path, {});
     REQUIRE(fd_file);
@@ -185,15 +186,15 @@ PathResult read_with_inflater(const dstd::String& path,
     return out;
 }
 
-PathResult reader_head_stream(const dstd::String& path) {
+PathResult reader_head_stream(dstd::CStringView path) {
     return read_with_inflater(path, trace::index::gzip::GzipRecordKind::Head);
 }
 
-PathResult reader_whole_member(const dstd::String& path) {
+PathResult reader_whole_member(dstd::CStringView path) {
     return read_with_inflater(path, trace::index::gzip::GzipRecordKind::Member);
 }
 
-PathResult indexer_stream(const dstd::String& path) {
+PathResult indexer_stream(dstd::CStringView path) {
     dstd::Optional<trace::index::gzip::GzipBuildArtifacts> art;
     dftu_utils_test::run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         CrcWindow window;
@@ -209,7 +210,7 @@ PathResult indexer_stream(const dstd::String& path) {
     return dstd::String(art->total_uc_size, 'x');
 }
 
-PathResult truncated_decoder(const dstd::String& path) {
+PathResult truncated_decoder(dstd::CStringView path) {
     std::FILE* f = std::fopen(path.c_str(), "rb");
     REQUIRE(f != nullptr);
     dstd::Vector<std::uint8_t> in;
@@ -229,13 +230,13 @@ PathResult truncated_decoder(const dstd::String& path) {
     return dstd::String(out.begin(), out.begin() + *keep);
 }
 
-PathResult rechunker(const dstd::String& path) {
-    const dstd::String out_path = dstd::fmt<"{}.rechunked.gz">(path);
+PathResult rechunker(dstd::CStringView path) {
+    const dstd::String out_path = dstd::fmt<"{}.rechunked.gz">(path.view());
     bool ok = true;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         CrcWindow window;
         auto rechunked = co_await fileio::compress::gzip_rechunk_to_members(
-            path, out_path, 1u << 20, 1);
+            dstd::String(path), out_path, 1u << 20, 1);
         ok = rechunked.has_value();
     });
     if (!ok) return dstd::nullopt;
@@ -245,7 +246,7 @@ PathResult rechunker(const dstd::String& path) {
 
 struct PathCase {
     const char* name;
-    PathResult (*run)(const dstd::String&);
+    PathResult (*run)(dstd::CStringView);
     // The index path reports only the decoded size, and the truncated decoder
     // takes one member.
     bool whole_file;
@@ -260,7 +261,7 @@ const PathCase PATHS[] = {
     {"truncated-member decoder", truncated_decoder, false, false},
 };
 
-bool same(const PathCase& p, const PathResult& got, const dstd::String& text) {
+bool same(const PathCase& p, const PathResult& got, dstd::StringView text) {
     if (!got) return false;
     if (p.size_only) return got->size() == text.size();
     return *got == text;
@@ -341,7 +342,7 @@ TEST_CASE("a gzip header with FHCRC and optional fields is accepted") {
     dstd::Vector<std::uint8_t> member = header;
     member.insert(member.end(), plain.begin() + PLAIN_HEADER, plain.end());
 
-    auto decode = [&](const dstd::Vector<std::uint8_t>& in) {
+    auto decode = [&](dstd::Span<const std::uint8_t> in) {
         fileio::compress::GzipStreamInflater inf;
         REQUIRE(inf.init(31));
         inf.set_input(in.data(), in.size());

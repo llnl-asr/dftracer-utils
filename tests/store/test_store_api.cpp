@@ -30,7 +30,7 @@ namespace {
 
 using namespace dftracer::utils::store;
 
-dstd::ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(dstd::StringView bytes) {
     return {bytes.data(), bytes.size()};
 }
 
@@ -39,15 +39,14 @@ dstd::String to_std(dstd::ByteView bytes) {
                         bytes.size());
 }
 
-NamespaceSpec spec_of(const dstd::String& name,
-                      FoldKind fold = FoldKind::None) {
+NamespaceSpec spec_of(dstd::StringView name, FoldKind fold = FoldKind::None) {
     NamespaceSpec spec;
     spec.name = dstd::String(name.data(), name.size());
     spec.fold = fold;
     return spec;
 }
 
-ScopeKey scope_of(const dstd::String& path) {
+ScopeKey scope_of(dstd::StringView path) {
     return ScopeKey::file(dstd::StringView(path.data(), path.size()));
 }
 
@@ -70,7 +69,7 @@ dstd::Expected<void, dstd::Error> run(
 }
 
 void put_all(Store& store, const Namespace& ns, const ScopeKey& scope,
-             const dstd::Vector<dstd::Pair<dstd::String, dstd::String>>& rows,
+             dstd::Span<const dstd::Pair<dstd::String, dstd::String>> rows,
              bool building = false) {
     Batch batch =
         building ? store.building_batch(ns, scope) : store.batch(ns, scope);
@@ -80,9 +79,18 @@ void put_all(Store& store, const Namespace& ns, const ScopeKey& scope,
     REQUIRE(run(store.commit(std::move(batch))).has_value());
 }
 
+void put_all(Store& store, const Namespace& ns, const ScopeKey& scope,
+             std::initializer_list<dstd::Pair<dstd::String, dstd::String>> rows,
+             bool building = false) {
+    put_all(store, ns, scope,
+            dstd::Span<const dstd::Pair<dstd::String, dstd::String>>(
+                rows.begin(), rows.size()),
+            building);
+}
+
 dstd::Optional<dstd::String> get_value(Store& store, const Namespace& ns,
                                        const ScopeKey& scope,
-                                       const dstd::String& key) {
+                                       dstd::StringView key) {
     auto snapshot = store.snapshot();
     REQUIRE(snapshot.has_value());
     auto found = snapshot->get(ns, scope, view_of(key));

@@ -63,7 +63,7 @@ int compare_bytes(ByteView a, ByteView b) {
     return 0;
 }
 
-ByteView bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
+ByteView bytes_of(dstd::Span<const std::uint8_t> bytes) {
     return {bytes.data(), bytes.size()};
 }
 
@@ -319,7 +319,7 @@ bool erase_covers(ByteView key, const detail::EraseRange& range) {
 /// The ordinal below which the erases of one copy hide every version of `key`,
 /// or zero when none covers it. Ordinals start at one.
 std::uint64_t erase_limit(ByteView key,
-                          const dstd::Vector<detail::EraseRange>& erases) {
+                          dstd::Span<const detail::EraseRange> erases) {
     std::uint64_t limit = 0;
     for (const detail::EraseRange& range : erases) {
         if (!erase_covers(key, range)) continue;
@@ -328,7 +328,7 @@ std::uint64_t erase_limit(ByteView key,
     return limit;
 }
 
-bool key_hidden(ByteView key, const dstd::Vector<detail::HiddenRange>& hidden) {
+bool key_hidden(ByteView key, dstd::Span<const detail::HiddenRange> hidden) {
     for (const detail::HiddenRange& range : hidden) {
         if (!range.begin.empty() &&
             compare_bytes(key, bytes_of(range.begin)) < 0) {
@@ -763,9 +763,8 @@ struct Snapshot::FileCheck {
         out.bad_commits.push_back({file.name, sequence});
     }
 
-    template <class T, class Offset>
-    void bad_commits_from(const dstd::Vector<T>& items, std::size_t at,
-                          Offset offset_of) {
+    template <class V, class Offset>
+    void bad_commits_from(const V& items, std::size_t at, Offset offset_of) {
         const auto offset = offset_of(items[at]);
         for (; at < items.size() && offset_of(items[at]) == offset; ++at) {
             bad_commit(items[at].sequence);
@@ -926,7 +925,7 @@ struct Snapshot::FileCheck {
         return true;
     }
 
-    void count_commits(const dstd::Vector<PendingSegments>& pending) {
+    void count_commits(dstd::Span<const PendingSegments> pending) {
         dstd::Vector<std::uint64_t> sequences;
         sequences.reserve(pending.size());
         for (const PendingSegments& entry : pending) {
@@ -1458,7 +1457,7 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
                    ? status.error
                    : dstd::Error(dstd::Condition::Parse);
     };
-    const dstd::String key =
+    dstd::String key =
         group_key(spec.name, spec.format_version, scope.kind, paths);
     if (const detail::ScopeGroup* known = groups_->find(key)) return known;
     const std::uint64_t hash =
@@ -1538,7 +1537,7 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
     if (owner == files_.size()) return nullptr;
     if (const detail::ScopeGroup* known =
             owner_leaf->groups->get(owner_entry)) {
-        groups_->add(key, known);
+        groups_->add(std::move(key), known);
         return known;
     }
 
@@ -1650,7 +1649,7 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
     }
     const detail::ScopeGroup* published =
         owner_leaf->groups->publish(owner_entry, std::move(group));
-    groups_->add(key, published);
+    groups_->add(std::move(key), published);
     return published;
 }
 
@@ -2433,23 +2432,21 @@ dstd::Expected<detail::SegmentRun, dstd::Error> Snapshot::copy_segments(
 }
 
 detail::GroupIndex::Shard& detail::GroupIndex::shard_of(
-    const dstd::String& key) const {
-    return shards_[dstd::Hash<dstd::String>{}(key) % SHARDS];
+    dstd::StringView key) const {
+    return shards_[dstd::Hash<dstd::StringView>{}(key) % SHARDS];
 }
 
-const detail::ScopeGroup* detail::GroupIndex::find(
-    const dstd::String& key) const {
+const detail::ScopeGroup* detail::GroupIndex::find(dstd::StringView key) const {
     Shard& shard = shard_of(key);
     std::lock_guard<std::mutex> locked(shard.mutex);
     const auto found = shard.groups.find(key);
     return found == shard.groups.end() ? nullptr : found->second;
 }
 
-void detail::GroupIndex::add(const dstd::String& key,
-                             const ScopeGroup* group) const {
+void detail::GroupIndex::add(dstd::String key, const ScopeGroup* group) const {
     Shard& shard = shard_of(key);
     std::lock_guard<std::mutex> locked(shard.mutex);
-    shard.groups.emplace(key, group);
+    shard.groups.emplace(std::move(key), group);
 }
 
 void detail::ExtentSlots::assign(std::size_t count) {
@@ -2822,11 +2819,11 @@ struct HeapAfter {
 }  // namespace
 
 void ScopeCursor::open(const Snapshot& snapshot, const detail::CopyData& copy,
-                       const dstd::Vector<detail::HiddenRange>& hidden,
+                       dstd::Span<const detail::HiddenRange> hidden,
                        ByteView begin, ByteView end) {
     snapshot_ = &snapshot;
     copy_ = &copy;
-    hidden_ = &hidden;
+    hidden_ = hidden;
     begin_ = begin;
     end_ = end;
     error_.reset();
@@ -2973,7 +2970,7 @@ void ScopeCursor::settle() {
                 if (matching_.empty()) continue;
             }
         }
-        if (hidden_ != nullptr && key_hidden(best, *hidden_)) {
+        if (key_hidden(best, hidden_)) {
             advance_matching();
             continue;
         }

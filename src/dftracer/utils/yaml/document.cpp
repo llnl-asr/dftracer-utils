@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/yaml/document.h>
 #include <dftracer/utils/yaml/line_value.h>
@@ -22,11 +23,10 @@ dstd::Result<Document> Document::parse(dstd::String text,
                                        dstd::StringView source_name) {
     auto storage = dstd::make_unique<DocumentStorage>();
     storage->text = std::move(text);
-    const std::size_t bom =
-        bom_size(storage->text.data(), storage->text.size());
+    const std::size_t bom = bom_size(storage->text);
     storage->base = storage->text.data() + bom;
     storage->size = storage->text.size() - bom;
-    if (storage->lines.build(storage->base, storage->size) ==
+    if (storage->lines.build(dstd::StringView(storage->base, storage->size)) ==
         BuildResult::Invalid)
         return line_problem_error(storage->lines.problem, source_name, 1);
     return Document(std::move(storage));
@@ -37,11 +37,11 @@ dstd::Result<Document> Document::parse(dstd::String text,
                                        RunJobs run_jobs) {
     auto storage = dstd::make_unique<DocumentStorage>();
     storage->text = std::move(text);
-    const std::size_t bom =
-        bom_size(storage->text.data(), storage->text.size());
+    const std::size_t bom = bom_size(storage->text);
     storage->base = storage->text.data() + bom;
     storage->size = storage->text.size() - bom;
-    if (storage->lines.build_parallel(storage->base, storage->size, run_jobs) ==
+    if (storage->lines.build_parallel(
+            dstd::StringView(storage->base, storage->size), run_jobs) ==
         BuildResult::Invalid)
         return line_problem_error(storage->lines.problem, source_name, 1);
     return Document(std::move(storage));

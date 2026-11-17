@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/query/group_fold.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
@@ -29,8 +30,8 @@ dataframe::Series strs(const Cells& cells) {
     return dataframe::Series::strings(v, valid.data());
 }
 
-dataframe::Series ints(const dstd::Vector<std::int64_t>& v) {
-    return dataframe::Series::flat_i64(v.data(),
+dataframe::Series ints(std::initializer_list<std::int64_t> v) {
+    return dataframe::Series::flat_i64(v.begin(),
                                        static_cast<std::int64_t>(v.size()));
 }
 

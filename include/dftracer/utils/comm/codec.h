@@ -45,8 +45,8 @@ concept Codec =
 /// The codec of a @ref dstd::String, its bytes, with no length head, since the
 /// block of a rank already has one.
 struct StringCodec {
-    std::size_t serialized_size(const dstd::String& value) const noexcept;
-    dstd::Result<std::size_t> serialize(const dstd::String& value,
+    std::size_t serialized_size(dstd::StringView value) const noexcept;
+    dstd::Result<std::size_t> serialize(dstd::StringView value,
                                         dstd::Span<std::byte> out) const;
     dstd::Result<dstd::String> deserialize(
         dstd::Span<const std::byte> bytes) const;
@@ -57,11 +57,11 @@ struct StringCodec {
 template <class T>
     requires std::is_trivially_copyable_v<T>
 struct VectorCodec {
-    std::size_t serialized_size(const dstd::Vector<T>& value) const noexcept {
+    std::size_t serialized_size(dstd::Span<const T> value) const noexcept {
         return value.size() * sizeof(T);
     }
 
-    dstd::Result<std::size_t> serialize(const dstd::Vector<T>& value,
+    dstd::Result<std::size_t> serialize(dstd::Span<const T> value,
                                         dstd::Span<std::byte> out) const {
         const std::size_t bytes = serialized_size(value);
         if (out.size() != bytes) {

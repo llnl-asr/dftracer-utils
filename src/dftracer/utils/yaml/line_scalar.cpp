@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/yaml/line_scalar.h>
 
 #include <cstring>
@@ -44,8 +45,8 @@ int hex_value(char c) {
 // Decodes `[s, e)` of a double quoted scalar into `w`. `barrier` ends up after
 // the last escape, which a fold must not trim. `escaped_break` is set when the
 // segment ends in a backslash: the line break after it is escaped.
-Decoded decode_double(const char* t, std::uint32_t s, std::uint32_t e, char*& w,
-                      char*& barrier, bool& escaped_break,
+Decoded decode_double(dstd::StringView t, std::uint32_t s, std::uint32_t e,
+                      char*& w, char*& barrier, bool& escaped_break,
                       EscapeProblem& problem) {
     for (std::uint32_t i = s; i < e; ++i) {
         if (t[i] != '\\') {
@@ -178,7 +179,8 @@ Decoded decode_double(const char* t, std::uint32_t s, std::uint32_t e, char*& w,
     return Decoded::Ok;
 }
 
-void decode_single(const char* t, std::uint32_t s, std::uint32_t e, char*& w) {
+void decode_single(dstd::StringView t, std::uint32_t s, std::uint32_t e,
+                   char*& w) {
     for (std::uint32_t i = s; i < e; ++i) {
         *w++ = t[i];
         if (t[i] == '\'') ++i;
@@ -214,16 +216,16 @@ dstd::String escape_reason(const EscapeProblem& problem) {
 
 // The offset of the first line feed in `[pos, e)`, or `e`. A line is short, so
 // a few bytes are looked at before a call is worth it.
-inline std::uint32_t find_newline(const char* t, std::uint32_t pos,
+inline std::uint32_t find_newline(dstd::StringView t, std::uint32_t pos,
                                   std::uint32_t e) {
     const std::uint32_t near_end = e - pos < 24 ? e : pos + 24;
     for (std::uint32_t i = pos; i < near_end; ++i)
         if (t[i] == '\n') return i;
     if (near_end == e) return e;
-    const void* found = std::memchr(t + near_end, '\n', e - near_end);
+    const void* found = std::memchr(t.data() + near_end, '\n', e - near_end);
     return found == nullptr ? e
                             : static_cast<std::uint32_t>(
-                                  static_cast<const char*>(found) - t);
+                                  static_cast<const char*>(found) - t.data());
 }
 
 // Folds the lines of a quoted scalar: trailing white space before a break and
@@ -243,7 +245,8 @@ Decoded decode_quoted(LineIndex& ix, std::uint32_t s, std::uint32_t e,
     bool after_escaped = false;
     bool is_first = true;
     for (;;) {
-        const std::uint32_t line_to = find_newline(t, pos, e);
+        const std::uint32_t line_to =
+            find_newline(dstd::StringView(t, ix.size), pos, e);
         const bool is_last = line_to == e;
         std::uint32_t from = pos;
         std::uint32_t to = line_to;
@@ -268,13 +271,14 @@ Decoded decode_quoted(LineIndex& ix, std::uint32_t s, std::uint32_t e,
         bool escaped_break = false;
         if (double_quoted) {
             const Decoded decoded =
-                decode_double(t, from, to, w, barrier, escaped_break, problem);
+                decode_double(dstd::StringView(t, ix.size), from, to, w,
+                              barrier, escaped_break, problem);
             if (decoded != Decoded::Ok) {
                 ix.arena.resize(old);
                 return decoded;
             }
         } else {
-            decode_single(t, from, to, w);
+            decode_single(dstd::StringView(t, ix.size), from, to, w);
         }
         if (is_last) break;
         if (escaped_break) {
@@ -347,7 +351,8 @@ void decode_plain(LineIndex& ix, std::uint32_t s, std::uint32_t e,
     std::uint32_t empties = 0;
     bool is_first = true;
     for (;;) {
-        const std::uint32_t line_to = find_newline(t, pos, e);
+        const std::uint32_t line_to =
+            find_newline(dstd::StringView(t, ix.size), pos, e);
         const bool is_last = line_to == e;
         std::uint32_t from = pos;
         std::uint32_t to = line_to;

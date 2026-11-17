@@ -241,7 +241,7 @@ struct GzipLineWriter::Impl {
         co_return co_await write_extra(opts.part_header, true);
     }
 
-    coro::CoroTask<bool> write_extra(const dstd::String& bytes, bool header) {
+    coro::CoroTask<bool> write_extra(dstd::String bytes, bool header) {
         if (bytes.empty()) co_return true;
         dstd::Vector<std::uint8_t> comp;
         if (opts.compress) {
@@ -287,8 +287,9 @@ struct GzipLineWriter::Impl {
         ok = co_await writer->close() == 0 && ok;
         if (ok && layout == parallel::FileLayout::Sharded) {
             // GCC 12 destroys a temporary built inside co_await twice.
-            const dstd::Vector<dstd::String> shards = writer->output_paths();
-            ok = co_await parallel::merge_shards(cur_path, shards) == 0;
+            dstd::Vector<dstd::String> shards = writer->output_paths();
+            ok = co_await parallel::merge_shards(cur_path, std::move(shards)) ==
+                 0;
         }
         writer.reset();
         if (!ok) {
@@ -840,7 +841,7 @@ GzipLineWriterBlocking::~GzipLineWriterBlocking() = default;
 
 namespace {
 template <typename T, typename F>
-dstd::Result<T> run_on_default(const char* name, F&& f) {
+dstd::Result<T> run_on_default(dstd::StringView name, F&& f) {
     dstd::Optional<dstd::Result<T>> out;
     auto ran = default_runtime().block_on(
         coro::named(name, [&]() -> coro::CoroTask<void> {

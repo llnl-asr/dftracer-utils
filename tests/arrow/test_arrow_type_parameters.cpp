@@ -56,7 +56,7 @@ struct Case {
 // Every op that gathers/reindexes rows and so must carry type parameters
 // through gather_column or dftu_series_slice.
 void check_op(const Case& c, const Series& result, std::int64_t src_row,
-              const dstd::String& op = "") {
+              dstd::StringView op = "") {
     CAPTURE(op);
     REQUIRE(result.valid());
     Series back = arrow_round_trip(result);

@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
@@ -399,9 +400,9 @@ class LinearCollectives : public Collectives {
         const bool table = (slot.records[rank].flags & RECORD_TABLE) != 0;
         const bool wants = (slot.records[rank].flags & RECORD_WANTS) != 0;
         const std::size_t head = header_size(slot.members, table);
-        auto malformed = [&](const char* what) {
+        auto malformed = [&](dstd::StringView what) {
             why = dstd::Error::from_format<"a collective table {}">(
-                dstd::Condition::InvalidArgument, dstd::StringView(what));
+                dstd::Condition::InvalidArgument, what);
             return false;
         };
         if (bytes.size() < head) return malformed("is shorter than its header");
@@ -611,7 +612,7 @@ class LinearCollectives : public Collectives {
     /// pieces, and reports the one of rank 0. A member gets only the bytes
     /// addressed to it, so no message holds the whole exchange.
     void broadcast_personal(const dstd::SharedPtr<Slot>& slot, WireInput& input,
-                            const dstd::Vector<std::uint8_t>& wants) {
+                            dstd::Span<const std::uint8_t> wants) {
         dstd::Vector<dstd::SharedPtr<Wire>> wires;
         dstd::Error bad;
         if (!build_personal_wires(input, wires, bad)) {

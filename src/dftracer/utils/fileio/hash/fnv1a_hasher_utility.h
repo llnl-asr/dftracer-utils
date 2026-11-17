@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_FILEIO_HASH_FNV1A_HASHER_UTILITY_H
 
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/hash/types.h>
@@ -70,8 +71,11 @@ class Fnv1aHasherUtility {
         current_hash_ = Hash{static_cast<std::size_t>(state_)};
     }
 
-    /// Hash a C-string as bytes, not as a pointer address.
-    void update(const char* str) { update(dstd::StringView(str)); }
+    /// Hash a string literal as bytes, not as a pointer address.
+    template <std::size_t N>
+    void update(const char (&str)[N]) {
+        update(dstd::StringView(str));
+    }
 
     /// Hash a trivially-copyable value as its raw bytes. Pointer types are
     /// excluded so a string literal is never hashed as an address.
@@ -85,7 +89,7 @@ class Fnv1aHasherUtility {
             dstd::StringView(reinterpret_cast<const char*>(&value), sizeof(T)));
     }
 
-    void update(const dstd::Vector<unsigned char>& data) {
+    void update(dstd::Span<const unsigned char> data) {
         update(dstd::StringView(reinterpret_cast<const char*>(data.data()),
                                 data.size()));
     }

@@ -3,6 +3,7 @@
 #include <arrow/arrow_helpers.h>
 #include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
@@ -28,7 +29,7 @@ struct BuiltArrow {
 void append_i64(ArrowArray* a, std::int64_t v) {
     REQUIRE(ArrowArrayAppendInt(a, v) == NANOARROW_OK);
 }
-void append_str(ArrowArray* a, const dstd::String& s) {
+void append_str(ArrowArray* a, dstd::StringView s) {
     ArrowStringView sv{s.data(), static_cast<std::int64_t>(s.size())};
     REQUIRE(ArrowArrayAppendString(a, sv) == NANOARROW_OK);
 }
@@ -41,7 +42,7 @@ void finish(ArrowArray* a) {
 
 namespace {
 
-Series import_large_utf8(const dstd::Vector<dstd::String>& values) {
+Series import_large_utf8(dstd::Span<const dstd::String> values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_STRING) ==
@@ -479,7 +480,8 @@ TEST_SUITE("dataframe_arrow_types") {
 TEST_CASE(
     "large_utf8 round-trips through export as utf8 with intact "
     "values, and its offsets were never copied down to int32") {
-    Series s = import_large_utf8({"one", "two", "three"});
+    const dstd::String words[] = {"one", "two", "three"};
+    Series s = import_large_utf8(words);
     REQUIRE(s.valid());
     REQUIRE(s.type() == TypeId::LargeString);
     const std::int64_t* wide_off = s.offsets64();

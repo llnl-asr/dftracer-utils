@@ -470,7 +470,7 @@ inline backend::Combine make_split_combine(backend::Combine inner,
 /// One object per type @p T, which only its address is read for: the address
 /// names the type exactly within one process, which no hash of its name does.
 template <class T>
-inline char type_key = 0;
+inline char g_type_key = 0;
 
 /// Puts the identity of @p T in @p record, over the fields an object call does
 /// not otherwise use (the key is compared across ranks), so ranks that pass
@@ -478,7 +478,7 @@ inline char type_key = 0;
 /// and belongs to the shared path only.
 template <class T>
 void set_type_key(backend::Record& record) noexcept {
-    const std::uint64_t key = reinterpret_cast<std::uintptr_t>(&type_key<T>);
+    const std::uint64_t key = reinterpret_cast<std::uintptr_t>(&g_type_key<T>);
     record.elem_size = static_cast<std::uint32_t>(key);
     record.key = static_cast<std::uint32_t>(key >> 32);
 }

@@ -52,13 +52,13 @@ namespace detail {
 
 /// A channel of bytes carries values of any length, so it fixes no value size.
 template <class T>
-inline constexpr bool is_bytes_channel =
+inline constexpr bool IS_BYTES_CHANNEL =
     std::is_same_v<T, dstd::Vector<std::byte>>;
 
 /// The bytes of one value of @p T, which a channel of bytes leaves free.
 template <class T>
 constexpr std::uint32_t channel_value_size() noexcept {
-    if constexpr (is_bytes_channel<T>) {
+    if constexpr (IS_BYTES_CHANNEL<T>) {
         return 0;
     } else {
         static_assert(std::is_trivially_copyable_v<T>,
@@ -79,7 +79,7 @@ constexpr std::uint64_t channel_id(dstd::StringView name) noexcept {
 /// fixed-size value, one owned buffer for a channel of bytes.
 template <class T>
 T value_of(dstd::Span<const std::byte> bytes) {
-    if constexpr (is_bytes_channel<T>) {
+    if constexpr (IS_BYTES_CHANNEL<T>) {
         dstd::Vector<std::byte> value(bytes.size());
         std::memcpy(value.data(), bytes.data(), bytes.size());
         return value;
@@ -428,7 +428,7 @@ Op<std::size_t> take_bytes(const dstd::SharedPtr<ChannelState>& channel,
 template <class T>
 Op<void> send_value(const dstd::SharedPtr<ChannelState>& channel,
                     std::uint32_t peer, const T& value, const CallOpts& opts) {
-    static_assert(!is_bytes_channel<T>,
+    static_assert(!IS_BYTES_CHANNEL<T>,
                   "a channel of bytes sends a span of bytes");
     dstd::Vector<std::byte> bytes(sizeof(T));
     std::memcpy(bytes.data(), &value, sizeof(T));
@@ -555,7 +555,7 @@ class ChannelRx {
     /// it again.
     Op<std::size_t> recv_into(dstd::Span<std::byte> buffer,
                               CallOpts opts = {}) {
-        static_assert(detail::is_bytes_channel<T>,
+        static_assert(detail::IS_BYTES_CHANNEL<T>,
                       "only a channel of bytes receives into a buffer");
         if (!state_) return detail::empty_channel<std::size_t>();
         return detail::take_bytes(state_, buffer, opts);

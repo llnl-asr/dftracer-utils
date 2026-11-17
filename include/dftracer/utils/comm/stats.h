@@ -14,9 +14,10 @@ namespace dftracer::utils::comm {
  *
  * A call counts once for each rank that makes it. @ref kind names the call as
  * its method does, `barrier` or `all_reduce`, or `channel_send`,
- * `channel_recv`, `pull` or `push`. The bytes are those of the calls that ended
- * well: what the call put in and what its result held. A group that no handle
- * names any more is counted in the row of group id 0.
+ * `channel_recv`, `pull` or `push` (see @ref Group and @ref Channel). The bytes
+ * are those of the calls that ended well: what the call put in and what its
+ * result held. A group that no handle names any more is counted in the row of
+ * group id 0.
  */
 struct CallStats {
     std::uint64_t group = 0;

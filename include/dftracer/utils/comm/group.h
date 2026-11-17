@@ -80,6 +80,11 @@ struct CallOpts {
  * (@ref size is 0, @ref rank and @ref id are 0) and its collectives end at once
  * with a value.
  *
+ * Thread rules: the handle and its copies may be used from any thread, and the
+ * calls of different ranks run on any thread. The collectives of one rank match
+ * in the order that rank calls them, so a rank makes them from one task at a
+ * time. Each call returns an @ref Op that ends exactly once.
+ *
  * Every call of a member belongs to the group and to a sequence number of that
  * member, and peers match on both. Aborting a group, canceling a call and a
  * passed deadline each fail every pending and later call of the group on every
@@ -163,9 +168,9 @@ class Group {
      *
      * No new pull or push on it starts: each fails with
      * @ref dstd::Condition::NotFound. The pulls and pushes that already started
-     * run to their end, and the Op completes when the last one ended, so the
-     * owner may free the memory after it. It completes at once for a ref that
-     * is not open. A second call on a ref that is still draining completes
+     * run to their end, and the @ref Op completes when the last one ended, so
+     * the owner may free the memory after it. It completes at once for a ref
+     * that is not open. A second call on a ref that is still draining completes
      * when the first does. It cannot be cancelled.
      *
      * A transfer between processes holds the exposure one range at a time, so
@@ -183,7 +188,7 @@ class Group {
      * copies nothing: the call never cuts a range silently. A @p ref past its
      * end, a write only exposure, a device memory kind, an unknown or closed
      * exposure and a ref of another group fail with an error that names the
-     * ref. @p dst must stay valid until the Op ends, also after
+     * ref. @p dst must stay valid until the @ref Op ends, also after
      * @ref Op::cancel.
      *
      * A cancel, a deadline and a stopped token end this call alone, never the
@@ -615,7 +620,7 @@ class Group {
      * Every rank passes the same number of values, the same @p op and, for the
      * forms with a function, the same function. The merge always folds in rank
      * order, so a float result is the same on every run and @ref
-     * CallOpts::reduce_order has no effect. Every rank receives every
+     * @ref CallOpts::reduce_order has no effect. Every rank receives every
      * contribution and merges its own prefix, which costs `r` merges on rank
      * `r`.
      */
@@ -1286,6 +1291,10 @@ class Neighborhood {
  * the executor given at start, so a program written against it runs unchanged
  * on a backend that spreads the ranks over nodes. Every rank of the run is
  * reachable from every thread of the process.
+ *
+ * Lifetime: the executor given at start outlives the communicator and every
+ * @ref Group it made. @ref stats and @ref pending may be called from any
+ * thread at any time. A start that fails gives an error and no communicator.
  */
 class Communicator {
    public:

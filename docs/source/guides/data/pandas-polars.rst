@@ -43,13 +43,13 @@ the polars call.
      - polars spellings
    * - ``Series``
      - ``aggregate`` = ``agg``, ``astype`` = ``cast``, ``isna`` = ``is_null``, ``isnull`` = ``is_null``, ``notna`` = ``is_not_null``, ``notnull`` = ``is_not_null``, ``dropna`` = ``drop_nulls``, ``fillna`` = ``fill_null``, ``isin`` = ``is_in``, ``nunique`` = ``n_unique``, ``prod`` = ``product``, ``argmax`` = ``arg_max``, ``idxmax`` = ``arg_max``, ``argmin`` = ``arg_min``, ``idxmin`` = ``arg_min``, ``cumsum`` = ``cum_sum``, ``cumprod`` = ``cum_prod``, ``cummax`` = ``cum_max``, ``cummin`` = ``cum_min``, ``searchsorted`` = ``search_sorted``, ``tolist`` = ``to_list``, ``ffill`` = ``forward_fill``, ``pad`` = ``forward_fill``, ``bfill`` = ``backward_fill``, ``backfill`` = ``backward_fill``, ``kurt`` (own signature) = ``kurtosis``, ``take`` = ``gather``, ``iat`` = ``iloc``, ``at`` = ``iloc``, ``loc`` = ``iloc``, ``rtruediv`` = ``rdiv``, ``divide`` = ``truediv``, ``div`` = ``truediv``, ``multiply`` = ``mul``, ``subtract`` = ``sub``, ``sort_values`` (own signature) = ``sort``, ``nlargest`` (own signature) = ``top_k``, ``nsmallest`` (own signature) = ``bottom_k``, ``drop_duplicates`` (own signature) = ``unique``, ``between`` (own signature) = ``is_between``
-     - none
+     - ``alias`` = ``rename``, ``clone`` = ``copy``, ``limit`` = ``head``
    * - ``Expr``
      - ``isna`` = ``is_null``, ``isnull`` = ``is_null``, ``notna`` = ``is_not_null``, ``notnull`` = ``is_not_null``, ``isin`` = ``is_in``, ``astype`` = ``cast``, ``fillna`` = ``fill_null``, ``cumsum`` = ``cum_sum``, ``cumprod`` = ``cum_prod``, ``cummax`` = ``cum_max``, ``cummin`` = ``cum_min``, ``ffill`` = ``forward_fill``, ``bfill`` = ``backward_fill``, ``between`` (own signature) = ``is_between``, ``startswith`` = ``starts_with``, ``endswith`` = ``ends_with``
      - none
    * - ``DataFrame``
      - ``aggregate`` = ``agg``, ``astype`` = ``cast``, ``dropna`` = ``drop_nulls``, ``fillna`` = ``fill_null``, ``groupby`` (own signature) = ``group_by``, ``sort_values`` (own signature) = ``sort``, ``drop_duplicates`` = ``unique``, ``take`` = ``gather``, ``nlargest`` (own signature) = ``top_k``, ``nsmallest`` (own signature) = ``top_k``, ``divide`` = ``div``, ``truediv`` = ``div``, ``multiply`` = ``mul``, ``subtract`` = ``sub``, ``product`` = ``prod``, ``rtruediv`` = ``rdiv``, ``map`` = ``applymap``, ``isnull`` = ``isna``, ``notnull`` = ``notna``, ``backfill`` = ``bfill``, ``pad`` = ``ffill``
-     - ``limit`` = ``head``
+     - ``limit`` = ``head``, ``clone`` = ``copy``
    * - ``LazyFrame``
      - ``aggregate`` = ``agg``, ``sort_values`` (own signature) = ``sort``, ``drop_duplicates`` = ``unique``, ``take`` = ``gather``
      - ``limit`` = ``head``
@@ -249,6 +249,21 @@ Left out, and why
   Parquet / CSV / IPC: not this engine's layer.
 - ``GroupBy.fillna(value)``: pandas deprecates it; ``ffill`` / ``bfill``
   are the spellings.
+
+Which names exist
+------------------
+
+``scripts/api_coverage.py`` compares the public names of the installed
+pandas and Polars classes with ours and fails on a name that is neither ours
+nor in ``scripts/api_coverage_exclude.txt``. Each line of that file gives one
+reason: ``out-of-scope``, ``python-semantics``, ``needs-index`` (waits for the
+row index), ``needs-kernel`` (names the missing engine kernel) or
+``deprecated-upstream``. ``scripts/api_coverage.py --report`` prints the
+table per class. ``tests/python/test_pandas_parity.py`` and
+``tests/python/test_polars_parity.py`` run each method we have in the library
+and in ours on the same data; the methods whose result differs are listed with
+their reasons in ``tests/python/parity_findings_pandas.txt`` and
+``parity_findings_polars.txt``.
 
 See also
 ---------

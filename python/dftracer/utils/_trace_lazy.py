@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import (
     TYPE_CHECKING,
+    Callable,
+    Dict,
     List,
     Literal,
     Optional,
@@ -23,6 +25,7 @@ from .series import Series
 
 if TYPE_CHECKING:
     from .columnar import Agg
+    from .enums import DType
     from .indexing import LazyILoc, LazyLoc, Resampler
 
 if TYPE_CHECKING:
@@ -64,6 +67,41 @@ class _LazyOps(_ext.TraceViewer):
         over the index column or ``on``, each aggregate call one streaming
         ``group_by_dynamic`` over the time-sorted plan."""
         return self.lazy().resample(rule, on, unit)
+
+    @property
+    def dtypes(self) -> "List[DType]":
+        """The dtypes of :attr:`schema`, in column order."""
+        return self.lazy().dtypes
+
+    @property
+    def width(self) -> int:
+        """The number of output columns (see :attr:`columns`)."""
+        return self.lazy().width
+
+    def collect_schema(self) -> "Dict[str, DType]":
+        """:attr:`schema` (polars ``collect_schema``)."""
+        return self.lazy().collect_schema()
+
+    def clone(self) -> "LazyFrame":
+        """This plan itself (plans are immutable)."""
+        return self.lazy().clone()
+
+    def clear(self, n: int = 0) -> "LazyFrame":
+        """The plan with its columns and no rows (polars ``clear``; ``n > 0``,
+        null rows, is not taken)."""
+        return self.lazy().clear(n)
+
+    def first(self) -> "LazyFrame":
+        """The first row as a one-row plan."""
+        return self.lazy().first()
+
+    def last(self) -> "LazyFrame":
+        """The last row as a one-row plan."""
+        return self.lazy().last()
+
+    def pipe(self, function: Callable[..., object], *args: object, **kwargs: object) -> object:
+        """``function(self, *args, **kwargs)``."""
+        return self.lazy().pipe(function, *args, **kwargs)
 
     def tail(self, n: int = 5) -> "LazyFrame":
         """The last ``n`` rows."""

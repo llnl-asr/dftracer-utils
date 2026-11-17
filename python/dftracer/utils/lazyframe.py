@@ -196,6 +196,47 @@ class LazyFrame(_ext.LazyFrame):
             name: DType(code) for name, code, _unit, _zone in _ext.LazyFrame.output_schema(self)
         }
 
+    @property
+    def dtypes(self) -> "List[DType]":
+        """The dtypes of :attr:`schema`, in column order."""
+        return list(self.schema.values())
+
+    @property
+    def width(self) -> int:
+        """The number of output columns (see :attr:`columns`)."""
+        return len(self.columns)
+
+    def collect_schema(self) -> "Dict[str, DType]":
+        """:attr:`schema` (polars ``collect_schema``)."""
+        return self.schema
+
+    def lazy(self) -> "LazyFrame":
+        """This plan itself."""
+        return self
+
+    def clone(self) -> "LazyFrame":
+        """This plan itself (plans are immutable)."""
+        return self
+
+    def clear(self, n: int = 0) -> "LazyFrame":
+        """The plan with its columns and no rows (polars ``clear``; ``n > 0``,
+        null rows, is not taken)."""
+        if n != 0:
+            raise ValueError("clear: only n=0 is taken")
+        return self.head(0)
+
+    def first(self) -> "LazyFrame":
+        """The first row as a one-row plan."""
+        return self.head(1)
+
+    def last(self) -> "LazyFrame":
+        """The last row as a one-row plan."""
+        return self.tail(1)
+
+    def pipe(self, function: Callable[..., object], *args: object, **kwargs: object) -> object:
+        """``function(self, *args, **kwargs)``."""
+        return function(self, *args, **kwargs)
+
     def _resolve(self, op: str) -> Callable[[str], int]:
         names = _ext.LazyFrame.schema(self)
         if not names:

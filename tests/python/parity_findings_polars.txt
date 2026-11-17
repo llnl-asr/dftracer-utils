@@ -1,0 +1,157 @@
+# Methods whose result differs from Polars today, one line per method:
+#   kind.method | tag | [inputs that differ] reason
+# kind: series, frame, lazy, groupby, expr, str (the table the case sits in).
+# tag: keyword (a Polars keyword is not accepted), missing (the method is not
+# there), shape (another result type or layout), semantics (another value,
+# dtype or error rule), engine (the engine refuses the input).
+# test_polars_parity.py marks every case of a listed method as an expected
+# failure; a fixed method shows as XPASS and its line is deleted.
+series.mean | semantics | [E] an empty column gives 0.0 here; polars gives null
+series.min | semantics | [E] an empty column gives 0 here; polars gives null
+series.max | semantics | [E] an empty column gives 0 here; polars gives null
+series.skew | semantics | [I] values -1.8814382337850113 vs -1.2621071358631282
+series.n_unique | semantics | [FIS] values 4 vs 5 (+2 more reasons)
+series.null_count | engine | [EFIS] null_count is a property here (the pandas shape); polars has a method; also TypeError: 'int' object is not callable
+series.quantile | keyword | [FI] quantile() got an unexpected keyword argument 'interpolation'
+series.describe | shape | [FI] rows 8 vs 9
+series.exp | semantics | [F] values [4.4816890703380645, None, 0.0, 0.0820849986238988, 20.085536923187668
+series.log | semantics | [F] log of a negative or NaN value gives a number here; polars gives null or -inf
+series.sign | semantics | [F] values [1.0, None, 0.0, -1.0, 1.0, 0.0] vs [1.0, None, None, -1.0, 1.0, 0.0]
+series.clip | semantics | [F] values [1.5, None, -1.0, -1.0, 2.0, 0.0] vs [1.5, None, None, -1.0, 2.0, 0.0] (+1 more reasons)
+series.cum_sum | keyword | [FI] Series.cum_sum() takes no keyword arguments
+series.diff | keyword | [FI] Series.diff() got an unexpected keyword argument 'null_behavior'
+series.shift | keyword | [FI] Series.shift() got an unexpected keyword argument 'fill_value'
+series.rank | semantics | [FI] values [3.0, None, None, 1.0, 4.0, 2.0] vs [3.0, None, 5.0, 1.0, 4.0, 2.0] (+1 more reasons)
+series.fill_null | engine | [FIS] DFTUtilsValueError: dataframe kernel produced a null column (+1 more reasons)
+series.forward_fill | keyword | [FI] Series.forward_fill() takes no keyword arguments
+series.is_in | semantics | [IS] values [True, False, False, True, True, False, False] vs [True, None, False,  (+2 more reasons)
+series.is_between | keyword | [FI] is_between() got an unexpected keyword argument 'closed'
+series.filter | shape | [F] length 2 vs 3
+series.cast | keyword | [FI] Series.cast() got an unexpected keyword argument 'strict'
+series.is_duplicated | semantics | [F] values [False, False, True, False, False, False] vs [False, False, False, Fal
+series.is_unique | engine | [FIS] is_unique is a property here (the pandas shape); polars has a method returning the mask; also TypeError: 'bool' object is not callable
+series.unique | semantics | [S] values [None, 'a', 'ab', 'b'] vs ['a', 'ab', None, 'b'] (+1 more reasons)
+series.value_counts | shape | [FIS] columns ['value', 'count'] vs ['v', 'count'] (+3 more reasons)
+series.mode | shape | [FIS] length 1 vs 2 (+2 more reasons)
+series.head | shape | [FI] length 5 vs 7 (+1 more reasons)
+series.slice | keyword | [FIS] function takes exactly 2 arguments (1 given)
+series.search_sorted | semantics | [F] values 6 vs 4
+series.sample | semantics | [FI] values [3, 2, -4] vs [None, 2, 1] (+1 more reasons)
+series.explode | engine | [FIS] DFTUtilsValueError: explode: v is not a List column
+series.equals | semantics | [F] values False vs True
+series.pipe | semantics | [FI] polars raised AttributeError, ours returned
+series.map | semantics | [FI] polars raised TypeError, ours returned
+series.truncate | shape | [FI] length 5 vs 7 (+1 more reasons)
+series.ewm_mean | semantics | [F] values [1.5, 1.5, None, None, None, None] vs [1.5, None, None, None, None, No
+series.rolling_sum | semantics | [FI] dtype float vs int (+2 more reasons)
+series.rolling_mean | semantics | [FI] values [None, None, None, None, None, None] vs [None, None, None, None, 0.25, (+1 more reasons)
+series.rolling_min | semantics | [I] dtype float vs int
+series.rolling_max | semantics | [I] dtype float vs int
+series.rolling_quantile | keyword | [F] function takes at most 2 arguments (3 given)
+series.ge | semantics | [F] values [False, None, False, False, False, False] vs [False, None, True, False (+1 more reasons)
+series.gt | semantics | [F] values [False, None, False, False, False, False] vs [False, None, True, False (+1 more reasons)
+frame.sum | shape | [E] rows 0 vs 1
+frame.mean | shape | [E] rows 0 vs 1
+frame.min | shape | [E] rows 0 vs 1
+frame.max | shape | [E] rows 0 vs 1
+frame.std | shape | [EN] rows 0 vs 1 (+1 more reasons)
+frame.var | shape | [E] rows 0 vs 1
+frame.quantile | semantics | [N] values b: [2.25] vs [3.0]
+frame.describe | shape | [N] rows 6 vs 9
+frame.corr | shape | [N] columns ['column', 'a', 'b'] vs ['a', 'b']
+frame.sum_horizontal | semantics | [N] values [2.5, None, None, -0.5, 5.0] vs [2.5, 0.0, None, -0.5, 5.0]
+frame.fill_null | keyword | [N] DataFrame.fill_null() got an unexpected keyword argument 'strategy'
+frame.fill_nan | semantics | [N] dtype a: float vs int
+frame.drop_nulls | keyword | [M] DataFrame.drop_nulls() takes 1 positional argument but 2 were given (+1 more reasons)
+frame.drop_nans | shape | [N] rows 3 vs 4
+frame.shift | keyword | [N] _FramePandasMixin.shift() got an unexpected keyword argument 'fill_value'
+frame.filter | semantics | [M] polars raised ColumnNotFoundError, ours returned
+frame.select | engine | [M] TypeError: select: takes names or expressions, got Series
+frame.with_columns | engine | [N] TypeError: with_columns: a positional item must be expr.alias(name)
+frame.with_row_index | keyword | [M] DataFrame.with_row_index() got an unexpected keyword argument 'offset'
+frame.unique | keyword | [M] DataFrame.unique() got an unexpected keyword argument 'maintain_order' (+1 more reasons)
+frame.top_k | keyword | [N] DataFrame.top_k() got an unexpected keyword argument 'by'
+frame.bottom_k | missing | [N] 'DataFrame' object has no attribute 'bottom_k'
+frame.sample | semantics | [N] values a: [3, 2] vs [2, 2]
+frame.unpivot | keyword | [N] unpivot() needs value_vars (polars: on=) (+1 more reasons)
+frame.pivot | engine | [G] TypeError: argument 1 must be str, not None
+frame.transpose | shape | [N] columns ['column', '0', '1', '2', '3', '4'] vs ['column_0', 'column_1', 'column_2', 'column_3', 'column_4'] (+1 more reasons)
+frame.to_dummies | shape | [M] columns ['a', 'b', 'c_x', 'c_y', 'd'] vs ['a', 'b', 'c_null', 'c_x', 'c_y', 'd']
+frame.to_dict | semantics | [N] values {'a': [1, None, 3, 2, 2], 'b': [1.5, None, None, -2.5, 3.0]} vs {'a':  (+1 more reasons)
+frame.to_dicts | semantics | [N] values [{'a': 1, 'b': 1.5}, {'a': None, 'b': None}, {'a': 3, 'b': nan}, {'a':
+frame.get_columns | semantics | [M] values [[1, None, 3, 2, 2], [1.5, None, None, -2.5, 3.0], ['x', None, 'y', 'x
+frame.iter_rows | semantics | [N] values <generator object _FramePolarsMixin.iter_rows at 0x1166cab00> vs <gene (+1 more reasons)
+frame.equals | semantics | [MN] values False vs True
+frame.hstack | shape | [N] columns ['a', 'b', 'column_0'] vs ['a', 'b', 'z']
+frame.update | shape | [N] ours NoneType (scalar), library DataFrame (frame)
+frame.partition_by | semantics | [M] values [ a b c d
+frame.join | semantics | [G] values a: [1, 1, 1, None, None, 3, 3, 3, 2, 2, 2, 2, 2] vs [1, 3, 2, None, 2, (+1 more reasons)
+frame.rolling | keyword | [N] _FramePandasMixin.rolling() got an unexpected keyword argument 'index_column'
+frame.dtypes | semantics | [EMN] values [<DType.INT64: 5>, <DType.FLOAT64: 11>, <DType.STRING: 12>, <DType.BOO (+1 more reasons)
+frame.schema | semantics | [EMN] values {'a': <DType.INT64: 5>, 'b': <DType.FLOAT64: 11>, 'c': <DType.STRING:  (+1 more reasons)
+lazy.fill_null | keyword | [N] LazyFrame.fill_null() got an unexpected keyword argument 'strategy'
+lazy.drop_nulls | keyword | [M] LazyFrame.drop_nulls() got an unexpected keyword argument 'subset'
+lazy.shift | missing | [N] 'LazyFrame' object has no attribute 'shift'
+lazy.unique | keyword | [M] LazyFrame.unique() got an unexpected keyword argument 'maintain_order'
+lazy.explode | engine | [M] EXC InvalidOperationError: `explode` operation not supported for dtype `str`
+lazy.unpivot | keyword | [N] LazyFrame.unpivot() got an unexpected keyword argument 'index'
+lazy.describe | shape | [N] rows 6 vs 9
+lazy.join | semantics | [G] values k: ['x', 'x', 'x', 'y', 'y', 'x', 'x', 'x', 'y', 'y', 'x', 'x', 'x'] v (+1 more reasons)
+lazy.collect_schema | semantics | [M] values {'a': <DType.INT64: 5>, 'b': <DType.FLOAT64: 11>, 'c': <DType.STRING:
+groupby.sum | keyword | [G] DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.mean | keyword | [G] DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.median | keyword | [G] DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.min | keyword | [G] DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.max | keyword | [G] DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.first | keyword | [G] DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.last | keyword | [G] DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.len | keyword | [G] DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.n_unique | keyword | [G] DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.quantile | keyword | [G] DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.head | keyword | [G] DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.tail | keyword | [G] DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.all | keyword | [G] DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+expr.exp | semantics | [F] values r: [4.4816890703380645, None, 0.0, 0.0820849986238988, 20.085536923187
+expr.log | semantics | [F] log of a negative or NaN value gives a number here; polars gives null or -inf
+expr.log10 | semantics | [F] log10 of a negative or NaN value gives a number here; polars gives null or -inf
+expr.log1p | semantics | [F] log1p of a negative or NaN value gives a number here; polars gives null or -inf
+expr.round | keyword | [F] Expr.__getattr__.<locals>.<lambda>() takes 0 positional arguments but 1 was given
+expr.sign | semantics | [F] values r: [1.0, None, 0.0, -1.0, 1.0, 0.0] vs [1.0, None, None, -1.0, 1.0, 0.
+expr.pow | missing | [FI] pow
+expr.clip | keyword | [FI] Expr.clip() got an unexpected keyword argument 'lower_bound'
+expr.median | missing | [FI] median
+expr.var | keyword | [FI] _make_agg_method.<locals>.method() got an unexpected keyword argument 'ddof'
+expr.len | missing | [FIS] len
+expr.n_unique | missing | [FIS] n_unique
+expr.null_count | missing | [FIS] null_count
+expr.quantile | semantics | [FI] values r: [1.993861087526097] vs [2.0] (+1 more reasons)
+expr.arg_max | missing | [FI] arg_max
+expr.arg_min | missing | [FI] arg_min
+expr.rank | semantics | [FI] values r: [3.0, None, None, 1.0, 4.0, 2.0] vs [3.0, None, 5.0, 1.0, 4.0, 2.0] (+1 more reasons)
+expr.fill_null | engine | [FIS] DFTUtilsValueError: expr: an operation does not take its input column type (+1 more reasons)
+expr.is_in | semantics | [I] values r: [True, False, False, True, True, False, False] vs [True, None, Fals
+expr.is_duplicated | semantics | [F] values r: [False, False, True, False, False, False] vs [False, False, False,
+expr.is_unique | semantics | [F] values r: [True, True, False, True, True, True] vs [True, True, True, True, T
+expr.cast | engine | [FI] KeyError: Float64
+expr.alias | missing | [FIS] 'Named' object has no attribute 'alias'
+expr.replace | engine | [FI] TypeError: bad argument type for built-in operation
+expr.hash | engine | [IS] DFTUtilsValueError: op 'dftu.hash.fnv1a' failed (+1 more reasons)
+expr.slice | engine | [FIS] DFTUtilsValueError: expr: string slice needs a String column, got int64 (+2 more reasons)
+expr.get | engine | [FIS] DFTUtilsValueError: expr: string method needs a String column, got int64 (+2 more reasons)
+expr.ewm_mean | semantics | [F] values r: [1.5, 1.5, None, None, None, None] vs [1.5, None, None, None, None,
+expr.rolling_sum | semantics | [FI] dtype r: float vs int (+1 more reasons)
+expr.rolling_mean | semantics | [F] values r: [None, None, None, None, None, None] vs [None, None, None, None, 0.
+expr.rolling_min | semantics | [I] dtype r: float vs int
+expr.rolling_max | semantics | [I] dtype r: float vs int
+expr.rolling_quantile | keyword | [F] Expr.rolling_quantile() takes 3 positional arguments but 4 were given
+expr.sample | keyword | [FI] Expr.sample() got an unexpected keyword argument 'n'
+expr.hist | shape | [F] rows 1 vs 10
+str.contains | keyword | [S] _StrAccessor.contains() got an unexpected keyword argument 'literal' (+1 more reasons)
+str.strip_chars | keyword | [S] _StrAccessor.strip_chars() takes no arguments (1 given)
+str.strip_chars_start | keyword | [S] _StrAccessor.strip_chars_start() takes no arguments (1 given)
+str.strip_chars_end | keyword | [S] _StrAccessor.strip_chars_end() takes no arguments (1 given)
+str.replace | keyword | [S] _StrAccessor.replace() got an unexpected keyword argument 'literal'
+str.replace_all | keyword | [S] replace_all() got an unexpected keyword argument 'literal'
+str.find | semantics | [S] values [-1, 0, None, 0, 0] vs [None, 0, None, 0, 0]
+str.join | engine | [S] DFTUtilsValueError: list_join: not a List column of strings
+str.encode | engine | [S] ValueError: encode: only utf-8 is supported, not 'hex'

@@ -345,6 +345,54 @@ class Expr:
         """Inequality predicate (the method form of ``!=``)."""
         return _Cmp("ne", self, other)
 
+    def lt(self, other: "Union[Value, Expr]") -> "Expr":
+        """Less-than predicate (the method form of ``<``)."""
+        return _Cmp("lt", self, other)
+
+    def le(self, other: "Union[Value, Expr]") -> "Expr":
+        """Less-or-equal predicate (the method form of ``<=``)."""
+        return _Cmp("le", self, other)
+
+    def gt(self, other: "Union[Value, Expr]") -> "Expr":
+        """Greater-than predicate (the method form of ``>``)."""
+        return _Cmp("gt", self, other)
+
+    def ge(self, other: "Union[Value, Expr]") -> "Expr":
+        """Greater-or-equal predicate (the method form of ``>=``)."""
+        return _Cmp("ge", self, other)
+
+    def add(self, other: object) -> "Expr":
+        """The method form of ``+``."""
+        return _Bin("+", self, _wrap(other))
+
+    def sub(self, other: object) -> "Expr":
+        """The method form of ``-``."""
+        return _Bin("-", self, _wrap(other))
+
+    def mul(self, other: object) -> "Expr":
+        """The method form of ``*``."""
+        return _Bin("*", self, _wrap(other))
+
+    def truediv(self, other: object) -> "Expr":
+        """The method form of ``/``."""
+        return _Bin("/", self, _wrap(other))
+
+    def neg(self) -> "Expr":
+        """The negation of each value."""
+        return _Unary("negate", self)
+
+    def and_(self, other: object) -> "Expr":
+        """The method form of ``&``."""
+        return _Logical("and", self, _as_expr(other))
+
+    def or_(self, other: object) -> "Expr":
+        """The method form of ``|``."""
+        return _Logical("or", self, _as_expr(other))
+
+    def not_(self) -> "Expr":
+        """The method form of ``~``."""
+        return _Logical("not", self, None)
+
     def count(self) -> "Agg":
         """The number of non-null values of this expression per group, as an
         :class:`Agg` (pandas ``count``). The group row count is the bare
@@ -1420,15 +1468,15 @@ class _IContains(Expr):
     """Case-insensitive substring: ``"sub" in field`` in the DSL, and
     ``lower(arg) contains lower(sub)`` in memory."""
 
-    def __init__(self, arg: Expr, sub: str) -> None:
+    def __init__(self, arg: Expr, needle: str) -> None:
         self.arg = arg
-        self.sub = sub
+        self.needle = needle
 
     def _dsl(self) -> str:
-        return f"{_format_value(self.sub)} in {_field_name(self.arg)}"
+        return f"{_format_value(self.needle)} in {_field_name(self.arg)}"
 
     def _lowered(self) -> Expr:
-        return _StrPred("contains", _StrMap("lower", self.arg), self.sub.lower())
+        return _StrPred("contains", _StrMap("lower", self.arg), self.needle.lower())
 
 
 class _ILike(Expr):

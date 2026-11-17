@@ -23,6 +23,7 @@ from .series import Series, _require_pyarrow
 
 if TYPE_CHECKING:
     from .dataframe import DataFrame
+    from .enums import DType
 
 
 class _FramePolarsMixin:
@@ -204,6 +205,10 @@ class _FramePolarsMixin:
 
     def is_empty(self) -> bool:
         return len(self._frame()) == 0
+
+    def collect_schema(self) -> "Dict[str, DType]":
+        """:attr:`schema` (polars ``collect_schema``)."""
+        return self._frame().schema
 
     def n_unique(self, subset: Optional[Union[str, Sequence[str]]] = None) -> int:
         """The number of distinct rows (or distinct ``subset`` rows)."""

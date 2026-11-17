@@ -582,6 +582,26 @@ class _FramePandasMixin(_ext.DataFrame):
         out._index = self._index
         return out
 
+    def convert_dtypes(self) -> "DataFrame":
+        """:meth:`copy`: an engine column is already typed and nullable."""
+        return self._frame().copy()
+
+    def infer_objects(self) -> "DataFrame":
+        """:meth:`copy`: an engine column is already typed."""
+        return self._frame().copy()
+
+    def clear(self, n: int = 0) -> "DataFrame":
+        """The frame with its columns and no rows (polars ``clear``; ``n > 0``,
+        null rows, is not taken)."""
+        if n != 0:
+            raise ValueError("clear: only n=0 is taken")
+        return self._frame().head(0)
+
+    def iter_columns(self) -> Iterator[Series]:
+        """Each column as a Series, in order (polars ``iter_columns``)."""
+        for name in self._frame().columns:
+            yield self._col(name)
+
     def pipe(self, func: Callable[..., Any], *args: object, **kwargs: Any) -> Any:
         return func(self, *args, **kwargs)
 

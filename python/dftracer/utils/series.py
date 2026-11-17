@@ -1178,6 +1178,30 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
 
     unique_mask = _ext.Series.is_unique
 
+    def has_nulls(self) -> bool:
+        """Whether any value is null (polars ``has_nulls``; ``hasnans`` is the
+        pandas property)."""
+        return self.null_count > 0
+
+    def is_empty(self) -> bool:
+        """Whether the Series has no elements (polars ``is_empty``)."""
+        return len(self) == 0
+
+    def first(self) -> "Optional[T_co]":
+        """The first element, ``None`` when the Series is empty (polars
+        ``first``)."""
+        return self[0] if len(self) else None
+
+    def last(self) -> "Optional[T_co]":
+        """The last element, ``None`` when the Series is empty (polars
+        ``last``)."""
+        return self[len(self) - 1] if len(self) else None
+
+    def is_not_nan(self) -> "Series[bool]":
+        """Bool mask of the values that are not NaN (a null stays null; polars
+        ``is_not_nan``)."""
+        return self.is_nan().logical_not()
+
     def is_in(self, values: "Union[Series, Sequence[object]]") -> "Series[bool]":
         """Bool mask: the value is one of ``values`` (a Series or a list; an
         empty list matches nothing)."""
@@ -1194,6 +1218,16 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         if periods is not None:
             n = periods
         return super().shift(n)
+
+    def diff(self, n: int = 1, *, periods: Optional[int] = None) -> Self:
+        """Each value minus the one ``n`` rows before it (after it for a
+        negative ``n``); the first ``n`` rows are null. ``periods`` is the
+        pandas spelling."""
+        if periods is not None:
+            n = periods
+        if n == 1:
+            return super().diff()
+        return cast("Self", self - self.shift(n))
 
     def sample(self, n: int, seed: int = 0, *, random_state: Optional[int] = None) -> Self:
         """A deterministic ``n``-row sample (``random_state`` is the pandas
@@ -1350,6 +1384,9 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         div = truediv
         multiply = mul
         subtract = sub
+        alias = _ext.Series.rename
+        clone = _SeriesPandasMixin.copy
+        limit = _ext.Series.head
         pass
     # END GENERATED aliases
 
@@ -1499,6 +1536,14 @@ class _DtAccessor(_ext.DtAccessor):
         %Z %%; another directive raises ValueError. Unlike pandas on a naive
         column, %z prints ``+0000`` and %Z prints ``UTC`` rather than empty."""
         return self._s.dt_format(fmt, _TIME_UNITS[self._unit])
+
+    def day_name(self) -> Series:
+        """The English weekday name of each instant (pandas ``day_name``)."""
+        return self.strftime("%A")
+
+    def month_name(self) -> Series:
+        """The English month name of each instant (pandas ``month_name``)."""
+        return self.strftime("%B")
 
     @property
     def year(self) -> Series:

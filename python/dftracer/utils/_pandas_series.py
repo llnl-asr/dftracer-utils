@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from pandas._libs.missing import NAType
 
     from .dataframe import DataFrame
+    from .enums import DType
     from .series import Series
 
     # A value of ``replace`` as the caller writes it, and as the engine takes it.
@@ -216,6 +217,33 @@ class _SeriesPandasMixin:
     def copy(self, deep: bool = True) -> "Series":
         """A new handle on the same immutable buffers (:meth:`share`)."""
         return self._s().share()
+
+    def convert_dtypes(self) -> "Series":
+        """:meth:`copy`: an engine column is already typed and nullable."""
+        return self.copy()
+
+    def infer_objects(self) -> "Series":
+        """:meth:`copy`: an engine column is already typed."""
+        return self.copy()
+
+    def squeeze(self) -> object:
+        """The one element of a one-element Series, else the Series itself."""
+        s = self._s()
+        return s[0] if len(s) == 1 else s
+
+    @property
+    def T(self) -> "Series":
+        """The Series itself (it has one dimension)."""
+        return self._s()
+
+    def transpose(self) -> "Series":
+        """The Series itself (it has one dimension)."""
+        return self._s()
+
+    @property
+    def dtypes(self) -> "DType":
+        """:attr:`dtype` (the pandas Series spelling)."""
+        return self._s().dtype
 
     def pipe(self, func: Callable[..., Any], *args: object, **kwargs: Any) -> Any:
         return func(self, *args, **kwargs)

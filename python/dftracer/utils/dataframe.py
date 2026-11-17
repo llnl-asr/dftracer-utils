@@ -696,9 +696,16 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         return {name: self[name].dtype for name in self.columns}
 
     def drop(
-        self, *names: "Union[str, Sequence[str]]", columns: Union[str, Sequence[str], None] = None
+        self,
+        *names: "Union[str, Sequence[str]]",
+        columns: Union[str, Sequence[str], None] = None,
+        axis: "Union[int, Literal['index', 'columns'], None]" = None,
     ) -> "DataFrame":
-        """Every column except ``names`` (``columns=`` is the pandas spelling)."""
+        """Every column except ``names`` (``columns=`` is the pandas spelling;
+        ``axis=1`` or ``"columns"`` is accepted, the frame has no row labels
+        for ``axis=0``)."""
+        if axis in (0, "index"):
+            raise ValueError("drop: dropping rows by label needs the row index; use filter")
         dropped = set(_names(columns))
         for n in names:
             dropped.update(_names(n))
@@ -1665,6 +1672,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         backfill = _FramePandasMixin.bfill
         pad = _FramePandasMixin.ffill
         limit = head
+        clone = _FramePandasMixin.copy
         pass
     # END GENERATED aliases
 

@@ -1,0 +1,151 @@
+# Methods whose result differs from pandas today, one line per method:
+#   kind.method | tag | [inputs that differ] reason
+# kind: series, frame, groupby, str (the table the case sits in).
+# tag: needs-index (the pandas result carries row labels), keyword (a pandas
+# keyword is not accepted), missing (the method is not there), shape (another
+# result type or layout), semantics (another value, dtype or error rule),
+# engine (the engine refuses the input).
+# test_pandas_parity.py marks every case of a listed method as an expected
+# failure; a fixed method shows as XPASS and its line is deleted.
+series.mean | semantics | [EFIX] NaN is a value in the engine and null is separate; pandas treats NaN as missing; also values 0.0 vs None (+2 more reasons)
+series.min | semantics | [E] an empty column gives 0 here; pandas gives NaN
+series.max | semantics | [EFI] NaN is a value in the engine and null is separate; pandas treats NaN as missing; also values 0 vs None (+1 more reasons)
+series.sum | semantics | [EFIX] NaN is a value in the engine and null is separate; pandas treats NaN as missing; also values None vs 5.0 (+1 more reasons)
+series.count | semantics | [X] NaN is a value in the engine and null is separate; pandas treats NaN as missing
+series.nunique | semantics | [FISX] NaN is a value in the engine and null is separate; pandas treats NaN as missing; also values 5 vs 4 (+1 more reasons)
+series.isna | semantics | [X] NaN is a value in the engine and null is separate; pandas treats NaN as missing
+series.notna | semantics | [X] NaN is a value in the engine and null is separate; pandas treats NaN as missing
+series.cumsum | semantics | [FIX] NaN is a value in the engine and null is separate; pandas treats NaN as missing; also values [1.5, None, None, None, None, None] vs [1.5, None, 4.5, 2.0, 5.0, 5.0] (+1 more reasons)
+series.fillna | semantics | [X] NaN is a value in the engine and null is separate; pandas treats NaN as missing
+series.dropna | semantics | [FISX] NaN is a value in the engine and null is separate; pandas treats NaN as missing; also length 6 vs 5 (+1 more reasons)
+series.kurtosis | semantics | [FI] values -0.056754933378309946 vs 3.772980266486764 (+3 more reasons)
+series.quantile | keyword | [FI] must be real number, not list
+series.median | keyword | [FI] Series.median() takes no keyword arguments
+series.describe | shape | [FI] ours DataFrame (frame), library Series (series)
+series.dot | semantics | [I] values 36.0 vs None
+series.shift | keyword | [FI] Series.shift() got an unexpected keyword argument 'fill_value'
+series.rank | semantics | [FI] dtype float vs int (+5 more reasons)
+series.ffill | keyword | [FI] Series.forward_fill() takes no keyword arguments
+series.between | semantics | [F] values [True, None, True, False, True, False] vs [True, False, True, False, T (+1 more reasons)
+series.mask | semantics | [I] values [1, None, 0, 0, 0, None, -4] vs [1, 0, 0, 0, 0, 0, -4]
+series.astype | semantics | [FI] pandas raised ValueError, ours returned (+1 more reasons)
+series.drop_duplicates | needs-index | [FIS] the library result carries row labels
+series.unique | semantics | [FIS] values [None, -4, 1, 2, 3] vs [1, None, 3, 2, -4] (+2 more reasons)
+series.value_counts | shape | [FIS] ours DataFrame (frame), library Series (series) (+1 more reasons)
+series.mode | semantics | [IS] dtype int vs str (+1 more reasons)
+series.sort_values | needs-index | [FIS] the library result carries row labels
+series.nlargest | needs-index | [FI] the library result carries row labels (+1 more reasons)
+series.nsmallest | needs-index | [FI] the library result carries row labels
+series.head | shape | [FI] length 0 vs 6 (+1 more reasons)
+series.tail | needs-index | [FIS] the library result carries row labels (+2 more reasons)
+series.take | needs-index | [FIS] the library result carries row labels
+series.searchsorted | semantics | [F] values 6 vs 4
+series.factorize | semantics | [IS] values [[1, -1, 3, 2, 2, -1, 0], [-4, 1, 2, 3]] vs [[0, -1, 1, 2, 2, -1, 3],  (+1 more reasons)
+series.to_numpy | shape | [F] ours ndarray (scalar), library ndarray (array)
+series.explode | engine | [FIS] DFTUtilsValueError: explode: v is not a List column
+series.compare | shape | [FI] columns ['index', 'self', 'other'] vs ['self', 'other']
+series.repeat | needs-index | [FIS] the library result carries row labels
+series.truncate | needs-index | [FI] the library result carries row labels
+series.agg | shape | [FI] ours DataFrame (frame), library Series (series)
+series.rolling | semantics | [F] values <dftracer_utils_ext.Rolling object at 0x113931230> vs Rolling [window= (+1 more reasons)
+series.rfloordiv | semantics | [F] values [1.0, None, 0.0, -1.0, 0.0, None] vs [1.0, None, 0.0, -1.0, 0.0, inf]
+series.rpow | semantics | [I] pandas raised ValueError, ours returned
+series.add | keyword | [FI] Series.add() got an unexpected keyword argument 'fill_value'
+series.rdivmod | semantics | [F] values [[1.0, None, 0.0, -1.0, 0.0, None], [0.5, None, 2.0, -0.5, 2.0, None]]
+series.eq | semantics | [FS] a comparison against a null gives null here; pandas gives False; also values [False, None, False, False, False, False] vs [False, False, False, Fal (+1 more reasons)
+series.ne | semantics | [FS] a comparison against a null gives null here; pandas gives False; also values [True, None, True, True, True, True] vs [True, True, True, True, True, (+1 more reasons)
+series.lt | semantics | [F] a comparison against a null gives null here; pandas gives False; also values [True, None, False, True, False, True] vs [True, False, False, True, F (+1 more reasons)
+series.le | semantics | [F] a comparison against a null gives null here; pandas gives False; also values [True, None, False, True, False, True] vs [True, False, False, True, F (+1 more reasons)
+series.gt | semantics | [F] a comparison against a null gives null here; pandas gives False; also values [False, None, True, False, True, False] vs [False, False, True, False, (+1 more reasons)
+series.ge | semantics | [F] a comparison against a null gives null here; pandas gives False; also values [False, None, True, False, True, False] vs [False, False, True, False, (+1 more reasons)
+series.values | shape | [FIS] ours ndarray (scalar), library IntegerArray (array) (+3 more reasons)
+series.nbytes | semantics | [BFIS] values 57 vs 63 (+4 more reasons)
+frame.sum | shape | [EMNX] ours DataFrame (frame), library Series (series) (+4 more reasons)
+frame.mean | shape | [ENX] ours DataFrame (frame), library Series (series) (+1 more reasons)
+frame.median | shape | [EN] ours DataFrame (frame), library Series (series)
+frame.min | shape | [EN] ours DataFrame (frame), library Series (series)
+frame.max | shape | [EN] ours DataFrame (frame), library Series (series) (+1 more reasons)
+frame.std | shape | [EN] ours DataFrame (frame), library Series (series) (+1 more reasons)
+frame.var | shape | [EN] ours DataFrame (frame), library Series (series) (+1 more reasons)
+frame.prod | shape | [EN] ours DataFrame (frame), library Series (series)
+frame.sem | shape | [N] ours DataFrame (frame), library Series (series)
+frame.skew | shape | [N] ours DataFrame (frame), library Series (series)
+frame.kurt | shape | [N] ours DataFrame (frame), library Series (series)
+frame.count | shape | [EMNX] ours DataFrame (frame), library Series (series) (+1 more reasons)
+frame.isna | semantics | [X] NaN is a value in the engine and null is separate; pandas treats NaN as missing
+frame.dropna | needs-index | [MX] the library result carries row labels (+4 more reasons)
+frame.nunique | shape | [M] ours DataFrame (frame), library Series (series) (+1 more reasons)
+frame.any | semantics | [M] pandas raised TypeError, ours returned
+frame.all | semantics | [M] pandas raised TypeError, ours returned
+frame.quantile | shape | [N] ours DataFrame (frame), library Series (series) (+1 more reasons)
+frame.idxmax | shape | [N] ours DataFrame (frame), library Series (series)
+frame.idxmin | shape | [N] ours DataFrame (frame), library Series (series)
+frame.describe | shape | [N] columns ['statistic', 'a', 'b'] vs ['a', 'b']
+frame.cov | shape | [N] columns ['column', 'a', 'b'] vs ['a', 'b']
+frame.corr | shape | [N] columns ['column', 'a', 'b'] vs ['a', 'b']
+frame.corrwith | shape | [N] ours DataFrame (frame), library Series (series)
+frame.diff | keyword | [N] _FramePandasMixin.diff() got an unexpected keyword argument 'periods'
+frame.shift | semantics | [MN] dtype d: bool vs str (+1 more reasons)
+frame.pct_change | keyword | [N] _FramePandasMixin.pct_change() got an unexpected keyword argument 'fill_method'
+frame.drop_duplicates | keyword | [M] DataFrame.unique() got an unexpected keyword argument 'keep'
+frame.value_counts | shape | [M] ours DataFrame (frame), library Series (series)
+frame.sort_values | needs-index | [M] the library result carries row labels
+frame.nlargest | needs-index | [N] the library result carries row labels
+frame.nsmallest | needs-index | [N] the library result carries row labels
+frame.tail | needs-index | [MN] the library result carries row labels
+frame.take | needs-index | [M] the library result carries row labels
+frame.melt | keyword | [N] unpivot() needs value_vars (polars: on=)
+frame.explode | engine | [M] DFTUtilsValueError: explode: c is not a List column
+frame.to_dict | semantics | [N] values {'a': [1, None, 3, 2, 2], 'b': [1.5, None, 3.0, -2.5, 3.0]} vs {'a': { (+1 more reasons)
+frame.to_records | keyword | [N] _FramePandasMixin.to_records() got an unexpected keyword argument 'index'
+frame.compare | shape | [N] columns ['row', 'column', 'self', 'other'] vs []
+frame.transpose | shape | [N] columns ['column', '0', '1', '2', '3', '4'] vs ['0', '1', '2', '3', '4']
+frame.apply | engine | [N] TypeError: DataFrame.apply expects a column expression (col()/F./lit()) or a callable, got str
+frame.agg | shape | [N] ours DataFrame (frame), library Series (series) (+1 more reasons)
+frame.aggregate | shape | [N] ours DataFrame (frame), library Series (series)
+frame.query | needs-index | [N] the library result carries row labels
+frame.sample | semantics | [N] values a: [3, 2] vs [3, None]
+frame.pivot_table | keyword | [G] DataFrame.pivot_table() missing 1 required positional argument: 'columns'
+frame.memory_usage | keyword | [N] _FramePandasMixin.memory_usage() got an unexpected keyword argument 'index'
+frame.info | semantics | [N] values DataFrame: 5 rows, 2 columns
+frame.to_string | semantics | [N] values  a b
+frame.to_html | semantics | [N] values <table border="1" class="dataframe">
+frame.ewm | semantics | [N] values <dftracer.utils._pandas_frame._FrameWindow object at 0x113905c00> vs E (+1 more reasons)
+frame.expanding | semantics | [N] values <dftracer.utils._pandas_frame._FrameWindow object at 0x113906b60> vs E (+1 more reasons)
+frame.rolling | semantics | [N] values <dftracer.utils._pandas_frame._FrameWindow object at 0x11001a530> vs R (+1 more reasons)
+frame.add | keyword | [N] _FramePandasMixin.add() got an unexpected keyword argument 'fill_value'
+frame.eq | semantics | [N] a comparison against a null gives null here; pandas gives False; also values b: [False, None, False, False, False] vs [False, False, False, False,  (+1 more reasons)
+frame.ne | semantics | [N] a comparison against a null gives null here; pandas gives False; also values b: [True, None, True, True, True] vs [True, True, True, True, True] (+1 more reasons)
+frame.lt | semantics | [N] a comparison against a null gives null here; pandas gives False; also values b: [True, None, False, True, False] vs [True, False, False, True, Fals (+1 more reasons)
+frame.le | semantics | [N] a comparison against a null gives null here; pandas gives False; also values b: [True, None, False, True, False] vs [True, False, False, True, Fals (+1 more reasons)
+frame.gt | semantics | [N] a comparison against a null gives null here; pandas gives False; also values b: [False, None, True, False, True] vs [False, False, True, False, Tru (+1 more reasons)
+frame.ge | semantics | [N] a comparison against a null gives null here; pandas gives False; also values b: [False, None, True, False, True] vs [False, False, True, False, Tru (+1 more reasons)
+frame.dot | shape | [N] columns ['column', '0', '1', '2', '3', '4'] vs ['0', '1', '2', '3', '4']
+frame.dtypes | needs-index | [EMN] pandas gives a Series indexed by the column names; ours is a list
+frame.T | shape | [N] columns ['column', '0', '1', '2', '3', '4'] vs ['0', '1', '2', '3', '4']
+groupby.prod | semantics | [G] dtype a: float vs int
+groupby.size | shape | [G] columns ['k', 'size'] vs ['k', '0']
+groupby.sum | keyword | [G] GroupBy.sum() got an unexpected keyword argument 'min_count'
+groupby.std | keyword | [G] GroupBy.std() got an unexpected keyword argument 'ddof'
+groupby.describe | shape | [G] columns ['k', 'a_count', 'a_mean', 'a_std', 'a_min', 'a_25%', 'a_50%', 'a_75%', 'a_max', 'b_count', 'b_mean',
+groupby.agg | shape | [G] columns ['k', 'a_sum', 'b_sum', 'a_min', 'b_min'] vs ["('k', '')", "('a', 'sum')", "('a', 'min')", "('b', 'sum
+groupby.cumprod | semantics | [G] dtype a: float vs int
+groupby.cumcount | shape | [G] ours DataFrame (frame), library Series (series)
+groupby.ngroup | shape | [G] ours DataFrame (frame), library Series (series)
+groupby.pct_change | keyword | [G] GroupBy.pct_change() got an unexpected keyword argument 'fill_method'
+groupby.tail | needs-index | [G] the library result carries row labels (+1 more reasons)
+groupby.filter | needs-index | [G] the library result carries row labels (+1 more reasons)
+groupby.apply | shape | [G] columns ['k', 'a', 'b'] vs ['k', 'level_1', 'a', 'b'] (+1 more reasons)
+groupby.get_group | needs-index | [G] the library result carries row labels (+1 more reasons)
+str.replace | keyword | [S] _StrAccessor.replace() got an unexpected keyword argument 'regex'
+str.cat | keyword | [S] _StrAccessor.cat() got an unexpected keyword argument 'na_rep'
+str.join | engine | [S] DFTUtilsValueError: list_join: not a List column of strings
+str.extract | keyword | [S] _StrAccessor.extract() got an unexpected keyword argument 'expand'
+series.pct_change | semantics | [F] values [None, None, None, -1.8333333333333333, -2.2, -1.0] vs [None, 0.0, 1.0
+series.argsort | semantics | [FI] values [6, 0, 3, 4, 2, 1, 5] vs [4, -1, 0, 2, 3, -1, 1] (+1 more reasons)
+series.apply | semantics | [I] dtype int vs float
+series.map | semantics | [I] dtype int vs float
+frame.map | semantics | [N] dtype a: int vs float
+groupby.head | shape | [G] columns ['k', 'a', 'b'] vs ['index', 'k', 'a', 'b']
+groupby.nth | shape | [G] columns ['k', 'a', 'b'] vs ['index', 'k', 'a', 'b']
+groupby.value_counts | semantics | [G] values a: [1, 3, 2, 2] vs [1, 2, 3, 2]

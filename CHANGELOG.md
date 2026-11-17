@@ -9,6 +9,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add `scripts/api_coverage.py`, a gate that lists the public names of pandas (`DataFrame`, `Series`, both group-bys, `.str`, `.dt`) and Polars (`DataFrame`, `Series`, `LazyFrame`, `Expr`, both group-bys, the `str`, `dt` and `list` namespaces), subtracts ours and the reasoned list in `scripts/api_coverage_exclude.txt`, and fails on a name that is neither; `--report` prints the table.
+  A line for a name that is now ours fails too, so the list only shrinks.
+  `tests/python/test_pandas_parity.py` and `tests/python/test_polars_parity.py` run each pandas or Polars method that we have on the same data in the library and in ours and compare type, shape, dtype, values and, for pandas, that the result has the default RangeIndex; `tests/python/parity_findings_pandas.txt` and `parity_findings_polars.txt` list every method whose result differs, with its reason.
+- Add `Expr.lt`, `le`, `gt`, `ge`, `add`, `sub`, `mul`, `truediv`, `neg`, `and_`, `or_` and `not_`, the method forms of the operators.
+- Add the Polars spellings `Series.alias`, `clone`, `limit`, `has_nulls`, `is_empty`, `first`, `last` and `is_not_nan`, `DataFrame.clone`, `clear`, `iter_columns` and `collect_schema`, and `LazyFrame.dtypes`, `width`, `collect_schema`, `lazy`, `clone`, `clear`, `first`, `last` and `pipe`.
+- Add the pandas spellings `Series.squeeze`, `T`, `transpose`, `dtypes`, `convert_dtypes`, `infer_objects`, `Series.dt.day_name` and `month_name`, and `DataFrame.convert_dtypes` and `infer_objects`.
+  `Series.diff` takes `n` (or `periods`) for a gap other than one row, and `DataFrame.drop` takes `axis=1` (or `"columns"`); `axis=0` raises, because a frame has no row labels yet.
+
 - Add `nulls_last` to the engine sort: `Series.sort` and `argsort`, `DataFrame` and `LazyFrame` `sort_by` and `sort_by_multi` (one flag, or one per key), the registry rows and the C functions `dftu_series_sort`, `dftu_series_argsort`, `dftu_dataframe_sort_by`, `dftu_dataframe_sort_by_multi`, `dftu_dataframe_sort_by_multi_per_col`, `dftu_lazyframe_sort_by` and `dftu_lazyframe_sort_by_multi`.
   Every mode is stable, also for equal values and for nulls first with `descending=True`, in memory and in the external merge sort, so Python no longer sorts over a presence key and `Expr.arg_sort` no longer reverses the opposite sort.
   A lazy sort with nulls first is not pushed down into a source.

@@ -228,7 +228,7 @@ foreach(fh_plugin toy_format_plugin toy_format_tie_plugin
                   factory_registers_op_plugin factory_escapes_plugin
                   scan_registers_op_plugin index_minmax_plugin udf_plugin
                   udf_clash_plugin udaf_plugin udaf_bad_plugin
-                  leaky_plugin crash_plugin)
+                  leaky_plugin crash_plugin reject_destroy_plugin)
   add_library(${fh_plugin} MODULE ${fh_plugin}.c)
   target_set_warnings(${fh_plugin})
   set_target_properties(
@@ -339,10 +339,11 @@ if(TARGET plugins_test_plugin_factory_host)
     FACTORY_REGISTERS_OP_PLUGIN_PATH="$<TARGET_FILE:factory_registers_op_plugin>"
     FACTORY_ESCAPES_PLUGIN_PATH="$<TARGET_FILE:factory_escapes_plugin>"
     SCAN_REGISTERS_OP_PLUGIN_PATH="$<TARGET_FILE:scan_registers_op_plugin>"
+    REJECT_DESTROY_PLUGIN_PATH="$<TARGET_FILE:reject_destroy_plugin>"
     BUILDER_PLUGIN_PATH="$<TARGET_FILE:builder_plugin>")
   add_dependencies(plugins_test_plugin_factory_host
                    factory_registers_op_plugin factory_escapes_plugin
-                   scan_registers_op_plugin
+                   scan_registers_op_plugin reject_destroy_plugin
                    builder_plugin)
 endif()
 

@@ -449,6 +449,9 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
             plugin_struct_min_size(PluginStruct::Plugin));
     }
     plugin = plugin_copy.get();
+    // The library owns the checked copy from here, so every rejection below
+    // runs the plugin's destroy once its registrations are undone.
+    library->adopt(std::move(plugin_copy));
 
     if (dstd::String bad = config_violation(plugin, config); !bad.empty()) {
         unregister_all();
@@ -479,13 +482,8 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
         }
     }
 
-    // The library runs the checked copy's destroy once the last object the
-    // plugin made is gone. It owns that copy, so the pointer stays valid for
-    // as long as the library is mapped. It must adopt only after the size
-    // check, and only through the checked copy, so the destructor never reads
-    // a field beyond the descriptor's declared size.
-    library->adopt(std::move(plugin_copy));
-
+    // The library, which adopted the checked copy above, runs its destroy once
+    // the last object the plugin made is gone.
     return Plugins::Impl::Loaded{
         std::move(library),
         plugin,

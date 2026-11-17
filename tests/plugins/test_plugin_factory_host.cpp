@@ -22,9 +22,48 @@
 #include <testing_utilities.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 
 using namespace dftracer::utils;
+
+namespace {
+
+dstd::String destroy_marks(const dstd::String& marker) {
+    auto text = dstd::fs::read_file(dstd::PathView(marker));
+    return text ? dstd::String(*text) : dstd::String();
+}
+
+}  // namespace
+
+TEST_CASE("a plugin the host rejects after its factory is destroyed") {
+    dftu_utils_test::TestEnvironment env;
+    const dstd::String marker = env.dir() + "/reject_destroy.marker";
+    ::setenv("REJECT_DESTROY_MARKER", marker.c_str(), 1);
+
+    SUBCASE("a config violation") {
+        ::unsetenv("REJECT_DESTROY_PLAN");
+        auto set = plugins::host::Plugins::builder()
+                       .add(REJECT_DESTROY_PLUGIN_PATH)
+                       .build();
+        REQUIRE_FALSE(set.has_value());
+        CHECK(destroy_marks(marker) == "d");
+    }
+
+    SUBCASE("a plan_duql that does not parse") {
+        ::setenv("REJECT_DESTROY_PLAN", "this is ((( not a query", 1);
+        auto set =
+            plugins::host::Plugins::builder()
+                .add(REJECT_DESTROY_PLUGIN_PATH, dstd::String("{\"n\": 1}"))
+                .build();
+        REQUIRE_FALSE(set.has_value());
+        CHECK(set.error().message().find("does not parse") !=
+              dstd::String::npos);
+        CHECK(destroy_marks(marker) == "d");
+    }
+    ::unsetenv("REJECT_DESTROY_PLAN");
+    ::unsetenv("REJECT_DESTROY_MARKER");
+}
 
 using View = dftracer::utils::trace::views::View;
 using ViewFile = dftracer::utils::trace::views::ViewFile;
@@ -37,6 +76,9 @@ using ViewFile = dftracer::utils::trace::views::ViewFile;
 #endif
 #ifndef BUILDER_PLUGIN_PATH
 #error "BUILDER_PLUGIN_PATH must be defined by CMake"
+#endif
+#ifndef REJECT_DESTROY_PLUGIN_PATH
+#error "REJECT_DESTROY_PLUGIN_PATH must be defined by CMake"
 #endif
 
 namespace {

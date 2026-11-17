@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: MIT
 """Write the generated parts of the type declarations from api.def.
 
-Two regions, each between `# BEGIN GENERATED` and `# END GENERATED` lines:
+Each region lies between `# BEGIN GENERATED` and `# END GENERATED` lines:
 
-* the Series methods of python/dftracer/utils/dftracer_utils_ext.pyi, one per
-  PY_METHOD(Series, ...) row, typed from its `args` and `result` tokens;
+* the methods of the classes Series, StrAccessor, DtAccessor and ListAccessor
+  in python/dftracer/utils/dftracer_utils_ext.pyi, one per PY_METHOD row of the
+  class Series, Str, Dt or List, typed from its `args` and `result` tokens;
 * the Expr methods declared under `if TYPE_CHECKING:` in
   python/dftracer/utils/columnar.py, one per row with on_expr YES.
 
@@ -38,6 +39,7 @@ RESULT_TYPES: Dict[str, str] = {
     "INT": '"PublicSeries[int]"',
     "FLOAT": '"PublicSeries[float]"',
     "STR": '"PublicSeries[str]"',
+    "ANY": '"PublicSeries[Scalar]"',
 }
 
 
@@ -54,17 +56,26 @@ SCALAR_OVERLOADS = (
 )
 
 
+def class_lines(cls: str) -> Callable[[List[api_def.Row]], List[str]]:
+    def make(rows: List[api_def.Row]) -> List[str]:
+        return series_lines([r for r in rows if r.cls == cls])
+
+    return make
+
+
 def series_lines(rows: List[api_def.Row]) -> List[str]:
     out = []
     for r in rows:
-        if r.cls != "Series":
-            continue
         if r.args == "NONE":
             params = ""
         elif r.args == "SCALAR":
             params = f", {r.keywords[0]}: Union[bool, int, float, str]"
         elif r.args == "NUMBER2":
             params = "".join(f", {k}: Union[int, float]" for k in r.keywords)
+        elif r.args in ("STR", "STR2"):
+            params = "".join(f", {k}: str" for k in r.keywords)
+        elif r.args == "INT":
+            params = f", {r.keywords[0]}: int"
         else:
             raise ValueError(f"{r.name}: unknown args token {r.args}")
         if r.result == "SCALAR":
@@ -88,10 +99,18 @@ def expr_lines(rows: List[api_def.Row]) -> List[str]:
     return out
 
 
-TARGETS: Dict[str, Tuple[Callable, Callable, str]] = {
-    "dftracer_utils_ext.pyi": (series_lines, lambda r: r.cls == "Series", "class Series("),
-    "columnar.py": (expr_lines, lambda r: r.on_expr, "class Expr:"),
-}
+TARGETS: List[Tuple[str, Callable, Callable, str]] = [
+    ("dftracer_utils_ext.pyi", class_lines("Series"), lambda r: r.cls == "Series", "class Series("),
+    ("dftracer_utils_ext.pyi", class_lines("Str"), lambda r: r.cls == "Str", "class StrAccessor:"),
+    ("dftracer_utils_ext.pyi", class_lines("Dt"), lambda r: r.cls == "Dt", "class DtAccessor:"),
+    (
+        "dftracer_utils_ext.pyi",
+        class_lines("List"),
+        lambda r: r.cls == "List",
+        "class ListAccessor:",
+    ),
+    ("columnar.py", expr_lines, lambda r: r.on_expr, "class Expr:"),
+]
 
 
 def hand_duplicates(text: str, names: List[str], scope: str) -> List[str]:
@@ -108,9 +127,10 @@ def hand_duplicates(text: str, names: List[str], scope: str) -> List[str]:
     return [n for n in names if re.search(rf"^\s+def {n}\(", outside, re.M)]
 
 
-def render(text: str, lines: List[str]) -> str:
+def render(text: str, lines: List[str], scope: str) -> str:
     src = text.split("\n")
-    begin = next(i for i, line in enumerate(src) if line.strip() == BEGIN)
+    first = next(i for i, line in enumerate(src) if line.startswith(scope))
+    begin = next(i for i in range(first, len(src)) if src[i].strip() == BEGIN)
     end = next(i for i in range(begin, len(src)) if src[i].strip() == END)
     return "\n".join(src[: begin + 1] + lines + src[end:])
 
@@ -121,18 +141,21 @@ def main() -> int:
     args = parser.parse_args()
     rows = api_def.rows()
     stale = []
-    for name, (make, select, scope) in TARGETS.items():
-        path = PKG / name
-        old = path.read_text(encoding="utf-8")
-        new = render(old, make(rows))
+    texts = {name: (PKG / name).read_text(encoding="utf-8") for name, *_ in TARGETS}
+    for name, make, select, scope in TARGETS:
+        old = texts[name]
+        new = render(old, make(rows), scope)
         clash = hand_duplicates(old, [r.name for r in rows if select(r)], scope)
         if clash:
             print(f"{name}: declared by hand and generated: {clash}", file=sys.stderr)
             return 1
         if new != old:
-            stale.append(name)
-            if not args.check:
-                path.write_text(new, encoding="utf-8")
+            if name not in stale:
+                stale.append(name)
+            texts[name] = new
+    if not args.check:
+        for name in stale:
+            (PKG / name).write_text(texts[name], encoding="utf-8")
     if args.check and stale:
         print("stale: " + ", ".join(stale) + " (run python scripts/gen_pyi.py)", file=sys.stderr)
         return 1

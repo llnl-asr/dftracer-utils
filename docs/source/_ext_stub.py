@@ -598,6 +598,21 @@ def install_extension_stub() -> None:
         def __arrow_c_array__(self, requested_schema: object = None) -> tuple[object, object]:
             return (None, None)
 
+    class StrAccessor(_BaseNative, metaclass=_NativeMethods):
+        """The string methods of a Series, the base of ``Series.str``."""
+
+        _s = None
+
+    class DtAccessor(_BaseNative, metaclass=_NativeMethods):
+        """The temporal methods of a Series, the base of ``Series.dt``."""
+
+        _s = None
+
+    class ListAccessor(_BaseNative, metaclass=_NativeMethods):
+        """The list methods of a Series, the base of ``Series.list``."""
+
+        _s = None
+
     class DataFrame(_BaseNative, metaclass=_NativeMethods):
         """Native columnar DataFrame (a set of named :class:`Series`).
 

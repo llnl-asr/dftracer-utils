@@ -3194,6 +3194,7 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series_detail.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/arith.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/accessor.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/api.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/window.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/stats.cpp

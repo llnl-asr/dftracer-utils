@@ -624,6 +624,9 @@ PyMethodDef Series_methods[] = {
      METH_VARARGS | METH_KEYWORDS,
      "child(i) -> child Series (List: 0=values; Struct: field i)."},
 #define API_PICK_Series(id, name, args, doc) API_ENTRY(id, name, args, doc)
+#define API_PICK_Str(id, name, args, doc)
+#define API_PICK_Dt(id, name, args, doc)
+#define API_PICK_List(id, name, args, doc)
 #define PY_METHOD(cls, name, op, args, result, name_rule, on_expr, kw0, kw1, \
                   err, doc)                                                  \
     API_PICK_##cls(core::api::row_id(#cls, #name), #name, args, doc)
@@ -713,6 +716,7 @@ int init_series(PyObject* m) {
     // subclass builds one from Python data in its own __new__.
     SeriesType.tp_new = nullptr;
     if (register_type(m, &SeriesType, "Series") < 0) return -1;
+    if (init_accessors(m) < 0) return -1;
 
     static PyMethodDef api_rows_def = {
         "_api_rows",

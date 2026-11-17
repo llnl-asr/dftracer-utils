@@ -35,6 +35,15 @@ struct SeriesObject {
     Py_ssize_t buf_stride;
 };
 
+// What s.str, s.dt and s.list hold: the Series they read. Defined in
+// series/accessor.cpp.
+struct AccessorObject {
+    PyObject_HEAD PyObject* weaklist;
+    PyObject* series;
+};
+
+int init_accessors(PyObject* m);
+
 }  // namespace dftracer::utils::python::frame::series_detail
 
 template <>

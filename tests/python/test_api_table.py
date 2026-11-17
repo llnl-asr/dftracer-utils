@@ -21,6 +21,7 @@ pytest.importorskip("dftracer.utils.dftracer_utils_ext")
 import dftracer.utils as dft  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as ext  # noqa: E402
 from dftracer.utils.columnar import Expr  # noqa: E402
+from dftracer.utils.series import _DtAccessor, _ListAccessor, _StrAccessor  # noqa: E402
 
 _ROOT = Path(__file__).resolve().parents[2]
 _ALLOWLIST = Path(__file__).parent / "api_allowlist.txt"
@@ -41,6 +42,9 @@ def _api_def():
 
 ROWS = _api_def().rows()
 SERIES_ROWS = [r for r in ROWS if r.cls == "Series"]
+ACCESSOR_ROWS = [r for r in ROWS if r.cls in {"Str", "Dt", "List"}]
+ACCESSOR_TYPES = {"Str": ext.StrAccessor, "Dt": ext.DtAccessor, "List": ext.ListAccessor}
+PUBLIC_ACCESSORS = {"Str": _StrAccessor, "Dt": _DtAccessor, "List": _ListAccessor}
 
 
 def _public(cls):
@@ -95,6 +99,56 @@ def test_series_row_runs_the_op_and_keeps_the_name(row):
     assert type(out) is dft.Series
     if row.name not in {"unique", "drop_nulls"}:
         assert out.name == "x" or row.name == "cum_count"
+
+
+def _accessor_input(row):
+    if row.cls == "List" or row.name == "join":
+        s = dft.Series(["a b", "c", None]).str.split(" ")
+    else:
+        s = dft.Series(["a", " Ab ", None, "12"])
+    s.name = "x"
+    return s
+
+
+_ACCESSOR_ARGS = {"NONE": (), "STR": ("a",), "STR2": ("a", "b"), "INT": (1,)}
+
+
+@pytest.mark.parametrize("row", ACCESSOR_ROWS, ids=[f"{r.cls}.{r.name}" for r in ACCESSOR_ROWS])
+def test_accessor_row_is_a_native_method_with_the_row_doc(row):
+    cls = ACCESSOR_TYPES[row.cls]
+    assert getattr(cls, row.name).__doc__ == row.doc
+    assert row.name in cls.__dict__
+    assert row.name not in PUBLIC_ACCESSORS[row.cls].__dict__
+
+
+@pytest.mark.parametrize("row", ACCESSOR_ROWS, ids=[f"{r.cls}.{r.name}" for r in ACCESSOR_ROWS])
+def test_accessor_row_runs_its_op_like_the_series_method_of_the_op(row):
+    s = _accessor_input(row)
+    args = _ACCESSOR_ARGS[row.args]
+    acc = getattr(s, row.cls.lower())
+    out = getattr(acc, row.name)(*args)
+    flat = getattr(s, row.op.rsplit(".", 1)[1])(*args)
+    assert type(out) is dft.Series
+    assert out.name == "x" and out.to_list() == flat.to_list()
+    assert str(out.dtype) == str(flat.dtype)
+    if row.keywords:
+        by_name = getattr(acc, row.name)(**dict(zip(row.keywords, args)))
+        assert by_name.to_list() == out.to_list()
+        with pytest.raises(TypeError):
+            getattr(acc, row.name)(**{"nope": args[0]})
+
+
+def test_an_accessor_row_the_column_does_not_fit_raises_its_error():
+    with pytest.raises(TypeError, match="list_len: not a List column"):
+        dft.Series([1, 2]).list.len()
+    with pytest.raises(TypeError, match="list_get: not a List column"):
+        dft.Series([1, 2]).list.get(0)
+    with pytest.raises(TypeError, match="str_count: not a String column"):
+        dft.Series([1, 2]).str.count("a")
+    with pytest.raises(TypeError):
+        dft.Series(["a"]).str.zfill("x")
+    with pytest.raises(TypeError):
+        dft.Series(["a"]).str.startswith(1)
 
 
 def test_a_row_the_column_does_not_fit_raises_its_error():
@@ -155,7 +209,7 @@ _KINDS = {
     "display",
 }
 _WITH_ARGUMENT = {"alias-of", "needs-token", "expr-node"}
-_CLASSES = {"Series": dft.Series, "Expr": Expr}
+_CLASSES = {"Series": dft.Series, "Expr": Expr, **PUBLIC_ACCESSORS}
 
 
 def _parse_line(line):
@@ -301,7 +355,7 @@ def test_a_duplicate_line_in_a_copy_of_the_allowlist_is_refused(tmp_path):
         _allowlist(copy)
 
 
-@pytest.mark.parametrize("cls_name", ["Series", "Expr"])
+@pytest.mark.parametrize("cls_name", ["Series", "Expr", "Str", "Dt", "List"])
 def test_every_public_method_is_generated_or_listed(cls_name):
     listed = {k.split(".", 1)[1] for k in _allowlist() if k.startswith(cls_name + ".")}
     public = _public(_CLASSES[cls_name])

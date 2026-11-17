@@ -19,14 +19,16 @@ API_DEF = Path(__file__).resolve().parents[1] / "src/dftracer/utils/python/core/
 # needs-token lines.
 ARG_TOKENS = frozenset(
     {
-        "NONE", "SCALAR", "NUMBER2",
+        "NONE", "SCALAR", "NUMBER2", "STR", "STR2", "INT",
         "SERIES", "SERIES_OR_SCALAR", "SCALAR_ARITH", "I64_ARG", "F64_ARG", "STR_ARG",
-        "REDUCE", "FLAG", "RANK", "LOGICAL", "CMP", "PRIM", "DTYPE",
+        "REDUCE", "FLAG", "RANK", "LOGICAL", "CMP", "PRIM", "DTYPE", "INT_CHAR",
     }
 )  # fmt: skip
 RESULT_TOKENS = frozenset(
-    {"SAME", "BOOL", "INT", "FLOAT", "STR", "I64", "F64", "SCALAR", "ELEMENT", "BOOL_VALUE"}
+    {"SAME", "BOOL", "INT", "FLOAT", "STR", "ANY", "I64", "F64", "SCALAR", "ELEMENT", "BOOL_VALUE"}
 )
+# The classes a row may name: Series, or an accessor (`s.str`, `s.dt`, `s.list`).
+CLASSES = frozenset({"Series", "Str", "Dt", "List"})
 
 
 class Row(NamedTuple):
@@ -164,6 +166,8 @@ def rows(path: Path = API_DEF) -> List[Row]:
         f = _split(text[start:end])
         if len(f) != 11:
             raise ValueError(f"{path}: PY_METHOD row of {len(f)} fields: {text[start:end][:60]!r}")
+        if f[0] not in CLASSES:
+            raise ValueError(f"{path}: unknown class in row {f[1]}: {f[0]}")
         if f[3] not in ARG_TOKENS or f[4] not in RESULT_TOKENS:
             raise ValueError(f"{path}: unknown token in row {f[1]}: {f[3]}, {f[4]}")
         keywords = tuple(k for k in (_literal(f[7]), _literal(f[8])) if k)

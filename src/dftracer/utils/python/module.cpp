@@ -77,7 +77,7 @@ PyObject* py_set_log_color(PyObject*, PyObject* args) {
 
 PyObject* py_memory_budget_advice(PyObject*, PyObject* args, PyObject* kwds) {
     unsigned long long required = 0, available = 0;
-    if (!dftracer::utils::python::core::parse_kw<"K|K">(
+    if (!dftracer::utils::python::core::parse_kw<"K|K:memory_budget_advice">(
             args, kwds, {"required_bytes", "available_bytes"}, &required,
             &available))
         return nullptr;

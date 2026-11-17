@@ -26,6 +26,12 @@ const char* args_name(Args a) {
             return "SCALAR";
         case Args::Number2:
             return "NUMBER2";
+        case Args::Str:
+            return "STR";
+        case Args::Str2:
+            return "STR2";
+        case Args::Int:
+            return "INT";
     }
     return "";
 }
@@ -42,6 +48,8 @@ const char* result_name(Result r) {
             return "FLOAT";
         case Result::Str:
             return "STR";
+        case Result::Any:
+            return "ANY";
         case Result::I64:
             return "I64";
         case Result::F64:
@@ -61,9 +69,25 @@ std::size_t arg_count(Args a) {
         case Args::Scalar:
             return 1;
         case Args::Number2:
+        case Args::Str2:
             return 2;
+        case Args::Str:
+        case Args::Int:
+            return 1;
     }
     return 0;
+}
+
+dftu_op_tok arg_token(Args a) {
+    switch (a) {
+        case Args::Str:
+        case Args::Str2:
+            return DFTU_TOK_STR;
+        case Args::Int:
+            return DFTU_TOK_I64;
+        default:
+            return DFTU_TOK_SCALAR;
+    }
 }
 
 // The function of a row's registry op, found on first use and checked once
@@ -93,7 +117,7 @@ std::array<dftu_op_generic_fn, ROW_COUNT> g_bound{};
               DFTU_OP_SIG_ARG(d->sig, 0) == DFTU_TOK_SERIES;
     const std::size_t n = arg_count(row.args);
     for (std::size_t i = 0; ok && i < 3; ++i) {
-        const dftu_op_tok want = i < n ? DFTU_TOK_SCALAR : DFTU_TOK_NONE;
+        const dftu_op_tok want = i < n ? arg_token(row.args) : DFTU_TOK_NONE;
         ok = DFTU_OP_SIG_ARG(d->sig, i + 1) == want;
     }
     if (!ok) {
@@ -124,6 +148,19 @@ PyObject* finish(const Row& row, Series&& out, const Series& source) {
     }
     return make_series(named_like(std::move(out), source));
 }
+
+// A str argument as the C ABI takes it; the bytes belong to the Python object.
+struct StrArg {
+    const char* data = nullptr;
+    std::int32_t size = 0;
+
+    bool set(PyObject* o) {
+        Py_ssize_t n = 0;
+        data = PyUnicode_AsUTF8AndSize(o, &n);
+        size = static_cast<std::int32_t>(n);
+        return data != nullptr;
+    }
+};
 
 }  // namespace
 
@@ -179,7 +216,7 @@ PyObject* run_op(std::size_t id, PyObject* self, PyObject* args, PyObject* kw) {
             const char* const names[1] = {row.kw[0]};
             if (!kw && PyTuple_GET_SIZE(args) == 1)
                 value = PyTuple_GET_ITEM(args, 0);
-            else if (!parse_kw<"O">(args, kw, names, &value))
+            else if (!parse_kw_for<"O">(row.name, args, kw, names, &value))
                 return nullptr;
             dftu_scalar s{};
             if (!py_to_scalar(value, &s)) return nullptr;
@@ -196,7 +233,8 @@ PyObject* run_op(std::size_t id, PyObject* self, PyObject* args, PyObject* kw) {
             if (!kw && PyTuple_GET_SIZE(args) == 2) {
                 lo = PyTuple_GET_ITEM(args, 0);
                 hi = PyTuple_GET_ITEM(args, 1);
-            } else if (!parse_kw<"OO">(args, kw, names, &lo, &hi)) {
+            } else if (!parse_kw_for<"OO">(row.name, args, kw, names, &lo,
+                                           &hi)) {
                 return nullptr;
             }
             dftu_scalar slo{}, shi{};
@@ -209,6 +247,70 @@ PyObject* run_op(std::size_t id, PyObject* self, PyObject* args, PyObject* kw) {
             return finish(
                 row,
                 kernel(*a, [&] { return Series{fn(a->handle(), slo, shi)}; }),
+                *a);
+        }
+        case Args::Str: {
+            PyObject* value = nullptr;
+            const char* const names[1] = {row.kw[0]};
+            if (!kw && PyTuple_GET_SIZE(args) == 1)
+                value = PyTuple_GET_ITEM(args, 0);
+            else if (!parse_kw_for<"O">(row.name, args, kw, names, &value))
+                return nullptr;
+            StrArg s;
+            if (!s.set(value)) return nullptr;
+            auto fn =
+                reinterpret_cast<dftu_series* (*)(const dftu_series*,
+                                                  const char*, std::int32_t)>(
+                    op);
+            return finish(
+                row,
+                kernel(*a,
+                       [&] { return Series{fn(a->handle(), s.data, s.size)}; }),
+                *a);
+        }
+        case Args::Str2: {
+            PyObject* first = nullptr;
+            PyObject* second = nullptr;
+            const char* const names[2] = {row.kw[0], row.kw[1]};
+            if (!kw && PyTuple_GET_SIZE(args) == 2) {
+                first = PyTuple_GET_ITEM(args, 0);
+                second = PyTuple_GET_ITEM(args, 1);
+            } else if (!parse_kw_for<"OO">(row.name, args, kw, names, &first,
+                                           &second)) {
+                return nullptr;
+            }
+            StrArg s1, s2;
+            if (!s1.set(first) || !s2.set(second)) return nullptr;
+            auto fn = reinterpret_cast<
+                dftu_series* (*)(const dftu_series*, const char*, std::int32_t,
+                                 const char*, std::int32_t)>(op);
+            return finish(
+                row,
+                kernel(*a,
+                       [&] {
+                           return Series{fn(a->handle(), s1.data, s1.size,
+                                            s2.data, s2.size)};
+                       }),
+                *a);
+        }
+        case Args::Int: {
+            PyObject* value = nullptr;
+            const char* const names[1] = {row.kw[0]};
+            if (!kw && PyTuple_GET_SIZE(args) == 1)
+                value = PyTuple_GET_ITEM(args, 0);
+            else if (!parse_kw_for<"O">(row.name, args, kw, names, &value))
+                return nullptr;
+            const long long n = PyLong_AsLongLong(value);
+            if (n == -1 && PyErr_Occurred()) return nullptr;
+            auto fn = reinterpret_cast<dftu_series* (*)(const dftu_series*,
+                                                        std::int64_t)>(op);
+            return finish(
+                row,
+                kernel(*a,
+                       [&] {
+                           return Series{
+                               fn(a->handle(), static_cast<std::int64_t>(n))};
+                       }),
                 *a);
         }
     }

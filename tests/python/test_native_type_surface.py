@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""The four native types take weak references, and the stub in
+"""The native types take weak references, and the stub in
 dftracer_utils_ext.pyi lists the same members as the compiled classes."""
 
 import ast
@@ -14,7 +14,15 @@ from dftracer.utils import dftracer_utils_ext as _ext
 from dftracer.utils.series import Series
 
 _PYI = Path(__file__).resolve().parents[2] / "python/dftracer/utils/dftracer_utils_ext.pyi"
-_TYPES = ("Series", "DataFrame", "LazyFrame", "TraceViewer")
+_TYPES = (
+    "Series",
+    "DataFrame",
+    "LazyFrame",
+    "TraceViewer",
+    "StrAccessor",
+    "DtAccessor",
+    "ListAccessor",
+)
 
 
 def _instances():
@@ -52,6 +60,30 @@ def test_weak_reference_to_a_series_and_a_derived_series():
     del s
     gc.collect()
     assert "s" not in wd
+
+
+@pytest.mark.parametrize("name", ["str", "dt", "list"])
+def test_an_accessor_holds_its_series_and_dies_with_its_last_reference(name):
+    s = Series([1, 2, 3])
+    acc = getattr(s, name)
+    assert acc._s is s
+    calls = []
+    ref = weakref.ref(acc, calls.append)
+    assert ref() is acc
+    del acc
+    gc.collect()
+    assert ref() is None and len(calls) == 1
+    assert s.to_list() == [1, 2, 3]
+
+
+@pytest.mark.parametrize("name", ["StrAccessor", "DtAccessor", "ListAccessor"])
+def test_an_accessor_is_built_from_a_series_only(name):
+    cls = getattr(_ext, name)
+    assert cls(Series([1])).__class__ is cls
+    with pytest.raises(TypeError, match="expected a Series"):
+        cls([1])
+    with pytest.raises(TypeError):
+        cls()
 
 
 def test_native_subclass_of_a_type_has_weakrefs_too():

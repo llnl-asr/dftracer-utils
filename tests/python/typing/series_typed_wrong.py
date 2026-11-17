@@ -25,6 +25,9 @@ ints.name = 5  # a str or None
 ints.cast(1.5)  # a dtype
 strs.rename(3)  # a str or None
 strs.str.len().str.upper()  # len is an int column
+strs.str.startswith(1)  # the prefix is a str
+strs.str.zfill("x")  # the width is an int
+strs.str.replace_all("a")  # both strings
 
 as_str: "Series[str]" = ints  # a Series[int] is not a Series[str]
 as_int: "Series[int]" = floats  # a Series[float] is not a Series[int]

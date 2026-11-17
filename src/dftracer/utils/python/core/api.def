@@ -3,13 +3,18 @@
  * read by the C++ build (core/api_methods.h) and by scripts/gen_pyi.py.
  *
  *   PY_METHOD(class, name, op, args, result, name_rule, on_expr, kw0, kw1, err, doc)
- *     class      Series (Expr gets the rows with on_expr YES at import time)
+ *     class      Series; or Str, Dt or List, a method of the accessor `s.str`,
+ *                `s.dt` or `s.list` (a native type that holds the Series).
+ *                Expr gets the rows with on_expr YES at import time
  *     name       the method name
  *     op         the registry op id, as in exported_series_ops.def
- *     args       NONE, SCALAR (one scalar, keyword kw0) or NUMBER2 (two
- *                numbers, keywords kw0 and kw1)
- *     result     a Series: SAME (the same element type), BOOL, INT, FLOAT or STR,
- *                named like the source (name_rule KEEP);
+ *     args       NONE, SCALAR (one scalar, keyword kw0), NUMBER2 (two
+ *                numbers, keywords kw0 and kw1), STR (one str, keyword kw0),
+ *                STR2 (two strs, keywords kw0 and kw1) or INT (one int, keyword
+ *                kw0)
+ *     result     a Series: SAME (the same element type), BOOL, INT, FLOAT, STR
+ *                or ANY (an element type the column decides), named like the
+ *                source (name_rule KEEP);
  *                a value: I64 (an int), F64 (a float), SCALAR (a number of the
  *                column's type) or ELEMENT (an element, None when there is none)
  *     name_rule  KEEP: the result takes the name of the Series it came from
@@ -140,6 +145,61 @@ PY_METHOD(Series, product, "dftu.series.product", NONE, SCALAR, KEEP, NO, "", ""
           "Product of non-null values -> scalar.")
 PY_METHOD(Series, mode, "dftu.series.mode", NONE, ELEMENT, KEEP, NO, "", "", "",
           "Most frequent non-null value -> scalar.")
+
+PY_METHOD(Str, lower, "dftu.series.to_lowercase", NONE, STR, KEEP, NO, "", "", "",
+          "lower() -> String Series, ASCII case fold (non-ASCII unchanged).")
+PY_METHOD(Str, upper, "dftu.series.to_uppercase", NONE, STR, KEEP, NO, "", "", "",
+          "upper() -> String Series, ASCII case fold (non-ASCII unchanged).")
+PY_METHOD(Str, to_lowercase, "dftu.series.to_lowercase", NONE, STR, KEEP, NO, "", "", "",
+          "to_lowercase() -> String Series, ASCII case fold (non-ASCII unchanged).")
+PY_METHOD(Str, to_uppercase, "dftu.series.to_uppercase", NONE, STR, KEEP, NO, "", "", "",
+          "to_uppercase() -> String Series, ASCII case fold (non-ASCII unchanged).")
+PY_METHOD(Str, casefold, "dftu.series.to_lowercase", NONE, STR, KEEP, NO, "", "", "",
+          "casefold() -> String Series, ASCII lower case (non-ASCII unchanged).")
+PY_METHOD(Str, strip, "dftu.series.str_strip", NONE, STR, KEEP, NO, "", "", "",
+          "strip() -> String Series trimmed of ASCII whitespace both ends.")
+PY_METHOD(Str, strip_chars, "dftu.series.str_strip", NONE, STR, KEEP, NO, "", "", "",
+          "strip_chars() -> String Series trimmed of ASCII whitespace both ends.")
+PY_METHOD(Str, lstrip, "dftu.series.str_lstrip", NONE, STR, KEEP, NO, "", "", "",
+          "lstrip() -> String Series trimmed of leading ASCII whitespace.")
+PY_METHOD(Str, rstrip, "dftu.series.str_rstrip", NONE, STR, KEEP, NO, "", "", "",
+          "rstrip() -> String Series trimmed of trailing ASCII whitespace.")
+PY_METHOD(Str, len, "dftu.series.str_len_chars", NONE, INT, KEEP, NO, "", "", "",
+          "len() -> Int64 Series of per-row UTF-8 codepoint count.")
+PY_METHOD(Str, len_chars, "dftu.series.str_len_chars", NONE, INT, KEEP, NO, "", "", "",
+          "len_chars() -> Int64 Series of per-row UTF-8 codepoint count.")
+PY_METHOD(Str, len_bytes, "dftu.series.str_len_bytes", NONE, INT, KEEP, NO, "", "", "",
+          "len_bytes() -> Int64 Series of per-row byte length.")
+PY_METHOD(Str, startswith, "dftu.series.str_starts_with", STR, BOOL, KEEP, NO, "pat", "", "",
+          "startswith(pat) -> Bool Series where the string starts with the literal pat.")
+PY_METHOD(Str, starts_with, "dftu.series.str_starts_with", STR, BOOL, KEEP, NO, "prefix", "", "",
+          "starts_with(prefix) -> Bool Series where the string starts with prefix.")
+PY_METHOD(Str, endswith, "dftu.series.str_ends_with", STR, BOOL, KEEP, NO, "pat", "", "",
+          "endswith(pat) -> Bool Series where the string ends with the literal pat.")
+PY_METHOD(Str, ends_with, "dftu.series.str_ends_with", STR, BOOL, KEEP, NO, "suffix", "", "",
+          "ends_with(suffix) -> Bool Series where the string ends with suffix.")
+PY_METHOD(Str, fullmatch, "dftu.series.str_matches", STR, BOOL, KEEP, NO, "pat", "", "",
+          "fullmatch(pat) -> Bool Series where the whole string matches the regex pat.")
+PY_METHOD(Str, find, "dftu.series.str_find", STR, INT, KEEP, NO, "sub", "", "",
+          "find(sub) -> Int64 Series of the first byte index of sub, or -1.")
+PY_METHOD(Str, count, "dftu.series.str_count", STR, INT, KEEP, NO, "pat", "", "str_count: not a String column",
+          "count(pat) -> Int64 Series of non-overlapping occurrences of the literal pat.")
+PY_METHOD(Str, rfind, "dftu.series.str_rfind", STR, INT, KEEP, NO, "sub", "", "str_rfind: not a String column",
+          "rfind(sub) -> Int64 Series of the byte index of the last sub, or -1.")
+PY_METHOD(Str, removeprefix, "dftu.series.str_remove_prefix", STR, STR, KEEP, NO, "prefix", "", "str_remove_prefix: not a String column",
+          "removeprefix(prefix) -> String Series without a leading prefix.")
+PY_METHOD(Str, removesuffix, "dftu.series.str_remove_suffix", STR, STR, KEEP, NO, "suffix", "", "str_remove_suffix: not a String column",
+          "removesuffix(suffix) -> String Series without a trailing suffix.")
+PY_METHOD(Str, replace_all, "dftu.series.str_replace_all", STR2, STR, KEEP, NO, "pat", "repl", "",
+          "replace_all(pat, repl) -> String Series, every literal occurrence of pat replaced.")
+PY_METHOD(Str, zfill, "dftu.series.str_zfill", INT, STR, KEEP, NO, "width", "", "",
+          "zfill(width) -> String Series left-padded with '0' after any sign.")
+PY_METHOD(Str, join, "dftu.series.list_join", STR, STR, KEEP, NO, "sep", "", "list_join: not a List column of strings",
+          "join(sep) -> String Series, each row's list of strings joined with sep.")
+PY_METHOD(List, len, "dftu.series.list_len", NONE, INT, KEEP, NO, "", "", "list_len: not a List column",
+          "len() -> Int64 Series of each row's list length.")
+PY_METHOD(List, get, "dftu.series.list_get", INT, ANY, KEEP, NO, "index", "", "list_get: not a List column",
+          "get(index) -> the element at index of each row's list (negative counts from the end).")
 
 #undef PY_METHOD
 #undef PY_ALIAS

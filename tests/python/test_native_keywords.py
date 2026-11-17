@@ -114,3 +114,56 @@ def test_a_wrong_keyword_is_still_an_error():
         s.is_between(lo=1, hi=2, nope=3)
     with pytest.raises(TypeError):
         s.is_between(lo=1)
+
+
+# (accessor, method, the old keyword names with valid values, in order). Frozen
+# from the signatures of the Python accessor methods the rows replaced.
+ACCESSOR_KEYWORDS = [
+    ("str", "count", {"pat": "a"}),
+    ("str", "endswith", {"pat": "c"}),
+    ("str", "ends_with", {"suffix": "c"}),
+    ("str", "find", {"sub": "b"}),
+    ("str", "fullmatch", {"pat": "abc"}),
+    ("str", "join", {"sep": "-"}),
+    ("str", "removeprefix", {"prefix": "a"}),
+    ("str", "removesuffix", {"suffix": "c"}),
+    ("str", "replace_all", {"pat": "a", "repl": "z"}),
+    ("str", "rfind", {"sub": "b"}),
+    ("str", "startswith", {"pat": "a"}),
+    ("str", "starts_with", {"prefix": "a"}),
+    ("str", "zfill", {"width": 5}),
+    ("list", "get", {"index": 1}),
+]
+
+
+@pytest.mark.parametrize(
+    "accessor,method,kwargs",
+    ACCESSOR_KEYWORDS,
+    ids=[f"{a}.{m}" for a, m, _ in ACCESSOR_KEYWORDS],
+)
+def test_accessor_method_accepts_the_old_keyword_names(accessor, method, kwargs):
+    words = Series(["abc", "ba", None, "cab"], name="x")
+    column = words.str.split("b") if accessor == "list" or method == "join" else words
+    acc = getattr(column, accessor)
+    by_name = getattr(acc, method)(**kwargs)
+    by_position = getattr(acc, method)(*kwargs.values())
+    assert by_name.to_list() == by_position.to_list()
+    assert by_name.name == "x"
+    with pytest.raises(TypeError, match="missing required argument"):
+        getattr(acc, method)(**dict(list(kwargs.items())[1:]))
+
+
+def test_an_unknown_keyword_is_named_like_python_does():
+    words = Series(["abc"])
+    with pytest.raises(
+        TypeError, match=r"startswith\(\) got an unexpected keyword argument 'nope'"
+    ):
+        words.str.startswith(nope="a")
+    with pytest.raises(TypeError, match=r"get\(\) got an unexpected keyword argument 'i'"):
+        words.str.split("b").list.get(i=0)
+    with pytest.raises(TypeError, match=r"clip\(\) got an unexpected keyword argument 'extra'"):
+        Series([1.0]).clip(lo=0, hi=1, extra=2)
+    with pytest.raises(
+        TypeError, match=r"memory_budget_advice\(\) got an unexpected keyword argument 'nope'"
+    ):
+        _ext.memory_budget_advice(required_bytes=1, nope=2)

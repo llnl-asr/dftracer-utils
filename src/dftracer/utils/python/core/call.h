@@ -76,23 +76,69 @@ static_assert(count_format(FormatString("|$Lp")).keywords == 2);
 
 }  // namespace detail
 
+namespace detail {
+
+/// The function name of a format, the text after its `:`; "function" when it
+/// has none.
+template <std::size_t N>
+constexpr const char *format_name(const FormatString<N> &fmt) {
+    for (std::size_t i = 0; i + 1 < N; ++i)
+        if (fmt.text[i] == ':') return fmt.text + i + 1;
+    return "function";
+}
+
+/// Sets the TypeError Python gives for a keyword that @p names does not hold.
+/// Returns false with the error set; does nothing when @p kw is null.
+inline bool check_keywords(const char *func, PyObject *kw,
+                           const char *const *names, std::size_t count) {
+    if (!kw) return true;
+    PyObject *key = nullptr;
+    PyObject *value = nullptr;
+    Py_ssize_t pos = 0;
+    while (PyDict_Next(kw, &pos, &key, &value)) {
+        bool known = false;
+        if (PyUnicode_Check(key))
+            for (std::size_t i = 0; i < count && !known; ++i)
+                known = PyUnicode_CompareWithASCIIString(key, names[i]) == 0;
+        if (!known) {
+            PyErr_Format(PyExc_TypeError,
+                         "%s() got an unexpected keyword argument '%U'", func,
+                         key);
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace detail
+
 /// Parses a call's arguments with PyArg_ParseTupleAndKeywords. @p Fmt is the
 /// format string, @p names the keyword of each unit in order, @p out one
 /// pointer per C argument. The count of names and of pointers is checked
 /// against the format at compile time (`O!`, `O&`, `s#`, `y#` and `z#` are one
-/// name and two pointers). Returns false with a Python error set.
+/// name and two pointers). A keyword that is not in @p names raises "<func>()
+/// got an unexpected keyword argument '<name>'", where func is the text after
+/// the `:` of @p Fmt, or "function". Returns false with a Python error set.
 template <detail::FormatString Fmt, std::size_t N, class... Out>
-bool parse_kw(PyObject *args, PyObject *kw, const char *const (&names)[N],
-              Out *...out) {
+bool parse_kw_for(const char *func, PyObject *args, PyObject *kw,
+                  const char *const (&names)[N], Out *...out) {
     constexpr detail::FormatCount COUNT = detail::count_format(Fmt);
     static_assert(N == COUNT.keywords, "keyword names do not match the format");
     static_assert(sizeof...(Out) == COUNT.pointers,
                   "output pointers do not match the format");
+    if (!detail::check_keywords(func, kw, names, N)) return false;
     char *kwlist[N + 1];
     for (std::size_t i = 0; i < N; ++i)
         kwlist[i] = const_cast<char *>(names[i]);
     kwlist[N] = nullptr;
     return PyArg_ParseTupleAndKeywords(args, kw, Fmt.text, kwlist, out...) != 0;
+}
+
+/// @ref parse_kw_for with the function name of the format.
+template <detail::FormatString Fmt, std::size_t N, class... Out>
+bool parse_kw(PyObject *args, PyObject *kw, const char *const (&names)[N],
+              Out *...out) {
+    return parse_kw_for<Fmt>(detail::format_name(Fmt), args, kw, names, out...);
 }
 
 /// A method whose body takes its one argument as a METH_O does, called with

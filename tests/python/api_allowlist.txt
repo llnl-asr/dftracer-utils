@@ -1,4 +1,4 @@
-# Public methods of Series and Expr that api.def does not generate, one line each:
+# Public methods of Series, Expr and the accessors Str, Dt and List that api.def does not generate, one line each:
 #   Class.name | kind | detail
 # Kinds (tests/python/test_api_table.py checks each):
 #   alias-of:<name>           the class attribute is the attribute <name>
@@ -404,3 +404,84 @@ Expr.var | python-semantics | Python logic that does not build one node
 Expr.where | expr-node:_Select | -
 Expr.wrap | expr-node:_StrFn | -
 Expr.zfill | expr-node:_StrFn | -
+
+# The accessors s.str, s.dt and s.list. A native base type gives the methods that are rows; the Python subclass in series.py has the rest.
+Str.pad_end | needs-token:INT_CHAR | -
+Str.pad_start | needs-token:INT_CHAR | -
+Str.center | needs-token:INT_CHAR | -
+Str.ljust | needs-token:INT_CHAR | -
+Str.rjust | needs-token:INT_CHAR | -
+Str.capitalize | python-semantics | one kernel with a fixed case code; a row cannot hold a constant argument yet
+Str.swapcase | python-semantics | one kernel with a fixed case code; a row cannot hold a constant argument yet
+Str.title | python-semantics | one kernel with a fixed case code; a row cannot hold a constant argument yet
+Str.isalnum | python-semantics | one kernel with a fixed class code; a row cannot hold a constant argument yet
+Str.isalpha | python-semantics | one kernel with a fixed class code; a row cannot hold a constant argument yet
+Str.isdecimal | python-semantics | one kernel with a fixed class code; a row cannot hold a constant argument yet
+Str.isdigit | python-semantics | one kernel with a fixed class code; a row cannot hold a constant argument yet
+Str.islower | python-semantics | one kernel with a fixed class code; a row cannot hold a constant argument yet
+Str.isnumeric | python-semantics | one kernel with a fixed class code; a row cannot hold a constant argument yet
+Str.isspace | python-semantics | one kernel with a fixed class code; a row cannot hold a constant argument yet
+Str.istitle | python-semantics | one kernel with a fixed class code; a row cannot hold a constant argument yet
+Str.isupper | python-semantics | one kernel with a fixed class code; a row cannot hold a constant argument yet
+Str.isascii | python-semantics | a regex fullmatch written in Python
+Str.contains | python-semantics | substring, case-folded or regex search chosen by the arguments
+Str.match | python-semantics | a regex anchored at the start, built in Python
+Str.replace | python-semantics | one or every occurrence by the count n
+Str.slice | python-semantics | the stop position becomes a length
+Str.pad | python-semantics | start or end padding chosen by the side
+Str.split | python-semantics | can return a frame, or builds one from several native calls
+Str.rsplit | python-semantics | can return a frame, or builds one from several native calls
+Str.partition | python-semantics | can return a frame, or builds one from several native calls
+Str.rpartition | python-semantics | can return a frame, or builds one from several native calls
+Str.get_dummies | python-semantics | can return a frame, or builds one from several native calls
+Str.extractall | python-semantics | can return a frame, or builds one from several native calls
+Str.cat | python-semantics | Python logic around native calls
+Str.get | python-semantics | Python logic around native calls
+Str.index | python-semantics | Python logic around native calls
+Str.rindex | python-semantics | Python logic around native calls
+Str.slice_replace | python-semantics | Python logic around native calls
+Str.encode | python-semantics | Python converts the arguments before the kernel
+Str.decode | python-semantics | Python converts the arguments before the kernel
+Str.normalize | python-semantics | Python converts the arguments before the kernel
+Str.translate | python-semantics | Python converts the arguments before the kernel
+Str.wrap | python-semantics | Python converts the arguments before the kernel
+Str.extract | python-semantics | an optional group argument and an invalid pattern is a ValueError, which a row cannot name
+Str.findall | python-semantics | an invalid pattern is a ValueError, which a row cannot name
+Str.regex_replace | python-semantics | an invalid pattern is a ValueError, which a row cannot name
+Str.repeat | python-semantics | a negative count is a ValueError, which a row cannot name
+Dt.ceil | python-semantics | reads the unit of the accessor, which a row cannot hold
+Dt.floor | python-semantics | reads the unit of the accessor, which a row cannot hold
+Dt.round | python-semantics | reads the unit of the accessor, which a row cannot hold
+Dt.normalize | python-semantics | reads the unit of the accessor, which a row cannot hold
+Dt.strftime | python-semantics | reads the unit of the accessor, which a row cannot hold
+Dt.total_seconds | python-semantics | reads the unit of the accessor, which a row cannot hold
+Dt.tz_convert | python-semantics | reads the unit of the accessor, which a row cannot hold
+Dt.tz_localize | python-semantics | reads the unit of the accessor, which a row cannot hold
+Dt.isocalendar | python-semantics | reads the unit of the accessor, which a row cannot hold
+Dt.day | python-semantics | property of the accessor's unit, not a method of one op
+Dt.day_of_week | python-semantics | property of the accessor's unit, not a method of one op
+Dt.day_of_year | python-semantics | property of the accessor's unit, not a method of one op
+Dt.dayofweek | python-semantics | property of the accessor's unit, not a method of one op
+Dt.dayofyear | python-semantics | property of the accessor's unit, not a method of one op
+Dt.days_in_month | python-semantics | property of the accessor's unit, not a method of one op
+Dt.daysinmonth | python-semantics | property of the accessor's unit, not a method of one op
+Dt.hour | python-semantics | property of the accessor's unit, not a method of one op
+Dt.is_leap_year | python-semantics | property of the accessor's unit, not a method of one op
+Dt.is_month_end | python-semantics | property of the accessor's unit, not a method of one op
+Dt.is_month_start | python-semantics | property of the accessor's unit, not a method of one op
+Dt.is_quarter_end | python-semantics | property of the accessor's unit, not a method of one op
+Dt.is_quarter_start | python-semantics | property of the accessor's unit, not a method of one op
+Dt.is_year_end | python-semantics | property of the accessor's unit, not a method of one op
+Dt.is_year_start | python-semantics | property of the accessor's unit, not a method of one op
+Dt.microsecond | python-semantics | property of the accessor's unit, not a method of one op
+Dt.millisecond | python-semantics | property of the accessor's unit, not a method of one op
+Dt.minute | python-semantics | property of the accessor's unit, not a method of one op
+Dt.month | python-semantics | property of the accessor's unit, not a method of one op
+Dt.nanosecond | python-semantics | property of the accessor's unit, not a method of one op
+Dt.quarter | python-semantics | property of the accessor's unit, not a method of one op
+Dt.second | python-semantics | property of the accessor's unit, not a method of one op
+Dt.tz | python-semantics | property of the accessor's unit, not a method of one op
+Dt.weekday | python-semantics | property of the accessor's unit, not a method of one op
+Dt.year | python-semantics | property of the accessor's unit, not a method of one op
+List.first | python-semantics | get with a fixed index; a row cannot hold a constant argument yet
+List.last | python-semantics | get with a fixed index; a row cannot hold a constant argument yet

@@ -1542,26 +1542,32 @@ _FREQ_UNITS = {
 }
 
 
-class _DtAccessor:
+_dt_accessor_new = _ext.DtAccessor.__new__
+_OWN_UNIT_TYPES = frozenset((int(DType.TIMESTAMP), int(DType.DURATION), int(DType.TIME64)))
+
+
+class _DtAccessor(_ext.DtAccessor):
     """``s.dt``: the calendar parts of a Timestamp / Date / Duration Series
     in its own unit, or of an Int64 Series read as microseconds
     (``s.dt("ns")`` picks another unit). Naive: a timezone is ignored and
     every part is UTC, as pandas on a tz-naive column."""
 
-    __slots__ = ("_s", "_unit")
+    __slots__ = ("_unit",)
 
-    def __init__(self, series: Series, unit: Optional[str] = None) -> None:
-        self._s = series
+    def __new__(cls, series: Series, unit: Optional[str] = None) -> "_DtAccessor":
+        self = _dt_accessor_new(cls, series)
         if unit is None:
             # A temporal column carries its own unit; an Int64 reads as us.
             unit = "us"
-            if series.dtype in (DType.TIMESTAMP, DType.DURATION, DType.TIME64):
+            kind = series.type
+            if kind in _OWN_UNIT_TYPES:
                 unit = ("s", "ms", "us", "ns")[series.time_unit]
-            elif series.dtype == DType.DATE64:
+            elif kind == DType.DATE64:
                 unit = "ms"
         if unit not in _TIME_UNITS:
             raise ValueError("dt: unit must be s, ms, us or ns")
         self._unit = unit
+        return self
 
     def __call__(self, unit: str) -> "_DtAccessor":
         return _DtAccessor(self._s, unit)
@@ -1737,20 +1743,11 @@ class _DtAccessor:
         return self._s.with_timezone(tz or "")
 
 
-class _ListAccessor:
+class _ListAccessor(_ext.ListAccessor):
     """``s.list``: the List column accessors (polars ``s.list.len()`` /
-    ``s.list.get(i)``)."""
+    ``s.list.get(i)``). ``len`` and ``get`` are native, from api.def."""
 
-    __slots__ = ("_s",)
-
-    def __init__(self, series: Series) -> None:
-        self._s = series
-
-    def len(self) -> Series:
-        return self._s.list_len()
-
-    def get(self, index: int) -> Series:
-        return self._s.list_get(index)
+    __slots__ = ()
 
     def first(self) -> Series:
         return self._s.list_get(0)
@@ -1759,34 +1756,14 @@ class _ListAccessor:
         return self._s.list_get(-1)
 
 
-class _StrAccessor:
-    """``s.str``: the string kernels under pandas and polars names."""
+class _StrAccessor(_ext.StrAccessor):
+    """``s.str``: the string kernels under pandas and polars names. The
+    methods that are exactly one kernel are native, from api.def; the ones
+    with Python logic around the kernels are here."""
 
-    __slots__ = ("_s",)
-
-    def __init__(self, series: Series) -> None:
-        self._s = series
+    __slots__ = ()
 
     # pandas
-    def lower(self) -> "Series[builtins.str]":
-        return self._s.to_lowercase()
-
-    def upper(self) -> "Series[builtins.str]":
-        return self._s.to_uppercase()
-
-    def strip(self) -> "Series[builtins.str]":
-        return self._s.str_strip()
-
-    def lstrip(self) -> "Series[builtins.str]":
-        return self._s.str_lstrip()
-
-    def rstrip(self) -> "Series[builtins.str]":
-        return self._s.str_rstrip()
-
-    def len(self) -> "Series[int]":
-        """Codepoint count, as pandas ``str.len()``."""
-        return self._s.str_len_chars()
-
     def contains(self, pat: str, case: bool = True, regex: bool = False) -> "Series[bool]":
         """Substring (or with ``regex=True`` a regex search) predicate."""
         if regex:
@@ -1797,21 +1774,9 @@ class _StrAccessor:
             return self._s.str_contains(pat)
         return self._s.to_lowercase().str_contains(pat.lower())
 
-    def startswith(self, pat: str) -> "Series[bool]":
-        return self._s.str_starts_with(pat)
-
-    def endswith(self, pat: str) -> "Series[bool]":
-        return self._s.str_ends_with(pat)
-
     def match(self, pat: str) -> "Series[bool]":
         """Regex anchored at the start, as pandas ``str.match``."""
         return self._s.str_search("^(?:" + pat + ")")
-
-    def fullmatch(self, pat: str) -> "Series[bool]":
-        return self._s.str_matches(pat)
-
-    def find(self, sub: str) -> "Series[int]":
-        return self._s.str_find(sub)
 
     def replace(self, pat: str, repl: str, n: int = -1) -> "Series[builtins.str]":
         """Literal replace: every occurrence (``n=-1``) or the first (``n=1``)."""
@@ -1834,9 +1799,6 @@ class _StrAccessor:
         if side == "right":
             return self._s.str_pad_end(width, fillchar)
         raise ValueError("side must be 'left' or 'right'")
-
-    def zfill(self, width: int) -> "Series[builtins.str]":
-        return self._s.str_zfill(width)
 
     def split(self, pat: str, expand: bool = False) -> "Union[Series, DataFrame]":
         """Split on the literal ``pat``: a ``list<string>`` Series, or with
@@ -1861,30 +1823,6 @@ class _StrAccessor:
         return self._s.str_extract(pat, group)
 
     # polars
-    def to_lowercase(self) -> "Series[builtins.str]":
-        return self._s.to_lowercase()
-
-    def to_uppercase(self) -> "Series[builtins.str]":
-        return self._s.to_uppercase()
-
-    def strip_chars(self) -> "Series[builtins.str]":
-        return self._s.str_strip()
-
-    def len_bytes(self) -> "Series[int]":
-        return self._s.str_len_bytes()
-
-    def len_chars(self) -> "Series[int]":
-        return self._s.str_len_chars()
-
-    def starts_with(self, prefix: str) -> "Series[bool]":
-        return self._s.str_starts_with(prefix)
-
-    def ends_with(self, suffix: str) -> "Series[bool]":
-        return self._s.str_ends_with(suffix)
-
-    def replace_all(self, pat: str, repl: str) -> "Series[builtins.str]":
-        return self._s.str_replace_all(pat, repl)
-
     def pad_start(self, width: int, fill: str = " ") -> "Series[builtins.str]":
         return self._s.str_pad_start(width, fill)
 
@@ -1901,9 +1839,6 @@ class _StrAccessor:
 
     def swapcase(self) -> "Series[builtins.str]":
         return self._s.str_case(2)
-
-    def casefold(self) -> "Series[builtins.str]":
-        return self._s.to_lowercase()
 
     def isalnum(self) -> "Series[bool]":
         return self._s.str_is(0)
@@ -1959,14 +1894,6 @@ class _StrAccessor:
     def istitle(self) -> "Series[bool]":
         return self._s.str_is(8)
 
-    def count(self, pat: str) -> "Series[int]":
-        """Non-overlapping occurrences of the literal ``pat`` per row."""
-        return self._s.str_count(pat)
-
-    def rfind(self, sub: str) -> "Series[int]":
-        """Byte index of the last ``sub`` per row, or -1."""
-        return self._s.str_rfind(sub)
-
     def index(self, sub: str) -> "Series[int]":
         """As :meth:`find`, but a row without ``sub`` raises (``ValueError``),
         as Python's ``str.index``."""
@@ -1980,12 +1907,6 @@ class _StrAccessor:
         if out.eq(-1).any():
             raise ValueError(f"rindex: substring {sub!r} not found in every row")
         return out
-
-    def removeprefix(self, prefix: str) -> "Series[builtins.str]":
-        return self._s.str_remove_prefix(prefix)
-
-    def removesuffix(self, suffix: str) -> "Series[builtins.str]":
-        return self._s.str_remove_suffix(suffix)
 
     def repeat(self, repeats: int) -> "Series[builtins.str]":
         return self._s.str_repeat(repeats)
@@ -2099,11 +2020,6 @@ class _StrAccessor:
     def rsplit(self, pat: str, expand: bool = False) -> "Union[Series, DataFrame]":
         """As :meth:`split` (every occurrence, so the same parts)."""
         return self.split(pat, expand)
-
-    def join(self, sep: str) -> Series:
-        """Each row's list of strings joined with ``sep`` (a List<String>
-        Series, as :meth:`split` gives)."""
-        return self._s.list_join(sep)
 
     def get(self, i: int) -> Series:
         """The element at ``i`` of each row: a list's element (negative

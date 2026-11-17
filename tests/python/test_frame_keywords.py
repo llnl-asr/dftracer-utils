@@ -89,7 +89,7 @@ def test_keyword_calls_give_the_positional_results(instances):
 
 def test_a_wrong_keyword_is_still_an_error(instances):
     df = instances["DataFrame"]
-    with pytest.raises(TypeError, match="at most 1 argument"):
+    with pytest.raises(TypeError, match="unexpected keyword argument 'nope'"):
         df.column_index("a", nope=1)
     with pytest.raises(TypeError, match="keyword"):
         df.partition_id(keys="a", n_parts=2, extra=1)

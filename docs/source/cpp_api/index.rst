@@ -31,6 +31,7 @@ layer that composes all below it.
    :caption: Data
 
    dataframe
+   arrow
    duql
 
 .. toctree::

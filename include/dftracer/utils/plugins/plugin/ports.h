@@ -229,7 +229,7 @@ class Ports {
 
    public:
     /// A receive into `buf`. `co_await` gives the message length, or a
-    /// @ref PortError: TooBig when `buf` is short (the message stays queued,
+    /// @ref PortError, TooBig when `buf` is short (the message stays queued,
     /// and `*needed` gets its size when set) and Closed once the channel is
     /// closed and drained. `buf` and `needed` must outlive the await.
     auto recv(ChannelId ch, dstd::MutableByteView buf,

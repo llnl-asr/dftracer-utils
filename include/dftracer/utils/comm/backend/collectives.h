@@ -188,7 +188,7 @@ using Arrival = dstd::Vector<std::uint8_t>;
  *
  * A slot is a group id and a sequence number of a member, so the calls of one
  * group match their peers by both. A provider reports arrival and moves
- * the bytes of the contributions into one @ref Table: the handshake, the error
+ * the bytes of the contributions into one @ref Table. The handshake, the error
  * text, the abort, the merge of a reduction in rank order and the deadlines
  * belong to the caller.
  * It never runs a @ref Done under its own lock, so neither the caller's group

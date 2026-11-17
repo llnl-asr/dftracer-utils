@@ -213,10 +213,11 @@ class Messaging {
     virtual OpId recv_any_source(const MessageKey& key, std::uint32_t senders,
                                  RecvFromDone done) = 0;
 
-    /// Receives the first message of @p key, or of any source when @ref source
-    /// is @ref ANY_SOURCE, into @p buffer, when it fits: the completion names
-    /// the bytes it took. A longer message fails with @ref ChannelError::TooBig
-    /// and stays first in its stream, so a later receive takes it again.
+    /// Receives the first message of @p key, or of any source when @ref
+    /// MessageKey::source is @ref ANY_SOURCE, into @p buffer, when it fits: the
+    /// completion names the bytes it took. A longer message fails with @ref
+    /// ChannelError::TooBig and stays first in its stream, so a later receive
+    /// takes it again.
     /// @p senders is as for @ref recv_any_source.
     virtual OpId recv_into(const MessageKey& key, std::uint32_t senders,
                            dstd::Span<std::byte> buffer, RecvIntoDone done) = 0;

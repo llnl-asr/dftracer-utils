@@ -17,7 +17,7 @@ namespace dftracer::utils::comm {
 
 /**
  * @brief How a value of @p T that is not trivially copyable crosses ranks, for
- * the `_object` forms of @ref Group.
+ * the `_object` forms of @ref dftracer::utils::comm::Group.
  *
  * `serialized_size(value)` is the exact number of bytes `serialize` writes.
  * `serialize(value, out)` fills all of @p out, which the caller sized to
@@ -42,7 +42,7 @@ concept Codec =
         { codec.deserialize(bytes) } -> std::same_as<dstd::Result<T>>;
     };
 
-/// The codec of a @ref dstd::String: its bytes, with no length head, since the
+/// The codec of a @ref dstd::String, its bytes, with no length head, since the
 /// block of a rank already has one.
 struct StringCodec {
     std::size_t serialized_size(const dstd::String& value) const noexcept;

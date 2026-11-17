@@ -29,7 +29,7 @@ namespace dftracer::utils::comm {
  * @brief One message that arrived on a channel, and the rank that sent it.
  *
  * @p T is the type the channel carries, so a channel of bytes gives
- * @ref dstd::Vector of @ref std::byte.
+ * @ref dstd::Vector of `std::byte`.
  */
 template <class T>
 class Message {
@@ -589,7 +589,7 @@ class ChannelRx {
  * group ends.
  *
  * A channel carries a trivially copyable @p T of a fixed size, or
- * @ref dstd::Vector of @ref std::byte for bytes of any length.
+ * @ref dstd::Vector of `std::byte` for bytes of any length.
  */
 template <class T>
 class Channel {

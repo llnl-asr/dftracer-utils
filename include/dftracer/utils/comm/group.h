@@ -568,8 +568,8 @@ class Group {
      * with @p counts cuts blocks of those sizes, which must add up to the count
      * and be the same on every rank. The ranks compare the counts exactly, so
      * counts that differ are an error on every rank. The merge follows the
-     * rules of @ref all_reduce: rank order unless @ref CallOpts::reduce_order
-     * says otherwise, and the function of rank 0. A provider that collects at
+     * rules of @ref all_reduce (rank order unless @ref CallOpts::reduce_order
+     * says otherwise, and the function of rank 0). A provider that collects at
      * rank 0 sends each rank the whole merge, of which the rank keeps its
      * block.
      */
@@ -619,7 +619,7 @@ class Group {
      *
      * Every rank passes the same number of values, the same @p op and, for the
      * forms with a function, the same function. The merge always folds in rank
-     * order, so a float result is the same on every run and @ref
+     * order, so a float result is the same on every run and
      * @ref CallOpts::reduce_order has no effect. Every rank receives every
      * contribution and merges its own prefix, which costs `r` merges on rank
      * `r`.
@@ -1376,14 +1376,14 @@ struct Hooks {
     /// Groups that are alive now, of every communicator.
     static std::size_t live_groups() noexcept;
 
-    /// Holds the timer thread in @ref expire right before it takes the group
+    /// Holds the timer thread in `expire` right before it takes the group
     /// lock, which is where a completing call can land. Null clears it.
     static void set_expire_gate(void (*gate)()) noexcept;
 
-    /// Clears what @ref expire reports to a test.
+    /// Clears what `expire` reports to a test.
     static void reset_expire_signal() noexcept;
 
-    /// True once @ref expire reached the group lock, and once it returned. A
+    /// True once `expire` reached the group lock, and once it returned. A
     /// test waits on these instead of on time.
     static bool expire_at_lock() noexcept;
     static bool expire_returned() noexcept;

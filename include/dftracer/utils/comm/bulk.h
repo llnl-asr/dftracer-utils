@@ -19,8 +19,8 @@ enum class Access : std::uint8_t {
     ReadWrite,
 };
 
-/// Where exposed memory lives. Only @ref Host works; the others are reserved
-/// for device memory, and a call that names one fails with
+/// Where exposed memory lives. Only @ref MemoryKind::Host works; the others are
+/// reserved for device memory, and a call that names one fails with
 /// @ref dstd::Condition::Unsupported.
 enum class MemoryKind : std::uint8_t {
     Host,

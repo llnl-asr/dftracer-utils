@@ -8,7 +8,7 @@
 
 namespace dftracer::utils::comm::backend {
 
-/// A @ref Collectives over any @ref Messaging: every member sends its record to
+/// A @ref Collectives over any @ref Messaging. Every member sends its record to
 /// group rank 0, which sends the table back to every member.
 dstd::SharedPtr<Collectives> make_linear_collectives(
     dstd::SharedPtr<Messaging> messaging);

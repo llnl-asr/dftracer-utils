@@ -126,7 +126,7 @@ class PendingOp {
     void set_timeout(coro::TimerService* timers, coro::TimerService::TimerId id,
                      dstd::SharedPtr<detail::TimerTarget> target) noexcept;
 
-    /// Observes the call with @p meta, from @ref detail::begin_call: its end is
+    /// Observes the call with @p meta, from `detail::begin_call`, so its end is
     /// counted and traced. Set before the call is shared with another thread.
     void observe(detail::CallMeta meta) noexcept { meta_ = std::move(meta); }
 

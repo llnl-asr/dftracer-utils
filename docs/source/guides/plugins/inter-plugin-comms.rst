@@ -267,6 +267,126 @@ fold order still sees the scan as it was. Order it the same way as a port:
 a plugin that must see the rewrite ``consumes`` a name the transform
 ``provides``. Two transforms chain, each seeing the previous one's output.
 
+Channels between stages
+-----------------------
+
+A port lives for one batch. When a plugin needs a stream that outlives a
+batch, declare a channel in the plugin factory with ``Ports::open`` (the C ABI
+``channel_open``). A bare name is yours, and the host prefixes it with
+``plugin.<your name>.``. The plugin that reads it opens
+``plugin.<owner>.<name>`` with the same credits, overflow mode and message
+size. A ``Block`` channel adds an edge to the order graph from each plugin that
+sets ``sends`` to each plugin that sets ``receives``, so the cycle rule covers
+blocking channels. ``Fail`` and ``DropOldest`` channels never wait and add no
+edge, so a request channel and a response channel between two plugins are
+fine.
+
+.. code-block:: cpp
+
+   // factory of "owner"
+   plugins::ChannelOptions options;
+   options.credits = 8;
+   options.overflow = plugins::Overflow::DropOldest;  // never a silent default
+   options.max_msg_bytes = sizeof(Reading);
+   DFTRACER_UTILS_TRY(plugins::ChannelId id,
+                      host.ports().open("readings", options));
+
+   // a task of "reader"
+   plugins::Channel<Reading> readings(h.ports(), id);
+   auto op = readings.recv();
+   dstd::Result<Reading> got = co_await op;
+
+Pick the overflow mode on purpose. ``Fail`` reports ``PortError::Full``;
+``DropOldest`` keeps the newest messages; ``Block`` makes the sender wait for
+a credit, and the host accepts it only when every end sets ``task_end``, so
+that no end runs in the fused ``on_batch`` loop, and ``sends`` or ``receives``.
+A ``Block`` send that starts from ``on_batch`` anyway fails at once with an
+error that names the channel. ``Channel<T>::recv`` drops a message whose size
+is not ``sizeof(T)`` and gives ``PortError::TooBig`` with both sizes, so one
+wrong message never blocks the channel. For a value that many readers
+poll, use a latest port (``latest_set``, ``latest_get``); it is a hint, and
+``NotReady`` means nothing was set yet. To merge a value over all slices, use
+a phase result: declare each generation in the factory, ``phase_contribute``
+from the slices, ``phase_seal`` the generation, and read it with
+``phase_result``. See :doc:`../../plugins` for the full list of rules.
+
+A receive that waits is a task, and another thread may stop it: ``retain`` the
+task before you hand it over, then call ``test`` or ``cancel`` there and
+``release`` it when you are done. The task still completes once, with
+``DFTU_E_CANCELLED`` when the cancel won. The reference rule is in section 9 of :doc:`../../plugins`.
+
+Two phases in one plan
+----------------------
+
+Some plugins need a fact about the whole input before they look at the first
+batch: the first timestamp, to report times from the start of the run, or the
+number of events, to size a table. A scan cannot give it, because a slice sees
+only the batches it reads. Pick the cheapest tool that is exact enough:
+
+- *The value is an index statistic: use a seed.* ``Ports::seed`` makes a phase
+  generation hold the earliest start (``PhaseSeed::TsMin``), the latest end
+  (``TsMax``) or the event count (``EventCount``) of the input files. The host
+  fills and seals it before the scan from the index, from its cache of an
+  earlier pass, or from a pass of its own, and the value is ready in the first
+  batch.
+- *An approximate answer in one pass is enough: use a sketch.* A quantile
+  sketch (``Host::make_sketch()``) takes a value at a time, merges across
+  slices and answers in the same scan, but only at the end.
+- *Anything else: run two plans.* Compute your value in a first run and keep it
+  in the plugin store (``Host::store()``), keyed by the sources it was computed
+  from; the second run reads it and checks the key.
+
+A seed. ``examples/plugins/two_phase_normalize.cpp`` reports event times
+relative to the start of all the files:
+
+.. code-block:: cpp
+
+   // in the factory
+   plugins::Ports ports = p.ports();
+   DFTRACER_UTILS_TRY(std::uint64_t gen,
+                      ports.phase_declare("origin", plugins::MergeOp::Min,
+                                          plugins::PhaseType::U64));
+   DFTRACER_UTILS_TRY_VOID(ports.seed("origin", gen, plugins::PhaseSeed::TsMin));
+
+   // in step(), at the first batch
+   std::uint64_t origin = 0;
+   DFTRACER_UTILS_TRY(auto size, h.ports().phase_result(
+       "origin", 1, dstd::MutableByteView(
+                        reinterpret_cast<std::byte*>(&origin), sizeof origin)));
+   // every event is at e.ts() - origin from here on
+
+A seed covers the input files, not the view: a filter on the view does not
+change it, which is why it is the same for every slice and every run over the
+same files. The plugin may not contribute to a seeded generation.
+
+A one-pass sketch. Slices keep a sketch, merge them, and finalize reads the
+quantiles; no second pass is needed when the answer may be approximate:
+
+.. code-block:: cpp
+
+   struct DurationQuantiles {
+       dstd::Optional<plugins::Sketch> sketch;
+       explicit DurationQuantiles(const plugins::Config&) {}
+
+       void step(const plugins::Batch& b, plugins::Host h) {
+           if (!sketch) sketch.emplace(h);
+           for (const plugins::Event& e : b)
+               if (e.has_dur()) sketch->add(static_cast<double>(e.dur()));
+       }
+       void merge(DurationQuantiles& other) {
+           if (sketch && other.sketch) sketch->merge(*other.sketch);
+       }
+       dstd::Result<void> finalize(plugins::Host h) {
+           if (!sketch) return {};
+           const plugins::Quantiles q = sketch->result();
+           const dstd::String text = dstd::fmt<"p50={} p99={}">(q.p50, q.p99);
+           return h.emit_result("duration_quantiles.text", text);
+       }
+   };
+
+A sketch gives each quantile within a bounded relative error, not the exact
+value; use a seed or two runs when you need the exact one.
+
 See also
 --------
 

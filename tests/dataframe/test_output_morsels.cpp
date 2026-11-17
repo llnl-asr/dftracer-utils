@@ -38,8 +38,11 @@ coro::CoroTask<dstd::Vector<DataFrame>> stream_all(LazyFrame lf,
                                                    std::int64_t max_rows) {
     dstd::Vector<DataFrame> out;
     auto g = lf.stream(max_rows);
-    while (auto df = co_await g.next())
+    while (true) {
+        auto df = co_await g.next();
+        if (!df) break;
         out.push_back(dftu_utils_test::ok(std::move(*df)));
+    }
     co_return out;
 }
 
@@ -53,8 +56,11 @@ dstd::String key_of(const dstd::Vector<Series>& cols, std::int64_t r) {
 coro::CoroTask<dstd::Result<void>> stream_status(LazyFrame lf,
                                                  std::int64_t max_rows) {
     auto g = lf.stream(max_rows);
-    while (auto df = co_await g.next())
+    while (true) {
+        auto df = co_await g.next();
+        if (!df) break;
         if (!*df) co_return df->error();
+    }
     co_return dstd::Result<void>();
 }
 

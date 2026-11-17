@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/env.h>
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -68,13 +69,12 @@ dstd::String write_trace(const dstd::String& dir, int n,
         const int dur = 1 + (i * 7 + n + salt) % 500;
         char fhash[24];
         std::snprintf(fhash, sizeof fhash, "%016x", 0x1000 + i % 7);
-        out += common::str_cat(
-            R"({"id":)", i, R"(,"name":")", name, R"(","cat":")", cat,
-            R"(","pid":)", 1 + i % 3, R"(,"tid":)", 1 + i % 2,
-            R"(,"ph":"X","ts":)", 1000 + i * 997, R"(,"dur":)", dur,
-            R"(,"args":{"ret":)", (i * 13) % 4096, R"(,"offset":)", i * 512,
-            R"(,"level":)", i % 3, R"(,"hhash":"a1b2c3d4e5f60718","fhash":")",
-            fhash, R"("}})", "\n");
+        dstd::fmt_append<
+            "{\"id\":{},\"name\":\"{}\",\"cat\":\"{}\",\"pid\":{},\"tid\":{},"
+            "\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{\"ret\":{},\"offset\":"
+            "{},\"level\":{},\"hhash\":\"a1b2c3d4e5f60718\",\"fhash\":\"{}\"}}"
+            "\n">(out, i, name, cat, 1 + i % 3, 1 + i % 2, 1000 + i * 997, dur,
+                  (i * 13) % 4096, i * 512, i % 3, fhash);
         dstd::String lower = cat;
         std::transform(lower.begin(), lower.end(), lower.begin(),
                        dstd::to_ascii_lower);
@@ -108,10 +108,9 @@ IndexerOptions options(dstd::StringView index_dir) {
 double build_seconds(const dstd::Vector<dstd::String>& files,
                      dstd::StringView index_dir) {
     auto ix = dftu_utils_test::ok(Indexer::open(files, options(index_dir)));
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto t0 = dstd::steady_now();
     dftu_utils_test::ok(ix.build());
-    return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
-        .count();
+    return std::chrono::duration<double>(dstd::steady_now() - t0).count();
 }
 
 struct Stored {
@@ -233,17 +232,18 @@ dstd::Map<dstd::String, dstd::String> agg_rows(dstd::StringView file,
         snapshot, stored_file,
         [&](std::uint64_t chunk, const schemas::dft::agg::ChunkColumns& block) {
             dstd::String value;
-            value += common::str_cat(block.rows);
+            dstd::fmt_append<"{}">(value, block.rows);
             for (const auto* locals :
                  {&block.cat, &block.name, &block.host, &block.file})
                 for (const std::uint32_t local : *locals)
-                    value += common::str_cat(
-                        ' ', dstd::StringView(block.texts[local].data(),
-                                              block.texts[local].size()));
+                    dstd::fmt_append<"{}{}">(
+                        value, ' ',
+                        dstd::StringView(block.texts[local].data(),
+                                         block.texts[local].size()));
             for (const auto* numbers :
                  {&block.ts, &block.dur, &block.pid, &block.tid})
                 for (const std::uint64_t v : *numbers)
-                    value += common::str_cat(' ', v);
+                    dstd::fmt_append<"{}{}">(value, ' ', v);
             rows.emplace("c " + dstd::to_string(chunk), value);
             return true;
         }));
@@ -353,13 +353,13 @@ TEST_SUITE("AggPartialsStore") {
         for (int i = 0; i < EVENTS; ++i) {
             const dstd::String fhash = HASHES[i % 3];
             const int dur = 1 + i % 50;
-            text += common::str_cat(
-                R"({"id":)", i, R"(,"name":"read","cat":"POSIX","pid":1)",
-                R"(,"tid":1,"ph":"X","ts":)", 1000 + i * 997, R"(,"dur":)", dur,
-                R"(,"args":{"hhash":"a1b2c3d4e5f60718")",
+            dstd::fmt_append<
+                "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+                "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{"
+                "\"hhash\":\"a1b2c3d4e5f60718\"{}}}\n">(
+                text, i, 1000 + i * 997, dur,
                 fhash.empty() ? dstd::String()
-                              : common::str_cat(R"(,"fhash":")", fhash, "\""),
-                "}}\n");
+                              : dstd::fmt<",\"fhash\":\"{}\"">(fhash));
             ++want[fhash];
             want_dur[fhash] += static_cast<std::uint64_t>(dur);
         }
@@ -464,7 +464,8 @@ TEST_SUITE("AggPartialsStore") {
                         }
                         build->finish(trace::index::store::IndexExtension::Agg,
                                       old.params_hash);
-                        if (!co_await build->commit()) marked = false;
+                        auto commit_result = co_await build->commit();
+                        if (!commit_result) marked = false;
                     }
                 },
                 "stale aggregation index");

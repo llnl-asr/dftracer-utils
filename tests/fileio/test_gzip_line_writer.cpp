@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/stop_token.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/time.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
@@ -912,10 +913,9 @@ TEST_CASE("GzipLineWriter - a drop without close on an executor joins") {
                   }),
                   "glw_dropped")
             .wait());
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    const auto deadline = dstd::steady_now() + std::chrono::seconds(30);
     while (has_output(dstd::String(path.str())) &&
-           std::chrono::steady_clock::now() < deadline)
+           dstd::steady_now() < deadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     CHECK_FALSE(has_output(dstd::String(path.str())));
     CHECK(on_executor.load());
@@ -1012,10 +1012,9 @@ StopRun write_until_stopped(const dstd::String& path, GzipWriterOptions options,
         };
         auto waiting = scope.spawn_future(
             coro::with_stop_token(writing(), source.token()));
-        const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        const auto deadline = dstd::steady_now() + std::chrono::seconds(10);
         while ((!has_output(path) || (close_after && !closing)) &&
-               std::chrono::steady_clock::now() < deadline)
+               dstd::steady_now() < deadline)
             co_await coro::sleep(std::chrono::milliseconds(5));
         run.existed = has_output(path);
         if (before_stop) before_stop();
@@ -1028,9 +1027,8 @@ StopRun write_until_stopped(const dstd::String& path, GzipWriterOptions options,
     }()));
     // The dropped writer joins its jobs and removes its files in the
     // background.
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    while (has_output(path) && std::chrono::steady_clock::now() < deadline)
+    const auto deadline = dstd::steady_now() + std::chrono::seconds(30);
+    while (has_output(path) && dstd::steady_now() < deadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     rt.shutdown();
     return run;
@@ -1067,9 +1065,8 @@ TEST_CASE("GzipLineWriter - a fold error held across a stop still cleans up") {
             return {};
         }
         held = true;
-        const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(20);
-        while (!release && std::chrono::steady_clock::now() < deadline)
+        const auto deadline = dstd::steady_now() + std::chrono::seconds(20);
+        while (!release && dstd::steady_now() < deadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         failed = true;
         return common::make_error(common::ErrorCode::Io, "fold fail");
@@ -1077,9 +1074,8 @@ TEST_CASE("GzipLineWriter - a fold error held across a stop still cleans up") {
     const StopRun run = write_until_stopped(
         dstd::String(path.str()), std::move(o),
         [&] {
-            const auto deadline =
-                std::chrono::steady_clock::now() + std::chrono::seconds(10);
-            while (!held && std::chrono::steady_clock::now() < deadline)
+            const auto deadline = dstd::steady_now() + std::chrono::seconds(10);
+            while (!held && dstd::steady_now() < deadline)
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
         },
         [&] { release = true; });
@@ -1101,9 +1097,8 @@ TEST_CASE("GzipLineWriter - a stop during close ends the task stopped") {
     std::atomic<bool> held{false}, release{false};
     o.fold = [&](const MemberRef&, dstd::StringView) -> dstd::Result<void> {
         held = true;
-        const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(20);
-        while (!release && std::chrono::steady_clock::now() < deadline)
+        const auto deadline = dstd::steady_now() + std::chrono::seconds(20);
+        while (!release && dstd::steady_now() < deadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         return {};
     };
@@ -1112,9 +1107,8 @@ TEST_CASE("GzipLineWriter - a stop during close ends the task stopped") {
     const StopRun run = write_until_stopped(
         dstd::String(path.str()), std::move(o),
         [&] {
-            const auto deadline =
-                std::chrono::steady_clock::now() + std::chrono::seconds(10);
-            while (!held && std::chrono::steady_clock::now() < deadline)
+            const auto deadline = dstd::steady_now() + std::chrono::seconds(10);
+            while (!held && dstd::steady_now() < deadline)
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
         },
         [&] { release = true; }, 7);

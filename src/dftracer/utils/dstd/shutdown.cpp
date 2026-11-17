@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/no_destructor.h>
 #include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/memory/detail/manager.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -32,13 +33,20 @@ Table& table() {
     std::abort();
 }
 
+void shutdown_noexcept() noexcept { shutdown(); }
+
 }  // namespace
 
 void add_shutdown_hook(ShutdownStage stage, void (*hook)() noexcept) {
     Table& t = table();
     std::lock_guard<std::mutex> lock(t.mutex);
     if (!t.armed) {
-        if (std::atexit(&shutdown) != 0) {
+        // The memory exit check runs its hooks before it reads the counters and
+        // only registers its own atexit handler at the first pool allocation,
+        // which can come after this one. Registering here too runs the hooks
+        // first whichever `atexit` order the process ends with.
+        memory::detail::add_exit_hook(&shutdown_noexcept);
+        if (std::atexit(&shutdown_noexcept) != 0) {
             abort_with("dftracer-utils shutdown: cannot register at exit\n");
         }
         t.armed = true;

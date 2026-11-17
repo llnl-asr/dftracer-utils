@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/hooks.h>
 #include <dftracer/utils/coro/monitor.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/io/io_backend_factory.h>
@@ -21,7 +22,7 @@
 namespace dftracer::utils {
 
 ThreadPoolExecutor::ThreadPoolExecutor(const ExecutorConfig& config)
-    : last_progress_ns_(common::steady_now_ns()),
+    : last_progress_ns_(dstd::steady_now_ns()),
       idle_timeout_(config.idle_timeout),
       deadlock_timeout_s_(config.deadlock_timeout.count()),
       keepalive_(config.elastic_keepalive),
@@ -113,7 +114,7 @@ dstd::Result<void> ThreadPoolExecutor::start() {
     for (std::size_t i = 0; i < floor; ++i) {
         auto worker = dstd::make_unique<WorkerContext>(
             next_worker_id_.fetch_add(1, std::memory_order_relaxed));
-        worker->last_activity = std::chrono::steady_clock::now();
+        worker->last_activity = dstd::steady_now();
         worker->owner = this;
         {
             std::lock_guard<std::mutex> lock(workers_mutex_);
@@ -222,13 +223,12 @@ void ThreadPoolExecutor::shutdown() {
 }
 
 void ThreadPoolExecutor::cancel_in_flight() {
-    using Clock = std::chrono::steady_clock;
     constexpr auto NO_PROGRESS_GRACE = std::chrono::seconds(2);
 
     if (io_backend_) io_backend_->cancel_pending();
 
     std::size_t last_left = park_registry_.size();
-    auto last_progress = Clock::now();
+    auto last_progress = dstd::steady_now();
     for (;;) {
         park_registry_.cancel_all();
         quiesce();
@@ -236,8 +236,8 @@ void ThreadPoolExecutor::cancel_in_flight() {
         if (left == 0) return;
         if (left < last_left) {
             last_left = left;
-            last_progress = Clock::now();
-        } else if (Clock::now() - last_progress > NO_PROGRESS_GRACE) {
+            last_progress = dstd::steady_now();
+        } else if (dstd::steady_now() - last_progress > NO_PROGRESS_GRACE) {
             DFTRACER_UTILS_LOG_WARN(
                 "Executor shutdown: {} suspended frames did not wake when "
                 "cancelled and are abandoned",
@@ -290,7 +290,7 @@ bool ThreadPoolExecutor::spawn_worker(std::size_t cap, bool best_effort) {
     if (live_workers_.load(std::memory_order_relaxed) >= cap) return false;
     auto worker = dstd::make_unique<WorkerContext>(
         next_worker_id_.fetch_add(1, std::memory_order_relaxed));
-    worker->last_activity = std::chrono::steady_clock::now();
+    worker->last_activity = dstd::steady_now();
     worker->owner = this;
     worker->core = acquire_core();
     WorkerContext* ptr = worker.get();
@@ -381,7 +381,7 @@ void ThreadPoolExecutor::enter_blocking() {
     if (ctx->blocking_depth++ != 0 || !ctx->holds_permit) return;
     // No thief takes from the LIFO slot and this thread stops running it.
     flush_lifo(*ctx->core);
-    ctx->blocking_since_ns.store(common::steady_now_ns(),
+    ctx->blocking_since_ns.store(dstd::steady_now_ns(),
                                  std::memory_order_relaxed);
     ctx->blk_state.store(BLK_SYSCALL, std::memory_order_release);
     // Only the 0->1 transition can find the sysmon parked; skip the wake else.
@@ -437,7 +437,7 @@ void ThreadPoolExecutor::sysmon_loop() {
             continue;
         }
 
-        const std::int64_t now = common::steady_now_ns();
+        const std::int64_t now = dstd::steady_now_ns();
         int handed = 0;
         {
             std::unique_lock<std::mutex> wl(workers_mutex_, std::try_to_lock);
@@ -552,9 +552,8 @@ void ThreadPoolExecutor::set_deadlock_timeout(std::chrono::seconds timeout) {
 }
 
 void ThreadPoolExecutor::monitor_loop() {
-    using Clock = std::chrono::steady_clock;
     const auto keepalive = keepalive_;
-    auto last_busy = Clock::now();
+    auto last_busy = dstd::steady_now();
 
     std::unique_lock<std::mutex> lock(coord_mutex_);
     while (running_.load(std::memory_order_acquire)) {
@@ -573,7 +572,7 @@ void ThreadPoolExecutor::monitor_loop() {
         if (pending_tasks(false) > 0 ||
             idle_workers_.load(std::memory_order_acquire) <
                 live_workers_.load(std::memory_order_acquire)) {
-            last_busy = Clock::now();
+            last_busy = dstd::steady_now();
         }
         // Grow: spawn until the backlog is covered or we hit the cap - all at
         // once, so a burst reaches full parallelism in one wake.
@@ -587,11 +586,11 @@ void ThreadPoolExecutor::monitor_loop() {
         // size reaches its floor in a few keep-alives.
         const std::size_t live = live_workers_.load(std::memory_order_acquire);
         const std::size_t floor = min_workers_.load(std::memory_order_acquire);
-        if (live > floor && Clock::now() - last_busy >= keepalive) {
+        if (live > floor && dstd::steady_now() - last_busy >= keepalive) {
             for (std::size_t n = std::max<std::size_t>((live - floor) / 2, 1);
                  n > 0; --n)
                 retire_worker();
-            last_busy = Clock::now();
+            last_busy = dstd::steady_now();
         }
         lock.lock();
     }
@@ -1138,7 +1137,7 @@ bool ThreadPoolExecutor::is_responsive() const {
         }
     }
 
-    const auto now = std::chrono::steady_clock::now();
+    const auto now = dstd::steady_now();
     const auto now_ns = now.time_since_epoch().count();
     if (!busy || seen_resumes_.exchange(resumes) != resumes) {
         last_progress_ns_.store(now_ns, std::memory_order_relaxed);
@@ -1235,7 +1234,7 @@ TaskProgress ThreadPoolExecutor::task_progress_of(const TaskInfo& info) const {
     progress.state = info.state;
 
     // Timing
-    auto now = std::chrono::steady_clock::now();
+    auto now = dstd::steady_now();
     if (info.state == TaskState::Queued) {
         progress.queued_duration_ms =
             std::chrono::duration<double, std::milli>(now - info.queued_at)
@@ -1292,7 +1291,7 @@ common::TaskIndex ThreadPoolExecutor::enqueue_tracked(
                                                      std::forward_as_tuple(id),
                                                      std::forward_as_tuple());
         if (inserted) {
-            auto now = std::chrono::steady_clock::now();
+            auto now = dstd::steady_now();
             it->second.task_id = id;
             it->second.name.assign(name.data(), name.size());
             it->second.state = TaskState::Queued;
@@ -1336,7 +1335,7 @@ void ThreadPoolExecutor::mark_coro_started(common::TaskIndex id) {
         return;
     }
     it->second.state = TaskState::Running;
-    it->second.started_at = std::chrono::steady_clock::now();
+    it->second.started_at = dstd::steady_now();
     it->second.location = TaskLocation::Executing;
     if (ctx != nullptr) it->second.worker_id = ctx->worker_id;
 }
@@ -1349,7 +1348,7 @@ void ThreadPoolExecutor::mark_coro_completed(common::TaskIndex id) {
         if (it != task_registry_.end() &&
             it->second.state != TaskState::Completed &&
             it->second.state != TaskState::Failed) {
-            auto now = std::chrono::steady_clock::now();
+            auto now = dstd::steady_now();
             if (it->second.started_at.time_since_epoch().count() == 0) {
                 it->second.started_at = now;
             }
@@ -1372,7 +1371,7 @@ void ThreadPoolExecutor::mark_coro_failed(common::TaskIndex id,
         if (it != task_registry_.end() &&
             it->second.state != TaskState::Completed &&
             it->second.state != TaskState::Failed) {
-            auto now = std::chrono::steady_clock::now();
+            auto now = dstd::steady_now();
             if (it->second.started_at.time_since_epoch().count() == 0) {
                 it->second.started_at = now;
             }

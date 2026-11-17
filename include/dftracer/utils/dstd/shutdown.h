@@ -26,9 +26,10 @@ void add_shutdown_hook(ShutdownStage stage, void (*hook)() noexcept);
 /// Runs every hook once, and a second call does nothing.
 ///
 /// The first add_shutdown_hook call registers this function at exit, so a
-/// process that never calls it still runs it. That registration happens after
-/// the memory manager exists, so the hooks run before its exit check. A hook
-/// may block and may call this function again.
+/// process that never calls it still runs it. The same call also registers it
+/// as a memory exit hook, which the exit check runs before it reads the
+/// counters, so the hooks run before the exit check whichever `atexit` order
+/// the process ends with. A hook may block and may call this function again.
 void shutdown();
 
 /// Whether shutdown() has begun running the hooks.

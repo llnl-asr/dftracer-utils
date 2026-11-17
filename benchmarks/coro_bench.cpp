@@ -52,6 +52,7 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -107,14 +108,14 @@ struct Meter {
 };
 
 Meter begin_meter() {
-    return {Clock::now(), dftu::bench::instructions_retired(),
+    return {dstd::steady_now(), dftu::bench::instructions_retired(),
             dftu::bench::allocations()};
 }
 
 void finish_meter(const Meter &start, Result &r) {
     std::uint64_t instructions = dftu::bench::instructions_retired();
     std::uint64_t allocations = dftu::bench::allocations();
-    r.total_ns = elapsed_ns(start.time, Clock::now());
+    r.total_ns = elapsed_ns(start.time, dstd::steady_now());
     r.instructions = instructions - start.instructions;
     r.allocations = allocations - start.allocations;
     r.peak_heap = dftu::bench::peak_heap_bytes();
@@ -287,12 +288,14 @@ Result parallel_for_small(std::size_t n) {
         std::atomic<std::int64_t> sum{0};
         Meter start = begin_meter();
         for (std::size_t i = 0; i < n; ++i) {
+            const coro::ParallelForOptions options{.grain = 16,
+                                                   .max_in_flight = 4};
             co_await coro::parallel_for(
                 64,
                 [&sum](std::int64_t begin, std::int64_t end) {
                     sum.fetch_add(end - begin, std::memory_order_relaxed);
                 },
-                coro::ParallelForOptions{.grain = 16, .max_in_flight = 4});
+                options);
         }
         finish_meter(start, r);
         r.correct = sum.load() == static_cast<std::int64_t>(n) * 64;

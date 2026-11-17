@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -31,10 +31,10 @@ namespace {
 
 dstd::String event(int i, const dstd::String& name, const dstd::String& args) {
     dstd::String o;
-    o += common::str_cat(R"({"id":)", i, R"(,"name":")", name,
-                         R"(","cat":"POSIX","pid":1,"tid":2,"ph":"X","ts":)",
-                         1000 + i, R"(,"dur":5,"type":"x","args":)", args,
-                         "}\n");
+    dstd::fmt_append<
+        "{\"id\":{},\"name\":\"{}\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":2,"
+        "\"ph\":\"X\",\"ts\":{},\"dur\":5,\"type\":\"x\",\"args\":{}}\n">(
+        o, i, name, 1000 + i, args);
     return o;
 }
 
@@ -48,13 +48,13 @@ dstd::String write_fixture(const dstd::String& dir) {
         "\n";
     for (int i = 0; i < 200; ++i) {
         dstd::String a;
-        a += common::str_cat(
-            R"({"size":)", i * 10, R"(,"ratio":)", i, ".5", R"(,"flag":)",
-            (i % 2 ? "true" : "false"),
-            R"(,"big":18446744073709551000,"io":{"off":)", i,
-            R"(,"mode":"r"},"hosts":["h1","h2"],"nul":null,"mix":)");
+        dstd::fmt_append<
+            "{\"size\":{},\"ratio\":{}.5,\"flag\":{},\"big\":"
+            "18446744073709551000,\"io\":{\"off\":{},\"mode\":\"r\"},\"hosts\":"
+            "[\"h1\",\"h2\"],\"nul\":null,\"mix\":">(
+            a, i * 10, i, (i % 2 ? "true" : "false"), i);
         if (i < 100)
-            a += common::str_cat(i);
+            dstd::fmt_append<"{}">(a, i);
         else
             a += R"("s")";
         if (i == 199) a += R"(,"retry":1)";
@@ -102,7 +102,11 @@ std::size_t count_rows(const dstd::String& trace, const dstd::String& index_dir,
         cfg.skip_pruning = skip_pruning;
         auto gen = dftu_utils_test::ok_items(reader.read_json(cfg));
         std::size_t n = 0;
-        while (auto line = co_await gen.next()) ++n;
+        while (true) {
+            auto line = co_await gen.next();
+            if (!line) break;
+            ++n;
+        }
         co_return n;
     };
     return dftu_utils_test::ok(run().get());
@@ -683,12 +687,12 @@ TEST_SUITE("TopLevelShadow") {
         dstd::String body = "[\n";
         for (int i = 0; i < 200; ++i) {
             dstd::String o;
-            o += common::str_cat(
-                R"({"id":)", i, R"(,"name":"read","cat":"POSIX")",
-                R"(,"pid":1,"tid":2,"ph":"X","ts":)", 1000 + i,
-                R"(,"dur":5,"type":"x","foo":"top)", i, R"(","args":{"id":)",
-                100000 + i, R"(,"cat":"ARG)", i, R"(","type":"arg)", i,
-                R"(","foo":"arg)", i, R"("}})", "\n");
+            dstd::fmt_append<
+                "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+                "\"tid\":2,\"ph\":\"X\",\"ts\":{},\"dur\":5,\"type\":\"x\","
+                "\"foo\":\"top{}\",\"args\":{\"id\":{},\"cat\":\"ARG{}\","
+                "\"type\":\"arg{}\",\"foo\":\"arg{}\"}}\n">(
+                o, i, 1000 + i, i, 100000 + i, i, i, i);
             body += o;
         }
         body += "]\n";

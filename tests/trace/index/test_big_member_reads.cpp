@@ -194,12 +194,14 @@ std::size_t inflate_mismatches(
         if (cache != nullptr) inf.set_cache(cache, 7);
         if (heads != nullptr) inf.set_index_hint(*heads);
         off_t offset = 0;
-        if (!co_await inf.initialize(fd, offset)) co_return;
+        auto initialize_result = co_await inf.initialize(fd, offset);
+        if (!initialize_result) co_return;
         dstd::Vector<unsigned char> buf(1 << 20);
         while (true) {
             std::size_t n = 0;
-            if (!co_await inf.read(fd, offset, buf.data(), buf.size(), n))
-                co_return;
+            auto read_result =
+                co_await inf.read(fd, offset, buf.data(), buf.size(), n);
+            if (!read_result) co_return;
             if (n == 0) break;
             if (at + n > expected.size() ||
                 std::memcmp(buf.data(), expected.data() + at, n) != 0)
@@ -220,7 +222,9 @@ std::size_t members_lines(const dstd::String& path) {
     std::size_t lines = 0;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto gen = fileio::compress::decode_gzip_members(fd, size, BOUND_BYTES);
-        while (auto part = co_await gen.next()) {
+        while (true) {
+            auto part = co_await gen.next();
+            if (!part) break;
             REQUIRE(*part);
             lines += static_cast<std::size_t>(
                 std::count((*part)->begin(), (*part)->end(), '\n'));
@@ -466,7 +470,9 @@ TEST_SUITE("BigMemberReads") {
                     auto lines =
                         fileio::lines::sources::async_streaming_gz_lines(
                             dstd::String(path));
-                    while (auto line = co_await lines.next()) {
+                    while (true) {
+                        auto line = co_await lines.next();
+                        if (!line) break;
                         REQUIRE(*line);
                         ++n;
                     }

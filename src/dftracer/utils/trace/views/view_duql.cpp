@@ -291,6 +291,8 @@ using namespace duql_detail;
 
 View detail::view_of(detail::ScanPlan plan) { return View(std::move(plan)); }
 
+detail::ScanPlan detail::scan_plan_of(const View& v) { return v.plan_; }
+
 View detail::with_named_columns(const View& v,
                                 dstd::Vector<dataframe::Field> columns) {
     return v.reshape("select", [&](const detail::ScanPlan& p) {

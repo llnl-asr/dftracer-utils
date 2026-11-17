@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -413,7 +413,7 @@ dstd::String write_prefix(const dstd::String& src, const dstd::String& dst,
     dstd::String bytes =
         dstd::fs::read_file(dstd::PathView(src)).value_or(dstd::String());
     dstd::fs::write_file(dstd::PathView(dst),
-                         common::str_cat(bytes.substr(
+                         dstd::fmt<"{}">(bytes.substr(
                              0, static_cast<std::size_t>(
                                     static_cast<double>(bytes.size()) * frac))))
         .discard();
@@ -617,7 +617,11 @@ TEST_SUITE("Truncated") {
                 {.file_path = dstd::String(path)});
             auto gen = dftu_utils_test::ok_items(reader.read_lines());
             std::size_t n = 0;
-            while (auto line = co_await gen.next()) ++n;
+            while (true) {
+                auto line = co_await gen.next();
+                if (!line) break;
+                ++n;
+            }
             co_return n;
         };
         CHECK(dftu_utils_test::ok(count_lines(cut).get()) ==

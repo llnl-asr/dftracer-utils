@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_TESTS_TRACE_VIEWS_FOLD_SHAPES_H
 #define DFTRACER_UTILS_TESTS_TRACE_VIEWS_FOLD_SHAPES_H
 
-#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -436,7 +436,6 @@ inline const Shape SHAPES[] = {
 /// and `top` as key=value (i int64, u uint64, d double, s string), and the
 /// specials as key:kind.
 inline String describe(const FoldEvent& ev, const StringIntern& intern) {
-    using dftracer::utils::common::str_cat;
     constexpr std::uint32_t NO_ID = StringIntern::NO_ID;
     const auto quote = [](StringView s) {
         String out = "\"";
@@ -455,30 +454,36 @@ inline String describe(const FoldEvent& ev, const StringIntern& intern) {
     const auto text = [&](std::uint32_t id) {
         return id == NO_ID ? String("-") : quote(intern.resolve(id));
     };
-    String out = str_cat("ph=", static_cast<int>(ev.phase), " pid=", ev.pid,
-                         " tid=", ev.tid, " ts=", ev.ts,
-                         " dur=", ev.has_dur ? str_cat(ev.dur) : String("-"),
-                         " cat=", text(ev.cat_id), " name=", text(ev.name_id),
-                         " fh=", text(ev.fhash_id), " hh=", text(ev.hhash_id));
+    String out = dftracer::utils::dstd::fmt<
+        "ph={} pid={} tid={} ts={} dur={} cat={} name={} fh={} hh={}">(
+        static_cast<int>(ev.phase), ev.pid, ev.tid, ev.ts,
+        ev.has_dur ? dftracer::utils::dstd::fmt<"{}">(ev.dur) : String("-"),
+        text(ev.cat_id), text(ev.name_id), text(ev.fhash_id),
+        text(ev.hhash_id));
     const auto list = [&](const char* label, const auto& args) {
-        out += str_cat(" ", label, "{");
+        dftracer::utils::dstd::fmt_append<" {}{">(out, label);
         bool first = true;
         for (const auto& [key, value] : args) {
             if (!first) out += " ";
             first = false;
-            out += str_cat(quote(intern.resolve(key)), "=");
+            dftracer::utils::dstd::fmt_append<"{}=">(
+                out, quote(intern.resolve(key)));
             switch (value.index()) {
                 case 0:
-                    out += str_cat("d", std::get<0>(value));
+                    dftracer::utils::dstd::fmt_append<"d{}">(
+                        out, std::get<0>(value));
                     break;
                 case 1:
-                    out += str_cat("i", std::get<1>(value));
+                    dftracer::utils::dstd::fmt_append<"i{}">(
+                        out, std::get<1>(value));
                     break;
                 case 2:
-                    out += str_cat("s", text(std::get<2>(value)));
+                    dftracer::utils::dstd::fmt_append<"s{}">(
+                        out, text(std::get<2>(value)));
                     break;
                 default:
-                    out += str_cat("u", std::get<3>(value));
+                    dftracer::utils::dstd::fmt_append<"u{}">(
+                        out, std::get<3>(value));
                     break;
             }
         }
@@ -491,8 +496,9 @@ inline String describe(const FoldEvent& ev, const StringIntern& intern) {
     for (const auto& s : ev.specials) {
         if (!first) out += " ";
         first = false;
-        out += str_cat(quote(intern.resolve(s.key)), ":",
-                       static_cast<int>(s.kind), s.top ? "t" : "");
+        dftracer::utils::dstd::fmt_append<"{}:{}{}">(
+            out, quote(intern.resolve(s.key)), static_cast<int>(s.kind),
+            s.top ? "t" : "");
     }
     out += "}";
     return out;
@@ -731,9 +737,8 @@ inline dftracer::utils::dstd::Vector<String> many_capture_names() {
     dftracer::utils::dstd::Vector<String> names;
     for (const char* name : CAPTURE_NAMES) names.emplace_back(name);
     for (int i = 0; i < 100; ++i) {
-        names.emplace_back(dftracer::utils::common::str_cat("n", i, ".x"));
-        if (i % 7 == 0)
-            names.emplace_back(dftracer::utils::common::str_cat("size"));
+        names.emplace_back(dftracer::utils::dstd::fmt<"n{}.x">(i));
+        if (i % 7 == 0) names.emplace_back("size");
     }
     return names;
 }
@@ -741,16 +746,17 @@ inline dftracer::utils::dstd::Vector<String> many_capture_names() {
 /// The text of `ev` for the path readers: `describe`, the schema leaves in
 /// order, the count of values that did not convert and the by_path mark.
 inline String describe_path(const FoldEvent& ev, const StringIntern& intern) {
-    using dftracer::utils::common::str_cat;
     String out = describe(ev, intern);
     out += " lv{";
     bool first = true;
     for (const auto& [id, tag] : ev.schema_leaves) {
         if (!first) out += " ";
         first = false;
-        out += str_cat(intern.resolve(id), ":", static_cast<int>(tag));
+        dftracer::utils::dstd::fmt_append<"{}:{}">(out, intern.resolve(id),
+                                                   static_cast<int>(tag));
     }
-    out += str_cat("} unc=", ev.unconverted, " bp=", ev.by_path ? 1 : 0);
+    dftracer::utils::dstd::fmt_append<"} unc={} bp={}">(out, ev.unconverted,
+                                                        ev.by_path ? 1 : 0);
     return out;
 }
 

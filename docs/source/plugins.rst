@@ -807,6 +807,182 @@ plugin provides a consumed name.
          uint32_t len = 0;
          const void* got = p->consume(host->h, key, &len); /* consumer */
 
+**Channels, latest values and phase results** are further members of
+``DFTU_SVC_PORTS``, in ``dftracer/utils/plugins/plugin/ports.h`` for C++. A
+payload is bytes, a fixed-size value or a frame, never a pointer, a ``size_t``
+or a ``long``. The host copies a payload before the call returns.
+
+Names are logical. A bare name belongs to the plugin that declares it, and the
+host prefixes it with ``plugin.<plugin name>.``. A plugin that reads another
+plugin's channel names it in full, ``plugin.<owner>.<name>``. A name is
+``[a-z0-9._/-]`` and stays out of the ``dftu.`` namespace. The host checks the
+plan before the scan and refuses it, naming the cause, when:
+
+- two plugins declare ports under one ``plugin.<name>.`` namespace, or one
+  plugin declares a channel twice;
+- a plugin opens a channel no loaded plugin declares, or declares another
+  credit count, overflow mode or message size than the owner;
+- a phase result skips a generation, or a phase seed breaks one of the rules
+  below;
+- the ``DFTU_OVERFLOW_BLOCK`` channels and the ``provides`` / ``consumes``
+  names hold a cycle. A Block channel orders every plugin that declares
+  ``DFTU_CHANNEL_F_SENDS`` at one of its ends before every plugin that declares
+  ``DFTU_CHANNEL_F_RECEIVES``, and every end of a Block channel declares one of
+  the two or both. A Fail or DropOldest channel never waits, so it adds no
+  order, and a request channel with a response channel is not a cycle. The
+  message lists the plugins and the names on the cycle, such as
+  ``'a' -[plugin.a.x]-> 'b' -[plugin.b.y]-> 'a'``;
+- a ``DFTU_OVERFLOW_BLOCK`` channel has an end that shares the fused scan
+  stage. Declare ``DFTU_CHANNEL_F_TASK_END`` at every end, which says the
+  plugin touches the channel only from tasks it starts, never from
+  ``on_batch``; otherwise a full channel would stop the loop that must drain
+  it. Use ``DFTU_OVERFLOW_FAIL`` or ``DFTU_OVERFLOW_DROP_OLDEST`` otherwise.
+  The plan check trusts the ``TASK_END`` bit. At run time the host also
+  refuses a Block ``channel_send`` that starts from ``on_batch`` or
+  ``transform``, with an error that names the channel, so a plugin that set
+  the bit and broke it fails at once and does not deadlock.
+
+*Channels.* A plugin factory declares each end with ``channel_open`` and a
+``dftu_channel_desc`` (``credits``, ``overflow``, ``max_msg_bytes``, each with a
+``field_mask`` bit; the defaults are 16 credits, fail, 65536 bytes). A callback
+opens the declared channel by the same name to get its handle. ``channel_send``
+and ``channel_recv`` start a task. The task completes with ``DFTU_OK`` and
+sets the port status, ``DFTU_PORT_OK``, ``DFTU_PORT_FULL`` (fail mode, no
+credit), ``DFTU_PORT_TOO_BIG`` or ``DFTU_PORT_CLOSED``. A receive into a short
+buffer is ``DFTU_PORT_TOO_BIG`` with the needed length in ``*out_len``, and the
+message stays queued. ``channel_recv_exact`` is the receive of a channel of
+fixed-size values: a message whose length is not ``cap`` is taken off the queue
+and dropped, and the status is ``DFTU_PORT_TOO_BIG`` with the length it had. A send under ``DFTU_OVERFLOW_BLOCK`` waits for a credit,
+and ``DFTU_OVERFLOW_DROP_OLDEST`` drops the oldest message to make room.
+``channel_try_send`` never waits. ``channel_close`` ends the sends; a receive
+still drains the queue and then gives ``DFTU_PORT_CLOSED``. The host closes
+every channel when the scan ends, for a scan that ``Plugins::run`` drives and
+for one that ``Plugins::attach`` joins to a session.
+
+*Call contract.* Every call except ``port_key``, ``publish`` and ``consume``
+takes a ``dftu_ctx*`` and returns a status. A negative status sets its message
+on ``ctx``; the plan refusals above reach the plugin this way, from
+``channel_open``, ``phase_declare`` and ``phase_seed``. A port status
+(``DFTU_PORT_*``) is not an error: the call returns ``DFTU_OK`` and the status
+is in ``*out_status``. A NULL ``out_status``, ``out_len``, ``out_generation`` or
+``out_task``, a NULL ``data`` or ``buf`` with a length above 0, a NULL name and
+a descriptor whose ``struct_size`` is wrong give ``DFTU_E_INVALID``; a NULL
+``data`` with length 0 is an empty message. The host copies the bytes of
+``channel_try_send``, ``latest_set`` and ``phase_contribute`` before the call
+returns, so the plugin keeps its buffer. A call that starts a task needs more.
+The ``data`` of ``channel_send``, and the ``buf``, ``*out_len`` and
+``*out_status`` of ``channel_send``, ``channel_recv`` and ``channel_recv_exact``,
+must stay valid until the task completes, and the task belongs to the caller,
+who hands it back through a ``pending`` or ``wait`` slot, waits with
+``dftu_svc_task::run`` or gives it up with ``discard``. ``channel_open`` as a declaration,
+``phase_declare`` and ``phase_seed`` run only in the plugin factory. Every other
+call runs after the plan, from a task or a callback, on any thread; a call
+locks the one port it names, so two plugins that use different ports never wait
+for each other.
+
+*Latest ports* are hints. ``latest_set`` stores the last value under a name and
+gives its generation, a 64-bit count of sets from 1 that the host assigns.
+``latest_get`` never waits: ``DFTU_PORT_NOT_READY`` before the first set, and
+``DFTU_PORT_TOO_BIG`` with the needed size in ``*out_len`` for a short buffer.
+It gives the generation it read, so a reader tells a new value from one it has
+seen.
+
+*Phase results* merge the values of many slices by a named op: ``DFTU_MERGE_SUM``,
+``MIN`` and ``MAX`` over ``DFTU_T_I64``, ``DFTU_T_U64`` or ``DFTU_T_F64``,
+``DFTU_MERGE_UNION`` over a set of ``DFTU_T_U64`` and ``DFTU_MERGE_CONCAT`` over
+``DFTU_T_BYTES``, appended in the order the host received them. A factory calls
+``phase_declare`` once for each generation, with generation 0 to take the
+next; the host assigns generations in order from 1, and a request that skips
+one fails the load. ``phase_contribute`` merges into an open generation and
+gives ``DFTU_PORT_TOO_BIG`` for a payload the op refuses and
+``DFTU_PORT_CLOSED`` once the generation is sealed. ``phase_seal`` closes
+generations in order, and sealing one whose predecessor is open is
+``DFTU_E_INVALID``. ``phase_result`` gives the merged value of a sealed one
+(``DFTU_PORT_NOT_READY`` while it is open, ``DFTU_PORT_TOO_BIG`` with the needed
+size for a short buffer); a generation with no contribution gives an empty
+result.
+
+*Phase seeds.* A plugin that needs a number about the whole input before its
+first batch, such as the start time of the trace, asks the host for it.
+``phase_seed(name, generation, seed)`` in the plugin factory, after
+``phase_declare`` of that generation, makes the generation a seed. The host
+fills it and seals it before the scan starts, so ``phase_result`` is ready in
+the first batch of every slice. The values are exact for the input files and
+cover every event that is not a metadata record, whatever filter the view
+carries:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 20 50
+
+   * - Seed
+     - Declared with
+     - Value (``DFTU_T_U64``, 8 bytes)
+   * - ``DFTU_PHASE_SEED_TS_MIN``
+     - ``DFTU_MERGE_MIN``
+     - The earliest event start above 0. Events recorded without a clock, at
+       ``ts`` 0, are left out. 0 when there is none.
+   * - ``DFTU_PHASE_SEED_TS_MAX``
+     - ``DFTU_MERGE_MAX``
+     - The latest event end, ``ts`` + ``dur``. 0 for an empty input.
+   * - ``DFTU_PHASE_SEED_EVENT_COUNT``
+     - ``DFTU_MERGE_SUM``
+     - The number of events.
+
+The plan is refused, naming the phase, when the generation was not declared,
+was declared with another merge or value type than the seed takes, is already
+seeded, belongs to another plugin, or follows a generation that is not seeded
+(generations seal in order). A plugin that calls ``phase_contribute`` on a
+seeded generation gets an error that names it. ``phase_seed`` is a factory
+call; a callback gets ``DFTU_E_UNSUPPORTED``. In C++, ``Ports::seed(name,
+generation, PhaseSeed::TsMin)`` and ``PluginBuilder::ports()``.
+
+The host takes the values from the first source that is exact for the input,
+in this order, and never from a stale one:
+
+1. *The index.* When every file of the run has an index that is current for the
+   file's mtime and size and holds its statistics, the host merges them. Nothing
+   is scanned.
+2. *The seed cache.* The host keeps the values of an earlier pass in the store
+   under the index root, in ``phase_seeds``. The key is a hash of the file
+   paths, nanosecond mtimes, sizes and a sample of the bytes of every file, with
+   the api and index versions. An entry is used only on an exact match, so a
+   file that changed is a miss.
+3. *A pass of the host.* One scan of the files, with no plugin code and none of
+   the view's filters, computes the three values and writes them to the cache.
+   A stale index is rebuilt first, as the files' view does when it is made.
+
+The cache needs one index root for the files and is skipped, with the index
+route, for a view that pins a file, such as a live view. ``Plugins::run`` and
+``Plugins::attach`` seed alike; an attached set seeds when its session starts
+executing, before the scan. ``PluginRun::seed_source`` tells which source
+filled the seeds.
+
+``publish`` and ``consume`` keep their shape. ``try_publish`` and
+``try_consume`` are their status forms: ``DFTU_PORT_FULL`` when the batch's
+port bytes are used up, ``DFTU_PORT_CLOSED`` outside a scan,
+``DFTU_PORT_NOT_READY`` and ``DFTU_PORT_TOO_BIG`` with the size needed.
+
+.. code-block:: cpp
+
+   // in the factory of plugin "owner"
+   plugins::Ports ports = host.ports();
+   plugins::ChannelOptions options;
+   options.credits = 8;
+   options.max_msg_bytes = sizeof(Reading);
+   DFTRACER_UTILS_TRY(plugins::ChannelId id, ports.open("readings", options));
+
+   // in a task of plugin "reader", which declared "plugin.owner.readings"
+   plugins::Channel<Reading> readings(h.ports(), id);
+   auto op = readings.recv();
+   dstd::Result<Reading> got = co_await op;  // PortError::Closed at the end
+   if (!got && got.error().is_code(plugins::PortError::Closed)) co_return;
+
+``co_await ports.recv(id, buffer)`` gives a ``dstd::Result<std::uint32_t>``
+with the message length, or an error with a ``PortError`` code
+(``Full``, ``TooBig``, ``Closed``, ``NotReady``). ``Channel<T>`` accepts only a
+trivially copyable ``T``. The SDK has no exceptions.
+
 **Cross-worker accumulators (DFTU_SVC_AGG)** are the whole-scan channel: a
 producer accumulates into a named accumulator (section 6) and any plugin reads
 the cross-worker-merged, finalized result by that name at ``on_finalize``.
@@ -865,6 +1041,25 @@ through ``*pending`` or a ``drive`` wait slot. A plugin must hand back every
 task it starts, also on an error return. The first error of a combinator
 cancels and awaits the tasks it no longer needs before it finishes, and a
 cancelled task reports ``DFTU_E_CANCELLED``.
+
+``dftu_svc_task::test`` tells without waiting whether a task has finished (1 or
+0). ``dftu_svc_task::cancel`` asks a task to stop and returns at once; the task
+still completes exactly once, with ``DFTU_OK``, ``DFTU_E_CANCELLED`` or another
+error, and its owner still awaits and frees it. A cancel of a finished task
+does nothing. Both calls use no state of the host handle, and ``test`` gives
+``DFTU_E_INVALID`` for a NULL task.
+
+A task is reference counted so that another thread can cancel it. It starts with
+one reference, the owner's. A thread that holds a reference calls
+``dftu_svc_task::retain`` and then hands the task to another thread, which may
+call ``test`` and ``cancel`` on it and calls ``dftu_svc_task::release`` when it
+is done. Call ``retain`` before the handoff and never from the receiving thread.
+The reference rule: ``test``, ``cancel`` and ``retain`` are valid only while the
+caller holds a reference, and no thread uses the task after its own ``release``.
+A cancel may complete the task on another thread, but the task stays valid until
+the last reference goes, so the cancel never touches freed memory. ``run``
+drops the owner's reference in every case, so it frees the task unless another
+thread still holds one; the last ``release`` frees it.
 
 .. tab-set::
 
@@ -1989,6 +2184,10 @@ that covers it:
      - ``DFTU_SVC_SKETCH``
      - `7. Quantile sketches (DFTU_SVC_SKETCH)`_
    * - ``Host::publish_port`` / ``consume_port`` (``OutPort`` / ``InPort``)
+     - ``DFTU_SVC_PORTS``
+     - `8. Inter-plugin communication`_
+   * - ``Host::ports()`` (``Ports``, ``Channel<T>``: channels, latest values,
+       phase results)
      - ``DFTU_SVC_PORTS``
      - `8. Inter-plugin communication`_
    * - ``Host::emit_result``

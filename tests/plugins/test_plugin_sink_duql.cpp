@@ -71,10 +71,11 @@ dstd::Optional<plugins::host::Plugins> load(const char* path) {
 
 // The counters the toy sink plugin exports, read from the loaded library.
 const std::int64_t* toy_stats(void* handle, std::int64_t* values) {
-    using Getter = const std::int64_t* (*)(std::int64_t*);
+    using Getter = void (*)(std::int64_t*);
     auto getter = reinterpret_cast<Getter>(dlsym(handle, "toy_sink_stats"));
     if (getter == nullptr) return nullptr;
-    return getter(values);
+    getter(values);
+    return values;
 }
 
 // The library the run loads, already resident.

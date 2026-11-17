@@ -7,10 +7,10 @@ What this explains: how the codebase is layered, and the path a query takes
 from a ``.pfw.gz`` trace file on disk to a result the caller can use, in C++,
 C, or Python.
 
-Eight libraries, one dependency direction
+Layered libraries, one dependency direction
 -------------------------------------------
 
-The C++ build produces eight layered libraries, each as both a shared and a
+The C++ build produces layered libraries, each as both a shared and a
 static variant (``src/CMakeLists.txt``), aggregated behind
 ``dftracer::utils``:
 
@@ -18,6 +18,91 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   executor and scheduler, the io backend, the pipeline machinery, and shared
   primitives (string interning, sharded maps, the error type). It knows
   nothing about traces.
+- ``dftracer_utils_comm`` is the distributed layer: the communicator, its
+  groups, collectives and channels, and the local backend. It links the
+  runtime and no MPI. The MPI backend is ``dftracer_utils_comm_mpi``, built
+  with ``-DDFTRACER_UTILS_ENABLE_MPI=ON`` and loaded at run time, so it is the
+  only library that links MPI.
+  A communicator is built from four providers behind small interfaces:
+  bootstrap (rank discovery and timers), messaging (ordered point to point),
+  collectives (the native ones of a backend, or linear ones over messaging)
+  and bulk (expose, pull and push, built on messaging when the backend has no
+  bulk of its own). The rules above them are the same for every backend:
+  every call is an ``Op``, a group aborts on a failed collective, a
+  continuation is posted to the executor and never runs on a progress thread,
+  and a call ends exactly once. ``Communicator::start`` takes ``local``,
+  ``mpi`` or ``auto``, so the tools have one code path: a run with no launcher
+  is a group of one rank. :doc:`../guides/runtime/communicator` shows the calls.
+  The MPI backend runs the collectives of a group on the nonblocking
+  collectives of MPI, each group on a communicator of its own: a barrier, a
+  reduction whose result is the same bit for bit as the fold in rank order
+  (an integer ``Sum``, ``Min`` or ``Max``, or any built-in operation when the
+  call allows any order), a broadcast, a gather and an all-gather, and an
+  all-to-all. Other reductions gather the contributions and fold them in rank
+  order. An MPI request cannot be cancelled, so a call that ends early (an
+  abort, a deadline or a cancel) fails at once with the error of its group
+  while the request stays with the context. If a context stops while a native
+  request is still pending after a short wait, because a peer never matched
+  the call, it prints one line on stderr and ends the job with ``MPI_Abort``
+  with a non-zero status instead of ``MPI_Finalize``, so the job never hangs.
+  A call moves its data in rounds of at most 1 GiB, so the size of a call has
+  no limit of the int count of MPI. The communicator of a group is made on a
+  thread of its own, and freed when the group is released.
+  The ``_object`` calls of a group (``all_gather_object``, ``gather_object``,
+  ``broadcast_object`` and ``all_to_all_object``) decide per pair of ranks
+  whether a value crosses a codec. A rank in the process of the sender gets the
+  sender's object itself, shared and read-only, with no codec call. A value is
+  serialized once, and only when a rank in another process reads it, and each
+  receiving process deserializes it once and shares that copy among its ranks.
+  A rank also exposes memory to its peers, which is the bulk capability
+  (``Group::expose``, ``pull``, ``push`` and ``unexpose``). ``expose`` gives a
+  small descriptor, ``BufferRef``, that the owner sends to a peer by any other
+  call; it holds the owner, an id, a 64-bit size, an access mode (read only,
+  write only or read write) and a memory kind, of which only host memory works
+  now. A peer copies the exposure into its own buffer with ``pull`` and writes
+  into it with ``push``; a buffer too short for the range is an error
+  (``ChannelError::TooBig``), never a silent cut, and the call gives the byte
+  count. The owner keeps the memory valid until the ``Op`` of ``unexpose`` has
+  completed, which happens when no transfer on it is left. In one process a
+  transfer is a copy in ranges. Between processes a range of at most 64 KiB
+  moves in one message, and a larger one is driven by its receiver: it asks for
+  one range at a time, and the bytes in flight toward it from one peer never
+  pass a credit that is a share of the memory budget of its process, so a
+  transfer of any size streams and is never refused for its size. A cancel, a
+  deadline or a stopped token ends one transfer and leaves the group alone; an
+  abort of the group or of the owner's process ends it with the error of the
+  group.
+  A deadline that passes on a collective ends the group with an error that
+  names the call, its sequence number, how long it waited, the ranks that
+  arrived and the ranks that did not, and the error of a channel or bulk call
+  names the group, the world rank and the age.
+  ``Communicator::pending()`` lists the calls of the collective sequence that
+  have not ended, each with its group, kind, sequence number, rank and age (a
+  call with a deadline or a trace is timed from its own start, and any other
+  from the start of its slot, so that a call reads no clock), and
+  ``Communicator::stats()`` gives, for each group and kind of call, how many
+  calls started, ended well, failed and were cancelled, and the bytes they sent
+  and received. A collective call is counted under the group mutex that it takes anyway, so
+  it adds no atomic read-modify-write, and a call is counted before any waiter
+  sees it end. A group that no handle names any more is counted in the row of
+  group 0. When ``DFTRACER_UTILS_COMM_TRACE`` names a directory, each rank
+  also writes one DFTracer event file there, ``comm-<rank>-<pid>-<n>.pfw`` (``n`` numbers the communicators of the
+  process), with one
+  complete event for each call that ended (``cat`` is ``comm``, ``name`` is the
+  kind of call, ``args`` hold the group, the sequence number, the bytes and the
+  status); the tools that read ``.pfw`` files read it, and when the variable is
+  unset a call pays one branch for it. A trace that cannot be made or written logs
+  one warning that names the path.
+  For tests and chaos runs, ``FaultMessaging`` wraps any messaging provider and,
+  by seeded rule, delays, reorders, drops or kills what passes through it. A
+  delay runs on the timers of the process and never sleeps a provider thread.
+  A reorder holds messages and releases them in a seeded order across streams
+  only, so each stream stays in order. A lost message is lost: the deadline of
+  the call that waited for it names the rank that never arrived. A killed rank
+  fails its sends and receives, and the groups that hold it abort with one error
+  that names it, so every pending collective, channel and bulk call ends with
+  that error on every rank. The same seed gives the same decisions for the same
+  messages, and the limit of a drop rule counts the messages of one stream.
 - ``dftracer_utils_store`` is the key-value store engine: data files, the
   writer and its committer, and the snapshot that reads them. It links only
   the runtime and knows nothing about traces.
@@ -66,6 +151,7 @@ active.
 
    graph TB
        Runtime["dftracer_utils_runtime<br/>runtime, coro, io, pipeline"]
+       Comm["dftracer_utils_comm<br/>communicator, groups"]
        Store["dftracer_utils_store<br/>key-value store engine"]
        Io["dftracer_utils_fileio<br/>gzip, line streams, writers"]
        Json["dftracer_utils_json<br/>simdjson-backed parsing"]
@@ -76,6 +162,7 @@ active.
        Plugins["dftracer_utils_plugins<br/>plugin host"]
        Util["dftracer_utils_domains<br/>analysis, workload, server"]
        Store --> Runtime
+       Comm --> Runtime
        Io --> Runtime
        Io --> Json
        Json --> Runtime

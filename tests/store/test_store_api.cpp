@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -640,9 +641,8 @@ TEST_SUITE("store api") {
         put_all(store, ns, scope, rows);
         dstd::Optional<dstd::String> seen =
             get_value(store, ns, scope, "k1000");
-        const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (!seen && std::chrono::steady_clock::now() < deadline) {
+        const auto deadline = dstd::steady_now() + std::chrono::seconds(5);
+        while (!seen && dstd::steady_now() < deadline) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             seen = get_value(store, ns, scope, "k1000");
         }

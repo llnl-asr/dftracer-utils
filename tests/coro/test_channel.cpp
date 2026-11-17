@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/generator.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -229,10 +230,9 @@ TEST_CASE("Channel - receive waits before first producer registration") {
         CHECK(blocking_send(channel, 123));
     });
 
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    const auto deadline = dstd::steady_now() + std::chrono::seconds(5);
     while (!consumer_done.load(std::memory_order_acquire) &&
-           std::chrono::steady_clock::now() < deadline) {
+           dstd::steady_now() < deadline) {
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
 
@@ -606,11 +606,11 @@ TEST_CASE("Channel - close wakes blocked receive" * doctest::test_suite("vg")) {
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
-    auto t0 = std::chrono::steady_clock::now();
+    auto t0 = dstd::steady_now();
     channel.close();
     receiver.join();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - t0);
+        dstd::steady_now() - t0);
 
     CHECK(receive_result == false);
     CHECK(receive_done.load(std::memory_order_acquire) == true);
@@ -640,11 +640,11 @@ TEST_CASE("Channel - last producer release wakes blocked receive") {
 
     CHECK(channel.producer_count() == 1);
 
-    auto t0 = std::chrono::steady_clock::now();
+    auto t0 = dstd::steady_now();
     guard.reset();
     receiver.join();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - t0);
+        dstd::steady_now() - t0);
 
     CHECK(receive_result == false);
     CHECK(channel.producer_count() == 0);
@@ -681,7 +681,9 @@ TEST_CASE("Channel - send_async unblocks when receiver drains") {
 
         CHECK(third_send_completed.load(std::memory_order_acquire) == false);
 
-        while (auto item = co_await channel->receive()) {
+        while (true) {
+            auto item = co_await channel->receive();
+            if (!item) break;
             consumed_sum.fetch_add(*item);
         }
         co_return;
@@ -754,7 +756,9 @@ TEST_CASE("Channel - async bounded handoff on single compute thread") {
     };
 
     auto consumer = [&]() -> coro::CoroTask<void> {
-        while (auto item = co_await channel.receive()) {
+        while (true) {
+            auto item = co_await channel.receive();
+            if (!item) break;
             consumed.fetch_add(*item, std::memory_order_relaxed);
         }
         co_return;
@@ -794,7 +798,9 @@ TEST_CASE("Channel - receive_async()") {
     };
 
     auto consumer = [&]() -> coro::CoroTask<void> {
-        while (auto item_opt = co_await channel.receive()) {
+        while (true) {
+            auto item_opt = co_await channel.receive();
+            if (!item_opt) break;
             consumer_sum.fetch_add(*item_opt);
         }
         co_return;
@@ -829,14 +835,18 @@ TEST_CASE("Channel - receive_async() with multiple consumers") {
     };
 
     auto consumer1 = [&]() -> coro::CoroTask<void> {
-        while (auto item_opt = co_await channel.receive()) {
+        while (true) {
+            auto item_opt = co_await channel.receive();
+            if (!item_opt) break;
             consumer1_sum.fetch_add(*item_opt);
         }
         co_return;
     };
 
     auto consumer2 = [&]() -> coro::CoroTask<void> {
-        while (auto item_opt = co_await channel.receive()) {
+        while (true) {
+            auto item_opt = co_await channel.receive();
+            if (!item_opt) break;
             consumer2_sum.fetch_add(*item_opt);
         }
         co_return;
@@ -878,7 +888,9 @@ TEST_CASE("Channel - receive_async() with transform chain") {
         [&, op = output_channel.producer()]() mutable -> coro::CoroTask<void> {
         auto out_guard = op.guard();
 
-        while (auto item_opt = co_await input_channel.receive()) {
+        while (true) {
+            auto item_opt = co_await input_channel.receive();
+            if (!item_opt) break;
             int transformed = (*item_opt) * (*item_opt);  // Square
             CHECK(co_await output_channel.send(transformed));
             transformed_values.push_back(transformed);
@@ -887,7 +899,9 @@ TEST_CASE("Channel - receive_async() with transform chain") {
     };
 
     auto consumer = [&]() -> coro::CoroTask<void> {
-        while (auto item_opt = co_await output_channel.receive()) {
+        while (true) {
+            auto item_opt = co_await output_channel.receive();
+            if (!item_opt) break;
             consumed_values.push_back(*item_opt);
         }
         co_return;
@@ -931,7 +945,9 @@ TEST_CASE("Channel - receive_async() fallback") {
     };
 
     auto consumer = [&]() -> coro::CoroTask<void> {
-        while (auto item_opt = co_await channel.receive()) {
+        while (true) {
+            auto item_opt = co_await channel.receive();
+            if (!item_opt) break;
             consumer_sum.fetch_add(*item_opt);
         }
         co_return;
@@ -967,7 +983,9 @@ TEST_CASE("Channel - receive_async() stress test") {
     };
 
     auto consumer = [&]() -> coro::CoroTask<void> {
-        while (auto item_opt = co_await channel.receive()) {
+        while (true) {
+            auto item_opt = co_await channel.receive();
+            if (!item_opt) break;
             items_received.fetch_add(1);
         }
         co_return;
@@ -1055,7 +1073,9 @@ TEST_CASE(
     };
 
     auto consume = [&]() -> coro::CoroTask<void> {
-        while (auto item_opt = co_await channel.receive()) {
+        while (true) {
+            auto item_opt = co_await channel.receive();
+            if (!item_opt) break;
             total_consumed.fetch_add(*item_opt);
         }
         co_return;
@@ -1227,7 +1247,9 @@ TEST_CASE("Channel - producer() with scope.spawn() pattern") {
             auto* total_consumed_ptr = &total_consumed;
             scope.spawn(
                 [total_consumed_ptr, channel]() -> coro::CoroTask<void> {
-                    while (auto item = co_await channel->receive()) {
+                    while (true) {
+                        auto item = co_await channel->receive();
+                        if (!item) break;
                         total_consumed_ptr->fetch_add(*item);
                     }
                     co_return;
@@ -1275,7 +1297,9 @@ TEST_CASE("Channel - producer() early exit in scope.spawn()") {
             auto* total_consumed_ptr = &total_consumed;
             scope.spawn(
                 [total_consumed_ptr, channel]() -> coro::CoroTask<void> {
-                    while (auto item = co_await channel->receive()) {
+                    while (true) {
+                        auto item = co_await channel->receive();
+                        if (!item) break;
                         total_consumed_ptr->fetch_add(1);
                     }
                     co_return;
@@ -1319,7 +1343,9 @@ TEST_CASE("Channel - producer() two-stage pipeline with scope.spawn()") {
                 scope.spawn([stage1_ptr, prod = stage2->producer()]() mutable
                                 -> coro::CoroTask<void> {
                     auto guard = prod.guard();
-                    while (auto item = co_await (*stage1_ptr)->receive()) {
+                    while (true) {
+                        auto item = co_await (*stage1_ptr)->receive();
+                        if (!item) break;
                         CHECK(co_await prod.send(*item * 2));
                     }
                     co_return;
@@ -1330,7 +1356,9 @@ TEST_CASE("Channel - producer() two-stage pipeline with scope.spawn()") {
             auto* total_consumed_ptr = &total_consumed;
             scope.spawn(
                 [total_consumed_ptr, stage2_ptr]() -> coro::CoroTask<void> {
-                    while (auto item = co_await (*stage2_ptr)->receive()) {
+                    while (true) {
+                        auto item = co_await (*stage2_ptr)->receive();
+                        if (!item) break;
                         total_consumed_ptr->fetch_add(1);
                     }
                     co_return;

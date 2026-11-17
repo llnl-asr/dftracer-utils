@@ -10,6 +10,8 @@ set(PLUGINS_TEST_SOURCES
     test_plugin_cxx_wrappers.cpp
     test_plugin_abi_features.cpp
     test_plugin_ports.cpp
+    test_plugin_ports_sdk.cpp
+    test_plugin_phase_seed.cpp
     test_plugin_results.cpp
     test_plugin_agg.cpp
     test_plugin_agg_spill.cpp
@@ -44,6 +46,7 @@ set(PLUGINS_TEST_SOURCES
     test_plugin_library_lifetime.cpp
     test_plugin_borrowed_column.cpp
     test_example_sessionize.cpp
+    test_example_two_phase_normalize.cpp
     test_example_csv_reader.cpp
     test_provider_schema_types.cpp
     test_example_range_provider.cpp
@@ -143,6 +146,23 @@ target_set_warnings(${store_target})
 set_target_properties(${store_target} PROPERTIES OUTPUT_NAME test_plugin_store
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 add_test(NAME plugins/test_plugin_store COMMAND ${store_target})
+
+# +++++++++++++++++++++++++++++++++++++++++
+# dftu.svc.ports: a C consumer calls the channel, latest and phase members and
+# a C++ test sequences them on folds that share one hub.
+# +++++++++++++++++++++++++++++++++++++++++
+
+set(ports_abi_target plugins_test_plugin_ports_abi)
+add_executable(${ports_abi_target} test_plugin_ports_abi.cpp
+                                   ports_abi_c_consumer.c)
+target_include_directories(${ports_abi_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(${ports_abi_target} PRIVATE doctest::doctest dftracer_utils
+                                                  testing_utilities)
+target_enable_coroutine(${ports_abi_target})
+target_set_warnings(${ports_abi_target})
+set_target_properties(${ports_abi_target} PROPERTIES OUTPUT_NAME test_plugin_ports_abi
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+add_test(NAME plugins/test_plugin_ports_abi COMMAND ${ports_abi_target})
 
 # +++++++++++++++++++++++++++++++++++++++++
 # ABI gate: real .so files loaded by plugins/test_plugin_abi_gate through a
@@ -246,6 +266,10 @@ foreach(cxx_plugin builder_plugin config_keys_plugin reads_projection_plugin
                              PRIVATE ${CMAKE_SOURCE_DIR}/include
                                      ${CMAKE_BINARY_DIR}/include)
   target_enable_coroutine(${cxx_plugin})
+  # GCC binds the statics of inline functions and templates as GNU unique
+  # symbols, which keep a plugin mapped after the host unloads it.
+  target_compile_options(${cxx_plugin}
+                         PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fno-gnu-unique>)
 endforeach()
 
 # It reads the batch dataframe and runs its own registered op, so it links the
@@ -470,6 +494,15 @@ if(TARGET plugins_test_example_csv_reader AND TARGET csv_reader_plugin)
     CSV_READER_CHUNKS_CSV="${CMAKE_SOURCE_DIR}/examples/plugins/tests/csv_reader/data/chunks.csv"
   )
   add_dependencies(plugins_test_example_csv_reader csv_reader_plugin)
+endif()
+
+if(TARGET plugins_test_example_two_phase_normalize
+   AND TARGET two_phase_normalize_plugin)
+  target_compile_definitions(
+    plugins_test_example_two_phase_normalize PRIVATE
+    TWO_PHASE_NORMALIZE_PLUGIN_PATH="$<TARGET_FILE:two_phase_normalize_plugin>")
+  add_dependencies(plugins_test_example_two_phase_normalize
+                   two_phase_normalize_plugin)
 endif()
 
 if(TARGET plugins_test_example_sessionize AND TARGET sessionize_plugin)

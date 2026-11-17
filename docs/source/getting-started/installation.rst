@@ -47,10 +47,14 @@ build dirs land under ``build/build-<preset>/``).
    cmake --preset dev            # RelWithDebInfo, shared + static, no Python
    cmake --build --preset dev
 
-The build produces ten layered component libraries, each as shared and static:
+The build produces layered component libraries, each as shared and static.
+The main ones:
 
 - ``dftracer_utils_runtime``, the async runtime (coroutines, tasks, I/O backend,
   pipelines, common primitives).
+- ``dftracer_utils_comm``, the distributed transports (the transport interface,
+  the local transport, the MPI helpers and the MPI transport). MPI is linked
+  only by this library.
 - ``dftracer_utils_store``, the key-value store engine (data files, writer, snapshot).
 - ``dftracer_utils_fileio``, file formats (gzip readers and writers, line
   streams, parallel writers, hashing).

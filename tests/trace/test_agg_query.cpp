@@ -8,6 +8,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/domains/analysis/comparator/comparison_aggregation.h>
 #include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -1402,10 +1403,10 @@ TEST_SUITE("AggQuery") {
         const auto timed = [&](std::size_t workers, AggQueryResult& out) {
             AggQuery q = make_query(*fx, ask, FIVE_SECONDS_US);
             q.workers = workers;
-            const auto t0 = std::chrono::steady_clock::now();
+            const auto t0 = dstd::steady_now();
             out = run(q);
             return std::chrono::duration<double, std::milli>(
-                       std::chrono::steady_clock::now() - t0)
+                       dstd::steady_now() - t0)
                 .count();
         };
         AggQueryResult serial, parallel;

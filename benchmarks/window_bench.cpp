@@ -12,6 +12,7 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -69,7 +70,9 @@ DataFrame make_frame(std::int64_t n) {
         s[i] = dstd::fmt<"str{}">(rng() % DISTINCT_STRINGS);
     }
     DataFrame d;
-    d.names = {"key", "ts", "v", "by", "s"};
+    d.names = {dstd::SharedString("key"), dstd::SharedString("ts"),
+               dstd::SharedString("v"), dstd::SharedString("by"),
+               dstd::SharedString("s")};
     d.columns.push_back(Series::flat_i64(key.data(), n));
     d.columns.push_back(Series::flat_i64(ts.data(), n));
     d.columns.push_back(Series::flat_f64(v.data(), n));
@@ -120,10 +123,10 @@ int main(int argc, char** argv) {
                     make_spec(c, mode, width)};
                 dftracer::utils::dstd::Vector<double> ms;
                 for (int r = 0; r < reps; ++r) {
-                    const auto t0 = std::chrono::steady_clock::now();
+                    const auto t0 = dstd::steady_now();
                     DataFrame out = dftu::bench::ok(
                         dataframe::window(frame, part, order, specs));
-                    const auto t1 = std::chrono::steady_clock::now();
+                    const auto t1 = dstd::steady_now();
                     ms.push_back(
                         std::chrono::duration<double, std::milli>(t1 - t0)
                             .count());

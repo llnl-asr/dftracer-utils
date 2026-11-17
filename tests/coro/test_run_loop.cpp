@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -53,13 +54,16 @@ coro::CoroTask<int> produce_consume(int producers, int per_producer) {
                          per_producer]() mutable -> coro::CoroTask<void> {
                 auto guard = ch.guard();
                 for (int i = 0; i < per_producer; ++i) {
-                    if (!co_await ch.send(1)) co_return;
+                    auto send_result = co_await ch.send(1);
+                    if (!send_result) co_return;
                 }
             });
         }
 
         scope.spawn([&channel, &total]() -> coro::CoroTask<void> {
-            while (auto item = co_await channel->receive()) {
+            while (true) {
+                auto item = co_await channel->receive();
+                if (!item) break;
                 total += *item;
             }
         });
@@ -175,9 +179,8 @@ TEST_SUITE("RunLoop") {
         }).detach();
 
         // Wide, as Valgrind runs this file many times slower.
-        const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(60);
-        while (!finished.load() && std::chrono::steady_clock::now() < deadline)
+        const auto deadline = dstd::steady_now() + std::chrono::seconds(60);
+        while (!finished.load() && dstd::steady_now() < deadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(finished.load());
         CHECK(timed_out.load());

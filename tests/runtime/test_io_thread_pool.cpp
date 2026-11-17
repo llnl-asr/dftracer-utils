@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/io/io_thread_pool.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
@@ -24,9 +25,9 @@ namespace {
 
 template <class Pred>
 bool wait_until(Pred pred, std::chrono::milliseconds limit = 10s) {
-    const auto deadline = std::chrono::steady_clock::now() + limit;
+    const auto deadline = dstd::steady_now() + limit;
     while (!pred()) {
-        if (std::chrono::steady_clock::now() > deadline) return false;
+        if (dstd::steady_now() > deadline) return false;
         std::this_thread::sleep_for(1ms);
     }
     return true;
@@ -58,8 +59,8 @@ std::size_t process_threads() {
 std::size_t settled_threads() {
     std::size_t last = process_threads();
     int stable = 0;
-    const auto deadline = std::chrono::steady_clock::now() + 10s;
-    while (stable < 5 && std::chrono::steady_clock::now() < deadline) {
+    const auto deadline = dstd::steady_now() + 10s;
+    while (stable < 5 && dstd::steady_now() < deadline) {
         std::this_thread::sleep_for(10ms);
         const std::size_t now = process_threads();
         stable = now == last ? stable + 1 : 0;

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/cli/comm_args.h>
 #include <dftracer/utils/cli/common_cli.h>
+#include <dftracer/utils/comm/group.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/logging.h>
@@ -13,6 +15,7 @@
 #include <dftracer/utils/domains/workload/genesis/genesis.h>
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -36,11 +39,6 @@
 #include <tuple>
 #include <utility>
 
-#ifdef DFTRACER_UTILS_ENABLE_MPI
-#include <dftracer/utils/runtime/distributed/mpi_transport.h>
-#include <mpi.h>
-#endif
-
 using namespace dftracer::utils;
 
 // Part `index` of `count` of the run groups.
@@ -58,10 +56,12 @@ class GenDistArgParse : public cli::ArgParse {
     Shard shard;
     cli::RuntimeArgs runtime_args;
     cli::MemoryArgs memory;
+    cli::CommArgs comm_args;
 
     explicit GenDistArgParse(cli::ArgParser& p) : ArgParse(p) {
         schema(runtime_args);
         schema(memory);
+        schema(comm_args);
     }
 
    protected:
@@ -323,7 +323,10 @@ class Progress {
         print(now, last_group);
     }
 
-    std::int64_t elapsed_ms() const { return common::elapsed_ms(start_ms_); }
+    std::int64_t elapsed_ms() const {
+        return static_cast<std::int64_t>(dstd::steady_now_ns() / 1000000ULL) -
+               start_ms_;
+    }
 
     dstd::String prefix(std::int64_t now_ms) const {
         return dstd::fmt<"{} {}]">(
@@ -398,7 +401,7 @@ class Progress {
                               std::chrono::milliseconds(GROUP_INTERVAL).count())
             return;
         last_groups_ms_ = now_ms;
-        const std::int64_t now_ns = common::steady_now_ns();
+        const std::int64_t now_ns = dstd::steady_now_ns();
         for (std::size_t w = 0; w < workers_; ++w) {
             const Slot& s = slots_[w];
             const domains::workload::genesis::RunGroup* g = s.group.load();
@@ -429,7 +432,8 @@ class Progress {
     }
 
     const dstd::String tag_;
-    const std::int64_t start_ms_ = common::steady_now_ms();
+    const std::int64_t start_ms_ =
+        static_cast<std::int64_t>(dstd::steady_now_ns() / 1000000ULL);
     const std::size_t total_groups_;
     const std::uint64_t total_bytes_;
     const std::uint64_t budget_;
@@ -778,35 +782,45 @@ void print_summary(const Report& r, dstd::StringView output) {
                 cli::c_str(output), r.skips);
 }
 
-#ifdef DFTRACER_UTILS_ENABLE_MPI
-
-bool all_ranks(bool ok) {
-    int mine = ok ? 1 : 0;
-    int all = 0;
-    MPI_Allreduce(&mine, &all, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
-    return all == 1;
+bool all_ranks(comm::Group& world, bool ok) {
+    auto op = world.all_reduce<int>(ok ? 1 : 0, comm::ReduceOp::Min);
+    auto all = op.wait();
+    if (!all) {
+        DFTRACER_UTILS_LOG_ERROR("Rank agreement failed: {}",
+                                 all.error().c_str());
+        return false;
+    }
+    return *all == 1;
 }
 
 // Joins every rank's part into `output` in rank order: gzip members
 // concatenate into one valid file. Rank 0 sizes the file, then every rank
 // copies its part to its offset at the same time.
-int join_parts(dstd::StringView output, const dstd::String& part, int rank,
-               int size, bool ok, const Report& report) {
+int join_parts(comm::Group& world, dstd::StringView output,
+               const dstd::String& part, bool ok, const Report& report) {
+    const std::uint32_t rank = world.rank();
     const auto part_size = ok ? dstd::fs::file_size(dstd::PathView(part))
                               : dstd::Expected<std::uint64_t, dstd::Error>(0);
     const std::uint64_t mine = part_size ? *part_size : 0;
-    if (!all_ranks(ok && part_size)) {
+    if (!all_ranks(world, ok && part_size)) {
         dstd::fs::remove(dstd::PathView(part)).discard();
         return 1;
     }
-    dstd::Vector<std::uint64_t> sizes(static_cast<std::size_t>(size));
-    MPI_Allgather(&mine, 1, MPI_UINT64_T, sizes.data(), 1, MPI_UINT64_T,
-                  MPI_COMM_WORLD);
+    auto gather = world.all_gather<std::uint64_t>(
+        dstd::Span<const std::uint64_t>(&mine, 1));
+    auto sizes = gather.wait();
+    if (!sizes) {
+        DFTRACER_UTILS_LOG_ERROR("Cannot share the part sizes: {}",
+                                 sizes.error().c_str());
+        dstd::fs::remove(dstd::PathView(part)).discard();
+        return 1;
+    }
     std::uint64_t offset = 0;
     std::uint64_t total = 0;
-    for (int r = 0; r < size; ++r) {
-        if (r < rank) offset += sizes[static_cast<std::size_t>(r)];
-        total += sizes[static_cast<std::size_t>(r)];
+    for (std::uint32_t r = 0; r < world.size(); ++r) {
+        const std::uint64_t size = sizes->as<std::uint64_t>(r)[0];
+        if (r < rank) offset += size;
+        total += size;
     }
     bool made = true;
     if (rank == 0) {
@@ -815,7 +829,7 @@ int join_parts(dstd::StringView output, const dstd::String& part, int rank,
                                       .creation = dstd::Creation::AlwaysNew});
         made = file && file->resize(total);
     }
-    bool copied = all_ranks(made);
+    bool copied = all_ranks(world, made);
     if (copied) {
         auto file = dstd::File::open(dstd::PathView(output),
                                      {.access = dstd::Access::Write});
@@ -823,42 +837,27 @@ int join_parts(dstd::StringView output, const dstd::String& part, int rank,
         if (file && !file->close()) copied = false;
     }
     dstd::fs::remove(dstd::PathView(part)).discard();
-    copied = all_ranks(copied);
-    unsigned long long counts[2] = {report.runs, report.skips};
-    unsigned long long sums[2] = {0, 0};
-    MPI_Reduce(counts, sums, 2, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0,
-               MPI_COMM_WORLD);
-    if (rank != 0) return copied ? 0 : 1;
-    if (!copied) {
+    copied = all_ranks(world, copied);
+    const std::uint64_t counts[2] = {report.runs, report.skips};
+    auto reduction = world.reduce<std::uint64_t>(
+        0, dstd::Span<const std::uint64_t>(counts, 2), comm::ReduceOp::Sum);
+    auto sums = reduction.wait();
+    if (rank != 0) return copied && sums ? 0 : 1;
+    if (!copied || !sums) {
         DFTRACER_UTILS_LOG_ERROR("Cannot write {}", cli::c_str(output));
         dstd::fs::remove(dstd::PathView(output)).discard();
         return 1;
     }
-    print_summary(
-        {static_cast<std::size_t>(sums[0]), static_cast<std::size_t>(sums[1])},
-        output);
+    print_summary({static_cast<std::size_t>((*sums)[0]),
+                   static_cast<std::size_t>((*sums)[1])},
+                  output);
     return 0;
 }
 
-// Ranks on one node share its memory, so an automatic budget is split
-// between them.
-std::size_t node_ranks() {
-    int rank = 0;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm local = MPI_COMM_NULL;
-    MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, rank,
-                        MPI_INFO_NULL, &local);
-    int n = 1;
-    MPI_Comm_size(local, &n);
-    MPI_Comm_free(&local);
-    return static_cast<std::size_t>(std::max(1, n));
-}
-
-int run_mpi(GenDistArgParse& cli) {
-    int rank = 0;
-    int size = 1;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &size);
+int run_distributed(GenDistArgParse& cli) {
+    comm::Group world = cli.comm_args.world();
+    const std::uint32_t rank = world.rank();
+    const std::uint32_t size = world.size();
     if (size == 1) {
         Report report;
         const int rc = run_local(cli, cli.shard, cli.output, &report);
@@ -868,46 +867,28 @@ int run_mpi(GenDistArgParse& cli) {
     if (!cli.shard_text.empty()) {
         if (rank == 0)
             DFTRACER_UTILS_LOG_ERROR(
-                "--shard cannot be used with more than one MPI rank: the ranks "
+                "--shard cannot be used with more than one rank: the ranks "
                 "take their parts themselves");
         return 1;
     }
+    // Ranks on one node share its memory, so an automatic budget is split
+    // between them.
     if (cli.memory.memory_budget == 0)
         cli.memory.memory_budget = std::max<std::uint64_t>(
             memory::MIN_MEMORY_BUDGET_BYTES,
-            memory::resolve_spill_budget(0) / node_ranks());
-    const Shard shard{static_cast<std::size_t>(rank),
-                      static_cast<std::size_t>(size)};
+            memory::resolve_spill_budget(0) / cli.comm_args.node().size());
+    const Shard shard{rank, size};
     const dstd::String part = dstd::fmt<"{}.{}.part">(cli.output, rank);
     Report report;
     const int rc = run_local(cli, shard, part, &report);
-    return join_parts(cli.output, part, rank, size, rc == 0, report);
+    return join_parts(world, cli.output, part, rc == 0, report);
 }
-#endif
-
 }  // namespace
 
 int main(int argc, char** argv) {
-#ifdef DFTRACER_UTILS_ENABLE_MPI
-    MPI_Init(&argc, &argv);
-    distributed::set_local_thread_budget();
-#endif
-    const int rc = cli::cli_main<GenDistArgParse>(
+    return cli::cli_main<GenDistArgParse>(
         argc, argv, "dftracer_genesis_gen_dist",
         "Build per-call-path duration and counter distributions from genesis "
         "sweep traces into one combined .pfw.gz trace",
-        [](GenDistArgParse& cli) {
-#ifdef DFTRACER_UTILS_ENABLE_MPI
-            return run_mpi(cli);
-#else
-            Report report;
-            const int code = run_local(cli, cli.shard, cli.output, &report);
-            if (code == 0) print_summary(report, cli.output);
-            return code;
-#endif
-        });
-#ifdef DFTRACER_UTILS_ENABLE_MPI
-    MPI_Finalize();
-#endif
-    return rc;
+        [](GenDistArgParse& cli) { return run_distributed(cli); });
 }

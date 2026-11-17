@@ -789,7 +789,8 @@ coro::CoroTask<dstd::Result<void>> GzipLineWriter::cut() {
 }
 
 coro::CoroTask<dstd::Result<WriteSummary>> GzipLineWriter::close() {
-    co_return co_await close(dstd::StringView{});
+    const dstd::StringView no_tail{};
+    co_return co_await close(no_tail);
 }
 
 coro::CoroTask<dstd::Result<WriteSummary>> GzipLineWriter::close(

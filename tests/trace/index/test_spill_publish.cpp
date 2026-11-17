@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -44,11 +44,11 @@ dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
     std::uint64_t ts = 1000000;
     for (int i = 0; i < events; ++i) {
         ts += 7 + static_cast<std::uint64_t>(i % 13);
-        out += common::str_cat(R"({"id":)", i, R"(,"name":"op)", (i / 50) % 7,
-                               R"(","cat":"C)", i % 3, R"(","pid":)", 1 + i % 4,
-                               R"(,"tid":)", 10 + i % 4, R"(,"ph":"X","ts":)",
-                               ts, R"(,"dur":)", 5 + i % 97, R"(,"args":{"k)",
-                               i % 600, R"(":)", i % 50, "}}\n");
+        dstd::fmt_append<
+            "{\"id\":{},\"name\":\"op{}\",\"cat\":\"C{}\",\"pid\":{},\"tid\":{}"
+            ",\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{\"k{}\":{}}}\n">(
+            out, i, (i / 50) % 7, i % 3, 1 + i % 4, 10 + i % 4, ts, 5 + i % 97,
+            i % 600, i % 50);
     }
     out += "]\n";
     const auto plain = dir + "/" + name + ".pfw";

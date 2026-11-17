@@ -42,6 +42,7 @@
 //   yaml_read_bench --smoke
 
 #include <bench_ok.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -256,11 +257,11 @@ template <class Fn>
 Outcome measure(Fn&& fn) {
     const std::size_t before = memory::detail::Manager::get().stats().live;
     PeakSampler sampler;
-    const auto start = Clock::now();
+    const auto start = dstd::steady_now();
     Outcome outcome;
     fn(outcome.answer);
     outcome.seconds =
-        std::chrono::duration<double>(Clock::now() - start).count();
+        std::chrono::duration<double>(dstd::steady_now() - start).count();
     const std::size_t peak = sampler.finish();
     outcome.extra_bytes = peak > before ? peak - before : 0;
     return outcome;

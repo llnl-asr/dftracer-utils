@@ -218,7 +218,8 @@ dftracer::utils::plugins::Task write_via_writer(
     dftracer::utils::plugins::Writer w =
         co_await h.writer(path, 1, /*gzip=*/false);
     co_await w.open();
-    co_await w.chunk(0, dstd::StringView{"writer-chunk-payload\n"});
+    const dstd::StringView payload{"writer-chunk-payload\n"};
+    co_await w.chunk(0, payload);
     co_await w.close();
 }
 

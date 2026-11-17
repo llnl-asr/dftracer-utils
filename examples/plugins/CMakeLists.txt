@@ -203,6 +203,30 @@ elseif(TARGET dftracer_utils_dataframe::static)
                         PRIVATE dftracer_utils_dataframe::static)
 endif()
 
+# Declares a phase result that the host seeds with the earliest event time of the
+# whole input, and reads it from the first batch through the ports service.
+add_library(two_phase_normalize_plugin MODULE two_phase_normalize.cpp)
+target_set_warnings(two_phase_normalize_plugin)
+set_target_properties(
+  two_phase_normalize_plugin
+  PROPERTIES OUTPUT_NAME two_phase_normalize
+             PREFIX ""
+             POSITION_INDEPENDENT_CODE ON
+             CXX_STANDARD 20
+             CXX_STANDARD_REQUIRED ON
+             CXX_EXTENSIONS OFF)
+target_include_directories(two_phase_normalize_plugin
+                           PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_enable_coroutine(two_phase_normalize_plugin)
+# plugins::Batch/Event (plugin.h) resolve columns through the dataframe C ABI.
+if(TARGET dftracer_utils_dataframe::shared)
+  target_link_libraries(two_phase_normalize_plugin
+                        PRIVATE dftracer_utils_dataframe::shared)
+elseif(TARGET dftracer_utils_dataframe::static)
+  target_link_libraries(two_phase_normalize_plugin
+                        PRIVATE dftracer_utils_dataframe::static)
+endif()
+
 # Registers the provider "range_provider.numbers": a table built in code, with
 # its frames built through the dataframe C ABI.
 add_library(range_provider_plugin MODULE range_provider.cpp)
@@ -400,7 +424,8 @@ endif()
 install(TARGETS event_counter_plugin duration_histogram_plugin
                 duration_report_plugin duration_udfs_plugin stats_udafs_plugin
                 query_filter_plugin csv_sink_plugin csv_reader_plugin
-                sessionize_plugin range_provider_plugin
+                sessionize_plugin two_phase_normalize_plugin
+                range_provider_plugin
                 perbatch_producer_plugin perbatch_consumer_plugin
                 dur_stats_producer_plugin dur_stats_consumer_plugin
                 process_counts_plugin process_file_edges_plugin

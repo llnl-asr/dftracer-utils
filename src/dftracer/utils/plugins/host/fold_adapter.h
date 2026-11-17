@@ -31,6 +31,9 @@
 // one fused scan. A task on_finalize hands back is awaited by finalize.
 namespace dftracer::utils::plugins::host {
 
+class PortHub;
+class PortNames;
+
 // A host-owned object lent to the plugin as an opaque handle (a reader, a
 // writer); the fold keeps it until the plugin closes it or the fold ends.
 struct PluginHandle {
@@ -175,10 +178,21 @@ class PluginFold : public trace::views::detail::Fold {
     bool reads_every_field() const override { return true; }
 
     dstd::UniquePtr<Fold> slice() const override {
-        return dstd::make_unique<PluginFold>(plugin_, *intern_, results_,
-                                             named_results_, plugin_name_,
-                                             memory_budget_, states_, memory_);
+        auto fold = dstd::make_unique<PluginFold>(
+            plugin_, *intern_, results_, named_results_, plugin_name_,
+            memory_budget_, states_, memory_);
+        fold->bind_ports(port_hub_, port_namespace_);
+        return fold;
     }
+
+    /// Wires the ports that cross plugins: `hub` is the scan's, and
+    /// `port_namespace` is the name the plugin declared its channels under.
+    /// Null `hub` leaves those calls refused.
+    void bind_ports(PortHub* hub, dstd::String port_namespace);
+    PortHub* port_hub() const { return port_hub_; }
+    const dstd::String& port_namespace() const { return port_namespace_; }
+    /// The qualified names this plugin used; null with no hub.
+    PortNames* port_names() const { return port_names_.get(); }
 
     /// Name this plugin logs under (its load-path stem); empty if unknown.
     const dstd::String& plugin_name() const { return plugin_name_; }
@@ -199,6 +213,10 @@ class PluginFold : public trace::views::detail::Fold {
     // No-ops / NULL when no bus is bound (e.g. a unit test without the driver).
     void port_publish(std::uint64_t key, const void* data, std::uint32_t len) {
         if (port_bus_) port_bus_->publish(key, data, len);
+    }
+    bool has_port_bus() const { return port_bus_ != nullptr; }
+    std::size_t port_bus_bytes() const {
+        return port_bus_ ? port_bus_->size_bytes() : 0;
     }
     const void* port_consume(std::uint64_t key, std::uint32_t* out_size) const {
         if (port_bus_) return port_bus_->consume(key, out_size);
@@ -368,6 +386,9 @@ class PluginFold : public trace::views::detail::Fold {
     dstd::Optional<dstd::Error> slice_error_;
     dftu_plugin_host host_{};
     FoldPortBus* port_bus_ = nullptr;
+    PortHub* port_hub_ = nullptr;
+    dstd::UniquePtr<PortNames> port_names_;
+    dstd::String port_namespace_;
     SharedResultRegistry* results_ = nullptr;
     utils::plugins::NamedResultRegistry* named_results_ = nullptr;
     std::uint64_t memory_budget_ = 0;

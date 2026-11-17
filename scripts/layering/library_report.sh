@@ -21,6 +21,11 @@ names=$(awk '
 
 for name in $names; do
     f=$build/lib/lib$name.$ext
+    # The MPI backend of comm exists only in a build with MPI ON.
+    if [ "$name" = dftracer_utils_comm_mpi ] &&
+        ! grep -q '^DFTRACER_UTILS_ENABLE_MPI:BOOL=ON' "$build/CMakeCache.txt"; then
+        continue
+    fi
     if [ ! -e "$f" ]; then
         echo "library_report: $name is missing from $build/lib" >&2
         exit 1

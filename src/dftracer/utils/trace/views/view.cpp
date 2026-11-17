@@ -65,6 +65,12 @@ void ViewSession::attach_fold_factory(
     detail::add_fold_factory(*state_, std::move(make), std::move(finalize));
 }
 
+void ViewSession::attach_pre_scan(
+    dstd::Function<coro::CoroTask<dstd::Result<void>>(const detail::ScanPlan&)>
+        pre) {
+    detail::add_pre_scan(*state_, std::move(pre));
+}
+
 dstd::Optional<Query> ViewSession::pushable(const FieldExpr& predicate) {
     auto query = predicate.to_duql();
     if (!query) {

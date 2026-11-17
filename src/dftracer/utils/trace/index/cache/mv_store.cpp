@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -310,12 +311,7 @@ void touch_last_used(dstd::StringView dir) {
                                        .mode = 0666});
     if (!file) return;
     file->close().discard();
-    const auto now = std::chrono::system_clock::now().time_since_epoch();
-    dstd::fs::set_mtime_ns(
-        path.view(),
-        static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()))
-        .discard();
+    dstd::fs::set_mtime_ns(path.view(), dstd::system_now_ns()).discard();
 }
 
 // Removes the least recently used views under `root` until they hold at most

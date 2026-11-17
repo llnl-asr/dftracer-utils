@@ -57,7 +57,7 @@ typedef struct dftu_agg_col {
 
    Each callback takes the host's @ref dftu_ctx first and returns a
    @ref dftu_status; a negative status fails the scan with the message the
-   plugin set through @ref dftu_fail. */
+   plugin set on its context. */
 typedef struct dftu_state_desc {
     uint32_t struct_size; /**< sizeof(dftu_state_desc) */
     /** Registry key; must be `<plugin>.<name>` and outlive the registration.

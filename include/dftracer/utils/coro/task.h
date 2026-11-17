@@ -150,6 +150,26 @@ TaskResult<T> stopped_result() {
 }
 }  // namespace detail
 
+/// One flag of a chain that cancels a task and every task it awaits. A task
+/// that owns a flag, such as a task of the plugin ABI, makes a node for it, and
+/// @ref PromiseBase::launch links the node to the awaiter's chain, so a cancel
+/// of an outer task reaches the inner ones. The node must outlive the task.
+struct CancelLink {
+    explicit CancelLink(const std::atomic<bool>* f) noexcept : flag(f) {}
+
+    const std::atomic<bool>* flag;
+    /// Set once by the launch of the task that holds the node, before the task
+    /// runs.
+    mutable const CancelLink* parent{nullptr};
+
+    bool requested() const noexcept {
+        for (const CancelLink* l = this; l != nullptr; l = l->parent) {
+            if (l->flag->load(std::memory_order_acquire)) return true;
+        }
+        return false;
+    }
+};
+
 struct PromiseBase : detail::FrameAllocation {
     std::atomic<bool> awaiting_async{false};
     /// Set (release) when the coroutine reaches its final suspend, so a thread
@@ -187,6 +207,12 @@ struct PromiseBase : detail::FrameAllocation {
     detail::ParentEnd parent_end{nullptr};
     PromiseBase* root_promise{nullptr};
     detail::RunContext context;
+    /// A chain of flags that cancel this task and every task it awaits, with no
+    /// scope or stop source behind it. A task that owns a node sets it before
+    /// it is awaited, and its launch links the node to the awaiter's chain; an
+    /// awaited task with no node takes its awaiter's chain. Kept after the hot
+    /// fields so they keep their offsets.
+    const CancelLink* cancel_link{nullptr};
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
     void* trace_handle{nullptr};  ///< logging::coro_trace enter/leave handle
     const char* trace_file{nullptr};  ///< coroutine definition site
@@ -206,6 +232,7 @@ struct PromiseBase : detail::FrameAllocation {
                root->cancel_flag.load(std::memory_order_acquire) ||
                (root->cancel_source &&
                 root->cancel_source->load(std::memory_order_acquire)) ||
+               (cancel_link && cancel_link->requested()) ||
                (root->scope && detail::scope_stopping(*root->scope));
     }
 
@@ -618,6 +645,12 @@ class CoroTask {
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* awaiting_root = awaiting_coro.promise().get_root_promise();
             p.set_root_promise(awaiting_root);
+            const CancelLink* outer = awaiting_coro.promise().cancel_link;
+            if (p.cancel_link == nullptr) {
+                p.cancel_link = outer;
+            } else if (p.cancel_link->parent == nullptr) {
+                p.cancel_link->parent = outer;
+            }
             awaiter_executor = awaiting_coro.promise().get_executor();
         }
         if (awaiter_executor == nullptr)

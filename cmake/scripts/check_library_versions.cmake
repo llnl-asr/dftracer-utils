@@ -9,7 +9,8 @@
 # memory and dstd, coro needs only memory, dstd and common, fileio needs only memory,
 # dstd, common, coro, runtime and json, yaml needs only memory, dstd and common,
 # trace needs everything but plugins and domains, plugins needs everything but
-# domains, and json and duql do not need runtime.
+# domains, json and duql do not need runtime, and comm_mpi needs only memory,
+# dstd, common, coro, runtime and comm.
 # Library names come from the create_library NAME arguments in
 # src/CMakeLists.txt.
 #
@@ -44,6 +45,10 @@ foreach(_call ${_calls})
   string(REGEX REPLACE ".*NAME[ \t\r\n]+" "" _name "${_call}")
   list(APPEND _names "${_name}")
 endforeach()
+# Libraries this build does not make, such as the MPI backend of comm.
+if(SKIP_LIBS)
+  list(REMOVE_ITEM _names ${SKIP_LIBS})
+endif()
 list(LENGTH _names _count)
 if(_count EQUAL 0)
   message(FATAL_ERROR "no create_library NAME found in src/CMakeLists.txt")
@@ -235,6 +240,29 @@ foreach(_name ${_names})
       message(SEND_ERROR "${_name}: needs ${_above_runtime}, but store needs only memory, dstd, common, coro and runtime")
       set(_failed TRUE)
     endif()
+  endif()
+  if(_name STREQUAL "dftracer_utils_comm")
+    set(_above_comm ${_needed})
+    list(REMOVE_ITEM _above_comm "dftracer_utils_memory" "dftracer_utils_dstd"
+         "dftracer_utils_common" "dftracer_utils_coro" "dftracer_utils_runtime")
+    if(_above_comm)
+      message(SEND_ERROR "${_name}: needs ${_above_comm}, but comm needs only memory, dstd, common, coro and runtime")
+      set(_failed TRUE)
+    endif()
+  endif()
+  if(_name STREQUAL "dftracer_utils_comm_mpi")
+    set(_above_comm_mpi ${_needed})
+    list(REMOVE_ITEM _above_comm_mpi "dftracer_utils_memory" "dftracer_utils_dstd"
+         "dftracer_utils_common" "dftracer_utils_coro" "dftracer_utils_runtime"
+         "dftracer_utils_comm")
+    if(_above_comm_mpi)
+      message(SEND_ERROR "${_name}: needs ${_above_comm_mpi}, but comm_mpi needs only memory, dstd, common, coro, runtime and comm")
+      set(_failed TRUE)
+    endif()
+  endif()
+  if(_name STREQUAL "dftracer_utils_runtime" AND "dftracer_utils_comm" IN_LIST _needed)
+    message(SEND_ERROR "${_name}: needs dftracer_utils_comm, but runtime is below comm")
+    set(_failed TRUE)
   endif()
   if(_name STREQUAL "dftracer_utils_fileio")
     set(_above_fileio ${_needed})

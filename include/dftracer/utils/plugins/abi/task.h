@@ -125,13 +125,39 @@ typedef struct dftu_svc_task {
        such as on an error path; the task never runs. A task already handed
        back must not be discarded. */
     void (*discard)(void* h, dftu_task* t);
-    /** Block the caller until `t` ends, free it in every case and return its
-       status: DFTU_OK, DFTU_END, or a negative status whose message is set
+    /** Block the caller until `t` ends, drop the owner's reference in every
+       case (which frees the task unless another thread retained it) and return
+       its status: DFTU_OK, DFTU_END, or a negative status whose message is set
        on `ctx` (NULL `ctx` drops the message). For code that has no host to
        await with, such as a node's cursor pulling its input. Uses no state of
        `h`, so a plugin may keep the service pointer and its `h` after the
        factory returns. Safe on a pool worker. */
     dftu_status (*run)(dftu_ctx* ctx, void* h, dftu_task* t);
+    /** Whether `t` has finished, without waiting: 1 when it has, 0 when it has
+       not, DFTU_E_INVALID for NULL. Uses no state of `h`. Safe from any
+       thread while the caller holds a reference, also while another thread
+       awaits the task. */
+    dftu_status (*test)(void* h, const dftu_task* t);
+    /** Ask `t` to stop and return at once; it never waits. The task still
+       completes exactly once, with DFTU_OK if it had nearly finished,
+       DFTU_E_CANCELLED, or another error, and the owner still awaits and
+       frees it. A task that already finished ignores the call. Uses no state
+       of `h`. Safe from any thread, while the caller holds a reference to `t`
+       (see retain). The call may complete the task on another thread, which
+       releases its reference; the task stays valid until the caller's own
+       reference is released, so the call cannot touch freed memory. */
+    void (*cancel)(void* h, dftu_task* t);
+    /** Add a reference to `t`. A task starts with one reference, the owner's.
+       The thread that holds a reference may call retain, then hand `t` to
+       another thread, which may call test and cancel on it and must call
+       release when it is done. Call retain before the handoff, never from the
+       other thread. Uses no state of `h`. */
+    void (*retain)(void* h, dftu_task* t);
+    /** Drop one reference to `t`; the last one frees it. run, which frees the
+       task in every case, drops the owner's reference. cancel, test and retain
+       may be called only while the caller holds a reference; the task must
+       not be used after the caller's own release. Uses no state of `h`. */
+    void (*release)(void* h, dftu_task* t);
 } dftu_svc_task;
 
 #ifdef __cplusplus

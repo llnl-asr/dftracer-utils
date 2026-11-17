@@ -8,6 +8,7 @@
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/host/plugin_library.h>
 #include <dftracer/utils/plugins/host/plugin_memory.h>
+#include <dftracer/utils/plugins/host/port_plan.h>
 #include <dftracer/utils/plugins/host/state_registry.h>
 
 #include <utility>
@@ -150,7 +151,14 @@ class BuildHost {
         return registered_index_extensions_;
     }
 
+    /// The channel ends and phase results the factory declared through
+    /// dftu_svc_ports, moved out once it returns.
+    PortDecls take_ports() { return std::move(ports_); }
+
+    PortDecls& ports() { return ports_; }
+
    private:
+    PortDecls ports_;
     dstd::SharedPtr<PluginLibrary> library_;
     dstd::String plugin_name_;
     dstd::String declared_name_;

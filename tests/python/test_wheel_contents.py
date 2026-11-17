@@ -35,6 +35,7 @@ REQUIRED_PATTERNS = (
     "dftracer/lib/libdftracer_utils_common",
     "dftracer/lib/libdftracer_utils_coro",
     "dftracer/lib/libdftracer_utils_runtime",
+    "dftracer/lib/libdftracer_utils_comm",
     "dftracer/lib/libdftracer_utils_store",
     "dftracer/lib/libdftracer_utils_fileio",
     "dftracer/lib/libdftracer_utils_json",

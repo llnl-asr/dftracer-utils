@@ -530,6 +530,10 @@ class PluginBuilder {
         return *this;
     }
 
+    /// Channels between plugins and phase results, declared from the factory;
+    /// see plugin/ports.h.
+    class Ports ports() const;
+
     /// Register a dataframe op, which must be named `<plugin>.<name>`.
     PluginBuilder& op(const OpSpec& spec) {
         const dftu_svc_ops* ops = ext<dftu_svc_ops>(DFTU_SVC_OPS);

@@ -26,6 +26,7 @@
 #include <bench_ok.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function_ref.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -109,10 +110,9 @@ void run_scoped(Fn fn) {
 }
 
 double seconds(dstd::FunctionRef<void()> f) {
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto t0 = dstd::steady_now();
     f();
-    return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
-        .count();
+    return std::chrono::duration<double>(dstd::steady_now() - t0).count();
 }
 
 double median(dstd::Vector<double> v) {
@@ -204,7 +204,9 @@ coro::CoroTask<QuerySet> sample_queries(dstd::String file) {
     auto gen =
         fileio::lines::sources::async_streaming_gz_lines(std::move(file));
     int seen = 0;
-    while (auto next = co_await gen.next()) {
+    while (true) {
+        auto next = co_await gen.next();
+        if (!next) break;
         if (!*next) dftu::bench::fail(next->error());
         dstd::StringView l = (*next)->content;
         while (!l.empty() && (l.back() == ',' || l.back() == ' '))
@@ -283,7 +285,9 @@ coro::CoroTask<dstd::Map<dstd::String, dstd::String>> sample_genesis(
     auto gen =
         fileio::lines::sources::async_streaming_gz_lines(std::move(file));
     int seen = 0;
-    while (auto next = co_await gen.next()) {
+    while (true) {
+        auto next = co_await gen.next();
+        if (!next) break;
         if (!*next) dftu::bench::fail(next->error());
         dstd::StringView l = (*next)->content;
         simdjson::dom::object o;

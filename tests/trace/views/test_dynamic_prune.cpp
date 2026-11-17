@@ -173,7 +173,11 @@ coro::CoroTask<std::uint64_t> scan_unit_events(ScanUnit unit,
     const ViewScannerInput input =
         make_scanner_input(unit, vdef, dstd::nullopt);
     auto gen = dftu_utils_test::ok_items(scanner(input));
-    while (auto batch = co_await gen.next()) matched += batch->events_matched;
+    while (true) {
+        auto batch = co_await gen.next();
+        if (!batch) break;
+        matched += batch->events_matched;
+    }
     co_return matched;
 }
 

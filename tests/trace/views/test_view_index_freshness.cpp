@@ -89,9 +89,9 @@ resolve_files(dstd::Vector<dstd::String> files) {
     in.require_checkpoints = true;
     dftracer::utils::trace::index::build::ResolverResult result;
     co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        result = dftu_utils_test::ok(
-            co_await dftracer::utils::trace::index::build::Resolver{}(scope,
-                                                                      in));
+        dftracer::utils::trace::index::build::Resolver resolver;
+        auto op = resolver(scope, in);
+        result = dftu_utils_test::ok(co_await op);
     });
     co_return result;
 }

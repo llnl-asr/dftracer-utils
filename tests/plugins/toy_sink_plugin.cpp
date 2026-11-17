@@ -95,6 +95,14 @@ class ToySink : public plugins::Sink {
 
 }  // namespace
 
+extern "C" {
+DFTU_PLUGIN_EXPORT void toy_sink_stats(std::int64_t* out);
+DFTU_PLUGIN_EXPORT const char* toy_sink_option_key();
+DFTU_PLUGIN_EXPORT const char* toy_sink_option_value();
+DFTU_PLUGIN_EXPORT const std::int64_t* toy_sink_rows();
+DFTU_PLUGIN_EXPORT std::int64_t toy_sink_row_count();
+}
+
 extern "C" DFTU_PLUGIN_EXPORT void toy_sink_stats(std::int64_t* out) {
     out[0] = g_made;
     out[1] = g_killed;

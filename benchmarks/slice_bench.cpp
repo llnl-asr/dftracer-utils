@@ -49,6 +49,7 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -220,14 +221,14 @@ double slice_loop(const Series& col,
                   const dftracer::utils::dstd::Vector<std::int64_t>& at,
                   std::int64_t len, std::size_t ops) {
     std::int64_t rows = 0;
-    auto start = Clock::now();
+    auto start = dstd::steady_now();
     for (std::size_t i = 0; i < ops; ++i) {
         dftu_series* s =
             dftu_series_slice(col.handle(), at[i % OFFSET_TABLE], len);
         rows += dftu_series_length(s);
         dftu_series_free(s);
     }
-    auto end = Clock::now();
+    auto end = dstd::steady_now();
     check(rows == len * static_cast<std::int64_t>(ops), "slice length");
     return elapsed_ns(start, end) / static_cast<double>(ops);
 }
@@ -248,7 +249,7 @@ double slice_depth4(const Scale& s) {
     std::int64_t sum = 0;
     std::int64_t expect = 0;
     const auto* base = col.data<std::int64_t>();
-    auto start = Clock::now();
+    auto start = dstd::steady_now();
     for (std::size_t i = 0; i < s.nested_ops; ++i) {
         std::int64_t o = at[i % OFFSET_TABLE];
         std::int64_t step = static_cast<std::int64_t>(i % 7);
@@ -262,7 +263,7 @@ double slice_depth4(const Scale& s) {
         dftu_series_free(b);
         dftu_series_free(a);
     }
-    auto end = Clock::now();
+    auto end = dstd::steady_now();
     for (std::size_t i = 0; i < s.nested_ops; ++i) {
         expect +=
             base[at[i % OFFSET_TABLE] + 3 * static_cast<std::int64_t>(i % 7)];
@@ -305,13 +306,13 @@ DataFrame wide_frame(std::int64_t rows, bool nullable) {
 double head_tail(const Scale& s) {
     DataFrame frame = wide_frame(s.big_rows, false);
     std::int64_t rows = 0;
-    auto start = Clock::now();
+    auto start = dstd::steady_now();
     for (std::size_t i = 0; i < s.head_ops; ++i) {
         DataFrame part =
             (i & 1) != 0 ? frame.tail(s.slice_size) : frame.head(s.slice_size);
         rows += part.num_rows();
     }
-    auto end = Clock::now();
+    auto end = dstd::steady_now();
     check(rows == s.slice_size * static_cast<std::int64_t>(s.head_ops),
           "head tail rows");
     return elapsed_ns(start, end) / static_cast<double>(s.head_ops);
@@ -323,12 +324,12 @@ double filter_half(const Scale& s) {
         static_cast<std::size_t>((s.big_rows + 7) / 8), 0x55);
     Series mask = Series::flat(TypeId::Bool, bits.data(), s.big_rows);
     std::int64_t rows = 0;
-    auto start = Clock::now();
+    auto start = dstd::steady_now();
     for (std::size_t i = 0; i < s.filter_ops; ++i) {
         Series kept = col.filter(mask);
         rows += kept.length();
     }
-    auto end = Clock::now();
+    auto end = dstd::steady_now();
     check(rows == (s.big_rows / 2) * static_cast<std::int64_t>(s.filter_ops),
           "filter rows");
     return elapsed_ns(start, end) / static_cast<double>(s.filter_ops);
@@ -343,7 +344,7 @@ double concat_slices(const Scale& s) {
     const char* names[] = {"i", "s"};
     dftracer::utils::dstd::Vector<dftu_dataframe*> parts(s.concat_parts);
     std::int64_t rows = 0;
-    auto start = Clock::now();
+    auto start = dstd::steady_now();
     for (std::size_t rep = 0; rep < s.concat_ops; ++rep) {
         for (std::size_t p = 0; p < s.concat_parts; ++p) {
             std::int64_t o = at[(rep * s.concat_parts + p) % OFFSET_TABLE];
@@ -358,7 +359,7 @@ double concat_slices(const Scale& s) {
         dftu_dataframe_free(all);
         for (dftu_dataframe* p : parts) dftu_dataframe_free(p);
     }
-    auto end = Clock::now();
+    auto end = dstd::steady_now();
     check(
         rows == len * static_cast<std::int64_t>(s.concat_parts * s.concat_ops),
         "concat rows");
@@ -368,7 +369,7 @@ double concat_slices(const Scale& s) {
 double arrow_round_trip(const Scale& s) {
     DataFrame frame = wide_frame(s.op_rows, true);
     std::int64_t rows = 0;
-    auto start = Clock::now();
+    auto start = dstd::steady_now();
     for (std::size_t i = 0; i < s.arrow_ops; ++i) {
         auto out = arrow::to_arrow(frame);
         check(static_cast<bool>(out), "arrow export");
@@ -377,7 +378,7 @@ double arrow_round_trip(const Scale& s) {
         rows +=
             back->num_rows() * static_cast<std::int64_t>(back->num_columns());
     }
-    auto end = Clock::now();
+    auto end = dstd::steady_now();
     check(rows == 3 * s.op_rows * static_cast<std::int64_t>(s.arrow_ops),
           "arrow round trip rows");
     return elapsed_ns(start, end) / static_cast<double>(s.arrow_ops);
@@ -400,9 +401,9 @@ DataFrame key_frame(std::int64_t rows, std::int64_t groups) {
 
 template <class Op>
 double repeat_op(std::size_t reps, Op op) {
-    auto start = Clock::now();
+    auto start = dstd::steady_now();
     for (std::size_t i = 0; i < reps; ++i) op();
-    auto end = Clock::now();
+    auto end = dstd::steady_now();
     return elapsed_ns(start, end) / static_cast<double>(reps);
 }
 

@@ -288,6 +288,12 @@ void add_fold_factory(
         make,
     dstd::Function<dstd::Result<void>()> finalize);
 
+/// Runs `pre` with the session's base plan at the start of run_session, before
+/// any branch is served or scanned; its error ends the session.
+void add_pre_scan(
+    ViewSessionState& state,
+    dstd::Function<coro::CoroTask<dstd::Result<void>>(const ScanPlan&)> pre);
+
 /// Keeps `error` as the first error of the session, unless it holds one; the
 /// session's execute ends with it before it scans.
 void keep_session_error(ViewSessionState& state, dstd::Error error);

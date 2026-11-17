@@ -4,6 +4,7 @@
 #include <dftracer/utils/cli/common_cli.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/time.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
@@ -65,7 +66,7 @@ TEST_CASE("a watchdog timeout stops the task and raises a timeout error") {
     cli::WatchdogArgs watchdog;
     watchdog.global_timeout = 1;
     watchdog.interval = 1;
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = dstd::steady_now();
     auto result =
         cli::run_on_pool("slow", small_runtime(), watchdog,
                          [](coro::Scope&) -> coro::CoroTask<void> {
@@ -75,14 +76,14 @@ TEST_CASE("a watchdog timeout stops the task and raises a timeout error") {
     CHECK(result.error().is(dstd::Condition::Timeout));
     CHECK(dstd::StringView(result.error().c_str()).find("Global timeout") !=
           dstd::StringView::npos);
-    CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(30));
+    CHECK(dstd::steady_now() - start < std::chrono::seconds(30));
 }
 
 TEST_CASE("a watchdog task timeout names the task and stops it") {
     cli::WatchdogArgs watchdog;
     watchdog.task_timeout = 1;
     watchdog.interval = 1;
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = dstd::steady_now();
     auto result =
         cli::run_on_pool("slow_task", small_runtime(), watchdog,
                          [](coro::Scope&) -> coro::CoroTask<void> {
@@ -92,7 +93,7 @@ TEST_CASE("a watchdog task timeout names the task and stops it") {
     CHECK(result.error().is(dstd::Condition::Timeout));
     CHECK(dstd::StringView(result.error().c_str())
               .find("Task 'slow_task' timed out") != dstd::StringView::npos);
-    CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(30));
+    CHECK(dstd::steady_now() - start < std::chrono::seconds(30));
 }
 
 TEST_CASE("a watchdog timeout raises for a body that gives a value") {

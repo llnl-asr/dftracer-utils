@@ -158,7 +158,8 @@ members:
    flux queue drain
    cat part-0.pfw.gz part-1.pfw.gz part-2.pfw.gz part-3.pfw.gz > genesis.pfw.gz
 
-A build with ``DFTRACER_UTILS_ENABLE_MPI=ON`` splits the groups between its
+Under an MPI launcher, with the MPI backend library available (built with
+``DFTRACER_UTILS_ENABLE_MPI=ON``), the tool splits the groups between its
 ranks without ``--shard``, which it refuses with more than one rank. Rank
 ``r`` of ``N`` takes part ``r``, writes it to ``<output>.<r>.part``, and the
 ranks then copy their parts into ``-o`` at their offsets at the same time and

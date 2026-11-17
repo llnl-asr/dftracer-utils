@@ -20,6 +20,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/map.h>
@@ -669,7 +670,9 @@ dstd::Set<dstd::String> registry_ops() {
 coro::CoroTask<std::int64_t> drain_count(LazyFrame lf) {
     std::int64_t n = 0;
     auto g = lf.stream(BATCH_SIZE);
-    while (auto df = co_await g.next()) {
+    while (true) {
+        auto df = co_await g.next();
+        if (!df) break;
         if (!*df) {
             std::fprintf(stderr, "stream failed: %s\n", df->error().c_str());
             co_return -1;
@@ -717,7 +720,7 @@ constexpr std::size_t MAX_PARALLEL_CHILDREN = 4;
 // Runs on worker threads, so it makes no assertion. The caller checks `piped`
 // and `forked`.
 ChildResult run_child(const dstd::String& op) {
-    const auto started = std::chrono::steady_clock::now();
+    const auto started = dstd::steady_now();
     ChildResult r;
     int fds[2];
     pid_t pid;
@@ -753,8 +756,7 @@ ChildResult run_child(const dstd::String& op) {
     char buf[256];
     bool timed_out = false;
     for (;;) {
-        const auto left =
-            CHILD_TIMEOUT - (std::chrono::steady_clock::now() - started);
+        const auto left = CHILD_TIMEOUT - (dstd::steady_now() - started);
         if (left <= std::chrono::steady_clock::duration::zero()) {
             timed_out = true;
             break;
@@ -782,9 +784,8 @@ ChildResult run_child(const dstd::String& op) {
     int status = 0;
     struct rusage ru{};
     ::wait4(pid, &status, 0, &ru);
-    r.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() -
-                                              started)
-                    .count();
+    r.seconds =
+        std::chrono::duration<double>(dstd::steady_now() - started).count();
     r.status = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
     if (timed_out) r.status = -2;
 #if defined(__APPLE__)

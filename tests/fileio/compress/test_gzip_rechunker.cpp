@@ -57,7 +57,9 @@ dstd::Pair<dstd::String, dstd::Vector<char>> decode_members(
     dstd::Vector<char> last_bytes;
     dftu_utils_test::ok([&]() -> dftracer::utils::coro::CoroTask<void> {
         auto gen = fileio::compress::decode_gzip_members(fd, size);
-        while (auto chunk = co_await gen.next()) {
+        while (true) {
+            auto chunk = co_await gen.next();
+            if (!chunk) break;
             REQUIRE(*chunk);
             const dstd::StringView bytes = **chunk;
             last_bytes.push_back(bytes.empty() ? '\0' : bytes.back());

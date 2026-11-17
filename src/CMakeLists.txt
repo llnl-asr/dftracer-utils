@@ -39,6 +39,7 @@ set(DFTU_PC_PRIVATE_common "-lpthread")
 if(DFTRACER_UTILS_HAVE_LUSTREAPI)
   set(DFTU_PC_PRIVATE_common "${DFTU_PC_PRIVATE_common} -llustreapi")
 endif()
+set(DFTU_PC_PRIVATE_comm "")
 set(DFTU_PC_PRIVATE_json "-lsimdjson")
 set(DFTU_PC_PRIVATE_fileio "-ldftracer_utils_zlib -ldeflate")
 set(DFTU_PC_PRIVATE_store "-ldeflate -lzstd")
@@ -211,6 +212,38 @@ if(DFTRACER_UTILS_HAVE_KQUEUE)
 endif()
 
 # -----------------------------------------
+# Comm library sources
+# -----------------------------------------
+
+set(DFTRACER_UTILS_COMM_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/codec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/bulk.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/channel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/group.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/detail/observe.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/loader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/local.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/bulk_support.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/local_bulk.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/message_bulk.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/linear_collectives.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/fault_messaging.cpp)
+
+# The MPI backend is its own library, loaded at run time by comm. The stamp
+# names this configure, so a comm_mpi built by another one is refused.
+string(TIMESTAMP DFTU_COMM_STAMP_TIME "%Y%m%d%H%M%S")
+set(DFTU_COMM_BUILD_STAMP "${PROJECT_VERSION}-${DFTU_COMM_STAMP_TIME}"
+    CACHE INTERNAL "The stamp of this configure of comm")
+set(DFTRACER_UTILS_COMM_MPI_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/bootstrap.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/c_api.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/collectives.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/messaging.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/mpi_backend.cpp)
+
+# -----------------------------------------
 # Utilities library sources
 # -----------------------------------------
 
@@ -287,6 +320,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/cache/cache_store.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/cache/lookup_store.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/cache/mv_store.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/cache/phase_seed_store.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/cache/rollup_store.cpp
 )
 
@@ -338,12 +372,6 @@ list(APPEND DFTRACER_UTILS_DOMAINS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/server/http_parser.cpp
 )
 
-# Add MPI-specific sources if MPI is enabled
-if(DFTRACER_UTILS_ENABLE_MPI)
-  list(APPEND DFTRACER_UTILS_DOMAINS_SOURCES
-       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/mpi/mpi_utils.cpp)
-endif()
-
 # Plugins (C ABI fold adapter + dlopen host + config tree builder)
 set(DFTRACER_UTILS_PLUGINS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/abi_context.cpp
@@ -372,6 +400,9 @@ set(DFTRACER_UTILS_PLUGINS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/format.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/memory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/store.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/ports.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/port_hub.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/phase_seed.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/state_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/plugin_abi.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/plugins.cpp
@@ -781,16 +812,6 @@ foreach(variant objects shared static)
     target_link_libraries(${VARIANT_TARGET}
                           PUBLIC ${CMAKE_DL_LIBS})
 
-    # mpi_utils.cpp is part of the runtime library sources when MPI is enabled,
-    # so runtime itself needs the MPI include path and runtime. Without this the
-    # precompiled header pulls in <mpi.h> and fails with "mpi.h: No such file or
-    # directory".
-    if(DFTRACER_UTILS_ENABLE_MPI)
-      target_compile_definitions(${VARIANT_TARGET}
-                                 PUBLIC DFTRACER_UTILS_MPI_ENABLED)
-      target_link_libraries(${VARIANT_TARGET} PUBLIC MPI::MPI_CXX)
-    endif()
-
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_runtime_objects)
       target_compile_options(dftracer_utils_runtime_objects
@@ -809,6 +830,140 @@ foreach(variant objects shared static)
 endforeach()
 
 use_precompiled_header(dftracer_utils_runtime_objects)
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Comm Library (MPI and other transports)
+# +++++++++++++++++++++++++++++++++++++++++
+
+# MPI is not in comm: the library comm_mpi below links it and comm loads that
+# library at run time.
+set(DFTRACER_UTILS_COMM_FIND_DEPENDENCIES
+    dftracer_utils_memory
+    dftracer_utils_dstd
+    dftracer_utils_common
+    dftracer_utils_coro
+    dftracer_utils_runtime)
+
+create_library(
+  NAME
+  dftracer_utils_comm
+  NAMESPACE
+  dftracer_utils_comm
+  SOURCES
+  ${DFTRACER_UTILS_COMM_SOURCES}
+  VERSION
+  ${PROJECT_VERSION}
+  DESCRIPTION
+  "DFTracer utils comm library (communicator, groups and collectives)"
+  URL
+  "https://github.com/llnl-asr/dftracer-utils"
+  BUILD_SHARED
+  ${DFTRACER_UTILS_BUILD_SHARED}
+  BUILD_STATIC
+  ${DFTRACER_UTILS_BUILD_STATIC}
+  SHARED_LINK_LIBRARIES
+  dftracer_utils_memory::shared
+  dftracer_utils_dstd::shared
+  dftracer_utils_common::shared
+  dftracer_utils_coro::shared
+  dftracer_utils_runtime::shared
+  STATIC_LINK_LIBRARIES
+  dftracer_utils_memory::static
+  dftracer_utils_dstd::static
+  dftracer_utils_common::static
+  dftracer_utils_coro::static
+  dftracer_utils_runtime::static
+  PUBLIC_INCLUDE_DIRS
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE_COMPILE_OPTIONS
+  ${COVERAGE_COMPILE_OPTIONS}
+  PKG_CONFIG_REQUIRES
+  "dftracer_utils_memory dftracer_utils_dstd dftracer_utils_common dftracer_utils_coro dftracer_utils_runtime"
+  PKG_CONFIG_LIBS_PRIVATE
+  "${DFTU_PC_PRIVATE_comm}"
+  FIND_DEPENDENCIES
+  ${DFTRACER_UTILS_COMM_FIND_DEPENDENCIES})
+
+foreach(variant objects shared static)
+  dftu_variant_target(VARIANT_TARGET dftracer_utils_comm ${variant})
+  set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
+  if(TARGET ${VARIANT_TARGET})
+    target_compile_definitions(
+      ${VARIANT_TARGET}
+      PRIVATE DFTRACER_UTILS_COMM_BUILD_STAMP="${DFTU_COMM_BUILD_STAMP}")
+    if(variant STREQUAL "objects")
+      target_set_warnings(dftracer_utils_comm_objects)
+      target_compile_options(dftracer_utils_comm_objects
+                             PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
+    elseif(COVERAGE_LINK_OPTIONS)
+      target_link_libraries(${VARIANT_TARGET}
+                            PRIVATE ${COVERAGE_LINK_OPTIONS})
+    endif()
+  endif()
+endforeach()
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Comm MPI Library (the MPI backend of comm, built only with MPI ON)
+# +++++++++++++++++++++++++++++++++++++++++
+
+if(DFTRACER_UTILS_ENABLE_MPI)
+  create_library(
+    NAME
+    dftracer_utils_comm_mpi
+    NAMESPACE
+    dftracer_utils_comm_mpi
+    SOURCES
+    ${DFTRACER_UTILS_COMM_MPI_SOURCES}
+    VERSION
+    ${PROJECT_VERSION}
+    DESCRIPTION
+    "DFTracer utils MPI backend of comm"
+    URL
+    "https://github.com/llnl-asr/dftracer-utils"
+    BUILD_SHARED
+    ${DFTRACER_UTILS_BUILD_SHARED}
+    BUILD_STATIC
+    ${DFTRACER_UTILS_BUILD_STATIC}
+    SHARED_LINK_LIBRARIES
+    dftracer_utils_comm::shared
+    STATIC_LINK_LIBRARIES
+    dftracer_utils_comm::static
+    PUBLIC_INCLUDE_DIRS
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    PRIVATE_COMPILE_OPTIONS
+    ${COVERAGE_COMPILE_OPTIONS}
+    PKG_CONFIG_REQUIRES
+    "dftracer_utils_comm"
+    FIND_DEPENDENCIES
+    dftracer_utils_comm
+    MPI)
+
+  foreach(variant objects shared static)
+    dftu_variant_target(VARIANT_TARGET dftracer_utils_comm_mpi ${variant})
+    if(TARGET ${VARIANT_TARGET})
+      # MPI is linked here and nowhere else.
+      target_link_libraries(${VARIANT_TARGET} PUBLIC MPI::MPI_CXX)
+      target_compile_definitions(
+        ${VARIANT_TARGET}
+        PRIVATE DFTRACER_UTILS_COMM_BUILD_STAMP="${DFTU_COMM_BUILD_STAMP}")
+      if(variant STREQUAL "objects")
+        target_set_warnings(dftracer_utils_comm_mpi_objects)
+        target_compile_options(
+          dftracer_utils_comm_mpi_objects
+          PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
+      elseif(COVERAGE_LINK_OPTIONS)
+        target_link_libraries(${VARIANT_TARGET}
+                              PRIVATE ${COVERAGE_LINK_OPTIONS})
+      endif()
+    endif()
+  endforeach()
+endif()
 
 # +++++++++++++++++++++++++++++++++++++++++
 # Store Library (key-value store engine: data files, writer, snapshot)
@@ -1443,6 +1598,17 @@ foreach(variant objects shared static)
       target_compile_options(dftracer_utils_dataframe_objects
                              PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
     endif()
+    if(NOT variant STREQUAL "objects")
+      # A C++ plugin links this library. GCC binds the statics of inline
+      # functions and templates as GNU unique symbols, which keep a plugin
+      # mapped after the host unloads it, so every module that links this
+      # library and is compiled by GCC gets -fno-gnu-unique.
+      target_compile_options(
+        ${VARIANT_TARGET}
+        INTERFACE
+          $<$<AND:$<CXX_COMPILER_ID:GNU>,$<COMPILE_LANGUAGE:CXX>,$<STREQUAL:$<TARGET_PROPERTY:TYPE>,MODULE_LIBRARY>>:-fno-gnu-unique>
+      )
+    endif()
     link_simdjson(${VARIANT_TARGET} ${VARIANT_UPPER})
     # Highway powers the SIMD kernels; hwy_contrib carries VQSort (argsort) and
     # publicly depends on hwy, so linking it pulls hwy in too. Fall back to hwy
@@ -1889,14 +2055,6 @@ foreach(variant objects shared static)
       link_boost_math(dftracer_utils_domains_objects)
     endif()
 
-    # Add MPI compile definitions and link library when enabled
-    if(DFTRACER_UTILS_ENABLE_MPI)
-      target_compile_definitions(${VARIANT_TARGET}
-                                 PUBLIC DFTRACER_UTILS_MPI_ENABLED)
-      target_link_libraries(${VARIANT_TARGET}
-                            PUBLIC MPI::MPI_CXX)
-    endif()
-
     # Link coverage if needed
     if(NOT variant STREQUAL "objects" AND COVERAGE_LINK_OPTIONS)
       target_link_libraries(${VARIANT_TARGET}
@@ -2007,6 +2165,26 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
     FIND_DEPENDENCIES
     dftracer_utils_common
     dftracer_utils_coro
+    BUILD_SHARED
+    ${DFTRACER_UTILS_BUILD_SHARED}
+    BUILD_STATIC
+    ${DFTRACER_UTILS_BUILD_STATIC})
+
+  create_unified_library_config(
+    NAME
+    dftracer_utils_comm
+    VERSION
+    ${PROJECT_VERSION}
+    DESCRIPTION
+    "DFTracer utils comm library (communicator, groups and collectives)"
+    URL
+    "https://github.com/llnl-asr/dftracer-utils"
+    PKG_CONFIG_REQUIRES
+    "dftracer_utils_memory dftracer_utils_dstd dftracer_utils_common dftracer_utils_coro dftracer_utils_runtime"
+    PKG_CONFIG_LIBS_PRIVATE
+    "${DFTU_PC_PRIVATE_comm}"
+    FIND_DEPENDENCIES
+    ${DFTRACER_UTILS_COMM_FIND_DEPENDENCIES}
     BUILD_SHARED
     ${DFTRACER_UTILS_BUILD_SHARED}
     BUILD_STATIC
@@ -2270,7 +2448,8 @@ else()
     add_library(dftracer_utils_shared INTERFACE)
     target_link_libraries(
       dftracer_utils_shared
-      INTERFACE dftracer_utils_runtime::shared dftracer_utils_store::shared
+      INTERFACE dftracer_utils_runtime::shared dftracer_utils_comm::shared
+                dftracer_utils_store::shared
                 dftracer_utils_fileio::shared dftracer_utils_trace::shared dftracer_utils_plugins::shared dftracer_utils_domains::shared
                 dftracer_utils_dataframe::shared)
 
@@ -2288,7 +2467,8 @@ else()
     add_library(dftracer_utils_static INTERFACE)
     target_link_libraries(
       dftracer_utils_static
-      INTERFACE dftracer_utils_runtime::static dftracer_utils_store::static
+      INTERFACE dftracer_utils_runtime::static dftracer_utils_comm::static
+                dftracer_utils_store::static
                 dftracer_utils_fileio::static dftracer_utils_trace::static dftracer_utils_plugins::static dftracer_utils_domains::static
                 dftracer_utils_dataframe::static)
 
@@ -2320,12 +2500,13 @@ if(DFTRACER_UTILS_PREFERRED_TYPE)
   string(APPEND UNIFIED_CONFIG_CONTENT "@PACKAGE_INIT@\n\n")
   string(APPEND UNIFIED_CONFIG_CONTENT "include(CMakeFindDependencyMacro)\n\n")
   if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
-    string(APPEND UNIFIED_CONFIG_CONTENT "# Find memory, dstd, common, coro, runtime, store, fileio, trace, plugins, domains and dataframe libraries\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT "# Find memory, dstd, common, coro, runtime, comm, store, fileio, trace, plugins, domains and dataframe libraries\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_memory)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_dstd)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_common)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_coro)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_runtime)\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_comm)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_store)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_fileio)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_trace)\n")
@@ -2445,7 +2626,7 @@ if(DFTRACER_UTILS_PREFERRED_TYPE)
     set(DFTRACER_UTILS_PKG_CONFIG_LIBS_PRIVATE "-lpthread")
   else()
     set(DFTRACER_UTILS_PKG_CONFIG_REQUIRES
-        "dftracer_utils_runtime dftracer_utils_store dftracer_utils_fileio dftracer_utils_trace dftracer_utils_plugins dftracer_utils_domains dftracer_utils_dataframe")
+        "dftracer_utils_runtime dftracer_utils_comm dftracer_utils_store dftracer_utils_fileio dftracer_utils_trace dftracer_utils_plugins dftracer_utils_domains dftracer_utils_dataframe")
     set(DFTRACER_UTILS_PKG_CONFIG_LIBS_PRIVATE "")
   endif()
   create_pkgconfig_file(
@@ -2626,11 +2807,10 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
   add_custom_target(dftracer_plugin_templates
                     DEPENDS ${DFTRACER_UTILS_PLUGIN_TEMPLATES_HEADER})
 
-  set(DFTRACER_UTILS_MPI_BINARIES "")
-
   add_library(
     dftracer_utils_cli STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/cli_args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/comm_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/plugin_info.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/plugin_golden.cpp)
   target_link_libraries(dftracer_utils_cli PUBLIC dftracer_utils)
@@ -2689,17 +2869,6 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
       create_python_wrapper(${bin_exec})
     endif()
   endforeach()
-
-  # dftracer_view is one source that compiles a distributed (MPI) path under
-  # DFTRACER_UTILS_ENABLE_MPI, so it needs the MPI library when that is on.
-  if(DFTRACER_UTILS_ENABLE_MPI AND TARGET dftracer_view)
-    target_link_libraries(dftracer_view PRIVATE MPI::MPI_CXX)
-  endif()
-  # dftracer_genesis_gen_dist splits its run groups between MPI ranks and
-  # joins their parts under DFTRACER_UTILS_ENABLE_MPI.
-  if(DFTRACER_UTILS_ENABLE_MPI AND TARGET dftracer_genesis_gen_dist)
-    target_link_libraries(dftracer_genesis_gen_dist PRIVATE MPI::MPI_CXX)
-  endif()
 
   # ----------------------------------------------------------------------------
   # Embed the single-file web UI into dftracer_server.
@@ -2784,38 +2953,6 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
       PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/server/viz/ui.cpp
               ${DFTRACER_UTILS_WEB_GENERATED} ${DFTRACER_UTILS_API_GENERATED})
   endif()
-
-  foreach(bin ${DFTRACER_UTILS_MPI_BINARIES})
-    string(REPLACE ".cpp" "" bin_exec ${bin})
-    string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/" ""
-                   bin_exec ${bin_exec})
-
-    add_executable(${bin_exec} ${bin})
-    set_target_properties(
-      ${bin_exec} PROPERTIES OUTPUT_NAME "${bin_exec}" RUNTIME_OUTPUT_DIRECTORY
-                                                       ${CMAKE_BINARY_DIR}/bin)
-    target_add_rpath(${bin_exec})
-
-    target_link_libraries(${bin_exec} PRIVATE dftracer_utils dftracer_utils_cli
-                                              MPI::MPI_CXX)
-    target_include_directories(
-      ${bin_exec} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
-                          ${CMAKE_CURRENT_SOURCE_DIR})
-    target_set_warnings(${bin_exec})
-    target_compile_options(${bin_exec}
-                           PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
-
-    if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-      target_compile_options(${bin_exec} PRIVATE --coverage -fprofile-arcs
-                                                 -ftest-coverage)
-      target_link_libraries(${bin_exec} PRIVATE --coverage)
-    endif()
-
-    install(TARGETS ${bin_exec} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-    if(SKBUILD)
-      create_python_wrapper(${bin_exec})
-    endif()
-  endforeach()
 endif()
 
 # ##############################################################################
@@ -2826,7 +2963,10 @@ option(DFTRACER_UTILS_BUILD_EXAMPLES "Build API examples" ON)
 
 if(DFTRACER_UTILS_BUILD_EXAMPLES)
   set(DFTRACER_UTILS_EXAMPLES
-      ${CMAKE_CURRENT_SOURCE_DIR}/../examples/view_containment_example.cpp)
+      ${CMAKE_CURRENT_SOURCE_DIR}/../examples/view_containment_example.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../examples/comm/comm_basics.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../examples/comm/comm_fault.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../examples/comm/comm_rank_report.cpp)
 
   foreach(example ${DFTRACER_UTILS_EXAMPLES})
     get_filename_component(example_name ${example} NAME_WE)
@@ -2948,7 +3088,9 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
     add_test(NAME bench_smoke/fs COMMAND fs_bench --smoke)
     add_test(NAME bench_smoke/pool COMMAND pool_bench --smoke)
     add_test(NAME bench_smoke/io COMMAND io_bench --smoke)
-    set_tests_properties(bench_smoke/coro PROPERTIES LABELS bench_smoke)
+    set_tests_properties(
+      bench_smoke/coro bench_smoke/channel bench_smoke/fs bench_smoke/pool
+      bench_smoke/io PROPERTIES LABELS bench_smoke)
 
     add_test(NAME bench_smoke/fmt COMMAND fmt_bench --smoke)
     set_tests_properties(bench_smoke/fmt PROPERTIES LABELS bench_smoke)
@@ -2984,6 +3126,20 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
     add_test(NAME bench_smoke/memory_probe COMMAND memory_probe_test)
     set_tests_properties(bench_smoke/memory_probe PROPERTIES LABELS
                                                             bench_smoke)
+
+    # Each smoke run also runs the memory exit check, so a benchmark that ends
+    # with a live pool, a store still open or a runtime not stopped fails the
+    # process that ran it.
+    set_tests_properties(
+      view_api_bench_smoke view_batch_bench_smoke index_bench_smoke
+      fold_read_bench_smoke duql_eval_bench_smoke group_transform_bench_smoke
+      bench_smoke/memory_attribution bench_smoke/counter_contention
+      bench_smoke/heap bench_smoke/coro bench_smoke/channel bench_smoke/fs
+      bench_smoke/pool bench_smoke/io bench_smoke/fmt bench_smoke/log
+      bench_smoke/string_intern bench_smoke/slice bench_smoke/spill_harness
+      bench_smoke/pressure_read bench_smoke/store bench_smoke/yaml_read
+      bench_smoke/memory_probe
+      PROPERTIES ENVIRONMENT "DFTRACER_UTILS_MEMORY_EXIT_CHECK=1")
   endif()
 endif()
 

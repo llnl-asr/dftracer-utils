@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Fail when a co_await sits inside the parentheses of an if, while, for or
-# switch header under src/ and include/. GCC 12 lays out a coroutine frame
+# switch header under src/, include/, tests/ and benchmarks/. GCC 12 lays out a coroutine frame
 # differently in the ramp and the actor when a temporary lives in such a
 # condition across the co_await, so the result must go through a named local.
 # A header may span lines. Comments, string literals and the bodies of lambdas
@@ -83,9 +83,12 @@ END { exit hits > 0 ? 1 : 0 }
 
 file(GLOB_RECURSE _files
      "${SOURCE_DIR}/src/*.h" "${SOURCE_DIR}/src/*.cpp" "${SOURCE_DIR}/src/*.inc"
-     "${SOURCE_DIR}/include/*.h" "${SOURCE_DIR}/include/*.hpp")
-# Vendored third-party text is not ours to check.
-list(FILTER _files EXCLUDE REGEX "/dftracer/utils/dstd/vendor/")
+     "${SOURCE_DIR}/include/*.h" "${SOURCE_DIR}/include/*.hpp"
+     "${SOURCE_DIR}/tests/*.h" "${SOURCE_DIR}/tests/*.cpp" "${SOURCE_DIR}/tests/*.inc"
+     "${SOURCE_DIR}/benchmarks/*.h" "${SOURCE_DIR}/benchmarks/*.cpp")
+# Vendored third-party text is not ours to check, and the self-test samples
+# hold bad code on purpose.
+list(FILTER _files EXCLUDE REGEX "/dftracer/utils/dstd/vendor/|/tests/cmake/")
 
 set(_candidates "")
 foreach(_file ${_files})

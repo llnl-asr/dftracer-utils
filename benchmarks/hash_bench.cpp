@@ -10,6 +10,7 @@
 //   hash_bench                (all cases, 7 reps, median)
 //   hash_bench --reps R       (R reps per case)
 
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
@@ -121,11 +122,11 @@ double time_once(const KeySet& set, Fn fn, std::uint64_t& sink) {
     const std::size_t mask = set.keys.size() - 1;
     const dstd::String* keys = set.keys.data();
     std::uint64_t acc = 0;
-    const auto start = Clock::now();
+    const auto start = dstd::steady_now();
     for (std::size_t i = 0; i < CALLS; ++i) {
         acc += fn(keys[(i + (acc & 1)) & mask]);
     }
-    const auto stop = Clock::now();
+    const auto stop = dstd::steady_now();
     sink += acc;
     return std::chrono::duration<double, std::nano>(stop - start).count() /
            static_cast<double>(CALLS);

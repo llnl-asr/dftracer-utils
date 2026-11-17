@@ -142,7 +142,8 @@ CoroTask<void> send_until_closed(Channel<std::uint64_t>& channel,
                                  std::atomic<std::uint64_t>& sent_sum,
                                  std::atomic<std::uint64_t>& sent_count) {
     for (std::uint64_t value = first;; ++value) {
-        const bool sent = co_await channel.send(std::uint64_t{value});
+        const std::uint64_t item = value;
+        const bool sent = co_await channel.send(item);
         if (!sent) co_return;
         sent_sum.fetch_add(value);
         sent_count.fetch_add(1);
@@ -475,7 +476,8 @@ TEST_CASE("UnboundedChannel never refuses and ends after the last producer") {
         {
             auto guard = producer.guard();
             for (std::uint64_t i = 1; i <= 10000; ++i) {
-                const bool sent = co_await channel->send(std::uint64_t{i});
+                const std::uint64_t item = i;
+                const bool sent = co_await channel->send(item);
                 CHECK(sent);
             }
             CHECK(channel->size() == 10000);

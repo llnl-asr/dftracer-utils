@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -25,10 +25,10 @@ dstd::String write_small_trace(const dstd::String& dir, int n) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < 40; ++i) {
-        out += common::str_cat(
-            R"({"id":)", i, R"(,"name":"read","cat":"POSIX","pid":1,)",
-            R"("tid":1,"ph":"X","ts":)", 1000 + i * 10,
-            R"(,"dur":3,"args":{"fname":"/data/f)", n, R"("}})", "\n");
+        dstd::fmt_append<
+            "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":"
+            "1,\"ph\":\"X\",\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
+            "f{}\"}}\n">(out, i, 1000 + i * 10, n);
     }
     out += "]\n";
     return dftu_utils_test::write_gz_trace(
@@ -39,13 +39,13 @@ dstd::String write_long_line_trace(const dstd::String& dir, std::size_t bytes) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < 40; ++i) {
-        out += common::str_cat(R"({"id":)", i,
-                               R"(,"name":"read","cat":"POSIX","pid":1,)",
-                               R"("tid":1,"ph":"X","ts":)", 1000 + i * 10,
-                               R"(,"dur":3,"args":{"fname":"/data/long")");
+        dstd::fmt_append<
+            "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":"
+            "1,\"ph\":\"X\",\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
+            "long\"">(out, i, 1000 + i * 10);
         if (i == 20)
-            out +=
-                common::str_cat(R"(,"note":")", dstd::String(bytes, 'x'), '"');
+            dstd::fmt_append<",\"note\":\"{}{}">(out, dstd::String(bytes, 'x'),
+                                                 '"');
         out += "}}\n";
     }
     out += "]\n";

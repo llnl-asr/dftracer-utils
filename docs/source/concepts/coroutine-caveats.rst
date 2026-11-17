@@ -165,8 +165,27 @@ So a lambda inside a ``co_await`` expression may capture only ``&``, ``&name`` o
 The bodies of lambdas inside the expression are not part of it, and a
 ``co_await`` in such a body is checked as its own expression. The ``coro_lambdas``
 ctest (``cmake/scripts/check_coro_lambdas.cmake``) fails on every violation under
-``src/`` and ``include/``, and ``coro_lambdas_self`` checks the check against
-the cases in ``tests/cmake/coro_lambdas/``.
+``src/``, ``include/``, ``tests/`` and ``benchmarks/``, and ``coro_lambdas_self``
+checks the check against the cases in ``tests/cmake/coro_lambdas/``.
+
+A braced temporary that is an argument inside a ``co_await`` expression is
+destroyed twice in the same way. With a type that owns memory, such as a struct
+that holds a string, the second destructor frees the memory again, and the
+coroutine crashes or hangs later. Name the value, or name the whole operation:
+
+.. code-block:: cpp
+
+   // Wrong: the Person temporary is destroyed twice on GCC 12.1.
+   auto got = co_await group.all_gather_object(Person{"x", 1}, PersonCodec{});
+
+   // Right: the operation is a named local, and the await holds no temporary.
+   auto op = group.all_gather_object(Person{"x", 1}, PersonCodec{});
+   auto got = co_await op;
+
+The ``coro_temp_args`` ctest (``cmake/scripts/check_coro_temp_args.cmake``) fails
+on a braced temporary that starts an argument inside a ``co_await`` expression,
+under the same four folders, and ``coro_temp_args_self`` checks it against the
+cases in ``tests/cmake/coro_temp_args/``.
 
 Symmetric transfer and the stack
 --------------------------------

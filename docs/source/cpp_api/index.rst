@@ -3,7 +3,7 @@
 C++ API Reference
 =================
 
-The C++20 engine: the coroutine runtime, the columnar DataFrame, the duql
+The C++20 engine: the coroutine runtime, the communicator, the columnar DataFrame, the duql
 builder, the trace-analysis layer, and the plugin SDK. Every page renders C++
 classes and namespaces from the source through Doxygen and Breathe. For the
 stable C ABI, see :doc:`../c_api/index`.
@@ -23,6 +23,7 @@ layer that composes all below it.
 
    runtime
    coro
+   comm
    store
 
 .. toctree::
@@ -30,6 +31,7 @@ layer that composes all below it.
    :caption: Data
 
    dataframe
+   arrow
    duql
 
 .. toctree::

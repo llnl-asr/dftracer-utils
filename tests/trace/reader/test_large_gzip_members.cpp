@@ -70,12 +70,14 @@ dstd::String read_all(const dstd::String& path) {
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         trace::reader::internal::ReaderInflater inf;
         off_t offset = 0;
-        if (!co_await inf.initialize(fd, offset)) co_return;
+        auto initialize_result = co_await inf.initialize(fd, offset);
+        if (!initialize_result) co_return;
         dstd::Vector<unsigned char> buf(1 << 20);
         while (true) {
             std::size_t n = 0;
-            if (!co_await inf.read(fd, offset, buf.data(), buf.size(), n))
-                co_return;
+            auto read_result =
+                co_await inf.read(fd, offset, buf.data(), buf.size(), n);
+            if (!read_result) co_return;
             if (n == 0) break;
             out.append(reinterpret_cast<const char*>(buf.data()), n);
         }
@@ -93,7 +95,9 @@ dstd::String read_members(const dstd::String& path) {
     dstd::String out;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto gen = fileio::compress::decode_gzip_members(fd, size);
-        while (auto part = co_await gen.next()) {
+        while (true) {
+            auto part = co_await gen.next();
+            if (!part) break;
             REQUIRE(*part);
             out.append(**part);
         }

@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <mpi_launcher.h>
 #include <testing_utilities.h>
 #include <zlib.h>
 
@@ -160,6 +161,43 @@ TEST_SUITE("dftracer_view_mpi") {
         CHECK(!s.empty());
         CHECK(s.find("cpu") != dstd::String::npos);  // group key
         CHECK(s.find("60") != dstd::String::npos);   // mean util across ranks
+    }
+
+    // A rank that fails before the gather must not leave its peer waiting:
+    // rank 1 gets the file that is not a trace, and both ranks must end with
+    // an error instead of hanging in the gather.
+    TEST_CASE("a rank that fails before the gather fails every rank") {
+        dstd::String bin = dftu_utils_test::find_binary_by_name(
+            "DFTRACER_UTILS_VIEW_PATH", "dftracer_view");
+        dstd::String launcher = dftu_utils_test::find_mpi_launcher();
+        if (bin.empty() || launcher.empty()) {
+            MESSAGE("dftracer_view or MPI launcher unavailable, skipping.");
+            return;
+        }
+
+        dftu_utils_test::TestEnvironment env(1);
+        REQUIRE(env.is_valid());
+        const dstd::String in = env.dir() + "/in";
+        REQUIRE(dstd::fs::create_directories(in).has_value());
+        write_counter_file(in + "/r0.pfw.gz", "cpu", {40, 40});
+        REQUIRE(dstd::fs::write_file(dstd::PathView(in + "/r1.pfw.gz"),
+                                     "this is not gzip data, only text")
+                    .has_value());
+
+        const dstd::String o = env.dir() + "/f.json";
+        const dstd::Vector<dstd::String> args = {
+            in, "--group-by", "name", "--agg", "mean:util", "--output", o};
+        ::setenv("OMPI_ALLOW_RUN_AS_ROOT", "1", 1);
+        ::setenv("OMPI_ALLOW_RUN_AS_ROOT_CONFIRM", "1", 1);
+        dstd::Vector<dstd::String> launch = {"-n", "2", bin};
+        for (const auto& a : args) launch.push_back(a);
+        int code = 0;
+        const dstd::String out =
+            dftu_utils_test::run_process_capture(launcher, launch, true, &code);
+        CHECK(code != 0);
+        // Rank 1 reports its own error, and rank 0 the abort it caused.
+        CHECK(out.find("its rebuild failed") != dstd::String::npos);
+        CHECK(out.find("aborted by rank 1") != dstd::String::npos);
     }
 
     // Distributed occupancy: each rank aggregate_partial()s its shard, the

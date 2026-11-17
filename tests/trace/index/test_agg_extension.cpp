@@ -4,7 +4,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
@@ -47,17 +47,16 @@ dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
     {
         dstd::String out;
         for (int i = 0; i < n; ++i)
-            out += common::str_cat(
-                R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
-                R"("tid":1,"ts":)",
-                start_us + static_cast<std::uint64_t>(i) * 1000,
-                R"(,"dur":100,"args":{}})", "\n");
+            dstd::fmt_append<
+                "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+                "\"tid\":1,\"ts\":{}{}\n">(
+                out, start_us + static_cast<std::uint64_t>(i) * 1000,
+                R"(,"dur":100,"args":{}})");
         for (int i = 0; system && i < n; ++i)
-            out += common::str_cat(
-                R"({"ph":"C","name":"cpu","cat":"sys","pid":1,"tid":1,)"
-                R"("ts":)",
-                start_us + static_cast<std::uint64_t>(i) * 1000,
-                R"(,"args":{"hhash":"h1","util":)", i, "}}\n");
+            dstd::fmt_append<
+                "{\"ph\":\"C\",\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,"
+                "\"tid\":1,\"ts\":{},\"args\":{\"hhash\":\"h1\",\"util\":{}}}"
+                "\n">(out, start_us + static_cast<std::uint64_t>(i) * 1000, i);
         dstd::fs::write_file(dstd::PathView(pfw), out).discard();
     }
     const dstd::String gz = pfw + ".gz";

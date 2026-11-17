@@ -613,6 +613,23 @@ dftu_status detail::task_run(::dftu_ctx* ctx, void* /*h*/, ::dftu_task* t) {
     return status;
 }
 
+dftu_status detail::task_test(void* /*h*/, const ::dftu_task* t) {
+    if (t == nullptr) return DFTU_E_INVALID;
+    return plugins::abi_task_finished(t) ? 1 : 0;
+}
+
+void detail::task_cancel(void* /*h*/, ::dftu_task* t) {
+    if (t != nullptr) plugins::cancel_abi_task(t);
+}
+
+void detail::task_retain(void* /*h*/, ::dftu_task* t) {
+    if (t != nullptr) plugins::retain_abi_task(t);
+}
+
+void detail::task_release(void* /*h*/, ::dftu_task* t) {
+    if (t != nullptr) plugins::free_abi_task(t);
+}
+
 namespace {
 
 const ::dftu_svc_task TASK_VTABLE = {
@@ -629,6 +646,10 @@ const ::dftu_svc_task TASK_VTABLE = {
     host_status,
     host_discard,
     detail::task_run,
+    detail::task_test,
+    detail::task_cancel,
+    detail::task_retain,
+    detail::task_release,
 };
 
 }  // namespace

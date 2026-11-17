@@ -57,6 +57,10 @@ dstd::String lookups_dir(dstd::StringView root) {
     return join(root, LOOKUPS_DIR);
 }
 
+dstd::String phase_seeds_dir(dstd::StringView root) {
+    return join(root, PHASE_SEEDS_DIR);
+}
+
 dstd::String views_dir(dstd::StringView root) { return join(root, VIEWS_DIR); }
 
 dstd::String view_root(dstd::StringView root, dstd::StringView slug) {

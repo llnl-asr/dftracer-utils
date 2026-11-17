@@ -49,6 +49,28 @@ Runtime and scheduler
        runtime from starting with an error; it never falls back. Use
        ``threadpool`` to trace the tools with DFTracer's preload, which sees
        only libc calls and so misses io_uring.
+   * - ``DFTRACER_UTILS_COMM``
+     - ``auto``
+     - The backend a tool starts its ranks on: ``local``, ``mpi`` or ``auto``.
+       ``auto`` is MPI under an MPI or PMIx launcher and one local rank
+       otherwise. The option ``--comm`` wins over it.
+   * - ``DFTRACER_UTILS_COMM_PATH``
+     - unset
+     - The one directory searched for ``libdftracer_utils_comm_mpi``. When it
+       is unset, the directory of the comm library is searched first and the
+       loader path second.
+   * - ``DFTRACER_UTILS_COMM_TRACE``
+     - unset
+     - A directory. When it is set and not empty, each rank writes
+       ``comm-<rank>-<pid>-<n>.pfw`` there, with ``n`` the number of the
+       communicator in the process, a DFTracer event file with one event for
+       each communicator call that ended. It is read once, when a communicator
+       starts, and the files are written when the communicator ends.
+   * - ``DFTRACER_UTILS_COMM_MPI_CHUNK_BYTES``
+     - ``1073741824`` (1 GiB)
+     - The most bytes one MPI message of the MPI backend carries. A longer
+       payload goes in several messages. A value above 1 GiB is lowered to it, and
+       one below 1 is raised to 1. Meant for tests.
    * - ``DFTRACER_UTILS_HW_CONCURRENCY``
      - ``std::thread::hardware_concurrency()`` (or ``1`` if that is ``0``)
      - Overrides the detected core count used to size thread pools when the

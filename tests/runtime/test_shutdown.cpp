@@ -15,6 +15,7 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/thread.h>
@@ -83,9 +84,9 @@ void shutdown_or_fail(Runtime& rt) {
 }
 
 void wait_until_entered(const Probe& probe) {
-    const auto deadline = std::chrono::steady_clock::now() + HANG_LIMIT;
+    const auto deadline = dstd::steady_now() + HANG_LIMIT;
     while (!probe.entered.load(std::memory_order_acquire)) {
-        if (std::chrono::steady_clock::now() > deadline) {
+        if (dstd::steady_now() > deadline) {
             fail_hung("frame start");
         }
         std::this_thread::sleep_for(1ms);
@@ -124,7 +125,8 @@ struct NeverReady {
 };
 
 coro::CoroTask<void> stuck_child(Gate* gate) {
-    co_await NeverReady{gate};
+    NeverReady awaiter{gate};
+    co_await awaiter;
     co_return;
 }
 
@@ -355,7 +357,7 @@ TEST_CASE("a generator dropped after a scope fan-out does not terminate") {
 
     struct Source {
         static coro::AsyncGenerator<int> numbers(std::atomic<int>* fanned) {
-            co_await coro::with_scope(
+            auto op = coro::with_scope(
                 [fanned](coro::Scope& scope) -> coro::CoroTask<void> {
                     auto a =
                         scope.spawn_future([fanned]() -> coro::CoroTask<int> {
@@ -370,6 +372,7 @@ TEST_CASE("a generator dropped after a scope fan-out does not terminate") {
                     co_await a;
                     co_await b;
                 });
+            co_await op;
             co_yield 1;
             co_yield 2;
         }
@@ -479,10 +482,9 @@ TEST_CASE("a runtime can end as soon as a foreign thread resumes its frame") {
             while (!released.load(std::memory_order_acquire))
                 std::this_thread::yield();
         });
-        const auto deadline = std::chrono::steady_clock::now() + HANG_LIMIT;
+        const auto deadline = dstd::steady_now() + HANG_LIMIT;
         while (!finished.load(std::memory_order_acquire)) {
-            if (std::chrono::steady_clock::now() > deadline)
-                fail_hung("foreign resume");
+            if (dstd::steady_now() > deadline) fail_hung("foreign resume");
             std::this_thread::yield();
         }
         rt.reset();
@@ -518,10 +520,9 @@ TEST_CASE("a foreign thread can exit while the runtime it resumed ends") {
                 handoff.executor,
                 std::coroutine_handle<>::from_address(handle));
         });
-        const auto deadline = std::chrono::steady_clock::now() + HANG_LIMIT;
+        const auto deadline = dstd::steady_now() + HANG_LIMIT;
         while (!finished.load(std::memory_order_acquire)) {
-            if (std::chrono::steady_clock::now() > deadline)
-                fail_hung("foreign resume");
+            if (dstd::steady_now() > deadline) fail_hung("foreign resume");
             std::this_thread::yield();
         }
         rt.reset();

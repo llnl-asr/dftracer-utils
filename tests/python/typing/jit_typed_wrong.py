@@ -130,3 +130,35 @@ jit.task(3)  # a function
 @jit.task
 def not_async(self: object) -> int:  # a task is an async def
     return 1
+
+
+# ---- channels, latest values and phase results ------------------------------
+
+
+@jit.plugin
+class WrongPorts:
+    out: jit.Sender[int] = jit.sender()
+    inp: jit.Receiver[float] = jit.receiver("plugin.other.q")
+    cfg: jit.Latest[int] = jit.latest()
+    total: jit.Phase[int] = jit.phase()
+    mixed: jit.Sender[int] = jit.latest()  # a latest is not a sender
+    peak: jit.Phase[float] = jit.phase(merge="count")  # a merge is sum, min or max
+    big: jit.Sender[int] = jit.sender(credits="many")  # credits is a count
+    drop: jit.Sender[int] = jit.sender(policy="lazy")  # a policy is fail, block or drop_oldest
+
+    @jit.each_event
+    def step(self, e: Event) -> None:
+        self.out.send("x")  # a str into an int channel
+        self.out.recv()  # a sender has no recv
+        self.inp.send(1.5)  # a receiver has no send
+        self.cfg.get()  # get needs a default
+        self.cfg.contribute(1)  # a latest has no contribute
+        self.total.contribute("x")  # a str into an int phase
+        self.total.set(1)  # a phase has no set
+        ok: str = self.out.try_send(1)  # try_send gives a bool, not a str
+        _ = ok
+
+
+_bad_receiver = jit.receiver(3)  # a receiver takes a sender or a name
+_bad_latest = jit.latest(3)  # a latest takes a latest or a name
+_bad_phase = jit.phase("plugin.x.y")  # a phase takes a phase

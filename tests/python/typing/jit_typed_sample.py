@@ -505,3 +505,82 @@ fatal: Exception = jit.Fatal("stop")
 skip: Exception = jit.SkipRest()
 cancelled: BaseException = jit.Cancelled()
 located: Optional[str] = jit.Fatal("stop", file="f.py", line=1, col=1).file
+
+
+# Channels, latest values and phase results. A port is a class attribute: the
+# annotation says the element type (``int`` or ``float``), the factory the
+# options, and a receiver, a latest or a phase takes another plugin's attribute.
+
+
+@jit.plugin
+class PortsOut:
+    out: jit.Sender[int] = jit.sender(credits=64, policy="drop_oldest")
+    ratio: jit.Sender[float] = jit.sender()
+    pipe: jit.Channel[int] = jit.channel(credits=2, policy="block")
+    cfg: jit.Latest[int] = jit.latest()
+    mass: jit.Phase[float] = jit.phase(merge="max")
+    total: jit.Phase[int] = jit.phase()
+    seen: int = 0
+
+    @jit.each_event
+    def step(self, e: Event) -> None:
+        self.seen += 1
+        sent: bool = self.out.try_send(e.dur)
+        self.ratio.send(e.dur / 2)
+        self.cfg.set(e.pid)
+        self.mass.contribute(e.dur * 0.5)
+        self.total.contribute(e.dur)
+        if sent:
+            self.cfg.set(0)
+
+    @jit.task
+    async def produce(self, n: int) -> int:
+        await self.pipe.send(n)
+        self.pipe.close()
+        return n
+
+    @jit.task
+    async def consume(self) -> int:
+        got = 0
+        async for v in self.pipe:
+            got += v
+        return got
+
+    @jit.finalize
+    async def done(self) -> None:
+        a, b = await jit.all(self.produce(3), self.consume())
+        self.total.seal()
+        self.mass.seal()
+        whole: int = self.total.result(0)
+        peak: float = self.mass.result()
+        latest: int = self.cfg.get(-1)
+        jit.emit("whole", whole + a + b + latest)
+        jit.emit("peak", peak)
+
+
+@jit.plugin
+class PortsIn:
+    inp: jit.Receiver[int] = jit.receiver(PortsOut.out)
+    flt: jit.Receiver[float] = jit.receiver(PortsOut.ratio)
+    named: jit.Receiver[int] = jit.receiver("plugin.other.q", credits=8, policy="drop_oldest")
+    cfg: jit.Latest[int] = jit.latest(PortsOut.cfg)
+    total: jit.Phase[int] = jit.phase(PortsOut.total)
+    seen: int = 0
+
+    @jit.each_event
+    def step(self, e: Event) -> None:
+        self.seen += 1
+
+    @jit.finalize
+    async def done(self) -> None:
+        first: int = await self.inp.recv()
+        try:
+            second: float = await self.flt.recv()
+            jit.emit("second", second)
+        except jit.Closed:
+            jit.emit("closed", first)
+        async for v in self.inp:
+            jit.emit("v", v)
+
+
+closed: Exception = jit.Closed("channel closed")

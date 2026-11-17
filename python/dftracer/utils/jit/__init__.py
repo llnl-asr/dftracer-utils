@@ -76,6 +76,7 @@ from typing import (
 from .. import _plugin_build, jit_op
 from .._c_text import c_str_literal as _c_str_literal
 from .._jit_errors import Cancelled as Cancelled
+from .._jit_errors import Closed as Closed
 from .._jit_errors import Error as Error
 from .._jit_errors import Fatal as Fatal
 from .._jit_errors import IoError as IoError
@@ -85,8 +86,19 @@ from .._jit_errors import ParseError as ParseError
 from .._jit_errors import SkipRest as SkipRest
 from .._jit_errors import _class_error, _Source
 from ..jit_op import Op, compile_op, op, run_op
-from . import _flow
+from . import _channels, _flow
 from . import ops as ops
+from ._channels import Channel as Channel
+from ._channels import Latest as Latest
+from ._channels import Phase as Phase
+from ._channels import PortDecl as _PortDecl
+from ._channels import Receiver as Receiver
+from ._channels import Sender as Sender
+from ._channels import channel as channel
+from ._channels import latest as latest
+from ._channels import phase as phase
+from ._channels import receiver as receiver
+from ._channels import sender as sender
 from ._flow import File as File
 from ._flow import FlowFn as _FlowFn
 from ._flow import TaskSig as _TaskSig
@@ -152,6 +164,17 @@ __all__ = [
     "publish",
     "consume",
     "Port",
+    "Sender",
+    "Receiver",
+    "Channel",
+    "Latest",
+    "Phase",
+    "sender",
+    "receiver",
+    "channel",
+    "latest",
+    "phase",
+    "Closed",
     "count",
     "sum",
     "min",
@@ -270,7 +293,7 @@ __all__ = [
 
 
 JitError.__module__ = __name__
-for _runtime_exc in (Error, NotFound, IoError, ParseError, Fatal, SkipRest, Cancelled):
+for _runtime_exc in (Error, NotFound, Closed, IoError, ParseError, Fatal, SkipRest, Cancelled):
     _runtime_exc.__module__ = __name__
 
 T = TypeVar("T")
@@ -1498,7 +1521,9 @@ def _state_fields(cls: type) -> "Tuple[Dict[str, _PlainField], Dict[str, _StoreF
     own = _own_annotations(cls)
     hints = _type_hints(cls)
     for attr in own:
-        if attr in _STATE_SKIP or isinstance(cls.__dict__.get(attr), (_MapDecl, _Port, _EachEvent)):
+        if attr in _STATE_SKIP or isinstance(
+            cls.__dict__.get(attr), (_MapDecl, _Port, _EachEvent, _PortDecl)
+        ):
             continue
         tp = _resolve_hint(cls, attr, hints.get(attr, own[attr]))
         if get_origin(tp) is ClassVar or tp is ClassVar:
@@ -2194,6 +2219,7 @@ _UNCATCHABLE = {
 _CATCH_COND = {
     "Error": "dftu_jit_is_error(_st)",
     "NotFound": "_st == DFTU_E_NOT_FOUND",
+    "Closed": "_st == DFTU_E_NOT_FOUND && _pclosed",
     "IoError": "_st == DFTU_E_IO",
     "ParseError": "_st == DFTU_E_PARSE",
 }
@@ -2217,10 +2243,16 @@ class _Compiler:
         config_fields: "Dict[str, _CfgField] | None" = None,
         plain: "Dict[str, _PlainField] | None" = None,
         stores: "Dict[str, _StoreField] | None" = None,
+        chans: "Dict[str, _PortDecl] | None" = None,
     ) -> None:
         self.maps = maps
         self.plain = plain if plain is not None else {}
         self.stores = stores if stores is not None else {}
+        # Channels, latest values and phase results by attribute, and the ones
+        # this body uses (their handles are opened before the body runs).
+        self.chans = chans if chans is not None else {}
+        self.chan_uses: builtins.set[str] = builtins.set()
+        self._port_frame = False
         # Per plain field: the (form, identity) its updates agree on.
         self.plain_forms: Dict[str, Tuple[str, bool]] = {}
         self.store_gets: builtins.set[str] = builtins.set()
@@ -2319,6 +2351,7 @@ class _Compiler:
         self.can_raise = builtins.any(
             isinstance(n, (ast.Raise, ast.Try, ast.With))
             or (isinstance(n, ast.Call) and self._jit_name(n.func) in ("json", "yaml"))
+            or (isinstance(n, ast.Call) and self._chan_call(n) is not None)
             for n in ast.walk(fn_ast)
         )
         body = fn_ast.body
@@ -2688,6 +2721,12 @@ class _Compiler:
         return None
 
     def _flow_stmt(self, stmt: ast.stmt) -> "List[str] | None":
+        if isinstance(stmt, ast.AsyncFor):
+            return self._async_for(stmt)
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+            port = self._chan_call(stmt.value)
+            if port is not None:
+                return self._port_stmt(port)
         if isinstance(stmt, ast.Assign):
             if len(stmt.targets) == 1 and isinstance(stmt.targets[0], (ast.Name, ast.Tuple)):
                 return self._assign(stmt.targets[0], stmt.value, stmt)
@@ -2732,6 +2771,9 @@ class _Compiler:
     def _assign(self, target: ast.expr, value: ast.expr, stmt: ast.stmt) -> List[str]:
         if isinstance(value, ast.Await):
             return self._await_stmt(target, value, stmt)
+        port = self._chan_call(value)
+        if port is not None:
+            return self._port_assign(target, port, stmt)
         if isinstance(target, ast.Tuple):
             _reject_at("tuple assignment needs `await jit.all(...)` on the right", target)
         assert isinstance(target, ast.Name)
@@ -2855,7 +2897,7 @@ class _Compiler:
     def _no_await(self, body: List[ast.stmt], what: str) -> None:
         for stmt in body:
             for sub in ast.walk(stmt):
-                if isinstance(sub, ast.Await):
+                if isinstance(sub, (ast.Await, ast.AsyncFor)):
                     _reject_at(f"await inside {what}; await before or after it", sub)
 
     def _path_text(self, node: ast.expr) -> Tuple[str, str]:
@@ -3270,7 +3312,7 @@ class _Compiler:
             return var, (kinds if name == "all" else [kinds[0]]), False
         _reject_at(
             "await of this call; the awaitables are jit.sleep(s), jit.all(...), jit.any(...), "
-            "a task of this class and a store get (a channel receive comes with channels)",
+            "a task of this class, a store get, and a channel send or receive",
             node,
         )
 
@@ -3278,6 +3320,9 @@ class _Compiler:
         if not self.flow or not self.is_async:
             _reject_at("await outside an `async def` @jit.finalize or @jit.task body", aw)
         inner = _unwrap_index(aw.value)
+        port = self._chan_call(inner)
+        if port is not None:
+            return self._port_await(target, port, stmt)
         if isinstance(inner, ast.Call) and self._store_method(inner) is not None:
             if not isinstance(target, ast.Name):
                 _reject_at("assign the value of a store get: x = await self.<store>.get(k, d)", aw)
@@ -3414,6 +3459,14 @@ class _Compiler:
             _reject_at(
                 f"self.{base} is a jit.Store: use self.{base}.get(key, default) "
                 f"and self.{base}.put(key, value)",
+                node,
+            )
+        if base is not None and base in self.chans:
+            _reject_at(
+                f"self.{base} is a port: a call on it is a statement of its own "
+                "(self.out.send(v)), or the right side of an assignment "
+                "(ok = self.out.try_send(v), x = self.latest.get(0), x = await self.inp.recv()); "
+                "it cannot sit inside an expression or a condition",
                 node,
             )
         _reject(_describe(node), node)
@@ -3731,6 +3784,407 @@ class _Compiler:
         self.store_puts.add(field.name)
         return [f"_st_put_{field.name}({', '.join(['&_se', 'host', *keys, value])});"]
 
+    # ---- ports: channels, latest values and phase results --------------------
+
+    def _chan_call(self, node: ast.expr) -> "Tuple[_PortDecl, str, ast.Call] | None":
+        """``(port, method, call)`` for ``self.<port>.<method>(...)``, else None."""
+        node = _unwrap_index(node)
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Attribute)
+            and isinstance(node.func.value.value, ast.Name)
+            and node.func.value.value.id == self.self_name
+            and node.func.value.attr in self.chans
+        ):
+            return None
+        return self.chans[node.func.value.attr], node.func.attr, node
+
+    def _port_where(self) -> str:
+        if not self.flow:
+            return "the per-event body"
+        return "a @jit.task" if self.in_task else "the @jit.finalize body"
+
+    def _port_fail(self, text: str, node: ast.AST) -> str:
+        msg = _c_str_literal(f"jit.Error [{self._loc_text_plain(node)}]: {text}")
+        return f"_st = dftu_fail(ctx, DFTU_E_INVALID, {msg}); _unw = 1; goto {self._target()};"
+
+    def _port_handle(self, decl: "_PortDecl") -> str:
+        self.chan_uses.add(decl.attr)
+        self.uses.add("ports")
+        return f"R->ch_{decl.attr}" if self.flow else f"_ch_{decl.attr}"
+
+    def _port_value(self, decl: "_PortDecl", node: ast.expr, what: str) -> str:
+        self._check_family(node, "i64", what)
+        expr, is_float = self._arith(node)
+        if decl.elem == "i64":
+            if is_float:
+                _reject_at(
+                    f"self.{decl.attr} carries an int; {what} is a float (round it first)", node
+                )
+            return f"(int64_t)({expr})"
+        return f"(double)({expr})"
+
+    def _port_args(self, decl: "_PortDecl", method: str, call: ast.Call, count: int) -> None:
+        if call.keywords or len(call.args) != count:
+            _reject_at(
+                f"self.{decl.attr}.{method}() takes "
+                + ("no argument" if count == 0 else f"{count} argument(s)"),
+                call,
+            )
+
+    def _port_checks(self, decl: "_PortDecl", method: str, call: ast.Call, awaited: bool) -> None:
+        """The rules a call of ``method`` on ``decl`` follows in this body."""
+        attr = decl.attr
+        methods = {
+            "channel": ("send", "try_send", "close", "recv"),
+            "latest": ("set", "get"),
+            "phase": ("contribute", "seal", "result"),
+        }[decl.kind]
+        if method not in methods:
+            _reject_at(
+                f"self.{attr}.{method}(); a {decl.kind} port has " + ", ".join(methods), call
+            )
+        if decl.kind == "channel":
+            sends = method in ("send", "try_send", "close")
+            if sends and decl.role == "recv":
+                _reject_at(f"self.{attr} is a receiver; it has recv(), not {method}()", call)
+            if not sends and decl.role == "send":
+                _reject_at(f"self.{attr} is a sender; it has send(), try_send() and close()", call)
+            if decl.policy == "block" and not self.flow:
+                _reject_at(
+                    f"self.{attr} is a Block channel, used from an async @jit.finalize or "
+                    "@jit.task, never from the per-event body: a full channel would stop the "
+                    "scan loop that has to drain it",
+                    call,
+                )
+            if method in ("recv", "close") and not self.flow:
+                _reject_at(
+                    f"self.{attr}.{method}() is a call of the @jit.finalize body or a @jit.task"
+                    + (": it waits" if method == "recv" else ": it ends the sends of every worker"),
+                    call,
+                )
+            if method == "send" and awaited and not (self.flow and self.is_async):
+                _reject_at("await outside an `async def` @jit.finalize or @jit.task body", call)
+            if method == "send" and not awaited and decl.policy == "block":
+                _reject_at(
+                    f"self.{attr} is a Block channel: a send waits for a credit; write "
+                    f"`await self.{attr}.send(v)` in an async @jit.finalize or @jit.task body",
+                    call,
+                )
+            if method in ("try_send", "close") and awaited:
+                _reject_at(f"self.{attr}.{method}() never waits; do not await it", call)
+            if method == "recv" and not awaited:
+                _reject_at(
+                    f"self.{attr}.recv() waits for a value: `await self.{attr}.recv()`", call
+                )
+        elif method in ("seal", "result") and not self.flow:
+            _reject_at(
+                f"self.{attr}.{method}() is a call of the @jit.finalize body or a @jit.task: "
+                "a phase is open to contributions while the scan runs",
+                call,
+            )
+        elif awaited:
+            _reject_at(f"self.{attr}.{method}() never waits; do not await it", call)
+
+    def _port_frame_fields(self) -> None:
+        if not self._port_frame:
+            self._port_frame = True
+            self.local_decls += ["int32_t pst;", "uint32_t plen;", "int64_t pval;"]
+
+    def _port_stmt(self, call_info: "Tuple[_PortDecl, str, ast.Call]") -> List[str]:
+        """A statement that is a port call whose value, if any, is unused."""
+        decl, method, call = call_info
+        self._port_checks(decl, method, call, False)
+        if method in ("get", "result"):
+            _reject_at(f"the value of self.{decl.attr}.{method}() is unused; assign it", call)
+        return self._port_lines(decl, method, call, None)
+
+    def _port_assign(
+        self, target: ast.expr, call_info: "Tuple[_PortDecl, str, ast.Call]", stmt: ast.stmt
+    ) -> List[str]:
+        decl, method, call = call_info
+        self._port_checks(decl, method, call, False)
+        if method not in ("try_send", "get", "result"):
+            _reject_at(f"self.{decl.attr}.{method}() gives no value to assign", call)
+        if not isinstance(target, ast.Name):
+            _reject_at("a result is assigned to a name", target)
+        kind = "i64" if method == "try_send" else decl.elem
+        assert kind is not None
+        loc = self._new_local(target.id, kind, target)
+        return self._port_lines(decl, method, call, loc.cname)
+
+    def _port_lines(
+        self, decl: "_PortDecl", method: str, call: ast.Call, dest: "str | None"
+    ) -> List[str]:
+        self.uses.add("ports")
+        attr, name = decl.attr, decl.full
+        tgt = self._target()
+        ctype = "int64_t" if decl.elem == "i64" else "double"
+        err = f"{{ _st = _s; _unw = 1; goto {tgt}; }}"
+        if method in ("send", "try_send"):
+            self._port_args(decl, method, call, 1)
+            value = self._port_value(decl, call.args[0], "the value")
+            h = self._port_handle(decl)
+            lines = [
+                "{",
+                f"    {ctype} _pv = {value};",
+                "    dftu_port_status _ps = DFTU_PORT_OK;",
+                f"    dftu_status _s = _prt->channel_try_send(ctx, host->h, {h}, &_pv, 8, &_ps);",
+                f"    if (_s < 0) {err}",
+            ]
+            if method == "try_send":
+                if dest is not None:
+                    lines.append(f"    {dest} = (_ps == DFTU_PORT_OK) ? 1 : 0;")
+            else:
+                here = self._loc_text_plain(call)
+                full = _c_str_literal(f"jit.Error [{here}]: channel '{name}' is full")
+                closed = _c_str_literal(f"jit.Error [{here}]: channel '{name}' is closed")
+                lines.append(
+                    "    if (_ps != DFTU_PORT_OK) { _st = dftu_fail(ctx, DFTU_E_INVALID, "
+                    f"_ps == DFTU_PORT_FULL ? {full} : {closed}); _unw = 1; goto {tgt}; }}"
+                )
+            return lines + ["}"]
+        if method == "close":
+            self._port_args(decl, method, call, 0)
+            h = self._port_handle(decl)
+            return [
+                "{",
+                f"    dftu_status _s = _prt->channel_close(ctx, host->h, {h});",
+                f"    if (_s < 0) {err}",
+                "}",
+            ]
+        if method == "set":
+            self._port_args(decl, method, call, 1)
+            value = self._port_value(decl, call.args[0], "the value")
+            return [
+                "{",
+                f"    {ctype} _pv = {value};",
+                "    uint64_t _gen = 0;",
+                f"    dftu_status _s = _prt->latest_set(ctx, host->h, {_c_str_literal(name)}, &_pv, 8, &_gen);",
+                f"    if (_s < 0) {err}",
+                "}",
+            ]
+        if method == "contribute":
+            self._port_args(decl, method, call, 1)
+            value = self._port_value(decl, call.args[0], "the value")
+            ty = "DFTU_T_I64" if decl.elem == "i64" else "DFTU_T_F64"
+            assert decl.merge is not None
+            sealed = self._port_fail(f"the phase result '{name}' is sealed", call)
+            return [
+                "{",
+                f"    {ctype} _pv = {value};",
+                "    dftu_port_status _ps = DFTU_PORT_OK;",
+                f"    dftu_status _s = _prt->phase_contribute(ctx, host->h, {_c_str_literal(name)}, 1, "
+                f"{_channels.MERGES[decl.merge]}, {ty}, &_pv, 8, &_ps);",
+                f"    if (_s < 0) {err}",
+                f"    if (_ps != DFTU_PORT_OK) {{ {sealed} }}",
+                "}",
+            ]
+        if method == "seal":
+            self._port_args(decl, method, call, 0)
+            return [
+                "{",
+                f"    dftu_status _s = _prt->phase_seal(ctx, host->h, {_c_str_literal(name)}, 1);",
+                f"    if (_s < 0) {err}",
+                "}",
+            ]
+        assert dest is not None and method in ("get", "result")
+        if method == "get":
+            self._port_args(decl, method, call, 1)
+            default = self._port_value(decl, call.args[0], "the default")
+            read = (
+                f"_prt->latest_get(ctx, host->h, {_c_str_literal(name)}, _pb, 8, &_pl, &_gen, &_ps)"
+            )
+            absent = f"{dest} = {default};"
+            blocked = ""
+        else:
+            if call.keywords or len(call.args) > 1:
+                _reject_at(f"self.{attr}.result() takes at most a default value", call)
+            default = (
+                self._port_value(decl, call.args[0], "the default")
+                if call.args
+                else ("0" if decl.elem == "i64" else "0.0")
+            )
+            read = (
+                f"_prt->phase_result(ctx, host->h, {_c_str_literal(name)}, 1, _pb, 8, &_pl, &_ps)"
+            )
+            absent = self._port_fail(
+                f"the phase result '{name}' is still open: call seal() first", call
+            )
+            blocked = f"if (_ps == DFTU_PORT_NOT_READY) {{ {absent} }}"
+        odd = self._port_fail(f"'{name}' holds a value that is not an 8-byte int or float", call)
+        lines = [
+            "{",
+            "    unsigned char _pb[8];",
+            "    uint32_t _pl = 0;",
+            *(["    uint64_t _gen = 0;"] if method == "get" else []),
+            "    dftu_port_status _ps = DFTU_PORT_OK;",
+            f"    dftu_status _s = {read};",
+            f"    if (_s < 0) {err}",
+        ]
+        if method == "get":
+            lines += [
+                f"    if (_ps == DFTU_PORT_NOT_READY) {{ {dest} = {default}; }}",
+                f"    else if (_ps == DFTU_PORT_OK && _pl == 8) {{ memcpy(&{dest}, _pb, 8); }}",
+                f"    else {{ {odd} }}",
+            ]
+        else:
+            lines += [
+                f"    {blocked}",
+                f"    else if (_ps == DFTU_PORT_OK && _pl == 0) {{ {dest} = {default}; }}",
+                f"    else if (_ps == DFTU_PORT_OK && _pl == 8) {{ memcpy(&{dest}, _pb, 8); }}",
+                f"    else {{ {odd} }}",
+            ]
+        return lines + ["}"]
+
+    def _port_wait(self, start: List[str], resume: List[str], node: ast.AST) -> List[str]:
+        """The lines of one await on a task the ports service started: start it,
+        park the frame, and on resume check the cancel, take the status and run
+        ``resume``."""
+        self._port_frame_fields()
+        self.uses.add("task")
+        self._await_n += 1
+        k = self._await_n
+        outer = self._target()
+        cancel = _c_str_literal(
+            f"jit.Cancelled [{self._loc_text_plain(node)}]: cancelled at an await"
+        )
+        return [
+            "{",
+            *["    " + ln for ln in start],
+            f"    if (_w < 0) {{ _st = _w; _unw = 1; goto {outer}; }}",
+            "    *n_wait = 1;",
+            "    S->tk = wait[0];",
+            f"    S->pc = {k};",
+            "    return DFTU_OK;",
+            "}",
+            f"case {k}: ;",
+            "{",
+            "    if (dftu_check(ctx) < 0) {",
+            "        dftu_jit_stat_inc(6);",
+            f"        _st = dftu_fail(ctx, DFTU_E_CANCELLED, {cancel}); _unw = 1; goto {outer};",
+            "    }",
+            "    dftu_status _w = _tsk->status(ctx, host->h, S->tk);",
+            "    S->tk = NULL;",
+            f"    if (_w < 0) {{ _st = _w; _unw = 1; goto {outer}; }}",
+            *["    " + ln for ln in resume],
+            "}",
+        ]
+
+    def _port_recv_start(self, decl: "_PortDecl") -> List[str]:
+        h = self._port_handle(decl)
+        return [
+            "S->pst = DFTU_PORT_OK;",
+            "S->plen = 0;",
+            "S->pval = 0;",
+            "dftu_status _w = _prt->channel_recv_exact(ctx, host->h, "
+            f"{h}, &S->pval, 8, &S->plen, &S->pst, &wait[0]);",
+        ]
+
+    def _port_await(
+        self,
+        target: "ast.expr | None",
+        call_info: "Tuple[_PortDecl, str, ast.Call]",
+        stmt: ast.stmt,
+    ) -> List[str]:
+        decl, method, call = call_info
+        self._port_checks(decl, method, call, True)
+        if decl.kind != "channel" or method not in ("send", "recv"):
+            _reject_at(f"self.{decl.attr}.{method}() is not awaited", call)
+        name = decl.full
+        here = self._loc_text_plain(stmt)
+        self.uses.add("ports")
+        if method == "send":
+            self._port_args(decl, method, call, 1)
+            if target is not None:
+                _reject_at("a send gives no value to assign", target)
+            ctype = "int64_t" if decl.elem == "i64" else "double"
+            value = self._port_value(decl, call.args[0], "the value")
+            h = self._port_handle(decl)
+            start = [
+                "S->pst = DFTU_PORT_OK;",
+                f"{ctype} _pv = {value};",
+                "memcpy(&S->pval, &_pv, 8);",
+                f"dftu_status _w = _prt->channel_send(ctx, host->h, {h}, &S->pval, 8, &S->pst, &wait[0]);",
+            ]
+            tgt = self._target()
+            full = _c_str_literal(f"jit.Error [{here}]: channel '{name}' is full")
+            closed = _c_str_literal(f"jit.Error [{here}]: channel '{name}' is closed")
+            resume = [
+                "if (S->pst != DFTU_PORT_OK) { _st = dftu_fail(ctx, DFTU_E_INVALID, "
+                f"S->pst == DFTU_PORT_FULL ? {full} : {closed}); _unw = 1; goto {tgt}; }}"
+            ]
+            return self._port_wait(start, resume, stmt)
+        self._port_args(decl, method, call, 0)
+        decode: List[str] = []
+        if target is not None:
+            if not isinstance(target, ast.Name):
+                _reject_at("a result is assigned to a name", target)
+            assert decl.elem is not None
+            loc = self._new_local(target.id, decl.elem, target)
+            decode.append(f"memcpy(&{loc.cname}, &S->pval, 8);")
+        tgt = self._target()
+        closed_msg = _c_str_literal(f"jit.Closed [{here}]: channel '{name}' is closed and drained")
+        start = self._port_recv_start(decl)
+        resume = [
+            "if (S->pst == DFTU_PORT_CLOSED) {",
+            f"    _pclosed = 1; _st = dftu_fail(ctx, DFTU_E_NOT_FOUND, {closed_msg}); _unw = 1; goto {tgt};",
+            "}",
+            "if (S->pst != DFTU_PORT_OK) { "
+            + self._port_fail(
+                f"channel '{name}' carried a message that is not an 8-byte int or float", stmt
+            )
+            + " }",
+            *decode,
+        ]
+        return self._port_wait(start, resume, stmt)
+
+    def _async_for(self, stmt: ast.AsyncFor) -> List[str]:
+        if not (self.flow and self.is_async):
+            _reject_at("`async for` needs an `async def` @jit.finalize or @jit.task body", stmt)
+        if stmt.orelse:
+            _reject_at("`async for` with `else`", stmt)
+        it = stmt.iter
+        decl = (
+            self.chans.get(it.attr)
+            if isinstance(it, ast.Attribute)
+            and isinstance(it.value, ast.Name)
+            and it.value.id == self.self_name
+            else None
+        )
+        if decl is None or decl.kind != "channel" or decl.role == "send":
+            _reject_at(
+                "`async for` takes a receiver or channel of this plugin: "
+                "`async for v in self.inp:`",
+                it,
+            )
+        if not isinstance(stmt.target, ast.Name):
+            _reject_at("the loop variable of `async for` is one name", stmt.target)
+        assert decl.elem is not None
+        loc = self._new_local(stmt.target.id, decl.elem, stmt.target)
+        self._loop_seq += 1
+        self._loops += 1
+        self._active_loops.append(self._loop_seq)
+        defs, body = self._compile_scope(stmt.body)
+        self._active_loops.pop()
+        self._loops -= 1
+        odd = self._port_fail(
+            f"channel '{decl.full}' carried a message that is not an 8-byte int or float", stmt
+        )
+        self.uses.add("ports")
+        start = self._port_recv_start(decl)
+        resume = [
+            "if (S->pst == DFTU_PORT_CLOSED) break;",
+            f"if (S->pst != DFTU_PORT_OK) {{ {odd} }}",
+            f"memcpy(&{loc.cname}, &S->pval, 8);",
+        ]
+        lines = ["for (;;) {"]
+        lines += ["    " + ln for ln in self._port_wait(start, resume, stmt)]
+        lines += ["    " + ln for ln in defs + body]
+        lines.append("}")
+        return lines
+
     def _slice_elts(self, sl: ast.expr) -> List[ast.expr]:
         sl = _unwrap_index(sl)
         return builtins.list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
@@ -3866,12 +4320,18 @@ class _Compiler:
             if name is None:
                 _reject_at(
                     "`except` names a Python class; catch jit.Error or one of its subclasses "
-                    "(jit.NotFound, jit.IoError, jit.ParseError)",
+                    "(jit.NotFound, jit.Closed, jit.IoError, jit.ParseError)",
                     at,
                 )
             if name in _UNCATCHABLE:
                 _reject_at(
                     f"jit.{name} ends the run and cannot be caught; {_UNCATCHABLE[name]}", at
+                )
+            if name == "Closed" and not (self.flow and self.is_async):
+                _reject_at(
+                    "jit.Closed comes from `await self.<channel>.recv()`; catch it in an async "
+                    "@jit.finalize or @jit.task body",
+                    at,
                 )
             cond = _CATCH_COND.get(name)
             if cond is None:
@@ -3913,6 +4373,8 @@ class _Compiler:
             lines.append(f"        {branch} (_st < 0 && ({cond})) {{")
             lines.append("            _unw = 0;")
             lines.append("            _st = DFTU_OK;")
+            if self.flow:
+                lines.append("            _pclosed = 0;")
             lines.extend("            " + ln for ln in hdefs + hbody)
             lines.append("        }")
             branch = "else if"
@@ -5223,10 +5685,15 @@ def _emit(
     res_frees: "List[str] | None" = None,
     flow_defs: "List[str] | None" = None,
     finalize_lines: "List[str] | None" = None,
+    chans: "Dict[str, _PortDecl] | None" = None,
+    chan_uses: "builtins.set[str] | None" = None,
+    plugin_name: str = "dftracer.jit",
 ) -> str:
     op_defs = op_defs or []
     stores = stores or {}
     ports = ports or {}
+    chans = chans or {}
+    chan_uses = chan_uses or builtins.set()
     flow_uses = flow_uses if flow_uses is not None else builtins.set()
     res_decls = res_decls or []
     res_frees = res_frees or []
@@ -5275,6 +5742,8 @@ def _emit(
         out += _flow.C_STATS
     if builtins.any(u in flow_uses for u in ("json", "yaml", "task")) or has_flows:
         out += _flow.C_VALUE_HELPERS
+    if _channels.channels_of(chans):
+        out += _channels.C_PORT_HELPERS
     if stores:
         out += _emit_store_defs(stores, store_gets or builtins.set(), store_puts or builtins.set())
     for fn_src in op_defs:
@@ -5377,8 +5846,12 @@ def _emit(
         ]
 
     name_defs, name_assigns = _emit_name_lists(
-        sorted([_wire_id(p) for _, p in pub_ports] + [map_ids[attr] for attr in maps]),
-        sorted(_wire_id(p) for _, p in sub_ports),
+        sorted(
+            [_wire_id(p) for _, p in pub_ports]
+            + [map_ids[attr] for attr in maps]
+            + _channels.provided_names(chans)
+        ),
+        sorted([_wire_id(p) for _, p in sub_ports] + _channels.consumed_names(chans)),
     )
     out += name_defs
     if has_slice:
@@ -5457,7 +5930,7 @@ def _emit(
         out.append(f"    dftu_jit_col _argcol{idx} = dftu_jit_resolve(df, {col_name});")
     out.append("    int _alloc_ok = 1;")
     if can_raise:
-        out.append("    int _unw = 0;")
+        out += ["    int _unw = 0;", "    (void)_unw;"]
     if "cap" in flow_uses:
         out += ["    DftuCap _cap;", "    dftu_cap_init(&_cap, ctx);"]
     for svc, ctype, ident, word in (
@@ -5465,9 +5938,16 @@ def _emit(
         ("task", "dftu_svc_task", "DFTU_SVC_TASK", "task"),
         ("json", "dftu_svc_format", "DFTU_SVC_JSON", "JSON"),
         ("yaml", "dftu_svc_format", "DFTU_SVC_YAML", "YAML"),
+        ("ports", "dftu_svc_ports", "DFTU_SVC_PORTS", "ports"),
     ):
         if svc in flow_uses:
-            var = {"fileio": "_fio", "task": "_tsk", "json": "_fmtj", "yaml": "_fmty"}[svc]
+            var = {
+                "fileio": "_fio",
+                "task": "_tsk",
+                "json": "_fmtj",
+                "yaml": "_fmty",
+                "ports": "_prt",
+            }[svc]
             out += [
                 f"    const {ctype}* {var} = (const {ctype}*)host->get_service(host->h, {ident});",
                 f'    if (!{var} && _st >= 0) _st = dftu_fail(ctx, DFTU_E_UNSUPPORTED, "the host has no {word} service");',
@@ -5479,6 +5959,7 @@ def _emit(
     inner: List[str] = []
     if ports:
         inner += _emit_port_pre(pub_ports, sub_ports)
+    inner += _channels.event_open_lines(chans, chan_uses)
     if batch is not None:
         inner.append("    if (n > 0) {")
         inner += ["        " + ln for ln in batch.lines]
@@ -5549,17 +6030,7 @@ def _emit(
         + (
             (flow_defs or []) + (finalize_lines or [])
             if has_flows
-            else [
-                "static dftu_status on_finalize(dftu_ctx* ctx, void* slice,",
-                "                               const dftu_plugin_host* host, dftu_task** pending) {",
-                "    (void)ctx;",
-                "    (void)slice;",
-                "    (void)host;",
-                "    *pending = NULL;",
-                "    return DFTU_OK;",
-                "}",
-                "",
-            ]
+            else _channels.close_without_finalize(chans)
         )
         + [
             "static void destroy_slice(void* slice) { free(slice); }",
@@ -5578,13 +6049,14 @@ def _emit(
             ]
         )
         + [
-            'DFTU_PLUGIN_INFO("dftracer.jit", NULL)',
+            f"DFTU_PLUGIN_INFO({_c_str_literal(plugin_name)}, NULL)",
             "",
             "DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h,",
             "                                               const dftu_value* config,",
             "                                               dftu_plugin** out) {",
             "    (void)ctx;",
             "    (void)h;",
+            *_channels.factory_lines(chans),
             cfg_reads,
             "    g_plugin.struct_size = sizeof(g_plugin);",
             f"    g_plugin.plan_duql = {plan_duql_field};",
@@ -5917,10 +6389,145 @@ def _store_plugin_name(identity: str) -> str:
 _STORE_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_-")
 
 
+_PORT_ANNOTATION = {
+    "Sender": ("channel", ("send",)),
+    "Receiver": ("channel", ("recv",)),
+    "Channel": ("channel", ("both",)),
+    "Latest": ("latest", ("own", "ref")),
+    "Phase": ("phase", ("own", "ref")),
+}
+_PORT_ORIGINS = {
+    Sender: "Sender",
+    Receiver: "Receiver",
+    Channel: "Channel",
+    Latest: "Latest",
+    Phase: "Phase",
+}
+_PORT_FACTORY = {
+    ("channel", "send"): "jit.sender(...)",
+    ("channel", "recv"): "jit.receiver(...)",
+    ("channel", "both"): "jit.channel(...)",
+    ("latest", "own"): "jit.latest()",
+    ("latest", "ref"): "jit.latest(...)",
+    ("phase", "own"): "jit.phase(...)",
+    ("phase", "ref"): "jit.phase(...)",
+}
+
+
+def _port_decls(
+    cls: type, pkg: "JitPackage", declared: "Dict[str, _PortDecl]"
+) -> "Dict[str, _PortDecl]":
+    """Complete the port attributes of ``cls``: the element type from the
+    annotation, the host name from the plugin identity, and, for a reference, the
+    options and type of the declaration it names (checked against this end)."""
+    if not declared:
+        return declared
+    own = _own_annotations(cls)
+    plugin_name = pkg.identity(cls)
+    own_full = {
+        f"plugin.{plugin_name}.{a}"
+        for a, d in declared.items()
+        if d.kind == "channel" and d.role in ("send", "both")
+    }
+    for attr, decl in declared.items():
+        try:
+            _channels.check_logical(attr)
+        except JitError as exc:
+            raise _class_error(cls, exc.reason, attr) from None
+        if attr not in own:
+            raise _class_error(
+                cls,
+                f"the port '{attr}' needs an annotation with its element type, "
+                f"such as `{attr}: jit.{'Sender' if decl.role == 'send' else 'Receiver'}[int]`",
+                attr,
+            )
+        tp = _resolve_hint(cls, attr, own[attr])
+        name = _PORT_ORIGINS.get(get_origin(tp))  # type: ignore[arg-type]
+        want = _PORT_FACTORY[(decl.kind, decl.role)]
+        args = get_args(tp)
+        if name is None or len(args) != 1:
+            raise _class_error(
+                cls,
+                f"the port '{attr}' is declared with {want}; annotate it "
+                "jit.Sender[int], jit.Receiver[float], jit.Channel[int], jit.Latest[int] or "
+                "jit.Phase[float]",
+                attr,
+            )
+        kind, roles = _PORT_ANNOTATION[name]
+        if kind != decl.kind or decl.role not in roles:
+            raise _class_error(
+                cls,
+                f"the port '{attr}' is annotated jit.{name}[...] but declared with {want}",
+                attr,
+            )
+        elem = _channels.elem_of(args[0])
+        if elem is None:
+            raise _class_error(
+                cls,
+                f"the port '{attr}' carries {getattr(args[0], '__name__', args[0])!s}; a port "
+                "carries an int or a float (a str is a view or an interned id that is valid "
+                "only in the body that read it, so it cannot cross a channel)",
+                attr,
+            )
+        decl.attr = attr
+        decl.elem = elem
+        decl.owner = True
+        decl.logical = attr
+        decl.full = f"plugin.{plugin_name}.{attr}"
+        src = decl.source
+        if isinstance(src, str):
+            if decl.kind == "channel" and src in own_full:
+                raise _class_error(
+                    cls,
+                    f"the port '{attr}' receives {src}, a channel of this plugin: its sends "
+                    "close only when its finalize ends, so a receive in it would wait for "
+                    "ever; use jit.channel for both ends in one plugin",
+                    attr,
+                )
+            decl.owner = False
+            decl.logical = decl.full = src
+        elif src is not None:
+            if not src.full:
+                raise _class_error(
+                    cls,
+                    f"the port '{attr}' refers to a port of a plugin that is not built yet; "
+                    "declare and decorate that class first",
+                    attr,
+                )
+            if src.elem != elem:
+                raise _class_error(
+                    cls,
+                    f"the port '{attr}' carries {args[0].__name__} but {src.full} carries "
+                    f"{'int' if src.elem == 'i64' else 'float'}",
+                    attr,
+                )
+            if src.policy == "block":
+                raise _class_error(
+                    cls,
+                    f"the port '{attr}' refers to the Block channel {src.full}, which stays in "
+                    "the plugin that owns it (a Block send to another plugin would wait for "
+                    "ever once it passed the credits); use policy 'fail' or 'drop_oldest'",
+                    attr,
+                )
+            decl.owner = False
+            decl.logical = decl.full = src.full
+            decl.credits, decl.policy = src.credits, src.policy
+            decl.max_msg_bytes, decl.merge = src.max_msg_bytes, src.merge
+    seen: Dict[str, str] = {}
+    for attr, decl in declared.items():
+        if decl.logical in seen:
+            raise _class_error(
+                cls, f"the ports '{seen[decl.logical]}' and '{attr}' name one port", attr
+            )
+        seen[decl.logical] = attr
+    return declared
+
+
 def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
     pkg = package if package is not None else _DEFAULT_PACKAGE
     maps: Dict[str, _AnyMap] = {}
     ports: Dict[str, _Port] = {}
+    chans: Dict[str, _PortDecl] = {}
     each: List[_EachEvent] = []
     batches: List[_EachBatch] = []
     task_fns: Dict[str, Callable[..., object]] = {}
@@ -5930,6 +6537,8 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
             maps[attr] = val
         elif isinstance(val, _Port):
             ports[attr] = val
+        elif isinstance(val, _PortDecl):
+            chans[attr] = val
         elif isinstance(val, _EachEvent):
             each.append(val)
         elif isinstance(val, _EachBatch):
@@ -5939,11 +6548,12 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
         elif callable(val) and getattr(val, _flow.FINALIZE_ATTR, False):
             finalize_fns.append(val)
     plains, stores = _state_fields(cls)
-    if not maps and not ports and not plains and not stores:
+    if not maps and not ports and not plains and not stores and not chans:
         raise _class_error(
             cls,
-            "@jit.plugin needs at least one jit.map, plain-container state field, jit.Store "
-            "or jit.publish/jit.consume attribute",
+            "@jit.plugin needs at least one jit.map, plain-container state field, jit.Store, "
+            "jit.publish/jit.consume attribute or port (jit.sender, jit.receiver, jit.channel, "
+            "jit.latest, jit.phase)",
         )
     if batches:
         if each:
@@ -5955,7 +6565,9 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
                 cls,
                 "@jit.task and @jit.finalize need an @jit.each_event plugin, not @jit.each_batch",
             )
-        return _build_batch_plugin(cls, pkg, maps, ports, plains, stores, batches)
+        return _build_batch_plugin(
+            cls, pkg, maps, ports, plains, stores, batches, _port_decls(cls, pkg, chans)
+        )
     if len(each) != 1:
         raise _class_error(
             cls, "@jit.plugin needs exactly one @jit.each_event or @jit.each_batch method"
@@ -5966,6 +6578,11 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
         )
     if (task_fns or finalize_fns) and each[0].raw:
         raise _class_error(cls, "@jit.task and @jit.finalize need an AST-compiled each_event body")
+    if chans and each[0].raw:
+        raise _class_error(
+            cls, "channels, latest values and phase results need an AST-compiled each_event body"
+        )
+    chans = _port_decls(cls, pkg, chans)
     if len(finalize_fns) > 1:
         raise _class_error(cls, "@jit.plugin takes one @jit.finalize method")
     if task_fns and not finalize_fns:
@@ -6012,6 +6629,7 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
             config_fields=configs,
             plain=plains,
             stores=stores,
+            chans=chans,
         )
         for attr, fn in task_fns.items():
             src = _Source(fn)
@@ -6052,6 +6670,7 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
                 config_fields=configs,
                 plain={},
                 stores=stores,
+                chans=chans,
             )
             flow_compiler.tasks = sigs
             flow = flow_compiler.lower_flow(fn, sig)
@@ -6071,7 +6690,11 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
                     f"    (void)_cfgs_{cf.name};",
                 ]
         flow_defs, finalize_lines, fu = _flow.emit_flows(
-            flow_fns, has_cfg=bool(configs), cfg_pre=cfg_pre, has_stores=bool(stores)
+            flow_fns,
+            has_cfg=bool(configs),
+            cfg_pre=cfg_pre,
+            has_stores=bool(stores),
+            chans=chans,
         )
         flow_uses |= fu
     map_ids = {attr: pkg.identity(cls, attr) for attr in maps}
@@ -6099,6 +6722,9 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
         res_frees=compiler.res_frees if not each[0].raw else None,
         flow_defs=flow_defs,
         finalize_lines=finalize_lines,
+        chans=chans,
+        chan_uses=compiler.chan_uses if not each[0].raw else None,
+        plugin_name=pkg.identity(cls) if chans else "dftracer.jit",
     )
     result_names = {qid: attr for attr, qid in map_ids.items()}
     name = _store_plugin_name(pkg.identity(cls)) if stores else cls.__name__
@@ -6112,6 +6738,8 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
     setattr(cls, "_jit_plugin", plugin)
     if configs:
         setattr(cls, "_jit_config", configs)
+    if chans:
+        setattr(cls, "_jit_ports", chans)
     return cls
 
 
@@ -6123,6 +6751,7 @@ def _build_batch_plugin(
     plains: Dict[str, _PlainField],
     stores: Dict[str, _StoreField],
     batches: "List[_EachBatch]",
+    chans: "Dict[str, _PortDecl]",
 ) -> type:
     from ._batch import HELPERS, lower_batch
 
@@ -6140,7 +6769,10 @@ def _build_batch_plugin(
     if _config_fields(cls):
         raise _class_error(cls, "an @jit.each_batch plugin takes no config; use @jit.each_event")
     hook = lower_batch(
-        batches[0].fn, cast("Dict[str, object]", maps), cast("Dict[str, object]", plains)
+        batches[0].fn,
+        cast("Dict[str, object]", maps),
+        cast("Dict[str, object]", plains),
+        cast("Dict[str, object]", chans),
     )
     for attr in plains:
         if attr not in hook.updated:
@@ -6172,10 +6804,16 @@ def _build_batch_plugin(
         {},
         map_ids=map_ids,
         batch=hook,
+        flow_uses=builtins.set(["ports"]) if chans else None,
+        chans=chans,
+        chan_uses=hook.chan_uses,
+        plugin_name=pkg.identity(cls) if chans else "dftracer.jit",
     )
     result_names = {qid: attr for attr, qid in map_ids.items()}
     plugin = JitPlugin(cls.__name__, source, {}, result_names, pkg.shippable(cls), "batch")
     setattr(cls, "_jit_plugin", plugin)
+    if chans:
+        setattr(cls, "_jit_ports", chans)
     return cls
 
 

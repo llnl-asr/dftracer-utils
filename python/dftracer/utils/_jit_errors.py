@@ -273,6 +273,12 @@ class NotFound(Error):
     """A path or key the plugin named does not exist (status ``DFTU_E_NOT_FOUND``)."""
 
 
+class Closed(NotFound):
+    """``await channel.recv()`` found the channel closed and drained (status
+    ``DFTU_E_NOT_FOUND``). A body catches it with ``except jit.Closed``;
+    ``async for v in channel`` ends instead of raising it."""
+
+
 class IoError(Error):
     """A read or write failed (status ``DFTU_E_IO``)."""
 
@@ -344,6 +350,7 @@ _RUNTIME_KINDS = {
     "Cancelled": Cancelled,
     "Error": Error,
     "NotFound": NotFound,
+    "Closed": Closed,
     "IoError": IoError,
     "ParseError": ParseError,
 }
@@ -352,7 +359,7 @@ _RUNTIME_KINDS = {
 # The tag comes first so that a long message cannot cut it; the host prefixes the
 # plugin and the callback.
 _RUNTIME_TAG = re.compile(
-    r"jit\.(Fatal|Cancelled|Error|NotFound|IoError|ParseError) \[(.+?):(\d+):(\d+)\]: (.*)\Z",
+    r"jit\.(Fatal|Cancelled|Error|NotFound|Closed|IoError|ParseError) \[(.+?):(\d+):(\d+)\]: (.*)\Z",
     re.S,
 )
 
@@ -365,3 +372,60 @@ def translate_run_error(exc: BaseException) -> "BaseException | None":
         return None
     kind, file, line, col, message = found.groups()
     return _RUNTIME_KINDS[kind](message, file=file, line=int(line), col=int(col))
+
+
+def check_port_wiring(plugins: "List[Any]") -> None:
+    """Raise a :class:`JitError`, located at the port, for a port that refers to
+    another ``@jit.plugin``'s latest value or phase result when that plugin is not
+    in ``plugins``: the host plans channels, but it has no way to know that a latest
+    or a phase has no owner. A reference by name (a string) is the host's to check."""
+    classes = [c for c in plugins if not isinstance(c, str)]
+    owned = {
+        decl.full
+        for cls in classes
+        for decl in (getattr(cls, "_jit_ports", None) or {}).values()
+        if decl.owner
+    }
+    owner_of = {
+        decl.full: decl
+        for cls in classes
+        for decl in (getattr(cls, "_jit_ports", None) or {}).values()
+        if decl.owner
+    }
+    for cls in classes:
+        for attr, decl in (getattr(cls, "_jit_ports", None) or {}).items():
+            if isinstance(decl.source, str):
+                # A reference by name takes no type from the owner, so a JIT owner in
+                # this set is matched here; a hand-written owner's wire is 8 raw bytes.
+                found = owner_of.get(decl.full)
+                if found is not None and (found.kind, found.elem) != (decl.kind, decl.elem):
+                    word = {"i64": "int", "f64": "float"}
+                    raise _class_error(
+                        cls,
+                        f"the port '{attr}' carries {word.get(decl.elem or '', decl.elem)} but "
+                        f"{decl.full} is a {found.kind} port that carries "
+                        f"{word.get(found.elem or '', found.elem)}",
+                        attr,
+                    )
+            if not decl.owner and not isinstance(decl.source, str) and decl.full not in owned:
+                raise _class_error(
+                    cls,
+                    f"the port '{attr}' refers to {decl.full}, which no plugin of this set "
+                    "declares; load the plugin that owns it in the same run",
+                    attr,
+                )
+
+
+def translate_plan_error(plugins: "List[Any]", exc: BaseException) -> "JitError | None":
+    """The :class:`JitError` a failed plan stands for when the host's message names
+    a port of one of the ``@jit.plugin`` classes in ``plugins`` (a receiver with no
+    sender, options that differ between two ends, two plugins of one name), located
+    at that port's declaration; None for any other failure."""
+    text = str(exc)
+    for cls in plugins:
+        if isinstance(cls, str):
+            continue
+        for attr, decl in (getattr(cls, "_jit_ports", None) or {}).items():
+            if decl.full and decl.full in text:
+                return _class_error(cls, text, attr)
+    return None

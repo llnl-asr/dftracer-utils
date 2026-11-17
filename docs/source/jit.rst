@@ -892,8 +892,8 @@ keeps across each ``await``. The awaits are a closed set:
   store (a task cannot get or put: tasks run beside each other, so pass the value as an
   argument).
 
-A channel receive is not in the set: channels come in a later group, and an
-``await`` of it is a compile error that says so. ``await`` is a statement of its
+A channel send and a channel receive are in the set too (see
+:ref:`jit-channels`). ``await`` is a statement of its
 own, or the whole right side of ``x = await ...`` or ``a, b = await ...``; inside a
 condition, an expression, a ``for`` body or a ``with`` body it is a compile error.
 A task call that is not awaited is one too.
@@ -913,10 +913,138 @@ and the ABI gives it no slot for a pending task, so a task started there could n
 add to scan state and waiting for it would be a plain call. A plugin that has a
 task needs a ``finalize``.
 
-A plugin that uses files, JSON or tasks exports ``dftu_jit_stat(k)``, which counts
+A plugin that uses files, JSON, tasks or channels exports ``dftu_jit_stat(k)``, which counts
 the task frames started (0), released (1), files opened (2) and closed (3) and
 task frames completed (4); the tests read it to check that every open is closed and
 every frame released once.
+
+.. _jit-channels:
+
+Channels, latest values and phase results
+-----------------------------------------
+
+A plugin talks to other plugins, and to its own tasks, through ports of the
+``DFTU_SVC_PORTS`` service. A port is a class attribute: the annotation gives the
+element type, ``int`` or ``float`` (a ``str`` is a view or an interned id that
+lives only in the body that read it, so ``jit.Sender[str]`` is a compile error),
+and the value says what the port is.
+
+.. code-block:: python
+
+   @jit.plugin
+   class Producer:
+       out: jit.Sender[int] = jit.sender(credits=64)
+
+       @jit.each_event
+       def step(self, e):
+           self.out.send(e.dur)               # stored now, or raises jit.Error
+
+   @jit.plugin
+   class Consumer:
+       inp: jit.Receiver[int] = jit.receiver(Producer.out)
+       n: int = 0
+
+       @jit.each_event
+       def step(self, e):
+           self.n += 1
+
+       @jit.finalize
+       async def done(self) -> None:
+           total = 0
+           async for v in self.inp:           # until the channel is closed
+               total += v
+           jit.emit("total", total)
+
+The plugin factory declares each end to the host, with the plugin's identity as
+its name (the host prefixes a port with ``plugin.<plugin>.``), and the host checks
+the whole plan before the scan: a receiver whose sender is not in the set, ends
+that differ in credits, policy or size, a cycle and two plugins of one name are
+refused. The host's message reaches ``Plugins(...)`` as a ``JitError`` located at
+the port that it names. A ``jit.receiver(Producer.out)`` takes its options and its
+element type from the sender it names, so the two cannot disagree: a different
+element type is a compile error at the receiver. The string form,
+``jit.receiver("plugin.owner.name", credits=..., policy=...)``, names a channel of
+a hand-written plugin in full and must repeat the owner's options. Every
+receiver, the string form included, lists its channel in ``consumes``, so the host
+runs the sender's plugin first whatever the load order; a hand-written sender
+lists the same full name in its ``provides``, or the host refuses the plan
+(``consumes ... which no loaded plugin provides``) and does not wait for ever. A
+receiver of a channel of its own plugin is a compile error (use ``jit.channel``).
+A string receiver of a ``jit`` sender in the same ``Plugins(...)`` is checked
+against that sender's element type; the wire is 8 raw bytes, an ``int64`` or a
+``double``, and a hand-written plugin on the other end is not checked: the type is
+the author's to keep.
+
+Channels
+~~~~~~~~
+
+- ``jit.sender(credits=16, policy="fail")``, ``jit.receiver(...)`` and
+  ``jit.channel(...)`` (both ends in one plugin, such as a producer task and a
+  consumer task of one finalize). ``credits`` is the number of messages the channel
+  holds; ``policy`` is what a send does when it is full: ``"fail"`` reports it,
+  ``"drop_oldest"`` drops the oldest message and ``"block"`` waits for a credit.
+  ``"block"`` is for ``jit.channel`` only: the finalize bodies of two plugins run one
+  after the other, so a send that waits for another plugin could never be
+  drained. A value takes 8 bytes, so ``max_msg_bytes`` is for a string-named channel
+  of a hand-written plugin.
+- ``self.out.send(v)`` stores the value now, and raises ``jit.Error`` (the message
+  names the channel) when the channel is full or closed. ``await self.out.send(v)`` in an
+  ``async`` finalize or task waits for a credit on a ``"block"`` channel.
+  ``ok = self.out.try_send(v)`` never waits and says whether the value was
+  stored. Both are calls of an ``each_event`` body too, except on a Block channel:
+  a full channel would stop the scan loop that has to drain it, so a Block channel is
+  used from an async finalize or task only.
+- ``send``, ``try_send``, ``set`` and ``contribute`` in an ``each_event`` body are
+  one host call for each event (a lock for each call); use an ``each_batch`` body to
+  call once for each batch. A per-event ``send`` on a ``"fail"`` channel needs a credit
+  for every value sent before the consumer drains it in its finalize, so give the
+  channel at least that many ``credits`` or it raises ``jit.Error`` when full
+  (``try_send`` returns ``False`` instead).
+- ``v = await self.inp.recv()`` waits for the next value. Once the channel is
+  closed and drained it raises ``jit.Closed`` (a ``jit.NotFound``), which a body can
+  catch with ``except jit.Closed``. ``async for v in self.inp:`` takes values until
+  then and ends without raising; its body may ``await``. A cancelled task stops at the
+  receive as it does at any ``await``, and its frame is released once.
+- ``self.out.close()`` (finalize or task) ends the sends: a receiver still gets what
+  is queued, then the end of the channel. A plugin closes its senders when its
+  finalize ends, and the host orders a sender's plugin before its receivers' (the
+  sender declares the channel in its ``provides``, the receiver in its
+  ``consumes``), so a consumer that loops until the end is not started before the
+  sender can close.
+- An ``each_batch`` body sends, sets and contributes a reduction of the batch:
+  ``self.out.send(df["dur"].sum())``, once for each batch. A value is read back in a
+  finalize or task.
+
+A message of the wrong size (a C plugin that sent something else) raises
+``jit.Error`` and is taken off the channel, as ``channel_recv_exact`` does.
+
+Latest values
+~~~~~~~~~~~~~
+
+``cfg: jit.Latest[int] = jit.latest()`` is a hint: ``self.cfg.set(v)`` stores the
+last value and ``x = self.cfg.get(default)`` reads it without waiting, giving
+``default`` before the first set. ``jit.latest(Other.cfg)`` sets and reads another
+plugin's. Which worker set last is not defined; use it for a value of which any
+recent one will do.
+
+Phase results
+~~~~~~~~~~~~~
+
+``total: jit.Phase[int] = jit.phase(merge="sum")`` (``"min"`` and ``"max"`` too)
+merges the contributions of every worker: ``self.total.contribute(v)`` in
+``each_event`` (or a batch body), then ``self.total.seal()`` and
+``x = self.total.result(default)`` in the finalize body, which runs after the
+scan. ``result`` of a phase that is still open and ``contribute`` after the seal
+raise ``jit.Error``; a phase nobody contributed to reads as ``default``.
+``jit.phase(Other.total)`` contributes to and reads another plugin's.
+
+A call on a port is a statement of its own or the whole right side of an
+assignment (``ok = self.out.try_send(v)``, ``x = self.cfg.get(0)``,
+``x = self.total.result(0)``, ``x = await self.inp.recv()``); inside an expression
+or a condition it is a compile error. Misuse is a compile error with the
+location: a send on a receiver, ``recv`` or ``close`` in the per-event body,
+``seal`` or ``result`` while the scan runs, a float into an ``int`` port, a missing
+annotation, an unsupported element type.
 
 Compile errors
 --------------

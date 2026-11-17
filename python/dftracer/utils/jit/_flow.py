@@ -15,6 +15,7 @@ from typing import (
     Awaitable,
     Callable,
     ContextManager,
+    Dict,
     Iterator,
     List,
     NoReturn,
@@ -27,6 +28,13 @@ from typing import (
 )
 
 from .._jit_errors import JitError
+from ._channels import (
+    PortDecl,
+    close_without_finalize,
+    root_close_lines,
+    root_fields,
+    root_open_lines,
+)
 
 _AF = TypeVar("_AF", bound=Callable[..., Awaitable[object]])
 _FF = TypeVar("_FF", bound=Callable[..., object])
@@ -374,7 +382,13 @@ def _frame_struct(fn: FlowFn) -> List[str]:
     ]
 
 
-def _step_fn(fn: FlowFn, cfg_pre: List[str], has_stores: bool, uses_cap: bool) -> List[str]:
+def _step_fn(
+    fn: FlowFn,
+    cfg_pre: List[str],
+    has_stores: bool,
+    uses_cap: bool,
+    close_lines: "List[str] | None" = None,
+) -> List[str]:
     n = fn.name
     out = [
         f"static dftu_status _step_{n}(dftu_ctx* ctx, void* coro, dftu_task** wait, uint32_t cap,",
@@ -387,6 +401,7 @@ def _step_fn(fn: FlowFn, cfg_pre: List[str], has_stores: bool, uses_cap: bool) -
         "    const dftu_svc_fileio* _fio = R->fio;",
         "    const dftu_svc_format* _fmtj = R->fmtj;",
         "    const dftu_svc_format* _fmty = R->fmty;",
+        "    const dftu_svc_ports* _prt = R->prt;",
         "    (void)wait;",
         "    (void)cap;",
         "    (void)n_wait;",
@@ -395,13 +410,16 @@ def _step_fn(fn: FlowFn, cfg_pre: List[str], has_stores: bool, uses_cap: bool) -
         "    (void)_fio;",
         "    (void)_fmtj;",
         "    (void)_fmty;",
+        "    (void)_prt;",
         *cfg_pre,
         "    DftuCap _cap;",
         "    dftu_cap_init(&_cap, ctx);",
         "    dftu_status _st = DFTU_OK;",
         "    int _unw = 0;",
+        "    int _pclosed = 0;",
         "    (void)_cap;",
         "    (void)_unw;",
+        "    (void)_pclosed;",
     ]
     if has_stores:
         out += ["    DftuStoreEnv& _se = R->se;", "    _se.ctx = ctx;", "    (void)_se;"]
@@ -409,6 +427,7 @@ def _step_fn(fn: FlowFn, cfg_pre: List[str], has_stores: bool, uses_cap: bool) -
     out += ["    " + ln for ln in fn.body]
     out += ["    }", "_fx_exit:"]
     out += [f"    {ln}" for ln in fn.res_frees]
+    out += [f"    {ln}" for ln in close_lines or []]
     out += [
         "    S->pc = -1;",
         "    if (_st < 0) return _st;",
@@ -506,10 +525,12 @@ def emit_flows(
     has_cfg: bool,
     cfg_pre: List[str],
     has_stores: bool,
+    chans: "Dict[str, PortDecl] | None" = None,
 ) -> Tuple[List[str], List[str], Set[str]]:
     """The C of every flow body of a plugin and its ``on_finalize``: returns the
     definitions (after the config and store types), the ``on_finalize`` function
     and the host services the bodies use."""
+    chans = chans or {}
     uses: Set[str] = set()
     for fn in flows:
         uses |= fn.uses
@@ -527,6 +548,7 @@ def emit_flows(
         "    const dftu_svc_format* fmtj;",
         "    const dftu_svc_format* fmty;",
     ]
+    root += root_fields(chans)
     if has_cfg:
         root.append("    const DftuCfg* cfg;")
     if has_stores:
@@ -548,7 +570,13 @@ def emit_flows(
         )
     out.append("")
     for fn in flows:
-        out += _step_fn(fn, cfg_pre, has_stores, "cap" in uses)
+        out += _step_fn(
+            fn,
+            cfg_pre,
+            has_stores,
+            "cap" in uses,
+            root_close_lines(chans) if fn.sig is None else None,
+        )
         out += _release_fn(fn, fn.sig is None and fn.is_async)
     for fn in tasks:
         out += _job_fns(fn)
@@ -559,15 +587,7 @@ def emit_flows(
         "    *pending = NULL;",
     ]
     if finalize is None:
-        fin_lines += [
-            "    (void)ctx;",
-            "    (void)slice;",
-            "    (void)host;",
-            "    return DFTU_OK;",
-            "}",
-            "",
-        ]
-        return out, fin_lines, uses
+        return out, close_without_finalize(chans), uses
     n = finalize.name
     fin_lines += [
         "    DftuRoot* R = (DftuRoot*)calloc(1, sizeof(DftuRoot));",
@@ -578,6 +598,7 @@ def emit_flows(
         "    R->fio = (const dftu_svc_fileio*)host->get_service(host->h, DFTU_SVC_FILEIO);",
         "    R->fmtj = (const dftu_svc_format*)host->get_service(host->h, DFTU_SVC_JSON);",
         "    R->fmty = (const dftu_svc_format*)host->get_service(host->h, DFTU_SVC_YAML);",
+        "    R->prt = (const dftu_svc_ports*)host->get_service(host->h, DFTU_SVC_PORTS);",
     ]
     if has_cfg:
         fin_lines.append("    R->cfg = ((DftuSlice*)slice)->cfg;")
@@ -589,10 +610,11 @@ def emit_flows(
         ("fileio", "fio", "file"),
         ("json", "fmtj", "JSON"),
         ("yaml", "fmty", "YAML"),
+        ("ports", "prt", "ports"),
     ]
     async_or_tasks = finalize.is_async or bool(tasks)
     for use, field, word in needs:
-        if use in uses or (use == "task" and async_or_tasks):
+        if use in uses or (use == "task" and async_or_tasks) or (use == "ports" and chans):
             fin_lines += [
                 f"    if (!R->{field}) {{",
                 f'        dftu_status e = dftu_fail(ctx, DFTU_E_UNSUPPORTED, "the host has no {word} service");',
@@ -600,6 +622,7 @@ def emit_flows(
                 "        return e;",
                 "    }",
             ]
+    fin_lines += root_open_lines(chans)
     if has_stores:
         fin_lines += [
             "    {",

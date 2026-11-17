@@ -23,7 +23,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Union, cast
 
-from ._jit_errors import translate_run_error
+from ._jit_errors import check_port_wiring, translate_plan_error, translate_run_error
 from .dataframe import DataFrame
 from .dftracer_utils_ext import Plugins as _NativePlugins
 from .dftracer_utils_ext import _DataFrame
@@ -170,7 +170,14 @@ class Plugins:
                 result_names.update(jit.plugin_result_names(plugin))
                 path = jit.compile_class(plugin)
             specs.append((path, json.dumps(cfg) if cfg is not None else None))
-        self._native = _NativePlugins(specs, result_names or None, runtime)
+        check_port_wiring(plugins)
+        try:
+            self._native = _NativePlugins(specs, result_names or None, runtime)
+        except (ImportError, ValueError) as exc:
+            translated = translate_plan_error(plugins, exc)
+            if translated is None:
+                raise
+            raise translated from exc
 
     def describe(self) -> "List[PluginInfo]":
         """What each plugin in the set is, in the order it was given: its path,

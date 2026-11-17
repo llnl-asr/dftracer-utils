@@ -506,7 +506,7 @@ def test_await_of_something_outside_the_closed_set_is_a_compile_error():
     )
 
 
-def test_a_channel_receive_is_not_in_the_set_yet():
+def test_a_receive_on_a_name_that_is_not_a_declared_port_is_a_compile_error():
     err = _err(
         _HEAD
         + """
@@ -515,7 +515,7 @@ def test_a_channel_receive_is_not_in_the_set_yet():
         x = await self.chan.recv()
 """
     )
-    assert "channel receive comes with channels" in err.reason or "awaitables" in err.reason
+    assert "channel send or receive" in err.reason
 
 
 def test_a_task_call_that_is_not_awaited_is_a_compile_error():

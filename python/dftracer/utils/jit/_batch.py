@@ -12,7 +12,7 @@ per-event loop in the emitted code.
 from __future__ import annotations
 
 import ast
-from typing import Dict, Iterable, List, NoReturn, Optional, Tuple
+from typing import Any, Dict, Iterable, List, NoReturn, Optional, Tuple
 
 from .._c_text import c_str_literal
 from .._jit_errors import JitError, _Source
@@ -43,6 +43,7 @@ _REDUCERS = {
     "mean": None,
 }
 _NEEDS_VALUES = frozenset({"min", "max"})
+_PORT_TAG = "@port:"
 
 # The reductions a fold target takes. A batch value is folded as the target's
 # own merge would fold the same rows, so only matching pairs are exact: sums add,
@@ -154,6 +155,8 @@ class BatchHook:
         self.columns: List[str] = []
         self.rows: Dict[str, int] = {}
         self.updated: List[str] = []
+        self.chan_uses: "set[str]" = set()
+        self.sends = 0
 
 
 class _Lowering:
@@ -162,9 +165,11 @@ class _Lowering:
         maps: "Dict[str, object]",
         plains: "Dict[str, object]",
         monoids: "Tuple[type, ...]",
+        chans: "Dict[str, Any]",
     ) -> None:
         self.maps = maps
         self.plains = plains
+        self.chans = chans
         self.self_name = "self"
         self.df_name = "df"
         self.locals: Dict[str, _V] = {}
@@ -197,11 +202,14 @@ class _Lowering:
         for stmt in fn_ast.body:
             self.cur = stmt
             self._stmt(stmt)
-        if not self.hook.updated:
+        if not self.hook.updated and not self.hook.sends:
             _fail("the each_batch body folds nothing into scan state", fn_ast)
         self._eval_independent([v for _, _, v in self.folds])
         for attr, elem, v in self.folds:
-            self._emit_fold(attr, elem, v)
+            if attr.startswith(_PORT_TAG):
+                self._emit_port(attr[len(_PORT_TAG) :], elem, v)
+            else:
+                self._emit_fold(attr, elem, v)
         prologue: List[str] = []
         c_n = max(len(self.columns), 1)
         prologue.append(f"dftu_series* _C[{c_n}] = {{0}};")
@@ -296,7 +304,59 @@ class _Lowering:
             _fail("assignment target in a batch hook (expected a local name)", target)
         self.locals[target.id] = self._value(value)
 
+    def _port_call(self, call: ast.Call) -> bool:
+        """``self.<port>.send(<reduction>)``, ``.try_send``, ``.set`` or
+        ``.contribute``: the value is a batch reduction (sum, min, max or count of a
+        column expression), sent or contributed once per batch."""
+        func = call.func
+        if not (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Attribute)
+            and isinstance(func.value.value, ast.Name)
+            and func.value.value.id == self.self_name
+            and func.value.attr in self.chans
+        ):
+            return False
+        decl = self.chans[func.value.attr]
+        method = func.attr
+        usable = {"channel": ("send", "try_send"), "latest": ("set",), "phase": ("contribute",)}
+        if method not in usable[decl.kind]:
+            _fail(
+                f"self.{decl.attr}.{method}() in an each_batch body; a batch hook has "
+                + ", ".join(f"{m}()" for m in usable[decl.kind])
+                + " of a reduction (seal, result, recv and close are calls of @jit.finalize "
+                "or a @jit.task of an @jit.each_event plugin)",
+                call,
+            )
+        if decl.kind == "channel" and decl.policy == "block":
+            _fail(
+                f"self.{decl.attr} is a Block channel, used from an async @jit.finalize or "
+                "@jit.task of an @jit.each_event plugin, never from a batch hook",
+                call,
+            )
+        if len(call.args) != 1 or call.keywords:
+            _fail(f"self.{decl.attr}.{method}() takes one reduction", call)
+        v = self._value(call.args[0])
+        if v.shape != "scalar" or v.name not in _REDUCERS:
+            _fail(
+                f'self.{decl.attr}.{method}() sends a reduction such as df["dur"].sum(), '
+                "not a column or a bare number",
+                call.args[0],
+            )
+        if decl.elem == "i64" and v.num == "float":
+            _fail(
+                f"self.{decl.attr} carries an int and this reduction is a float; "
+                "declare the port with float",
+                call.args[0],
+            )
+        self.hook.sends += 1
+        self.hook.chan_uses.add(decl.attr)
+        self.folds.append((f"{_PORT_TAG}{decl.attr}:{method}", decl.elem, v))
+        return True
+
     def _call_stmt(self, call: ast.Call) -> None:
+        if self._port_call(call):
+            return
         func = call.func
         if (
             isinstance(func, ast.Attribute)
@@ -950,11 +1010,82 @@ class _Lowering:
             self._line("    }")
         self._line("}")
 
+    def _emit_port(self, spec: str, elem: str, v: _V) -> None:
+        """Send, set or contribute one batch reduction, once per batch."""
+        attr, method = spec.split(":")
+        decl = self.chans[attr]
+        sv = self._series(v.args[0])
+        self.fold_count += 1
+        n = self.fold_count
+        name = decl.full
+        guard = v.name in _NEEDS_VALUES
+        self._line("{")
+        if guard:
+            self._line(f"    if (dftu_series_count({sv}) > 0) {{")
+        pad = "        " if guard else "    "
+        if v.name == "count":
+            self._line(f"{pad}dftu_scalar _r{n} = dftu_jb_si(dftu_series_count({sv}));")
+        else:
+            self._line(f"{pad}dftu_scalar _r{n} = dftu_series_reduce({sv}, {_REDUCERS[v.name]});")
+            self._line(
+                f"{pad}if (_r{n}.kind == DFTU_SCALAR_TAG_ERR) {{ "
+                f'_st = dftu_fail(ctx, DFTU_E_INVALID, "{v.name}() is not defined for this '
+                f'column type"); goto _bdone; }}'
+            )
+        if elem == "f64":
+            self._line(f"{pad}double _pv{n} = dftu_jb_to_f64(_r{n});")
+        else:
+            self._line(f"{pad}int64_t _pv{n} = 0;")
+            self._line(
+                f"{pad}if (!dftu_jb_to_i64(_r{n}, &_pv{n})) {{ _st = dftu_fail(ctx, "
+                f'DFTU_E_INVALID, "self.{attr} carries an int and {v.name}() of this '
+                f'column is a float; declare the port with float"); goto _bdone; }}'
+            )
+        self._line(f"{pad}dftu_status _s = DFTU_OK;")
+        if method in ("send", "try_send"):
+            self._line(f"{pad}dftu_port_status _ps = DFTU_PORT_OK;")
+            self._line(
+                f"{pad}_s = _prt->channel_try_send(ctx, host->h, _ch_{attr}, &_pv{n}, 8, &_ps);"
+            )
+            self._line(f"{pad}if (_s < 0) {{ _st = _s; goto _bdone; }}")
+            if method == "send":
+                msg = c_str_literal(f"jit.Error: channel '{name}' is full or closed")
+                self._line(
+                    f"{pad}if (_ps != DFTU_PORT_OK) {{ _st = dftu_fail(ctx, DFTU_E_INVALID, "
+                    f"{msg}); goto _bdone; }}"
+                )
+        elif method == "set":
+            self._line(f"{pad}uint64_t _gen = 0;")
+            self._line(
+                f"{pad}_s = _prt->latest_set(ctx, host->h, {c_str_literal(name)}, &_pv{n}, 8, &_gen);"
+            )
+            self._line(f"{pad}if (_s < 0) {{ _st = _s; goto _bdone; }}")
+        else:
+            ty = "DFTU_T_I64" if elem == "i64" else "DFTU_T_F64"
+            merge = {"sum": "DFTU_MERGE_SUM", "min": "DFTU_MERGE_MIN", "max": "DFTU_MERGE_MAX"}[
+                decl.merge
+            ]
+            msg = c_str_literal(f"jit.Error: the phase result '{name}' is sealed")
+            self._line(f"{pad}dftu_port_status _ps = DFTU_PORT_OK;")
+            self._line(
+                f"{pad}_s = _prt->phase_contribute(ctx, host->h, {c_str_literal(name)}, 1, "
+                f"{merge}, {ty}, &_pv{n}, 8, &_ps);"
+            )
+            self._line(f"{pad}if (_s < 0) {{ _st = _s; goto _bdone; }}")
+            self._line(
+                f"{pad}if (_ps != DFTU_PORT_OK) {{ _st = dftu_fail(ctx, DFTU_E_INVALID, "
+                f"{msg}); goto _bdone; }}"
+            )
+        if guard:
+            self._line("    }")
+        self._line("}")
+
 
 def lower_batch(
     fn: object,
     maps: "Dict[str, object]",
     plains: "Dict[str, object]",
+    chans: "Dict[str, object] | None" = None,
 ) -> BatchHook:
     """Lower an ``each_batch`` function to a :class:`BatchHook`; ``maps`` is
     the plugin's ``jit.map`` declarations and ``plains`` its plain fields."""
@@ -964,7 +1095,7 @@ def lower_batch(
         funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
         if len(funcs) != 1:
             _fail("each_batch must decorate a single method", tree.body[0])
-        lowering = _Lowering(maps, plains, ())
+        lowering = _Lowering(maps, plains, (), chans or {})
         source.cur = funcs[0]
         try:
             return lowering.lower(funcs[0])

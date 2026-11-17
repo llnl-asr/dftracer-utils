@@ -55,6 +55,7 @@ from typing import (
     ClassVar,
     Dict,
     Generic,
+    Iterator,
     List,
     Literal,
     Mapping,
@@ -82,6 +83,7 @@ from . import ops as ops
 if TYPE_CHECKING:
     from ..columnar import Expr
     from ..plugins import JSONValue
+    from ._batch import BatchHook
     from .ops import Result
 
 # Python 3.8 wraps a subscript's slice in ast.Index; 3.9+ stores the value
@@ -190,6 +192,9 @@ __all__ = [
     "Map",
     "Store",
     "Event",
+    "Frame",
+    "Column",
+    "Mask",
     "Str",
     "Counter",
     "Sum",
@@ -230,6 +235,7 @@ JitError.__module__ = __name__
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
 K = TypeVar("K")
+N = TypeVar("N", int, float)
 V = TypeVar("V", bound="_Monoid | type[object]")
 K1 = TypeVar("K1")
 K2 = TypeVar("K2")
@@ -963,6 +969,90 @@ class Event(Protocol):
     def arg_str(self, name: str) -> Str: ...
 
 
+class Mask(Protocol):
+    """A Bool column built from comparisons in an ``@jit.each_batch`` body.
+    Authoring-only: the body is AST-compiled, never executed."""
+
+    def __and__(self, other: "Mask") -> "Mask": ...
+    def __or__(self, other: "Mask") -> "Mask": ...
+    def __invert__(self) -> "Mask": ...
+    def sum(self) -> int: ...
+    def count(self) -> int: ...
+
+
+class Column(Protocol[N]):
+    """A numeric column of an ``@jit.each_batch`` body: ``Column[int]`` or
+    ``Column[float]``. Arithmetic and comparisons build lazy column
+    expressions; ``s[mask]`` filters; a reduction returns a scalar to fold into
+    scan state. Authoring-only: the body is AST-compiled, never executed."""
+
+    @overload
+    def __add__(self, other: "int | Column[int]") -> "Column[N]": ...
+    @overload
+    def __add__(self, other: "float | Column[float]") -> "Column[float]": ...
+    @overload
+    def __sub__(self, other: "int | Column[int]") -> "Column[N]": ...
+    @overload
+    def __sub__(self, other: "float | Column[float]") -> "Column[float]": ...
+    @overload
+    def __mul__(self, other: "int | Column[int]") -> "Column[N]": ...
+    @overload
+    def __mul__(self, other: "float | Column[float]") -> "Column[float]": ...
+    @overload
+    def __radd__(self, other: int) -> "Column[N]": ...
+    @overload
+    def __radd__(self, other: float) -> "Column[float]": ...
+    @overload
+    def __rsub__(self, other: int) -> "Column[N]": ...
+    @overload
+    def __rsub__(self, other: float) -> "Column[float]": ...
+    @overload
+    def __rmul__(self, other: int) -> "Column[N]": ...
+    @overload
+    def __rmul__(self, other: float) -> "Column[float]": ...
+    def __truediv__(self, other: "float | Column[int] | Column[float]") -> "Column[float]": ...
+    def __rtruediv__(self, other: float) -> "Column[float]": ...
+    def __neg__(self) -> "Column[N]": ...
+    def __abs__(self) -> "Column[N]": ...
+    def __lt__(self, other: "float | Column[int] | Column[float]") -> Mask: ...
+    def __le__(self, other: "float | Column[int] | Column[float]") -> Mask: ...
+    def __gt__(self, other: "float | Column[int] | Column[float]") -> Mask: ...
+    def __ge__(self, other: "float | Column[int] | Column[float]") -> Mask: ...
+    def __eq__(  # type: ignore[override]  # ty: ignore[incompatible-method-override]
+        self, other: "float | Column[int] | Column[float]"
+    ) -> Mask: ...
+    def __ne__(  # type: ignore[override]  # ty: ignore[incompatible-method-override]
+        self, other: "float | Column[int] | Column[float]"
+    ) -> Mask: ...
+    def __getitem__(self, mask: Mask) -> "Column[N]": ...
+    def abs(self) -> "Column[N]": ...
+    def clip(self, lo: N, hi: N) -> "Column[N]": ...
+    def isnull(self) -> Mask: ...
+    def notnull(self) -> Mask: ...
+    def fill_null(self, value: N) -> "Column[N]": ...
+    def where(self, mask: Mask, other: "N | Column[N]") -> "Column[N]": ...
+    def sum(self) -> N: ...
+    def min(self) -> N: ...
+    def max(self) -> N: ...
+    def count(self) -> int: ...
+    def mean(self) -> float: ...
+
+
+class Frame(Protocol):
+    """The scan batch an ``@jit.each_batch`` method receives: ``df["dur"]`` is
+    a numeric column. The scan columns ``pid``, ``tid``, ``ts``, ``dur`` and
+    ``ph`` are ``Column[int]``; an ``args.<key>`` column is typed
+    ``Column[float]``, and a sum of it folds into an int field only when the
+    column holds integers at run time."""
+
+    @overload
+    def __getitem__(  # type: ignore[overload-overlap]
+        self, name: Literal["pid", "tid", "ts", "dur", "ph"]
+    ) -> Column[int]: ...
+    @overload
+    def __getitem__(self, name: str) -> Column[float]: ...
+
+
 class _Record:
     __slots__ = ("names", "monoids")
 
@@ -1498,16 +1588,21 @@ class _EachBatch:
 
 
 def each_batch(fn: Callable[..., None]) -> _EachBatch:
-    """Mark the one per-batch method of a :func:`vfold`.
+    """Mark the one per-batch method of a :func:`vfold` or a :func:`plugin`.
 
     It takes ``(self, df)`` where ``df`` is the current scan batch as columns.
-    Its body folds column reductions into the class's scalar accumulators, e.g.
-    ``self.total += df["dur"].sum()``."""
+    On a :func:`vfold` its body folds column reductions into the class's scalar
+    accumulators, e.g. ``self.total += df["dur"].sum()``. On a :func:`plugin`
+    the body is a sequence of column expressions (arithmetic, comparisons,
+    masks, ``s[mask]``, ``where``, ``abs``, ``clip``, ``isnull``,
+    ``fill_null``) whose reductions (``sum``, ``min``, ``max``, ``count``,
+    ``mean``) fold into scalar state fields or key-less ``jit.map``
+    descriptors; annotate ``df`` as :class:`Frame`."""
     return _EachBatch(fn)
 
 
 class JitPlugin:
-    __slots__ = ("name", "source", "renames", "result_names", "shippable")
+    __slots__ = ("name", "source", "renames", "result_names", "shippable", "lowering")
 
     def __init__(
         self,
@@ -1516,6 +1611,7 @@ class JitPlugin:
         renames: Dict[str, List[str]],
         result_names: "Dict[str, str] | None" = None,
         shippable: bool = True,
+        lowering: str = "branch",
     ) -> None:
         self.name = name
         self.source = source
@@ -1528,6 +1624,11 @@ class JitPlugin:
         # False when built under an implicit __main__ identity (a script or
         # notebook with no JitPackage namespace); build() refuses those.
         self.shippable = shippable
+        # How the per-event body was lowered: "branch" (a C branch per event),
+        # "mask" (a guard evaluated over the batch into a selection, then the
+        # updates on the selected rows only), "batch" (an @each_batch body of
+        # column ops, no per-event loop), "raw" or "vfold".
+        self.lowering = lowering
 
 
 def _top_level_package(module: str) -> str:
@@ -1904,6 +2005,7 @@ _CONSTRUCT = {
     ast.Assign: "local assignment",
     ast.Return: "return statement",
     ast.IfExp: "conditional expression",
+    ast.NamedExpr: "assignment expression (:=)",
 }
 
 
@@ -1977,6 +2079,23 @@ _STATE_FORMS = {
 _STATE_PY = {"i64": "int", "f64": "float"}
 
 
+def _unconditional_nodes(root: ast.AST) -> Iterator[ast.AST]:
+    """The nodes of ``root`` that always run. An ``and`` / ``or`` operand after
+    the first, and a link of a chained comparison after the first, only run when
+    the earlier ones allow it, so hoisting one above its guard would run it for
+    a row the guard excludes."""
+    stack: List[ast.AST] = [root]
+    while stack:
+        node = stack.pop()
+        yield node
+        if isinstance(node, ast.BoolOp):
+            stack.append(node.values[0])
+        elif isinstance(node, ast.Compare) and len(node.ops) > 1:
+            stack.extend((node.left, node.comparators[0]))
+        else:
+            stack.extend(ast.iter_child_nodes(node))
+
+
 class _Compiler:
     def __init__(
         self,
@@ -2021,6 +2140,10 @@ class _Compiler:
         self._cse_n = 0
         # The statement being compiled, where an error without a node points.
         self._cur: ast.AST | None = None
+        # The C condition of a body that is one guard around its updates: the
+        # emitted code filters the batch with it once, then runs the updates
+        # on the surviving rows only. None when the body branches per event.
+        self.mask_guard: str | None = None
 
     def lower(self, fn: Callable[..., object]) -> List[str]:
         source = _Source(fn)
@@ -2044,7 +2167,17 @@ class _Compiler:
         if self.plain:
             self._infer_plain(fn_ast.body)
             self._declare_plain()
-        defs, lines = self._compile_scope(fn_ast.body)
+        body = fn_ast.body
+        if (
+            len(body) == 1
+            and isinstance(body[0], ast.If)
+            and not body[0].orelse
+            and not self.stores
+        ):
+            self._cur = body[0]
+            self.mask_guard = self._cond(body[0].test)
+            body = body[0].body
+        defs, lines = self._compile_scope(body)
         return defs + lines
 
     def _cfg_field(self, node: ast.expr) -> "_CfgField | None":
@@ -2425,13 +2558,12 @@ class _Compiler:
         counts: Dict[str, int] = {}
         reps: Dict[str, ast.expr] = {}
         for stmt in stmts:
-            roots = [stmt.test] if isinstance(stmt, ast.If) else [stmt]
-            for root in roots:
-                for node in ast.walk(root):
-                    if isinstance(node, ast.expr) and self._is_cse_candidate(node):
-                        d = ast.dump(node)
-                        counts[d] = counts.get(d, 0) + 1
-                        reps.setdefault(d, node)
+            root = stmt.test if isinstance(stmt, ast.If) else stmt
+            for node in _unconditional_nodes(root):
+                if isinstance(node, ast.expr) and self._is_cse_candidate(node):
+                    d = ast.dump(node)
+                    counts[d] = counts.get(d, 0) + 1
+                    reps.setdefault(d, node)
         cands = [reps[d] for d, c in counts.items() if c >= 2 and d not in self._cse]
         # Define inner (smaller) expressions first so an outer local can name
         # them.
@@ -2471,13 +2603,23 @@ class _Compiler:
     def _stmt(self, stmt: ast.stmt) -> List[str]:
         self._cur = stmt
         if isinstance(stmt, ast.If):
-            if stmt.orelse:
-                _reject("else / elif branch", stmt.orelse[0])
-            guard = self._compare(stmt.test)
+            guard = self._cond(stmt.test)
             defs, body = self._compile_scope(stmt.body)
             lines = [f"if ({guard}) {{"]
             lines.extend("    " + ln for ln in defs)
             lines.extend("    " + ln for ln in body)
+            if not stmt.orelse:
+                lines.append("}")
+                return lines
+            if len(stmt.orelse) == 1 and isinstance(stmt.orelse[0], ast.If):
+                chained = self._stmt(stmt.orelse[0])
+                lines.append("} else " + chained[0])
+                lines.extend(chained[1:])
+                return lines
+            edefs, ebody = self._compile_scope(stmt.orelse)
+            lines.append("} else {")
+            lines.extend("    " + ln for ln in edefs)
+            lines.extend("    " + ln for ln in ebody)
             lines.append("}")
             return lines
         return self._add_stmt(stmt)
@@ -2508,58 +2650,121 @@ class _Compiler:
                 )
         _reject(_describe(stmt), stmt)
 
-    def _compare(self, node: ast.expr) -> str:
+    def _cond(self, node: ast.expr) -> str:
+        """C text for a per-event condition: ``and`` / ``or`` / ``not``,
+        comparisons (chained, ``in`` a literal tuple, ``is None``) and a bare
+        flag or number as its own truth value."""
+        if isinstance(node, ast.BoolOp):
+            sym = "&&" if isinstance(node.op, ast.And) else "||"
+            return "(" + f" {sym} ".join(self._cond(v) for v in node.values) + ")"
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            return f"!({self._cond(node.operand)})"
+        if isinstance(node, ast.Compare):
+            parts = []
+            left = node.left
+            for op, right in zip(node.ops, node.comparators):
+                parts.append(self._cmp_pair(left, op, right, node))
+                left = right
+            return parts[0] if len(parts) == 1 else "(" + " && ".join(parts) + ")"
+        if isinstance(node, ast.NamedExpr):
+            _reject("assignment expression (:=)", node)
         flag = self._cfg_field(node)
         if flag is not None and flag.kind == "bool":
             return f"_cfg_{flag.name} != 0"
-        if isinstance(node, ast.Compare) and len(node.ops) == 1:
-            if isinstance(node.ops[0], (ast.Is, ast.IsNot)):
-                opt = self._cfg_field(node.left)
-                other = node.comparators[0]
-                if (
-                    opt is None
-                    or not opt.optional
-                    or not (isinstance(other, ast.Constant) and other.value is None)
-                ):
-                    _reject(
-                        "`is` comparison (only self.config.<optional field> is None / is not None)",
-                        node,
-                    )
-                return (
-                    f"!_has_{opt.name}" if isinstance(node.ops[0], ast.Is) else f"_has_{opt.name}"
-                )
-        if not isinstance(node, ast.Compare) or len(node.ops) != 1:
-            _reject("guard must be a single comparison on e.<field>", node)
-        op_t = type(node.ops[0])
-        op = _CMP_OP.get(op_t)
-        if op is None:
-            _reject("comparison operator", node)
-        str_cmp = self._str_compare(node.left, node.comparators[0], op_t)
+        if self._is_str_element(node) or self._is_str_literal(node):
+            _reject_at("a string is not a truth value; compare it with ==, != or `is None`", node)
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr == "has_dur"
+            and self._is_event(node.value)
+        ):
+            return self._field("has_dur")
+        expr, _ = self._arith(node)
+        return f"({expr}) != 0"
+
+    def _is_event(self, node: ast.expr) -> bool:
+        return isinstance(node, ast.Name) and node.id == self.event_name
+
+    def _cmp_pair(self, left: ast.expr, op: ast.cmpop, right: ast.expr, whole: ast.expr) -> str:
+        op_t = type(op)
+        if isinstance(op, (ast.Is, ast.IsNot)):
+            return self._is_none(left, right, isinstance(op, ast.Is), whole)
+        if isinstance(op, (ast.In, ast.NotIn)):
+            if not isinstance(right, (ast.Tuple, ast.List, ast.Set)):
+                _reject_at("`in` needs a literal tuple, list or set", right)
+            if not all(isinstance(e, ast.Constant) for e in right.elts):
+                _reject_at("`in` takes only literals", right)
+            if not right.elts:
+                return "0" if isinstance(op, ast.In) else "1"
+            alts = [self._cmp_pair(left, ast.Eq(), e, whole) for e in right.elts]
+            joined = "(" + " || ".join(alts) + ")"
+            return joined if isinstance(op, ast.In) else f"!{joined}"
+        sym = _CMP_OP.get(op_t)
+        if sym is None:
+            _reject("comparison operator", whole)
+        str_cmp = self._str_compare(left, right, op_t)
         if str_cmp is not None:
             return str_cmp
-        left = self._value(node.left)
-        right = self._value(node.comparators[0])
-        return f"{left} {op} {right}"
+        lexpr, _ = self._arith(left)
+        rexpr, _ = self._arith(right)
+        return f"{lexpr} {sym} {rexpr}"
+
+    def _is_none(self, left: ast.expr, right: ast.expr, positive: bool, whole: ast.expr) -> str:
+        if not (isinstance(right, ast.Constant) and right.value is None):
+            _reject("`is` comparison (only `is None` / `is not None`)", whole)
+        opt = self._cfg_field(left)
+        if opt is not None:
+            if not opt.optional:
+                _reject_at(f"self.config.{opt.name} is not optional, so it is never None", left)
+            return f"!_has_{opt.name}" if positive else f"_has_{opt.name}"
+        operand = self._str_operand(left)
+        if operand is not None:
+            return f"{operand} {'==' if positive else '!='} DFTU_STR_NONE"
+        _reject_at(
+            "`is None` applies to an optional self.config field, a string field such as "
+            "e.fhash or e.arg_str(...); a numeric field is never None",
+            left,
+        )
+
+    def _is_none_sentinel(self, node: ast.expr) -> bool:
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == "NONE"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "jit"
+        )
 
     def _str_compare(self, a: ast.expr, b: ast.expr, op_t: type) -> str | None:
-        a_lit = self._is_str_literal(a)
-        b_lit = self._is_str_literal(b)
-        if not a_lit and not b_lit:
+        a_none = self._is_none_sentinel(a)
+        b_none = self._is_none_sentinel(b)
+        a_str = a_none or self._is_str_literal(a) or self._is_str_element(a)
+        b_str = b_none or self._is_str_literal(b) or self._is_str_element(b)
+        if not a_str and not b_str:
             return None
+        if a_str != b_str:
+            _reject(
+                "comparison between a string and a number (a string field compares only with a string)",
+                a,
+            )
         if op_t not in (ast.Eq, ast.NotEq):
             _reject("string comparison operator other than == / !=", a)
-        lit_node, field_node = (a, b) if a_lit else (b, a)
-        operand = self._str_operand(field_node)
-        if operand is None:
-            _reject("string literal compared to a non-string e.<field>", a)
-        cfg = self._cfg_field(lit_node)
-        if cfg is not None:
-            cached = f"_cfgs_{cfg.name}"
-        else:
-            assert isinstance(lit_node, ast.Constant) and isinstance(lit_node.value, str)
-            cached = self._str_literal(lit_node.value)
-        op = _CMP_OP[op_t]
-        return f"{operand} {op} {cached}"
+        sides = []
+        for side, is_none in ((a, a_none), (b, b_none)):
+            if is_none:
+                sides.append("DFTU_STR_NONE")
+                continue
+            cfg = self._cfg_field(side)
+            if cfg is not None:
+                sides.append(f"_cfgs_{cfg.name}")
+            elif isinstance(side, ast.Constant):
+                assert isinstance(side.value, str)
+                sides.append(self._str_literal(side.value))
+            else:
+                operand = self._str_operand(side)
+                if operand is None:
+                    _reject_at("a string compared with something that is not a string field", side)
+                sides.append(operand)
+        return f"{sides[0]} {_CMP_OP[op_t]} {sides[1]}"
 
     def _is_str_literal(self, node: ast.expr) -> bool:
         """A string literal, or a str config field (an interned constant)."""
@@ -2958,7 +3163,9 @@ class _Compiler:
                     _reject_at("a string field cannot be an arithmetic operand", operand)
             left, lf = self._arith(node.left)
             right, rf = self._arith(node.right)
-            return f"({left} {sym} {right})", lf or rf or isinstance(node.op, ast.Div)
+            if isinstance(node.op, ast.Div):
+                return f"((double)({left}) / (double)({right}))", True
+            return f"({left} {sym} {right})", lf or rf
         opc = self._op_call(node)
         if opc is not None:
             return opc
@@ -3585,6 +3792,8 @@ def _emit(
     stores: "Dict[str, _StoreField] | None" = None,
     store_gets: "builtins.set[str] | None" = None,
     store_puts: "builtins.set[str] | None" = None,
+    mask_guard: "str | None" = None,
+    batch: "BatchHook | None" = None,
 ) -> str:
     op_defs = op_defs or []
     stores = stores or {}
@@ -3703,6 +3912,8 @@ def _emit(
     # a plugin that never looks at them. A raw body is not AST-analyzable, so
     # it declares nothing and keeps the whole batch.
     read_cols = [] if raw_event else sorted(fields_used) + [f"args.{a}" for a in sorted(arg_keys)]
+    if batch is not None:
+        read_cols = batch.columns
     if read_cols:
         out.append("static const char* const g_reads[] = {")
         for col in read_cols:
@@ -3804,14 +4015,34 @@ def _emit(
     inner: List[str] = []
     if ports:
         inner += _emit_port_pre(pub_ports, sub_ports)
-    inner.append("    for (int64_t i = 0; i < n; ++i) {")
-    if raw_event:
-        inner += ["        " + ln for ln in _RAW_EVENT_SHIM_POPULATE]
-    for line in body:
-        inner.append("        " + line)
-    if stores:
-        inner.append("        if (_se.st < 0) break;")
-    inner.append("    }")
+    if batch is not None:
+        inner.append("    if (n > 0) {")
+        inner += ["        " + ln for ln in batch.lines]
+        inner.append("    }")
+    else:
+        if mask_guard is not None:
+            inner += [
+                "    uint32_t* _sel = (uint32_t*)malloc(sizeof(uint32_t) * (size_t)(n > 0 ? n : 1));",
+                "    if (!_sel) _alloc_ok = 0;",
+                "    int64_t _ns = 0;",
+                "    for (int64_t i = 0; _sel && i < n; ++i) {",
+                "        _sel[_ns] = (uint32_t)i;",
+                f"        _ns += ({mask_guard}) ? 1 : 0;",
+                "    }",
+                "    for (int64_t _j = 0; _j < _ns; ++_j) {",
+                "        const int64_t i = (int64_t)_sel[_j];",
+            ]
+        else:
+            inner.append("    for (int64_t i = 0; i < n; ++i) {")
+        if raw_event:
+            inner += ["        " + ln for ln in _RAW_EVENT_SHIM_POPULATE]
+        for line in body:
+            inner.append("        " + line)
+        if stores:
+            inner.append("        if (_se.st < 0) break;")
+        inner.append("    }")
+        if mask_guard is not None:
+            inner.append("    free(_sel);")
     if ports:
         inner += _emit_port_flush(pub_ports)
     for attr, decl in maps.items():
@@ -4211,6 +4442,7 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
     maps: Dict[str, _AnyMap] = {}
     ports: Dict[str, _Port] = {}
     each: List[_EachEvent] = []
+    batches: List[_EachBatch] = []
     for attr, val in vars(cls).items():
         if isinstance(val, _MapDecl):
             maps[attr] = val
@@ -4218,6 +4450,8 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
             ports[attr] = val
         elif isinstance(val, _EachEvent):
             each.append(val)
+        elif isinstance(val, _EachBatch):
+            batches.append(val)
     plains, stores = _state_fields(cls)
     if not maps and not ports and not plains and not stores:
         raise _class_error(
@@ -4225,8 +4459,16 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
             "@jit.plugin needs at least one jit.map, plain-container state field, jit.Store "
             "or jit.publish/jit.consume attribute",
         )
+    if batches:
+        if each:
+            raise _class_error(
+                cls, "@jit.plugin takes one @jit.each_event or one @jit.each_batch, not both"
+            )
+        return _build_batch_plugin(cls, pkg, maps, ports, plains, stores, batches)
     if len(each) != 1:
-        raise _class_error(cls, "@jit.plugin needs exactly one @jit.each_event method")
+        raise _class_error(
+            cls, "@jit.plugin needs exactly one @jit.each_event or @jit.each_batch method"
+        )
     if (plains or stores) and each[0].raw:
         raise _class_error(
             cls, "plain-container state and jit.Store need an AST-compiled each_event body, not raw"
@@ -4304,13 +4546,84 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
         stores=stores,
         store_gets=compiler.store_gets if not each[0].raw else None,
         store_puts=compiler.store_puts if not each[0].raw else None,
+        mask_guard=compiler.mask_guard if not each[0].raw else None,
     )
     result_names = {qid: attr for attr, qid in map_ids.items()}
     name = _store_plugin_name(pkg.identity(cls)) if stores else cls.__name__
-    plugin = JitPlugin(name, source, {}, result_names, pkg.shippable(cls))
+    if each[0].raw:
+        lowering = "raw"
+    elif compiler.mask_guard is not None:
+        lowering = "mask"
+    else:
+        lowering = "branch"
+    plugin = JitPlugin(name, source, {}, result_names, pkg.shippable(cls), lowering)
     setattr(cls, "_jit_plugin", plugin)
     if configs:
         setattr(cls, "_jit_config", configs)
+    return cls
+
+
+def _build_batch_plugin(
+    cls: type,
+    pkg: "JitPackage",
+    maps: Dict[str, _AnyMap],
+    ports: Dict[str, _Port],
+    plains: Dict[str, _PlainField],
+    stores: Dict[str, _StoreField],
+    batches: "List[_EachBatch]",
+) -> type:
+    from ._batch import HELPERS, lower_batch
+
+    if len(batches) != 1:
+        raise _class_error(cls, "@jit.plugin needs exactly one @jit.each_batch method")
+    if ports or stores:
+        raise _class_error(
+            cls,
+            "an @jit.each_batch plugin folds into scalar state fields and key-less jit.map "
+            "descriptors; publish/consume ports and jit.Store need @jit.each_event",
+        )
+    plan_duql = getattr(cls, "plan_duql", None)
+    if plan_duql is not None and not isinstance(plan_duql, str):
+        raise _class_error(cls, "@jit.plugin plan_duql must be a query DSL string", "plan_duql")
+    if _config_fields(cls):
+        raise _class_error(cls, "an @jit.each_batch plugin takes no config; use @jit.each_event")
+    hook = lower_batch(
+        batches[0].fn, cast("Dict[str, object]", maps), cast("Dict[str, object]", plains)
+    )
+    for attr in plains:
+        if attr not in hook.updated:
+            raise _class_error(
+                cls,
+                f"'{attr}' is never updated in the each_batch body, so its merge cannot be "
+                "inferred; remove it or update it",
+                attr,
+            )
+        field = plains[attr]
+        monoid: _Monoid = (
+            Counter("DFTU_AGG_SUM", elem="i64")
+            if field.elem == "i64"
+            else Sum("DFTU_AGG_SUM", elem="f64")
+        )
+        maps[attr] = _MapDecl((), (monoid,), False)
+    map_ids = {attr: pkg.identity(cls, attr) for attr in maps}
+    source = _emit(
+        maps,
+        [],
+        builtins.set(),
+        plan_duql,
+        [],
+        [],
+        builtins.set(),
+        hook.rows,
+        HELPERS,
+        {},
+        {},
+        map_ids=map_ids,
+        batch=hook,
+    )
+    result_names = {qid: attr for attr, qid in map_ids.items()}
+    plugin = JitPlugin(cls.__name__, source, {}, result_names, pkg.shippable(cls), "batch")
+    setattr(cls, "_jit_plugin", plugin)
     return cls
 
 
@@ -4657,7 +4970,7 @@ def _build_vfold(cls: type[_C]) -> type[_C]:
     # for its own validation, not to gate what on_batch resolves.
     ops, _fields = _compile_vfold(batch[0].fn, accums, maps)
     source = _emit_vfold(ops, plan_duql)
-    setattr(cls, "_jit_plugin", JitPlugin(cls.__name__, source, {}))
+    setattr(cls, "_jit_plugin", JitPlugin(cls.__name__, source, {}, lowering="vfold"))
     return cls
 
 

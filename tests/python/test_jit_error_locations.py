@@ -60,22 +60,6 @@ class TestEachEventBody:
 
         _check(ei.value, "ifexp", "e.dur if")
 
-    def test_else_branch(self):
-        with pytest.raises(jit.JitError, match="else / elif") as ei:
-
-            @jit.plugin
-            class Else:
-                hits = jit.map(key=(jit.i64,), value=jit.count())
-
-                @jit.each_event
-                def step(self, e):
-                    if e.dur > 1:
-                        self.hits[(e.pid,)] += 1
-                    else:
-                        self.hits[(e.pid,)] += 2  # MARK:else
-
-        _check(ei.value, "else", "self.hits[(e.pid,)] += 2")
-
     def test_unknown_event_field(self):
         with pytest.raises(jit.JitError, match="event field e.nope") as ei:
 
@@ -937,3 +921,478 @@ class TestStoreErrors:
                     self.total += self.seen  # MARK:bare
 
         _check(ei.value, "bare", "self.seen")
+
+
+class TestConditions:
+    def test_walrus(self):
+        with pytest.raises(jit.JitError, match="assignment expression") as ei:
+
+            @jit.plugin
+            class Walrus:
+                hits = jit.map(key=(jit.i64,), value=jit.count())
+
+                @jit.each_event
+                def step(self, e):
+                    if (d := e.dur) > 3:  # MARK:walrus
+                        self.hits[(e.pid,)] += d
+
+        _check(ei.value, "walrus", "d := e.dur")
+
+    def test_function_call_in_a_condition(self):
+        with pytest.raises(jit.JitError, match="function call") as ei:
+
+            @jit.plugin
+            class Call:
+                hits = jit.map(key=(jit.i64,), value=jit.count())
+
+                @jit.each_event
+                def step(self, e):
+                    if len(e.name) > 3:  # MARK:call
+                        self.hits[(e.pid,)] += 1
+
+        _check(ei.value, "call", "len(e.name)")
+
+    def test_string_compared_with_a_number(self):
+        with pytest.raises(jit.JitError, match="string and a number") as ei:
+
+            @jit.plugin
+            class Mixed:
+                hits = jit.map(key=(jit.i64,), value=jit.count())
+
+                @jit.each_event
+                def step(self, e):
+                    if e.cat == 3:  # MARK:mixed
+                        self.hits[(e.pid,)] += 1
+
+        _check(ei.value, "mixed", "e.cat")
+
+    def test_number_compared_with_a_string_in_a_chain(self):
+        with pytest.raises(jit.JitError, match="string") as ei:
+
+            @jit.plugin
+            class Chained:
+                hits = jit.map(key=(jit.i64,), value=jit.count())
+
+                @jit.each_event
+                def step(self, e):
+                    if 1 < e.dur < "x":  # MARK:chain
+                        self.hits[(e.pid,)] += 1
+
+        _check(ei.value, "chain", "e.dur")
+
+    def test_is_none_on_a_number(self):
+        with pytest.raises(jit.JitError, match="is None") as ei:
+
+            @jit.plugin
+            class NumNone:
+                hits = jit.map(key=(jit.i64,), value=jit.count())
+
+                @jit.each_event
+                def step(self, e):
+                    if e.dur is None:  # MARK:isnone
+                        self.hits[(e.pid,)] += 1
+
+        _check(ei.value, "isnone", "e.dur")
+
+    def test_is_with_something_other_than_none(self):
+        with pytest.raises(jit.JitError, match="is None") as ei:
+
+            @jit.plugin
+            class IsOther:
+                hits = jit.map(key=(jit.i64,), value=jit.count())
+
+                @jit.each_event
+                def step(self, e):
+                    if e.fhash is e.name:  # MARK:isother
+                        self.hits[(e.pid,)] += 1
+
+        _check(ei.value, "isother", "e.fhash is e.name")
+
+    def test_in_a_non_literal(self):
+        with pytest.raises(jit.JitError, match="literal tuple") as ei:
+
+            @jit.plugin
+            class InName:
+                hits = jit.map(key=(jit.i64,), value=jit.count())
+
+                @jit.each_event
+                def step(self, e):
+                    if e.pid in e.tid:  # MARK:innonlit
+                        self.hits[(e.pid,)] += 1
+
+        _check(ei.value, "innonlit", "e.tid")
+
+    def test_in_with_a_computed_element(self):
+        with pytest.raises(jit.JitError, match="takes only literals") as ei:
+
+            @jit.plugin
+            class InExpr:
+                hits = jit.map(key=(jit.i64,), value=jit.count())
+
+                @jit.each_event
+                def step(self, e):
+                    if e.pid in (1, e.tid):  # MARK:inexpr
+                        self.hits[(e.pid,)] += 1
+
+        _check(ei.value, "inexpr", "(1, e.tid)")
+
+    def test_ordered_string_comparison(self):
+        with pytest.raises(jit.JitError, match="other than == / !="):
+
+            @jit.plugin
+            class Ordered:
+                hits = jit.map(key=(jit.i64,), value=jit.count())
+
+                @jit.each_event
+                def step(self, e):
+                    if e.cat < "Z":
+                        self.hits[(e.pid,)] += 1
+
+    def test_string_as_a_truth_value(self):
+        with pytest.raises(jit.JitError, match="not a truth value") as ei:
+
+            @jit.plugin
+            class Truth:
+                hits = jit.map(key=(jit.i64,), value=jit.count())
+
+                @jit.each_event
+                def step(self, e):
+                    if e.name:  # MARK:truth
+                        self.hits[(e.pid,)] += 1
+
+        _check(ei.value, "truth", "e.name")
+
+    def test_is_none_on_a_required_config_field(self):
+        @dataclass(frozen=True)
+        class Cfg:
+            cap: int = 3
+
+        with pytest.raises(jit.JitError, match="not optional") as ei:
+
+            @jit.plugin
+            class Required:
+                config: Cfg
+                hits = jit.map(key=(jit.i64,), value=jit.count())
+
+                @jit.each_event
+                def step(self, e):
+                    if self.config.cap is None:  # MARK:required
+                        self.hits[(e.pid,)] += 1
+
+        _check(ei.value, "required", "self.config.cap")
+
+
+class TestBatchHook:
+    def test_series_stored_on_self(self):
+        with pytest.raises(jit.JitError, match="stored on self escapes") as ei:
+
+            @jit.plugin
+            class Stored:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    self.saved = df["dur"]  # MARK:b_stored
+                    self.total += df["dur"].sum()
+
+        _check(ei.value, "b_stored", "self.saved")
+
+    def test_series_returned(self):
+        with pytest.raises(jit.JitError, match="cannot be returned") as ei:
+
+            @jit.plugin
+            class Returned:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    self.total += df["dur"].sum()
+                    return df["dur"]  # MARK:b_returned
+
+        _check(ei.value, "b_returned", "return df")
+
+    def test_series_folded_without_a_reduction(self):
+        with pytest.raises(jit.JitError, match="reduce it first") as ei:
+
+            @jit.plugin
+            class Unreduced:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    self.total += df["dur"]  # MARK:b_unreduced
+
+        _check(ei.value, "b_unreduced", 'df["dur"]')
+
+    def test_method_outside_the_vocabulary(self):
+        with pytest.raises(jit.JitError, match=r"\.std\(\) is outside") as ei:
+
+            @jit.plugin
+            class Std:
+                total: float = 0.0
+
+                @jit.each_batch
+                def step(self, df):
+                    self.total += df["dur"].std()  # MARK:b_std
+
+        _check(ei.value, "b_std", 'df["dur"].std()')
+
+    def test_function_outside_the_vocabulary(self):
+        with pytest.raises(jit.JitError, match=r"call to len\(\)") as ei:
+
+            @jit.plugin
+            class Len:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    self.total += len(df["dur"])  # MARK:b_len
+
+        _check(ei.value, "b_len", 'len(df["dur"])')
+
+    def test_string_column(self):
+        with pytest.raises(jit.JitError, match="is a string") as ei:
+
+            @jit.plugin
+            class Text:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    self.total += df["name"].count()  # MARK:b_text
+
+        _check(ei.value, "b_text", 'df["name"]')
+
+    def test_and_between_columns(self):
+        with pytest.raises(jit.JitError, match="write .a. & .b."):
+
+            @jit.plugin
+            class AndOp:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    self.total += ((df["dur"] > 1) and (df["pid"] > 1)).sum()
+
+    def test_not_on_a_column(self):
+        with pytest.raises(jit.JitError, match="write ~"):
+
+            @jit.plugin
+            class NotOp:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    self.total += (not (df["dur"] > 1)).sum()
+
+    def test_control_flow(self):
+        with pytest.raises(jit.JitError, match="If in a batch hook") as ei:
+
+            @jit.plugin
+            class Branch:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    if True:  # MARK:b_branch
+                        self.total += df["dur"].sum()
+
+        _check(ei.value, "b_branch", "if True")
+
+    def test_in_on_a_column(self):
+        with pytest.raises(jit.JitError, match="`In` on columns") as ei:
+
+            @jit.plugin
+            class InCol:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    self.total += (df["pid"] in (1, 2)).sum()  # MARK:b_incol
+
+        _check(ei.value, "b_incol", 'df["pid"] in')
+
+    def test_mixed_row_sets(self):
+        with pytest.raises(jit.JitError, match="different row sets") as ei:
+
+            @jit.plugin
+            class Rows:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    dur = df["dur"]
+                    self.total += (dur[dur > 3] + dur).sum()  # MARK:b_rows
+
+        _check(ei.value, "b_rows", "dur[dur > 3] + dur")
+
+    def test_float_reduction_into_an_integer_field(self):
+        with pytest.raises(jit.JitError, match="integer field and this reduction is a float") as ei:
+
+            @jit.plugin
+            class Narrow:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    self.total += (df["dur"] * 0.5).sum()  # MARK:b_narrow
+
+        _check(ei.value, "b_narrow", "(df")
+
+    def test_unknown_name(self):
+        with pytest.raises(jit.JitError, match="unknown name nope") as ei:
+
+            @jit.plugin
+            class Nope:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    self.total += nope.sum()  # noqa: F821  # MARK:b_nope
+
+        _check(ei.value, "b_nope", "nope.sum")
+
+    def test_reading_state(self):
+        with pytest.raises(jit.JitError, match="write-only") as ei:
+
+            @jit.plugin
+            class ReadState:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    keep = self.total + df["dur"]  # MARK:b_read
+                    self.total += keep.sum()
+
+        _check(ei.value, "b_read", "self.total")
+
+    def test_assigning_a_reduction(self):
+        with pytest.raises(jit.JitError, match="has no merge") as ei:
+
+            @jit.plugin
+            class Assign:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    self.total = df["dur"].sum()  # MARK:b_assign
+
+        _check(ei.value, "b_assign", "self.total")
+
+    def test_keyed_state(self):
+        with pytest.raises(jit.JitError, match="keyed update") as ei:
+
+            @jit.plugin
+            class Keyed:
+                by_pid = jit.map(key=(jit.i64,), value=jit.sum())
+
+                @jit.each_batch
+                def step(self, df):
+                    self.by_pid[(1,)] += df["dur"].sum()  # MARK:b_keyed
+
+        _check(ei.value, "b_keyed", "self.by_pid")
+
+    def test_container_state(self):
+        with pytest.raises(jit.JitError, match="is a set") as ei:
+
+            @jit.plugin
+            class Container:
+                seen: Set[int] = set()
+
+                @jit.each_batch
+                def step(self, df):
+                    self.seen += df["pid"].max()  # MARK:b_container
+
+        _check(ei.value, "b_container", "self.seen")
+
+    def test_list_append_of_a_series(self):
+        with pytest.raises(jit.JitError, match="stored on self escapes") as ei:
+
+            @jit.plugin
+            class Appended:
+                total: int = 0
+                keep: List[int] = []
+
+                @jit.each_batch
+                def step(self, df):
+                    self.keep.append(df["dur"])  # MARK:b_append
+                    self.total += 1
+
+        _check(ei.value, "b_append", "self.keep.append")
+
+    def test_bare_batch_name(self):
+        with pytest.raises(jit.JitError, match="is the batch") as ei:
+
+            @jit.plugin
+            class Bare:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    self.total += df.sum()  # MARK:b_bare
+
+        _check(ei.value, "b_bare", "df.sum")
+
+    def test_column_name_must_be_literal(self):
+        with pytest.raises(jit.JitError, match="takes a column name string") as ei:
+
+            @jit.plugin
+            class Dynamic:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    pick = 3
+                    self.total += df[pick].sum()  # MARK:b_dynamic
+
+        _check(ei.value, "b_dynamic", "pick")
+
+    def test_each_event_and_each_batch_together(self):
+        with pytest.raises(jit.JitError, match="not both"):
+
+            @jit.plugin
+            class Both:
+                total: int = 0
+
+                @jit.each_event
+                def step(self, e):
+                    self.total += 1
+
+                @jit.each_batch
+                def other(self, df):
+                    self.total += df["dur"].sum()
+
+    def test_a_field_the_batch_never_updates(self):
+        with pytest.raises(jit.JitError, match="never updated in the each_batch body"):
+
+            @jit.plugin
+            class Idle:
+                total: int = 0
+                other: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    self.total += df["dur"].sum()
+
+    def test_a_batch_body_that_folds_nothing(self):
+        with pytest.raises(jit.JitError, match="folds nothing"):
+
+            @jit.plugin
+            class Nothing:
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    dur = df["dur"]  # noqa: F841
+
+    def test_a_store_needs_each_event(self):
+        with pytest.raises(jit.JitError, match="need @jit.each_event"):
+
+            @jit.plugin
+            class WithStore:
+                seen: jit.Store[int, int]
+                total: int = 0
+
+                @jit.each_batch
+                def step(self, df):
+                    self.total += df["dur"].sum()

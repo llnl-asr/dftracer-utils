@@ -86,3 +86,28 @@ class WrongStore:
         self.seen.put(e.pid, "x")  # a str value into a Store[int, int]
         self.seen.put("k", 1)  # a str key into a Store[int, ...]
         self.seen.get(e.pid)  # get needs a default
+
+
+@jit.plugin
+class WrongBatch:
+    total: int = 0
+
+    @jit.each_batch
+    def step(self, df: int) -> None:  # a batch hook takes the batch frame
+        self.total += df["dur"].sum()
+
+    def helper(self, df: jit.Frame) -> None:
+        _ = df["dur"] + "x"  # a column plus a str
+        _ = df["dur"].where(1, 0)  # where takes a mask
+        _ = df["dur"][df["pid"]]  # a column is indexed by a mask
+        _ = df["dur"].clip("a", "b")  # clip takes numbers
+        _ = df["dur"].std()  # outside the vocabulary
+        _ = df[3]  # a column name is a string
+
+
+jit.each_batch(3)  # a method
+
+
+@jit.each_batch
+def batch_returns_int(self: object, df: jit.Frame) -> int:  # a batch hook returns None
+    return 1

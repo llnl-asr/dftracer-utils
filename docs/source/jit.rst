@@ -28,7 +28,7 @@ Overview
   key). A ``jit.map`` lowers to a host aggregation accumulator keyed by its key
   columns - the same ``DFTU_SVC_AGG`` surface a C plugin uses.
 - **Statically checked**: the structured ``each_event`` body is a deliberately
-  small subset (an optional ``if`` guard around one map update); anything outside
+  small subset (conditions, then map or state updates); anything outside
   it raises ``JitError`` at decoration time - never a silent miscompile - and
   ``jit.map`` infers the ``Map[tuple[K], V]`` type so a type checker validates
   your keys and values.
@@ -483,6 +483,172 @@ different threads. A ``str`` value (NUL bytes included) is copied into the
 instance when it loads and freed when the instance is destroyed; the plugin
 never reads the caller's string after the load. An ``Optional`` field that the
 config sets to ``None`` stays unset even when the dataclass default is a value.
+
+.. _jit-conditions:
+
+Conditions in a per-event body
+------------------------------
+
+An ``@jit.each_event`` body branches with ``if`` / ``elif`` / ``else``, nested
+``if`` statements and several guards in a row. A condition is built from:
+
+- ``and``, ``or`` and ``not``, which keep Python's short-circuit order;
+- comparisons ``<  <=  >  >=  ==  !=``, chained (``20 <= e.dur < 40``);
+- ``in`` and ``not in`` against a literal tuple, list or set
+  (``e.pid in (1, 3)``, ``e.name in {"read", "open"}``);
+- ``x is None`` and ``x is not None`` on an ``Optional`` config field
+  (``self.config.cap is None``) and on a string field (``e.fhash is None``,
+  ``e.arg_str("k") is None``); a numeric field is never ``None``;
+- a bare number or a ``bool`` config field as its own truth value
+  (``if e.arg_i64("v"):``).
+
+A string field compares only with a string, a string literal, a ``str`` config
+field or ``jit.NONE``; ``e.cat == 3`` is a compile error. The operands of an
+``and`` after the first, and the links of a chained comparison after the first,
+run only when the earlier ones allow it, so a division behind ``x != 0 and``
+never runs for a row where ``x`` is zero. ``/`` is true division on doubles, as
+in Python, whatever the operand types; ``//`` is a compile error. The scan
+fields ``pid``, ``tid``, ``ts`` and ``dur`` are unsigned 64-bit, so ``e.dur - 20``
+wraps below zero; ``e.arg_i64`` is signed.
+
+A key an event lacks reads as ``0`` (``e.arg_i64``, ``e.arg_f64``) or
+``jit.NONE`` (``e.arg_str``, ``e.fhash``). A batch hook sees the same key as a
+null instead, which sums, counts and comparisons skip, so
+``e.arg_i64("w") == 0`` is true for an absent ``w`` and ``(w == 0).sum()`` is not.
+
+A compile error names the line and column. These are errors: an assignment
+expression (``:=``), a function call other than the numeric primitives,
+``@jit.op`` transforms and ``e.arg_*``, a comparison between a string and a
+number, ``is`` against anything but ``None``, ``in`` against anything but a
+literal, and a string used as a truth value.
+
+The compiler chooses one of two lowerings, and ``Plugin._jit_plugin.lowering``
+says which:
+
+``"mask"``
+   The whole body is one ``if`` with no ``else`` around its updates. The
+   emitted code makes two passes over the batch (two-pass index selection):
+   the first evaluates the condition and writes the index of each matching
+   event, the second runs the updates over those events only. A nested ``if``
+   inside is still a branch, on the matching events.
+
+``"branch"``
+   Everything else: an ``else`` or ``elif``, several guards, a statement
+   outside the ``if``. Each event runs the C branches in order.
+
+The result is the same either way; the mask lowering keeps the condition out of
+the update loop, so the updates run only on the matching events.
+
+.. _jit-batch-hooks:
+
+Batch hooks
+-----------
+
+``@jit.each_batch`` on a ``@jit.plugin`` class works on whole columns instead of
+events. The method takes ``(self, df)``, where ``df`` is the scan batch, and
+folds column reductions into scan state. Nothing runs per event: the body is
+lowered to engine expressions that run fused over the batch, the same way
+``@jit.series`` and the dataframe ``Expr`` do.
+
+.. code-block:: python
+
+   from dftracer.utils import jit
+
+   @jit.plugin
+   class SlowReads:
+       secs: float = 0.0
+       kept: int = 0
+       worst = jit.map(key=(), value=jit.max(of=jit.i64))
+
+       @jit.each_batch
+       def step(self, df: jit.Frame) -> None:
+           dur = df["dur"]
+           keep = (dur > 30) & (df["pid"] != 3)
+           slow = dur[keep]
+           self.secs += (slow * 0.5).sum()
+           self.kept += keep.sum()
+           self.worst[()].observe(slow.max())
+
+The vocabulary is closed. In a column expression:
+
+- ``df["name"]``, a numeric column by string literal (``pid``, ``tid``,
+  ``ts``, ``dur``, ``ph`` or ``args.<key>``); a string column is an error;
+- number literals and a local name bound to an expression (``dur = df["dur"]``);
+- ``+  -  *  /`` and unary ``-``;
+- comparisons, chained or not, against a number or another column;
+- ``&``, ``|`` and ``~`` on masks (write ``(a > 1) & (b < 2)``; ``and``, ``or``
+  and ``not`` do not apply to a column);
+- ``s[mask]``, which keeps the rows where the mask is true;
+- ``s.where(mask, other)``, which keeps ``s`` where the mask is true and takes
+  ``other`` (a number or a column) elsewhere;
+- ``abs(s)`` or ``s.abs()``, and ``s.clip(lo, hi)`` with number literals;
+- ``s.isnull()``, ``s.notnull()`` and ``s.fill_null(v)`` with a number literal.
+
+A statement is either ``name = <column expression>`` or a fold of a reduction
+into state:
+
+- a reduction folded into the target that merges it exactly. The batch value
+  is merged with the target's own merge, so only these pairs are accepted:
+
+  ===========================  ===========================================
+  reduction                    target
+  ===========================  ===========================================
+  ``sum``, ``count``           ``self.n += ...`` on an ``int`` or ``float``
+                               field, or ``self.m[()] += ...`` on
+                               ``jit.sum()`` or ``jit.count()``
+  ``min``                      ``self.m[()].observe(...)`` on ``jit.min()``
+  ``max``                      ``self.m[()].observe(...)`` on ``jit.max()``
+  ``mean``                     ``self.m[()].observe(...)`` on ``jit.mean()``
+  ===========================  ===========================================
+
+  Any other pair is a compile error that names the line: the max of the
+  batch maxima is the max, but the sum of them is not. A mean is not additive
+  across batches, so it cannot be added into a field. A ``jit.mean()`` target
+  observes every non-null element of the column, and the engine merges the
+  mean exactly across batches and workers; to keep a total mean in a plain
+  field, fold ``sum`` and ``count`` and divide after the run;
+- ``mask.sum()`` counts the true rows.
+
+Everything else is a compile error with the line and column: a call outside the
+list, a keyed or container update, an ``if`` or loop, a return, and any way to
+let a column outlive the call. A column stored on ``self``
+(``self.saved = df["dur"]``), appended to a list, returned, or added to state
+without a reduction is an error, because a column is valid only inside one
+call. A float reduction into an ``int`` field is an error when the compiler
+knows the column is a float; for an ``args.<key>`` column the type is known only
+when the batch runs, and a float result into an ``int`` field then fails the
+scan with a message naming the field.
+
+Rules that follow from the lowering:
+
+- Columns in one expression must be over the same rows. ``dur[dur > 3] + dur``
+  is an error; filter both with the same mask.
+- ``pid``, ``tid``, ``ts`` and ``dur`` are read as signed 64-bit inside an
+  expression, so ``df["dur"] - 20`` is negative as in Python. A comparison
+  against a non-negative literal runs on the column as stored.
+- ``s.clip(lo, hi)`` with a float bound is a float column, whatever the column
+  type, and an ``int`` field refuses its sum.
+- ``min``, ``max`` and ``mean`` of an empty selection fold nothing, so a batch
+  where the mask matches no row leaves the extremum alone.
+- A column the batch lacks (an ``args.<key>`` no event has) is an all-null
+  column, so its reductions fold ``0`` for ``sum`` and ``count`` and nothing for
+  ``min``, ``max`` and ``mean``; the other statements run as usual.
+- The result does not depend on how the scan splits batches for ``sum``,
+  ``count``, ``min`` and ``max`` into a field with the matching merge; float
+  sums can differ in the last digits between runs, as for ``each_event``.
+
+A batch hook plugin takes no config, ports or ``jit.Store``, and one class has
+one ``@jit.each_event`` or one ``@jit.each_batch``, not both. ``@jit.vfold``
+keeps its own, narrower form for keyed column folds.
+
+``benchmarks/jit_batch_bench.py`` times a batch hook against the per-event form
+and against the same computation written by hand, as dataframe kernels and as
+one fused ``dftu_expr`` program, for a light and a heavy (about 20 ops) body, on
+traces of big and of small batches. Run with ``--threads 1``, the compute of the
+batch hook is within 5 percent of the hand-written expression program (it is
+0.7 to 0.9 times its net time over the scan on 4 000 000 events, median of 5).
+With all threads the compute hides under the parallel scan and is below the
+run-to-run noise.
 
 Compile errors
 --------------

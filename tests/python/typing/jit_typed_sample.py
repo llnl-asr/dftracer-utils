@@ -379,3 +379,60 @@ class PlainState:
 def use_store(handle: jit.Store[int, int]) -> int:
     handle.put(1, 2)
     return handle.get(1, 0)
+
+
+# Per-event conditions: if / elif / else, and / or / not, chained comparisons,
+# ``in`` a literal and ``is None``.
+
+
+@dataclass(frozen=True)
+class CondCfg:
+    cap: Optional[int] = None
+    label: str = "read"
+
+
+@jit.plugin
+class Conditions:
+    config: CondCfg
+    small: int = 0
+    mid: int = 0
+    big: int = 0
+    picked: int = 0
+    missing: int = 0
+
+    @jit.each_event
+    def step(self, e: Event) -> None:
+        if e.dur < 20:
+            self.small += 1
+        elif 20 <= e.dur < 40 and not e.pid == 3:
+            self.mid += 1
+        else:
+            self.big += 1
+        if e.pid in (1, 3) or e.name in {"read", "open"}:
+            self.picked += 1
+        if e.fhash is None and (self.config.cap is None or e.dur < self.config.cap):
+            self.missing += 1
+
+
+# A batch hook: columns in, reductions into scan state out.
+
+
+@jit.plugin
+class BatchHook:
+    total: float = 0.0
+    kept: int = 0
+    hi = jit.map(key=(), value=jit.max(of=jit.i64))
+    avg = jit.map(key=(), value=jit.mean())
+
+    @jit.each_batch
+    def step(self, df: jit.Frame) -> None:
+        dur = df["dur"]
+        keep = (dur > 30) & (df["pid"] != 3)
+        picked = dur[keep]
+        self.total += (picked.clip(0, 100) * 0.5 + abs(picked) + picked.abs()).sum()
+        self.total += (2 * picked + 1 - picked + 0.5 * picked + 1.0 / picked + (3 - picked)).sum()
+        self.kept += keep.sum()
+        self.hi[()].observe(picked.where(picked > 40, 0).max())
+        spare: jit.Column[float] = df["args.f"].fill_null(0.0)
+        flags: jit.Mask = spare.isnull() | ~(spare >= 1.5)
+        self.avg[()].observe(spare[flags].mean())

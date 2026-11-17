@@ -51,7 +51,7 @@ class ColumnOp:
     operand (an expression), ``a`` / ``b`` the scalar operands, ``text`` a
     string or char operand, in the op's signature order."""
 
-    __slots__ = ("op", "column2", "a", "b", "text", "over", "kind", "n", "agg")
+    __slots__ = ("op", "column2", "a", "b", "text", "over", "kind", "n", "agg", "unit")
 
     def __init__(
         self,
@@ -64,6 +64,7 @@ class ColumnOp:
         kind: Optional[str] = None,
         n: int = 0,
         agg: "Optional[Agg]" = None,
+        unit: Optional[str] = None,
     ) -> None:
         self.op = op
         self.column2 = column2
@@ -75,6 +76,10 @@ class ColumnOp:
         self.n = n
         # An aggregate's over: the group value broadcast back onto its rows.
         self.agg = agg
+        # A dt_round rule kept as text in `text`, turned into a count of the
+        # column's own unit once the column is known; `unit` is the unit the
+        # caller named, None to read the column's.
+        self.unit = unit
 
 
 def _tokens(op: str) -> Tuple[List[str], str]:
@@ -84,6 +89,21 @@ def _tokens(op: str) -> Tuple[List[str], str]:
     return [t.strip() for t in m.group(1).split(",") if t.strip()], m.group(2)
 
 
+def _round_every(spec: ColumnOp, unit: str) -> int:
+    from .indexing import rule_to_units
+
+    assert spec.text is not None
+    return rule_to_units(spec.text, unit)
+
+
+def resolve_round(spec: ColumnOp, unit: str) -> ColumnOp:
+    """``spec`` with its dt_round rule as a count of ``unit``, unchanged when
+    the rule is already a count."""
+    if spec.op != "dftu.series.dt_round" or spec.text is None:
+        return spec
+    return ColumnOp(spec.op, spec.column2, _round_every(spec, unit), spec.b)
+
+
 def run_column_op(series: Series, spec: ColumnOp, series2: Optional[Series]) -> Series:
     """``spec`` over ``series`` through the registry, the operands placed by
     the op's signature tokens exactly as the lazy ``column_op`` step places
@@ -91,6 +111,10 @@ def run_column_op(series: Series, spec: ColumnOp, series2: Optional[Series]) -> 
     tokens, ret = _tokens(spec.op)
     if not tokens or tokens[0] != "series" or ret != "series":
         raise TypeError(f"{spec.op}: not a column -> column op")
+    if spec.op == "dftu.series.dt_round" and spec.text is not None:
+        from .series import _DtAccessor
+
+        spec = resolve_round(spec, _DtAccessor(series, spec.unit)._unit)
     scalars = [spec.a, spec.b]
     args: List[object] = []
     used_text = False
@@ -265,6 +289,17 @@ def _ascending(spec: ColumnOp) -> bool:
 # ---- lazy ------------------------------------------------------------------
 
 
+def _plan_unit(plan: "LazyFrame", name: str, spec: ColumnOp) -> str:
+    """The unit a dt_round rule counts in on column ``name`` of a plan: the
+    caller's, else date64 milliseconds; a plan schema holds no unit for the
+    other temporal types, so they read as microseconds, as an Int64 does."""
+    from .enums import DType
+
+    if spec.unit is not None:
+        return spec.unit
+    return "ms" if plan.schema[name] == DType.DATE64 else "us"
+
+
 def lower_column_ops(plan: "LazyFrame", expr: "Expr") -> "Tuple[LazyFrame, Expr, List[str]]":
     """The plan with every column op of ``expr`` appended as steps (each
     argument computed into a temporary column, the op run over it in
@@ -289,6 +324,8 @@ def lower_column_ops(plan: "LazyFrame", expr: "Expr") -> "Tuple[LazyFrame, Expr,
                 column2 = f"{name}b"
                 plan = plan.with_column(column2, spec.column2)
                 temps.append(column2)
+        if spec.op == "dftu.series.dt_round" and spec.text is not None:
+            spec = resolve_round(spec, _plan_unit(plan, name, spec))
         if spec.over is None:
             plan = _ext.LazyFrame._column_op(
                 plan, name, spec.op, column2=column2, a=spec.a, b=spec.b, text=spec.text

@@ -455,10 +455,11 @@ class Expr:
         text: Optional[str] = None,
         kind: Optional[str] = None,
         n: int = 0,
+        unit: Optional[str] = None,
     ) -> "Expr":
         from ._expr_ops import ColumnOp
 
-        return _ColumnOpNode(self, ColumnOp(op, None, a, b, text, None, kind, n))
+        return _ColumnOpNode(self, ColumnOp(op, None, a, b, text, None, kind, n, None, unit))
 
     def cum_sum(self) -> "Expr":
         """The running sum (``cum_prod`` / ``cum_max`` / ``cum_min`` /
@@ -1916,11 +1917,12 @@ class _ExprStr:
 class _ExprDt:
     """``col.dt``: the calendar parts and bucket rounding as column ops."""
 
-    __slots__ = ("_e", "_unit")
+    __slots__ = ("_e", "_unit", "_given")
 
-    def __init__(self, e: Expr, unit: str = "us") -> None:
+    def __init__(self, e: Expr, unit: Optional[str] = None) -> None:
         self._e = e
-        self._unit = unit
+        self._given = unit
+        self._unit = unit or "us"
 
     def __call__(self, unit: str) -> "_ExprDt":
         return _ExprDt(self._e, unit)
@@ -1987,15 +1989,20 @@ class _ExprDt:
     def truncate(self, every: "Union[int, str]") -> Expr:
         """Each instant floored to a multiple of ``every`` (a pandas offset
         string or a count of the column's units); ``round`` likewise."""
-        return self._e._op("dftu.series.dt_round", a=self._every(every), b=0)
+        return self._round(every, 0)
 
     def round(self, every: "Union[int, str]") -> Expr:
-        return self._e._op("dftu.series.dt_round", a=self._every(every), b=2)
+        return self._round(every, 2)
 
-    def _every(self, every: "Union[int, str]") -> int:
+    def _round(self, every: "Union[int, str]", mode: int) -> Expr:
         from .indexing import rule_to_units
 
-        return rule_to_units(every, self._unit)
+        # A rule is a count of the unit of the column it runs on, known only
+        # then; reject a rule that no unit could read now.
+        count = rule_to_units(every, "ns")
+        if isinstance(every, str):
+            return self._e._op("dftu.series.dt_round", b=mode, text=every, unit=self._given)
+        return self._e._op("dftu.series.dt_round", a=count, b=mode)
 
 
 # The namespaces, bound after the class body so the names `str` and `dt` do

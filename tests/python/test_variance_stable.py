@@ -217,10 +217,10 @@ def test_tier_and_scan_give_the_same_std(tmp_path):
     with du.Indexer(
         files=[path], index_dir=agg, aggregation_config=AggregationConfig(time_interval_ms=100000)
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     def run(scan):
-        tv = TraceViewer([path], index_path=agg)
+        tv = TraceViewer([path], index_dir=agg)
         # The tier cannot evaluate a filter on ts, so this one makes the view
         # scan every record.
         if scan:

@@ -97,14 +97,12 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject*, PyObject*) {
         self->checkpoint_size = dftracer::utils::common::constants::indexer::
             DEFAULT_CHECKPOINT_SIZE;
         self->parallelism = 0;
-        self->force_rebuild = 0;
     }
     return (PyObject*)self;
 }
 
 static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
-    const char* directory = "";
-    PyObject* files_obj = Py_None;
+    PyObject* files_arg = nullptr;
     const char* index_dir = "";
     int require_checkpoint = 1;
     int require_bloom = 1;
@@ -116,7 +114,6 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     Py_ssize_t checkpoint_size = static_cast<Py_ssize_t>(
         dftracer::utils::common::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
     Py_ssize_t parallelism = 0;
-    int force_rebuild = 0;
     PyObject* runtime_arg = nullptr;
     PyObject* bloom_fields_obj = Py_None;
     double false_positive_rate = self->false_positive_rate;
@@ -130,37 +127,21 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     unsigned long long memory_budget = 0;
     PyObject* schema_obj = Py_None;
 
-    if (!parse_kw<"|sOspppdOppnnpOOdnndnOKO">(
+    if (!parse_kw<"O|spppdOppnnOOdnndnOKO">(
             args, kwds,
-            {"directory",
-             "files",
-             "index_dir",
-             "require_checkpoint",
-             "require_bloom",
-             "build_bloom",
-             "time_interval_ms",
-             "group_keys",
-             "compute_percentiles",
-             "group_by_file",
-             "checkpoint_size",
-             "parallelism",
-             "force_rebuild",
-             "runtime",
-             "bloom_fields",
-             "false_positive_rate",
-             "expected_entries",
-             "path_budget",
-             "stats_share",
-             "auto_max_distinct",
-             "extensions",
-             "memory_budget",
-             "schema"},
-            &directory, &files_obj, &index_dir, &require_checkpoint,
-            &require_bloom, &build_bloom, &time_interval_ms, &group_keys_obj,
+            {"files",           "index_dir",           "require_checkpoint",
+             "require_bloom",   "build_bloom",         "time_interval_ms",
+             "group_keys",      "compute_percentiles", "group_by_file",
+             "checkpoint_size", "parallelism",         "runtime",
+             "bloom_fields",    "false_positive_rate", "expected_entries",
+             "path_budget",     "stats_share",         "auto_max_distinct",
+             "extensions",      "memory_budget",       "schema"},
+            &files_arg, &index_dir, &require_checkpoint, &require_bloom,
+            &build_bloom, &time_interval_ms, &group_keys_obj,
             &compute_percentiles, &group_by_file, &checkpoint_size,
-            &parallelism, &force_rebuild, &runtime_arg, &bloom_fields_obj,
-            &false_positive_rate, &expected_entries, &path_budget, &stats_share,
-            &auto_max_distinct, &extensions_obj, &memory_budget, &schema_obj)) {
+            &parallelism, &runtime_arg, &bloom_fields_obj, &false_positive_rate,
+            &expected_entries, &path_budget, &stats_share, &auto_max_distinct,
+            &extensions_obj, &memory_budget, &schema_obj)) {
         return -1;
     }
     if (!(false_positive_rate > 0.0 && false_positive_rate < 1.0)) {
@@ -216,15 +197,13 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
         Py_XSETREF(self->extensions, extensions_obj);
     }
 
-    // Validate: at least one of directory or files must be provided
-    bool has_directory = directory && directory[0] != '\0';
-    bool has_files = files_obj && files_obj != Py_None &&
-                     PyList_Check(files_obj) && PyList_Size(files_obj) > 0;
-
-    if (!has_directory && !has_files) {
-        PyErr_SetString(PyExc_ValueError,
-                        "At least one of 'directory' or 'files' must be "
-                        "provided");
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> input_paths;
+    dftracer::utils::dstd::Optional<dftracer::utils::dstd::String> input_dir;
+    if (!dftracer::utils::python::core::parse_trace_files(
+            files_arg, input_paths, input_dir))
+        return -1;
+    if (!input_dir && input_paths.empty()) {
+        PyErr_SetString(PyExc_ValueError, "files must name at least one path");
         return -1;
     }
 
@@ -246,7 +225,7 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
         }
     }
 
-    self->directory = PyUnicode_FromString(directory);
+    self->directory = PyUnicode_FromString(input_dir ? input_dir->c_str() : "");
     self->index_dir = PyUnicode_FromString(index_dir);
     self->require_checkpoint = require_checkpoint;
     self->require_bloom = require_bloom;
@@ -256,14 +235,13 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     self->group_by_file = group_by_file;
     self->checkpoint_size = static_cast<std::size_t>(checkpoint_size);
     self->parallelism = static_cast<std::size_t>(parallelism);
-    self->force_rebuild = force_rebuild;
 
-    // Store files list
-    if (has_files) {
-        Py_INCREF(files_obj);
-        self->files = files_obj;
-    } else {
-        self->files = nullptr;
+    self->files = PyList_New(static_cast<Py_ssize_t>(input_paths.size()));
+    if (!self->files) return -1;
+    for (std::size_t i = 0; i < input_paths.size(); ++i) {
+        PyObject* item = PyUnicode_FromString(input_paths[i].c_str());
+        if (!item) return -1;
+        PyList_SET_ITEM(self->files, static_cast<Py_ssize_t>(i), item);
     }
 
     // Store group_keys
@@ -385,14 +363,13 @@ static bool with_indexer(IndexerObject* self, Fn fn) {
     });
 }
 
-enum class IndexerCall { Status, Build, Rebuild, Ensure };
+enum class IndexerCall { Status, Build, Rebuild };
 
 static bool run_indexer(IndexerObject* self, IndexerCall call,
                         dftracer::utils::trace::index::IndexStatus& out) {
     auto options = indexer_options(self);
     if (!options) return false;
     auto paths = indexer_paths(self);
-    const bool force = self->force_rebuild != 0;
     return run_blocking([&] {
         auto ix = dftracer::utils::python::core::py_unwrap(
             dftracer::utils::trace::index::Indexer::open(std::move(paths),
@@ -407,20 +384,6 @@ static bool run_indexer(IndexerObject* self, IndexerCall call,
             case IndexerCall::Rebuild:
                 out = dftracer::utils::python::core::py_unwrap(ix.rebuild());
                 break;
-            case IndexerCall::Ensure: {
-                if (!force) {
-                    out = dftracer::utils::python::core::py_unwrap(ix.build());
-                    break;
-                }
-                auto before =
-                    dftracer::utils::python::core::py_unwrap(ix.status());
-                out = before.needs_work.empty() &&
-                              !before.aggregation_needs_rebuild
-                          ? std::move(before)
-                          : dftracer::utils::python::core::py_unwrap(
-                                ix.rebuild());
-                break;
-            }
         }
     });
 }
@@ -445,7 +408,7 @@ static PyObject* status_dict(
     PyObject* dict = PyDict_New();
     if (!dict) return nullptr;
     dict_set_steal(dict, "total_files", PyLong_FromSize_t(st.total));
-    dict_set_steal(dict, "index_path",
+    dict_set_steal(dict, "index_dir",
                    PyUnicode_FromString(st.index_path.c_str()));
     dict_set_steal(dict, "aggregation_interval_us",
                    PyLong_FromUnsignedLongLong(st.aggregation_interval_us));
@@ -458,11 +421,11 @@ static PyObject* status_dict(
 }
 
 // ---------------------------------------------------------------------------
-// resolve() - check what exists vs needs building
+// status() - check what exists vs needs building
 // ---------------------------------------------------------------------------
 
-static PyObject* Indexer_resolve(IndexerObject* self,
-                                 PyObject* Py_UNUSED(ignored)) {
+static PyObject* Indexer_status(IndexerObject* self,
+                                PyObject* Py_UNUSED(ignored)) {
     dftracer::utils::trace::index::IndexStatus st;
     if (!run_indexer(self, IndexerCall::Status, st)) return nullptr;
     return status_dict(st);
@@ -472,15 +435,20 @@ static PyObject* Indexer_resolve(IndexerObject* self,
 // build() - build missing index tiers
 // ---------------------------------------------------------------------------
 
-static PyObject* Indexer_build(IndexerObject* self,
-                               PyObject* Py_UNUSED(ignored)) {
+static bool parse_force(PyObject* args, PyObject* kwds, int& force) {
+    return dftracer::utils::python::core::parse_kw<"|p">(args, kwds, {"force"},
+                                                         &force);
+}
+
+static PyObject* Indexer_build(IndexerObject* self, PyObject* args,
+                               PyObject* kwds) {
+    int force = 0;
+    if (!parse_force(args, kwds, force)) return nullptr;
     dftracer::utils::trace::index::IndexStatus st;
-    if (!run_indexer(
-            self,
-            self->force_rebuild ? IndexerCall::Rebuild : IndexerCall::Build,
-            st))
+    if (!run_indexer(self, force ? IndexerCall::Rebuild : IndexerCall::Build,
+                     st))
         return nullptr;
-    Py_RETURN_NONE;
+    return status_dict(st);
 }
 
 static dftracer::utils::coro::CoroTask<
@@ -498,14 +466,16 @@ open_and_build(
     co_return co_await std::move(building);
 }
 
-static PyObject* Indexer_build_async(IndexerObject* self,
-                                     PyObject* Py_UNUSED(ignored)) {
+static PyObject* Indexer_build_async(IndexerObject* self, PyObject* args,
+                                     PyObject* kwds) {
     using namespace dftracer::utils;
+    int force_flag = 0;
+    if (!parse_force(args, kwds, force_flag)) return nullptr;
     auto options = indexer_options(self);
     if (!options) return nullptr;
     auto task = coro::with_scope(
         [paths = indexer_paths(self), options = std::move(*options),
-         force = self->force_rebuild != 0](coro::Scope& scope) mutable {
+         force = force_flag != 0](coro::Scope& scope) mutable {
             return open_and_build(std::move(paths), std::move(options), force,
                                   scope);
         });
@@ -516,18 +486,18 @@ static PyObject* Indexer_build_async(IndexerObject* self,
                 python::core::set_py_error(result.error());
                 return nullptr;
             }
-            Py_RETURN_NONE;
+            return status_dict(*result);
         });
 }
 
 // ---------------------------------------------------------------------------
-// ensure_indexed() - resolve + build if needed
+// ensure() - build what is missing or stale; no-op when fresh
 // ---------------------------------------------------------------------------
 
-static PyObject* Indexer_ensure_indexed(IndexerObject* self,
-                                        PyObject* Py_UNUSED(ignored)) {
+static PyObject* Indexer_ensure(IndexerObject* self,
+                                PyObject* Py_UNUSED(ignored)) {
     dftracer::utils::trace::index::IndexStatus st;
-    if (!run_indexer(self, IndexerCall::Ensure, st)) return nullptr;
+    if (!run_indexer(self, IndexerCall::Build, st)) return nullptr;
     return status_dict(st);
 }
 
@@ -646,9 +616,9 @@ static PyObject* Indexer_get_checkpoint_indexer(IndexerObject* self,
 
 static dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>
 resolve_index_path(IndexerObject* self) {
-    PyObject* status = Indexer_resolve(self, nullptr);
+    PyObject* status = Indexer_status(self, nullptr);
     if (!status) return dftracer::utils::dstd::nullopt;
-    PyObject* obj = PyDict_GetItemString(status, "index_path");
+    PyObject* obj = PyDict_GetItemString(status, "index_dir");
     const char* path = obj ? as_utf8(obj) : nullptr;
     if (!path || path[0] == '\0') {
         Py_DECREF(status);
@@ -808,25 +778,29 @@ static PyMethodDef Indexer_methods[] = {
      "    file_path: Path to the trace file (.pfw/.pfw.gz)\n\n"
      "Returns:\n"
      "    Indexer instance for checkpoint-level operations.\n"},
-    {"resolve", DFTU_PYCFUNCTION(Indexer_resolve), METH_NOARGS,
-     "resolve()\n"
+    {"status", DFTU_PYCFUNCTION(Indexer_status), METH_NOARGS,
+     "status()\n"
      "--\n\n"
-     "Check what files exist vs need indexing.\n\n"
+     "Check what files exist vs need indexing. Builds nothing.\n\n"
      "Returns:\n"
-     "    dict with 'total_files', 'ready', 'needs_work', 'index_path'\n"},
-    {"build", DFTU_PYCFUNCTION(Indexer_build), METH_NOARGS,
-     "build()\n"
+     "    dict with 'total_files', 'ready', 'needs_work', 'index_dir'\n"},
+    {"build", DFTU_PYCFUNCTION(Indexer_build), METH_VARARGS | METH_KEYWORDS,
+     "build(force=False)\n"
      "--\n\n"
-     "Build all missing index tiers based on require_* flags.\n"},
-    {"build_async", DFTU_PYCFUNCTION(Indexer_build_async), METH_NOARGS,
-     "build_async() -> TaskHandle[None]\n"
+     "Build the missing index tiers based on require_* flags; with\n"
+     "force=True, rebuild them even when they are fresh.\n\n"
+     "Returns:\n"
+     "    dict with index status after building.\n"},
+    {"build_async", DFTU_PYCFUNCTION(Indexer_build_async),
+     METH_VARARGS | METH_KEYWORDS,
+     "build_async(force=False) -> TaskHandle[dict]\n"
      "--\n\n"
-     "Start build() on the Runtime and return at once. The handle's get()\n"
-     "raises the error build() would.\n"},
-    {"ensure_indexed", DFTU_PYCFUNCTION(Indexer_ensure_indexed), METH_NOARGS,
-     "ensure_indexed()\n"
+     "Start build(force) on the Runtime and return at once. The handle's\n"
+     "get() returns the status dict build() returns, or raises its error.\n"},
+    {"ensure", DFTU_PYCFUNCTION(Indexer_ensure), METH_NOARGS,
+     "ensure()\n"
      "--\n\n"
-     "Resolve and build if needed.\n\n"
+     "Build what is missing or stale; a no-op when the index is fresh.\n\n"
      "Returns:\n"
      "    dict with index status after building.\n"},
     {"manifest", DFTU_PYCFUNCTION(Indexer_manifest), METH_NOARGS,
@@ -884,16 +858,14 @@ PyTypeObject IndexerType = {
     .tp_dealloc = (destructor)Indexer_dealloc,
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
     .tp_doc =
-        "BatchIndexer(directory='', files=None, index_dir='',\n"
-        "             require_checkpoint=True, require_bloom=True,\n"
-        "             time_interval_ms=1000.0, group_keys=None,\n"
-        "             compute_percentiles=True, parallelism=0,\n"
-        "             force_rebuild=False, runtime=None)\n"
+        "Indexer(files, index_dir='',\n"
+        "        require_checkpoint=True, require_bloom=True,\n"
+        "        time_interval_ms=1000.0, group_keys=None,\n"
+        "        compute_percentiles=True, parallelism=0, runtime=None)\n"
         "--\n\n"
         "Indexer with tiered index building.\n\n"
-        "At least one of 'directory' or 'files' must be provided.\n"
-        "- directory: scan for .pfw/.jsonl/.ndjson/.json files, plain or gzip\n"
-        "- files: list of specific file paths\n\n"
+        "files is one path, a directory (scanned for .pfw/.jsonl/.ndjson/\n"
+        ".json files, plain or gzip) or a list of paths.\n\n"
         "Supports:\n"
         "- Tier 1: Checkpoints (require_checkpoint)\n"
         "- Tier 2: Bloom filters (require_bloom)\n"

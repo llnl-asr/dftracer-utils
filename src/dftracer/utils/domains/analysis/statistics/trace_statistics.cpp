@@ -70,7 +70,7 @@ dstd::String TraceStatistics::to_json() const {
     ss += "\"file_path\":\"";
     trace::internal::append_value(ss, file_path);
     ss += '"';
-    ss += ",\"index_path\":\"";
+    ss += ",\"index_dir\":\"";
     trace::internal::append_value(ss, index_path);
     ss += '"';
     ss += ",\"success\":";

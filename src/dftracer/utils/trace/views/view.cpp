@@ -544,9 +544,9 @@ View View::from_files(dstd::Vector<ViewFile> files) {
 }
 
 coro::CoroTask<View> View::from_directory(dstd::String dir,
-                                          dstd::String index_path) {
+                                          dstd::String index_dir) {
     auto listing =
-        detail::scan::from_directory(std::move(dir), std::move(index_path));
+        detail::scan::from_directory(std::move(dir), std::move(index_dir));
     detail::ScanPlan plan = co_await std::move(listing);
     if (plan->error) co_return View().failed(*plan->error);
     co_return View(std::move(plan));

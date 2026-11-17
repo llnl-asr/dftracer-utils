@@ -51,7 +51,7 @@ picture.
    import dftracer.utils as dft
 
    with dft.Indexer(files=["baseline.pfw.gz", "variant.pfw.gz"]) as ix:
-       ix.ensure_indexed()
+       ix.ensure()
 
 Compare them
 -------------

@@ -104,8 +104,8 @@ class TestDaskWorkerPluginIntegration:
 
                     idx = os.path.dirname(path)
                     with dft.Indexer(files=[path], index_dir=idx) as ix:
-                        ix.ensure_indexed()
-                    tv = dft.TraceViewer(path, index_path=idx)
+                        ix.ensure()
+                    tv = dft.TraceViewer(path, index_dir=idx)
                     return tv.statistics()["duration_count"]
 
                 future = client.submit(count_events, gz_file)
@@ -137,8 +137,8 @@ class TestDaskWorkerPluginIntegration:
 
                     idx = os.path.dirname(path)
                     with dft.Indexer(files=[path], index_dir=idx) as ix:
-                        ix.ensure_indexed()
-                    tv = dft.TraceViewer(path, index_path=idx)
+                        ix.ensure()
+                    tv = dft.TraceViewer(path, index_dir=idx)
                     return tv.statistics()["duration_count"]
 
                 futures = client.map(count_events, files)

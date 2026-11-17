@@ -21,7 +21,7 @@ without worrying about redundant work.
    .. tab-item:: Python
 
       ``Indexer`` builds the checkpoint, bloom-filter and aggregation tiers.
-      ``ensure_indexed()`` checks what is
+      ``ensure()`` checks what is
       already built and only builds what is missing:
 
       .. code-block:: python
@@ -29,18 +29,17 @@ without worrying about redundant work.
          import dftracer.utils as dft
 
          with dft.Indexer(files=["trace.pfw.gz"]) as ix:
-             status = ix.ensure_indexed()
+             status = ix.ensure()
              print(status.total_files, status.ready, status.needs_work)
 
          # Or point at a whole directory:
          with dft.Indexer("traces/") as ix:
-             ix.ensure_indexed()
+             ix.ensure()
 
-      ``ensure_indexed()`` is ``resolve()`` (check what needs work) followed
-      by ``build()`` (build only that) in one call; call ``resolve()`` on its
-      own to inspect status without triggering a build. ``force_rebuild=True``
-      on the constructor rebuilds every tier regardless of what already
-      exists.
+      ``ensure()`` builds what is missing or stale and does nothing when the
+      index is fresh; call ``status()`` on its own to inspect what needs work
+      without building. ``build(force=True)`` rebuilds every tier regardless
+      of what already exists.
 
       Both ``require_checkpoint`` and ``require_bloom`` default to ``True``.
       Every build also makes the aggregation tier, with one standard config
@@ -54,7 +53,7 @@ without worrying about redundant work.
              "traces/",
              aggregation_config=AggregationConfig(time_interval_ms=5000),
          ) as ix:
-             ix.ensure_indexed()  # one fused pass builds all three tiers
+             ix.ensure()  # one fused pass builds all three tiers
 
       The bloom tier always covers ``name``, ``cat``, ``pid``, ``tid`` and the
       file, host and command hashes. It also indexes other paths of each
@@ -92,7 +91,7 @@ without worrying about redundant work.
       ``path_budget`` is an error. An index built without a requested field,
       or with other settings, rebuilds its zone map, bloom and count evidence
       once (postings, stats and the catalog are kept) on the next
-      ``ensure_indexed()``. The new evidence format also rebuilds existing
+      ``ensure()``. The new evidence format also rebuilds existing
       evidence once.
       Example:
 
@@ -101,7 +100,7 @@ without worrying about redundant work.
          from dftracer.utils import BloomConfig, Indexer
 
          with Indexer("traces/", require_bloom=BloomConfig(fields=["io.off"])) as ix:
-             ix.ensure_indexed()
+             ix.ensure()
 
       Each field costs index space and build time in proportion to its
       distinct values per chunk, so index the fields you filter on, not every
@@ -187,7 +186,7 @@ Reuse and incremental builds
 -----------------------------
 
 Nothing you write needs to track whether a trace has already been indexed.
-Every build entry point - ``Indexer.ensure_indexed()``,
+Every build entry point - ``Indexer.ensure()``,
 ``Indexer::build``, and ``dftracer_index`` without ``--force`` -
 checks the existing ``.dftindex`` store first and only does work for files
 that are missing or out of date. Add new trace files to a directory and
@@ -293,7 +292,7 @@ rebuilding the rest.
          import dftracer.utils as dft
 
          with dft.Indexer("traces/") as ix:
-             ix.ensure_indexed()
+             ix.ensure()
              for f in ix.manifest():
                  print(f["path"], [e["name"] for e in f["extensions"] if e["current"]])
 
@@ -303,12 +302,12 @@ rebuilding the rest.
                      print("  ", e["name"], "rules out", e["removed"])
 
              ix.drop_extension("counts")      # removed from every file
-             ix.ensure_indexed()              # built again: still requested
+             ix.ensure()              # built again: still requested
              ix.rebuild_extension("bloom")    # rewrites bloom only
 
          # Build without counts; a later build does not add it back.
          with dft.Indexer("traces/", extensions=["zonemap", "bloom", "postings"]) as ix:
-             ix.ensure_indexed()
+             ix.ensure()
 
    .. tab-item:: C++
 
@@ -354,11 +353,11 @@ chunks. Detection is per file; set the schema to skip it or to override it:
       .. code-block:: python
 
          with dft.Indexer(files=["requests.ndjson.gz"]) as ix:
-             ix.ensure_indexed()                     # detected as generic
+             ix.ensure()                     # detected as generic
              print(ix.explain('op == "read"'))       # chunks the filter skips
 
          with dft.Indexer("traces/", schema="dftracer") as ix:
-             ix.ensure_indexed()
+             ix.ensure()
 
    .. tab-item:: C++
 
@@ -461,7 +460,7 @@ as usual:
 .. code-block:: python
 
    with dft.Indexer(files=["access.ndjson.gz"]) as ix:
-       ix.ensure_indexed()
+       ix.ensure()
        print(ix.explain('upstream == "u2"'))   # reads the u2 chunks only
 
    tv = dft.TraceViewer("access.ndjson.gz")
@@ -540,7 +539,7 @@ order in which the pieces were parsed; a build that spills is slower.
       .. code-block:: python
 
          with dft.Indexer("traces/", memory_budget="2GB") as ix:
-             ix.ensure_indexed()
+             ix.ensure()
 
    .. tab-item:: C++
 

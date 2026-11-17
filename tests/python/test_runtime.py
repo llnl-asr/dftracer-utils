@@ -99,7 +99,7 @@ class TestRuntimeProgress:
     def _indexed(self, env):
         gz = env.create_test_gzip_file()
         with dftu_utils.Indexer(files=[gz], index_dir=env.temp_dir) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         return gz
 
     def test_progress_after_stream(self):
@@ -108,7 +108,7 @@ class TestRuntimeProgress:
         with Environment(lines=10) as env:
             gz = self._indexed(env)
             rt = dftu_utils.Runtime(threads=2)
-            list(dftu_utils.TraceViewer(gz, index_path=env.temp_dir, runtime=rt).stream())
+            list(dftu_utils.TraceViewer(gz, index_dir=env.temp_dir, runtime=rt).stream())
             rt.shutdown()
             p = rt.get_progress()
             assert p["total"] >= 1
@@ -120,7 +120,7 @@ class TestRuntimeProgress:
         with Environment(lines=10) as env:
             gz = self._indexed(env)
             rt = dftu_utils.Runtime(threads=2)
-            list(dftu_utils.TraceViewer(gz, index_path=env.temp_dir, runtime=rt).stream())
+            list(dftu_utils.TraceViewer(gz, index_dir=env.temp_dir, runtime=rt).stream())
             rt.shutdown()
             p = rt.get_progress()
             assert len(p["tasks"]) >= 1
@@ -136,7 +136,7 @@ class TestRuntimeProgress:
         with Environment(lines=10) as env:
             gz = self._indexed(env)
             rt = dftu_utils.Runtime(threads=2)
-            tv = dftu_utils.TraceViewer(gz, index_path=env.temp_dir, runtime=rt)
+            tv = dftu_utils.TraceViewer(gz, index_dir=env.temp_dir, runtime=rt)
             list(tv.stream())
             list(tv.stream())
             tv.statistics()
@@ -155,7 +155,7 @@ class TestRuntimeProgress:
             # tasks in it. This stream must add no failure of its own.
             rt = dftu_utils.Runtime(threads=2)
             before = rt.get_progress()
-            list(dftu_utils.TraceViewer(gz, index_path=env.temp_dir, runtime=rt).stream())
+            list(dftu_utils.TraceViewer(gz, index_dir=env.temp_dir, runtime=rt).stream())
             rt.shutdown()
             p = rt.get_progress()
             assert p["failed"] == before["failed"]

@@ -226,7 +226,7 @@ def test_columnar_over_view_batch_stays_in_vec():
     with Environment(lines=100) as env:
         gz = env.create_test_gzip_file()
         with dft.Indexer(files=[gz]) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
 
         batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur", "mean:dur").collect()
         assert isinstance(batch, DataFrame)
@@ -253,7 +253,7 @@ def test_columnar_batch_to_arrow_and_pandas_roundtrip():
     with Environment(lines=100) as env:
         gz = env.create_test_gzip_file()
         with dft.Indexer(files=[gz]) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         batch = TraceViewer(gz).group_by("cat").agg("count").collect()
         tbl = batch.to_arrow()
         assert tbl.num_rows == batch.num_rows
@@ -273,7 +273,7 @@ def test_columnar_batch_and_column_pickle_roundtrip():
     with Environment(lines=100) as env:
         gz = env.create_test_gzip_file()
         with dft.Indexer(files=[gz]) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur").collect()
 
         b2 = pickle.loads(pickle.dumps(batch))
@@ -298,7 +298,7 @@ def test_vecbatch_native_frame_ops():
     with Environment(lines=200) as env:
         gz = env.create_test_gzip_file()
         with dft.Indexer(files=[gz]) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur").collect()
 
         proj = batch.select("cat", "count")
@@ -592,7 +592,7 @@ def test_vecbatch_topk_and_concat():
     with Environment(lines=200) as env:
         gz = env.create_test_gzip_file()
         with dft.Indexer(files=[gz]) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur").collect()
 
         top1 = batch.topk("count", 1, largest=True)

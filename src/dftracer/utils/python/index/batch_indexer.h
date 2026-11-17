@@ -41,7 +41,6 @@ struct IndexerObject {
 
     std::size_t checkpoint_size;
     std::size_t parallelism;
-    int force_rebuild;
 };
 
 extern PyTypeObject IndexerType;

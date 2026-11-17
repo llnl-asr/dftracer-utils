@@ -16,7 +16,7 @@ def _ndjson(path):
         for i in range(RECORDS):
             out.write('{"op":"%s","lat":%d,"io":{"off":%d}}\n' % (OPS[i % 3], i % 50, i * 4096))
     with dftu.Indexer(files=[path]) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
     return path
 
 

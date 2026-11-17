@@ -97,15 +97,15 @@ def test_flat_dotted_arg_key_resolves_at_runtime(tmp_path):
     _write_dotted_arg_trace(trace)
     idx = os.path.join(tmp_path, "idx")
     with Indexer(
-        directory=str(tmp_path),
+        str(tmp_path),
         index_dir=idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     def count(pred):
         tbl = (
-            TraceViewer(str(tmp_path), index_path=idx)
+            TraceViewer(str(tmp_path), index_dir=idx)
             .phase("events")
             .filter(pred)
             .group_by("mlx5.op")
@@ -132,18 +132,18 @@ def test_traceviewer_filter_accepts_expr(tmp_path):
     _write_trace(trace)
     idx = os.path.join(tmp_path, "idx")
     with Indexer(
-        directory=str(tmp_path),
+        str(tmp_path),
         index_dir=idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     expr = col("cat") == "POSIX"
     assert isinstance(expr, Expr)
 
     def count(pred):
         tbl = (
-            TraceViewer(str(tmp_path), index_path=idx)
+            TraceViewer(str(tmp_path), index_dir=idx)
             .phase("events")
             .filter(pred)
             .group_by("cat")
@@ -275,15 +275,15 @@ def test_traceviewer_filter_unified_predicates(tmp_path):
     _write_trace(trace)
     idx = os.path.join(tmp_path, "idx")
     with Indexer(
-        directory=str(tmp_path),
+        str(tmp_path),
         index_dir=idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     def count(pred):
         tbl = (
-            TraceViewer(str(tmp_path), index_path=idx)
+            TraceViewer(str(tmp_path), index_dir=idx)
             .phase("events")
             .filter(pred)
             .group_by("cat")
@@ -296,11 +296,11 @@ def test_traceviewer_filter_unified_predicates(tmp_path):
     assert count(F.dur > 0) == count("dur > 0")
 
     # filter accepts like predicates (built and pushed down).
-    v = TraceViewer(str(tmp_path), index_path=idx).phase("events").filter(F.cat.like("POS%"))
+    v = TraceViewer(str(tmp_path), index_dir=idx).phase("events").filter(F.cat.like("POS%"))
     assert isinstance(v, TraceViewer)
 
     # A non-pushable predicate filters the collected rows, not the index.
-    events = TraceViewer(str(tmp_path), index_path=idx).phase("events")
+    events = TraceViewer(str(tmp_path), index_dir=idx).phase("events")
     v3 = events.filter((F.dur + F.ts) > 1005)
     assert isinstance(v3, TraceViewer)
     every = pa.table(events.collect()).to_pandas()

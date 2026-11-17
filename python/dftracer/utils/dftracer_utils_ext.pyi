@@ -96,12 +96,11 @@ class _ArrowBatchStream:
     def __arrow_c_stream__(self, requested_schema: object = None) -> object: ...
 
 class Indexer:
-    """Indexer with resolve/build pattern for tiered indexing."""
+    """Indexer with status/ensure/build pattern for tiered indexing."""
 
     def __init__(
         self,
-        directory: str = "",
-        files: Optional[List[str]] = None,
+        files: Union[str, Sequence[str]],
         index_dir: str = "",
         require_checkpoint: bool = True,
         require_bloom: bool = True,
@@ -112,7 +111,6 @@ class Indexer:
         group_by_file: bool = True,
         checkpoint_size: int = 32 * 1024 * 1024,
         parallelism: int = 0,
-        force_rebuild: bool = False,
         runtime: Optional["Runtime"] = None,
         bloom_fields: Optional[Sequence[str]] = None,
         false_positive_rate: float = 0.01,
@@ -126,11 +124,9 @@ class Indexer:
     ) -> None:
         """Create an indexer for trace files.
 
-        At least one of 'directory' or 'files' must be provided.
-
         Args:
-            directory: Path to the directory containing trace files.
-            files: List of specific file paths to index.
+            files: One path, a directory scanned for trace files, or a list
+                of paths.
             index_dir: Directory for `.dftindex` stores. If empty, uses
                 directory-local paths.
             require_checkpoint: If True, build checkpoint index (tier 1).
@@ -140,7 +136,6 @@ class Indexer:
             group_keys: Keys to group by for aggregation.
             compute_percentiles: If True, compute percentiles during aggregation.
             parallelism: Number of parallel indexers. 0 = auto.
-            force_rebuild: If True, rebuild indices even if they exist.
             runtime: Runtime instance for thread pool control.
             bloom_fields: Args fields the bloom tier indexes by name; a file
                 indexed without one is rebuilt.
@@ -161,32 +156,32 @@ class Indexer:
         """
         ...
 
-    def resolve(self) -> Dict[str, object]:
-        """Resolve which files need indexing.
+    def status(self) -> Dict[str, object]:
+        """Which files are indexed and which need work. Builds nothing.
 
         Returns:
             Dictionary with 'ready' and 'needs_work' file lists.
         """
         ...
 
-    def build(self) -> Dict[str, object]:
-        """Build indices for files that need work.
+    def build(self, force: bool = False) -> Dict[str, object]:
+        """Build the missing index tiers; with ``force``, rebuild them all.
 
         Returns:
-            Dictionary with build status and statistics.
+            Dictionary with the status after building.
         """
         ...
 
-    def build_async(self) -> "TaskHandle[None]":
+    def build_async(self, force: bool = False) -> "TaskHandle[Dict[str, object]]":
         """Start :meth:`build` on the Runtime and return at once.
 
-        The handle's ``get()`` returns ``None`` or raises the error ``build``
-        would.
+        The handle's ``get()`` returns the status ``build`` returns or raises
+        the error ``build`` would.
         """
         ...
 
-    def ensure_indexed(self) -> Dict[str, object]:
-        """Ensure all files are indexed by calling resolve then build if needed.
+    def ensure(self) -> Dict[str, object]:
+        """Build what is missing or stale; a no-op when the index is fresh.
 
         Returns:
             Dictionary with 'ready' and 'needs_work' file lists after indexing.
@@ -263,9 +258,9 @@ class CheckpointIndexer:
     def __init__(
         self,
         gz_path: str,
-        index_path: Optional[str] = None,
+        index_dir: Optional[str] = None,
         checkpoint_size: int = 1048576,
-        force_rebuild: bool = False,
+        force: bool = False,
         build_bloom: bool = False,
         runtime: Optional["Runtime"] = None,
     ) -> None:
@@ -273,10 +268,10 @@ class CheckpointIndexer:
 
         Args:
             gz_path: Path to the gzip trace file.
-            index_path: Path to the `.dftindex` store. If None, uses the
+            index_dir: Path to the `.dftindex` store. If None, uses the
                 root-local `.dftindex` next to ``gz_path``.
             checkpoint_size: Checkpoint size in bytes for index building.
-            force_rebuild: If True, rebuild the index even if it exists.
+            force: If True, rebuild the index even if it exists.
             build_bloom: If True, build bloom filter data in the index.
             runtime: Runtime instance for thread pool control.
                 If None, uses the default global Runtime.
@@ -321,7 +316,7 @@ class CheckpointIndexer:
         ...
 
     @property
-    def index_path(self) -> str:
+    def index_dir(self) -> str:
         """Get the `.dftindex` path."""
         ...
 
@@ -501,7 +496,7 @@ class Index:
     record the aggregation of a distributed build.
     """
 
-    def __init__(self, index_path: str) -> None: ...
+    def __init__(self, index_dir: str) -> None: ...
     def find_stale_files(self, paths: List[str]) -> dict:
         """Stat-only (mtime + size) staleness check of `paths` against the
         index. Returns a dict with keys `changed`, `added`, `removed`
@@ -518,7 +513,7 @@ def build_index_batch(
     files: List[str],
     index_dir: str,
     checkpoint_size: int = 33554432,
-    force_rebuild: bool = False,
+    force: bool = False,
     build_bloom: bool = True,
     bloom_dimensions: Optional[List[str]] = None,
     parallelism: int = 0,
@@ -1402,12 +1397,12 @@ def enable_aggregation_deterministic_ids() -> None:
     so the same string maps to the same 32-bit id in every worker process."""
     ...
 
-def write_shard_set(index_root: str, shard_dirs: Sequence[str]) -> None:
+def write_shard_set(index_dir: str, shard_dirs: Sequence[str]) -> None:
     """Catalog ``shard_dirs`` as the shards of the index root, in the root's
     ``shards.json``. A shard under the root is stored relative to it."""
     ...
 
-def consolidate_shard_set(index_root: str) -> int:
+def consolidate_shard_set(index_dir: str) -> int:
     """Merge the shards the root's ``shards.json`` names into the root's own
     store by moving their data files, then remove the manifest and the shard
     directories. Returns the number of trace files the shards indexed. A failed
@@ -1426,7 +1421,7 @@ class _LiveTraceViewer:
     def __init__(
         self,
         files: Sequence[str],
-        index_path: Optional[str] = ...,
+        index_dir: Optional[str] = ...,
     ) -> None: ...
     def snapshot(self) -> "TraceViewer":
         """Index what was written since the last call; a TraceViewer of every whole member."""
@@ -1446,7 +1441,7 @@ class TraceViewer:
     def __init__(
         self,
         files: Union[str, Sequence[str]],
-        index_path: Optional[str] = ...,
+        index_dir: Optional[str] = ...,
     ) -> None:
         """``files`` is a trace path, a sequence of paths, or a directory; a
         directory is scanned recursively for ``.pfw.gz`` traces."""

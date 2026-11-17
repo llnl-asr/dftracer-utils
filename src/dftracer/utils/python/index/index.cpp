@@ -90,7 +90,7 @@ PyObject *Index_new(PyTypeObject *type, PyObject * /*args*/,
 
 int Index_init(IndexObject *self, PyObject *args, PyObject *kwds) {
     const char *index_path = nullptr;
-    if (!parse_kw<"s">(args, kwds, {"index_path"}, &index_path)) return -1;
+    if (!parse_kw<"s">(args, kwds, {"index_dir"}, &index_path)) return -1;
     return guard([&] {
         auto opened =
             dftracer::utils::python::core::py_unwrap(trace::index::Index::open(

@@ -202,7 +202,7 @@ def test_schema_tree_nests_paths(tmp_path):
     lines = ['{"op":"read","io":{"off":4096}}', '{"op":"write","io":{"off":0}}']
     path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
     with dftu.Indexer(files=[str(path)], schema=PyTree) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
     tree = dftu.TraceViewer(str(path)).schema_tree()
     assert tree["op"] == {"type": "string", "count": 2, "field": "op", "declared_type": "string"}
     assert tree["io"]["children"]["off"]["count"] == 2
@@ -287,10 +287,10 @@ def test_schemas_next_to_the_index_are_used(tmp_path):
         "index: {path_budget: 0}\n"
     )
     with dftu.Indexer(files=[trace], index_dir=str(index_dir)) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
         explained = ix.explain('upstream == "u2"')[0]
     assert len(explained["read"]) < explained["chunks"]
-    viewer = dftu.TraceViewer(trace, index_path=str(index_dir / ".dftindex"))
+    viewer = dftu.TraceViewer(trace, index_dir=str(index_dir / ".dftindex"))
     rows = viewer.duql('upstream == "u2"').collect()
     assert len(rows) == 300
 
@@ -314,8 +314,8 @@ def test_schema_path_environment_and_spec_edits(tmp_path):
     build = f"""
         import dftracer.utils as d
         with d.Indexer(files=[{trace!r}], index_dir={index_dir!r}) as ix:
-            print("needs", len(ix.resolve().needs_work))
-            ix.ensure_indexed()
+            print("needs", len(ix.status().needs_work))
+            ix.ensure()
         print("ids", [s["id"] for s in d.schemas.list()])
     """
     code, out = _run(build, env)
@@ -340,7 +340,7 @@ def test_schema_path_environment_and_spec_edits(tmp_path):
     # Read without the schema registered: an error that says where to load it.
     read = f"""
         import dftracer.utils as d
-        d.TraceViewer({trace!r}, index_path={index_dir + "/.dftindex"!r}).collect()
+        d.TraceViewer({trace!r}, index_dir={index_dir + "/.dftindex"!r}).collect()
     """
     code, out = _run(read, {"DFTRACER_UTILS_SCHEMA_PATH": ""})
     assert code == 1, out
@@ -415,7 +415,7 @@ def test_old_locations_are_not_read(tmp_path):
         f"""
         import dftracer.utils as d
         with d.Indexer(files=[{trace!r}], index_dir={str(index_dir)!r}) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         print("ids", [s["id"] for s in d.schemas.list()])
         print("detected", d.schemas.detect({trace!r}))
         """,

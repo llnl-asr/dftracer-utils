@@ -225,7 +225,7 @@ class TestColumnsAndSchema:
 
     def test_column_info_reads_the_index(self, trace, tv):
         with dft.Indexer(files=[trace]) as indexer:
-            indexer.ensure_indexed()
+            indexer.ensure()
         info = tv.column_info()
         assert info["dur"] == "int64"
         assert "size" in info

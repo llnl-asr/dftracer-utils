@@ -49,7 +49,7 @@ def test_typed_read_to_ipc_is_the_ipc_form_of_view_typed_frames(tmp_path):
         index_dir=idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     # Granularity must match the tier's interval (100000 ms == 100 s): coarsening
     # only reads coarser than the stored bucket, never finer.
@@ -88,7 +88,7 @@ def test_view_agg_tier_matches_raw_scan(tmp_path):
         index_dir=agg,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     keys = ["name", "io_cat", "pid", "tid"]
     metrics = [
@@ -105,7 +105,7 @@ def test_view_agg_tier_matches_raw_scan(tmp_path):
     ]
 
     def collect(idx, scan=False):
-        tv = _viewer(TraceViewer(files, index_path=idx), scan).group_by(*keys).agg(*metrics)
+        tv = _viewer(TraceViewer(files, index_dir=idx), scan).group_by(*keys).agg(*metrics)
         return tv.collect().to_pandas().sort_values(keys).reset_index(drop=True)
 
     tier, raw = collect(agg), collect(agg, scan=True)
@@ -139,11 +139,11 @@ def test_view_agg_tier_serves_offset_like_raw_scan(tmp_path):
         index_dir=agg,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     def collect(idx, scan=False):
         tv = (
-            _viewer(TraceViewer([path], index_path=idx), scan)
+            _viewer(TraceViewer([path], index_dir=idx), scan)
             .group_by("name")
             .agg("min:offset", "max:offset", "sum:offset")
         )
@@ -175,12 +175,12 @@ def test_view_agg_tier_skew_kurt_pct_match_raw_scan(tmp_path):
         index_dir=agg,
         aggregation_config=AggregationConfig(time_interval_ms=100000, compute_percentiles=True),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     metrics = ["skew:dur", "kurt:dur", "p50:dur", "p90:dur"]
 
     def collect(idx, scan=False):
-        tv = _viewer(TraceViewer(files, index_path=idx), scan).group_by("name").agg(*metrics)
+        tv = _viewer(TraceViewer(files, index_dir=idx), scan).group_by("name").agg(*metrics)
         return tv.collect().to_pandas().sort_values("name").reset_index(drop=True)
 
     tier, raw = collect(agg), collect(agg, scan=True)
@@ -211,11 +211,11 @@ def test_view_histogram_tier_matches_raw_scan(tmp_path):
         index_dir=agg,
         aggregation_config=AggregationConfig(time_interval_ms=100000, compute_percentiles=True),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     def collect(idx, scan=False):
         tv = (
-            _viewer(TraceViewer(files, index_path=idx), scan)
+            _viewer(TraceViewer(files, index_dir=idx), scan)
             .group_by("name")
             .agg("count", "hist:dur")
         )
@@ -263,9 +263,9 @@ def test_collect_typed_one_pass_returns_all_record_families(tmp_path):
         index_dir=idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
-    res = TraceViewer([p], index_path=idx).group_by("name", "pid", "tid").collect_typed()
+    res = TraceViewer([p], index_dir=idx).group_by("name", "pid", "tid").collect_typed()
     assert set(res) == {"regular", "aggregated", "counters"}
     regular = res["regular"].to_dict()
     aggregated = res["aggregated"].to_dict()
@@ -300,10 +300,10 @@ def test_collect_typed_cat_filter_matches_collect(tmp_path):
         index_dir=idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     def count(q):
-        tv = TraceViewer([p], index_path=idx).filter(q).group_by("name").agg("count")
+        tv = TraceViewer([p], index_dir=idx).filter(q).group_by("name").agg("count")
         c = tv.collect()
         reg = tv.collect_typed()["regular"]
         cn = 0 if c is None else int(sum(c["count"].to_list()))
@@ -348,7 +348,7 @@ def test_view_typed_frames_maps_all_three_to_dfanalyzer_schema(tmp_path):
         index_dir=idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     fr = view_typed_frames([p], idx, time_granularity=100.0)
     ev, prof, sysf = fr["events"], fr["profiles"], fr["system"]
@@ -395,7 +395,7 @@ def test_view_typed_frames_distributed_matches_single_node(tmp_path):
         index_dir=idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     single = view_typed_frames([p], idx, time_granularity=100.0)
     cluster = LocalCluster(processes=False, n_workers=3, threads_per_worker=1)
@@ -438,10 +438,10 @@ def test_resolved_name_group_keys(tmp_path):
         _make_trace_with_fh(p, pid)
     idx = str(tmp_path / "idx")
     with dftu_utils.Indexer(files=files, index_dir=idx) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     def g(key):
-        tv = TraceViewer(files, index_path=idx).group_by(key).agg("count", "sum:dur")
+        tv = TraceViewer(files, index_dir=idx).group_by(key).agg("count", "sum:dur")
         return tv.collect().to_pandas().set_index(key).sort_index()
 
     fp, fn, fh = g("file_path"), g("file_name"), g("fhash")
@@ -468,9 +468,9 @@ def test_collect_typed_resolves_name_group_keys(tmp_path):
         index_dir=idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
-    typed = TraceViewer(files, index_path=idx).group_by("file_name").collect_typed()
+    typed = TraceViewer(files, index_dir=idx).group_by("file_name").collect_typed()
     reg = typed["regular"].to_pandas()
     assert sorted(reg["file_name"].unique()) == ["file1.dat", "file2.dat"]
 
@@ -490,9 +490,9 @@ def test_percentiles_from_view(tmp_path):
             )
     idx = str(tmp_path / "idx")
     with dftu_utils.Indexer(files=[p], index_dir=idx) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
     df = (
-        TraceViewer([p], index_path=idx)
+        TraceViewer([p], index_dir=idx)
         .group_by("name")
         .agg("count", "p50:dur", "p90:dur", "p99:dur")
         .collect()
@@ -522,9 +522,9 @@ def test_skew_kurtosis_from_view(tmp_path):
             )
     idx = str(tmp_path / "idx")
     with dftu_utils.Indexer(files=[p], index_dir=idx) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
     df = (
-        TraceViewer([p], index_path=idx).group_by("name").agg("skew:dur", "kurt:dur").collect()
+        TraceViewer([p], index_dir=idx).group_by("name").agg("skew:dur", "kurt:dur").collect()
     ).to_pandas()
     a = np.array(vals, dtype=float)
     mu = a.mean()
@@ -564,7 +564,7 @@ def test_view_typed_frames_folds_files_into_buckets(tmp_path):
         index_dir=idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     fine = view_typed_frames([p], idx, time_granularity=100.0)["events"]
     folded = view_typed_frames(
@@ -646,10 +646,10 @@ def test_fileless_index_serves_non_file_queries(tmp_path):
             index_dir=idx,
             aggregation_config=AggregationConfig(time_interval_ms=100000, group_by_file=by_file),
         ) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
 
     def totals(idx):
-        tv = TraceViewer([p], index_path=idx).group_by("name").agg("count", "sum:dur")
+        tv = TraceViewer([p], index_dir=idx).group_by("name").agg("count", "sum:dur")
         return tv.collect_typed()["regular"].to_pandas()
 
     keyed_rows, fileless_rows = totals(keyed), totals(fileless)
@@ -670,10 +670,10 @@ def test_group_key_transforms_coarsen_without_losing_totals(tmp_path):
     _make_trace_with_paths(p, 1, paths)
     idx = str(tmp_path / "idx")
     with dftu_utils.Indexer(files=[p], index_dir=idx) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     def group(expr):
-        tv = TraceViewer([p], index_path=idx).group_by(expr).agg("count")
+        tv = TraceViewer([p], index_dir=idx).group_by(expr).agg("count")
         df = tv.collect().to_pandas()
         return sorted(df[df.columns[0]].tolist()), int(df["count"].sum())
 
@@ -709,16 +709,16 @@ def test_group_key_transform_applies_on_both_read_paths(tmp_path):
 
     scan_idx, tier_idx = str(tmp_path / "scan"), str(tmp_path / "tier")
     with dftu_utils.Indexer(files=[p], index_dir=scan_idx) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
     with dftu_utils.Indexer(
         files=[p],
         index_dir=tier_idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     def group(idx):
-        tv = TraceViewer([p], index_path=idx).group_by("dirname(file_path)").agg("count")
+        tv = TraceViewer([p], index_dir=idx).group_by("dirname(file_path)").agg("count")
         df = tv.collect().to_pandas()
         return sorted(df[df.columns[0]].tolist()), int(df["count"].sum())
 
@@ -744,7 +744,7 @@ def test_profile_on_a_bucket_boundary_keeps_its_bucket(tmp_path):
     with dftu_utils.Indexer(
         files=[p], index_dir=idx, aggregation_config=AggregationConfig(time_interval_ms=5000)
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
     prof = view_typed_frames([p], idx, time_granularity=5.0)["profiles"]
     assert prof["func_name"].tolist() == ["train"]
     assert int(prof["time_start"].iloc[0]) == 5_000_000

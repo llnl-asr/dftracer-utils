@@ -46,7 +46,7 @@ def tv(tmp_path_factory):
         for r in RECORDS:
             f.write(json.dumps(r) + "\n")
     with dftu.Indexer(files=[path]) as indexer:
-        indexer.ensure_indexed()
+        indexer.ensure()
     return dftu.TraceViewer(path)
 
 

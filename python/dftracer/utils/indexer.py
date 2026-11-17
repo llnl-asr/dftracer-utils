@@ -88,7 +88,7 @@ class IndexStatus:
         total_files: Total number of files discovered.
         ready: Files that are fully indexed for requested tiers.
         needs_work: Files that need indexing.
-        index_path: Path to the .dftindex store.
+        index_dir: Path to the .dftindex store.
         aggregation_interval_us: Time interval (us) of the cached aggregation
             tier, or 0 if none.
         truncated: Ready files whose last gzip member was cut short; their
@@ -98,18 +98,18 @@ class IndexStatus:
     total_files: int
     ready: List[str] = field(default_factory=list)
     needs_work: List[str] = field(default_factory=list)
-    index_path: str = ""
+    index_dir: str = ""
     aggregation_interval_us: int = 0
     truncated: List[str] = field(default_factory=list)
 
     @classmethod
     def _from_dict(cls, result: dict) -> "IndexStatus":
-        """Build from the native resolve()/ensure_indexed() result dict."""
+        """Build from the native status()/ensure()/build() result dict."""
         return cls(
             total_files=result["total_files"],
             ready=result["ready"],
             needs_work=result["needs_work"],
-            index_path=result.get("index_path", ""),
+            index_dir=result.get("index_dir", ""),
             aggregation_interval_us=result.get("aggregation_interval_us", 0),
             truncated=result.get("truncated", []),
         )
@@ -123,12 +123,10 @@ class Indexer:
     - Tier 2: Bloom filters (for fast filtering)
     - Tier 3: Aggregation data, built by every build
 
-    At least one of 'directory' or 'files' must be provided.
-
     Args:
-        directory: Directory containing gzip trace files (.pfw.gz,
-            .jsonl.gz and .ndjson.gz).
-        files: List of specific file paths to index.
+        files: A trace file, a directory scanned recursively for trace files
+            (.pfw, .jsonl and .ndjson, plain or gzip), or a list of file
+            paths, as for :class:`~dftracer.utils.TraceViewer`.
         index_dir: Directory for .dftindex stores (default: next to files).
         require_checkpoint: Build checkpoint tier (default True).
         require_bloom: Build the bloom tier: True for the defaults, or a
@@ -138,7 +136,6 @@ class Indexer:
         aggregation_config: Settings of the aggregation tier, which every build
             builds (default: the standard config).
         parallelism: Number of parallel workers (0 = all cores).
-        force_rebuild: Force rebuild even if index exists.
         runtime: Runtime for executor parallelism (default: global runtime).
         extensions: Pruning extensions the bloom tier builds, from
             "zonemap", "bloom", "counts" and "postings" (default all four).
@@ -153,24 +150,26 @@ class Indexer:
 
     Example:
         >>> indexer = Indexer("/path/to/traces")
-        >>> indexer.ensure_indexed()  # builds checkpoint, bloom
+        >>> indexer.ensure()  # builds checkpoint, bloom; no-op when fresh
 
         >>> # With explicit file list
-        >>> indexer = Indexer(files=["/path/to/trace1.pfw.gz", "/path/to/trace2.pfw.gz"])
-        >>> indexer.ensure_indexed()
+        >>> indexer = Indexer(["/path/to/trace1.pfw.gz", "/path/to/trace2.pfw.gz"])
+        >>> indexer.ensure()
+
+        >>> # Rebuild even when the index is fresh
+        >>> indexer.build(force=True)
 
         >>> # With a customized aggregation
         >>> indexer = Indexer(
         ...     "/path/to/traces",
         ...     aggregation_config=AggregationConfig(time_interval_ms=5000),
         ... )
-        >>> indexer.ensure_indexed()  # fused pass with aggregation
+        >>> indexer.ensure()  # fused pass with aggregation
     """
 
     def __init__(
         self,
-        directory: str = "",
-        files: Optional[List[str]] = None,
+        files: "Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]]",
         index_dir: str = "",
         require_checkpoint: bool = True,
         require_bloom: Union[bool, BloomConfig] = True,
@@ -178,7 +177,6 @@ class Indexer:
         aggregation_config: Optional[AggregationConfig] = None,
         checkpoint_size: Union[int, str] = DEFAULT_CHECKPOINT_SIZE,
         parallelism: int = 0,
-        force_rebuild: bool = False,
         runtime: Optional[Runtime] = None,
         extensions: Optional[Sequence[str]] = None,
         memory_budget: Union[int, str] = 0,
@@ -192,9 +190,13 @@ class Indexer:
 
         # Build native indexer
         native_runtime = runtime._native if runtime else None
+        paths = (
+            os.fspath(files)
+            if isinstance(files, (str, os.PathLike))
+            else [os.fspath(f) for f in files]
+        )
         self._native = _NativeIndexer(
-            directory=directory,
-            files=files,
+            files=paths,
             index_dir=index_dir,
             require_checkpoint=require_checkpoint,
             require_bloom=bool(require_bloom),
@@ -205,7 +207,6 @@ class Indexer:
             group_by_file=agg_config.group_by_file,
             checkpoint_size=checkpoint_size,
             parallelism=parallelism,
-            force_rebuild=force_rebuild,
             runtime=native_runtime,
             bloom_fields=bloom.fields,
             false_positive_rate=bloom.false_positive_rate,
@@ -237,49 +238,57 @@ class Indexer:
         """The settings the aggregation tier is built with."""
         return self._aggregation_config
 
-    def resolve(self) -> IndexStatus:
-        """Check what files exist vs need indexing.
+    def status(self) -> IndexStatus:
+        """Check which files are indexed and which need work. Builds nothing.
 
         Returns:
             IndexStatus with total_files, ready, and needs_work lists.
         """
-        result = self._native.resolve()
-        return IndexStatus._from_dict(result)
+        return IndexStatus._from_dict(self._native.status())
 
-    def build(self) -> None:
-        """Build all missing index tiers based on require_* flags.
+    def ensure(self) -> IndexStatus:
+        """Build what is missing or stale; a no-op when the index is fresh.
 
         This method builds indexes in parallel using the Runtime executor.
         When aggregation is enabled, it performs a fused pass for efficiency.
-        """
-        self._native.build()
-
-    def build_async(self) -> TaskHandle[None]:
-        """Start :meth:`build` on the native pool and return at once.
-
-        ``get()`` on the handle returns ``None`` when the build ends, or raises
-        the error ``build`` would, and releases the GIL while it waits. Opening
-        the files happens in the task, so a bad path fails there too.
-        """
-        native = self._native.build_async()
-        return TaskHandle(native=native, name=native.name, task_id=native.task_id)
-
-    def ensure_indexed(self) -> IndexStatus:
-        """Resolve and build if needed.
-
-        Convenience method that calls resolve() then build() if needed.
 
         Returns:
             IndexStatus after building.
         """
-        result = self._native.ensure_indexed()
-        return IndexStatus._from_dict(result)
+        return IndexStatus._from_dict(self._native.ensure())
+
+    def build(self, force: bool = False) -> IndexStatus:
+        """Build the missing index tiers based on require_* flags.
+
+        Args:
+            force: Rebuild every tier even when the index is fresh.
+
+        Returns:
+            IndexStatus after building.
+        """
+        return IndexStatus._from_dict(self._native.build(force=force))
+
+    def build_async(self, force: bool = False) -> TaskHandle[IndexStatus]:
+        """Start :meth:`build` on the native pool and return at once.
+
+        ``get()`` on the handle returns the :class:`IndexStatus` that ``build``
+        returns when the build ends, or raises the error ``build`` would, and
+        releases the GIL while it waits. Opening the files happens in the task,
+        so a bad path fails there too.
+        """
+        native = self._native.build_async(force=force)
+        return TaskHandle(
+            native=native,
+            name=native.name,
+            task_id=native.task_id,
+            finish=IndexStatus._from_dict,
+        )
 
     def manifest(self) -> List[dict]:
         """The extensions built for each indexed file.
 
         Returns:
-            One dict per file with ``path``, ``index_path`` and
+            One dict per file with ``path``, ``index_dir`` and
             ``extensions``: dicts with ``name``, ``version``, ``params_hash``
             (16 hex digits), ``ready`` and ``current``.
         """
@@ -350,7 +359,7 @@ class Indexer:
 
         Example:
             >>> indexer = Indexer("/path/to/traces")
-            >>> indexer.ensure_indexed()
+            >>> indexer.ensure()
             >>> files = indexer.rowset("files").to_dict()
             >>> # files = {"fhash": ["abc123", ...], "path": ["/data.h5", ...]}
         """
@@ -393,16 +402,14 @@ class Indexer:
         return self._file_info_cache
 
 
-def _open_readonly_indexer(files, index_path: str) -> "Indexer":
+def _open_readonly_indexer(files, index_dir: str) -> "Indexer":
     """Open an Indexer that only reads existing index tiers (never builds).
 
-    Derives index_dir from index_path's directory. Used by the distributed
-    read paths where the index is already built.
+    Used by the distributed read paths where the index is already built.
     """
     return Indexer(
-        files=files,
-        index_dir=os.path.dirname(index_path) if index_path else "",
+        files,
+        index_dir=index_dir,
         require_checkpoint=False,
         require_bloom=False,
-        force_rebuild=False,
     )

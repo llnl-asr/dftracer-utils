@@ -17,7 +17,7 @@ from .common import Environment
 def _indexed(env):
     gz = env.create_test_gzip_file()
     with dftu_utils.Indexer(files=[gz]) as indexer:
-        indexer.ensure_indexed()
+        indexer.ensure()
     return gz
 
 
@@ -35,7 +35,7 @@ def _make_trace(env, name, rows):
     with gzip.open(path, "wt") as f:
         f.write("\n".join(json.dumps(r) for r in rows) + "\n")
     with dftu_utils.Indexer(files=[path]) as indexer:
-        indexer.ensure_indexed()
+        indexer.ensure()
     return path
 
 
@@ -712,8 +712,8 @@ class TestTraceViewer:
             TraceViewer(gz).filter('cat == "STDIO"').export_trace(out)
             # The exported trace is a valid, re-indexable dftracer trace.
             with dftu_utils.Indexer(files=[out], index_dir=str(tmp_path)) as ix:
-                ix.ensure_indexed()
-            reread = TraceViewer(out, index_path=str(tmp_path)).statistics()
+                ix.ensure()
+            reread = TraceViewer(out, index_dir=str(tmp_path)).statistics()
             assert 0 < reread["duration_count"] < 300
 
     def test_export_aggregation_gzip(self, tmp_path):
@@ -767,11 +767,11 @@ class TestTraceViewer:
         with Environment(lines=300) as env:
             files = [env.create_test_gzip_file(f"f{k}/t{k}.pfw.gz") for k in range(3)]
             with dftu_utils.Indexer(files=files, index_dir=env.temp_dir) as ix:
-                ix.ensure_indexed()
+                ix.ensure()
 
             def view(fs):
                 return (
-                    dftu_utils.TraceViewer(fs, index_path=env.temp_dir)
+                    dftu_utils.TraceViewer(fs, index_dir=env.temp_dir)
                     .group_by("cat")
                     .agg("count", "mean:dur", "std:dur")
                 )
@@ -846,10 +846,10 @@ class TestTraceViewer:
                         '"ts":%d,"dur":%d,"args":{}}\n' % (name, 1000 + i, dur)
                     )
         with dftu_utils.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         df = (
             (
-                dftu_utils.TraceViewer(gz, index_path=str(tmp_path))
+                dftu_utils.TraceViewer(gz, index_dir=str(tmp_path))
                 .group_by("io_cat")
                 .agg("count", "sumsq:dur")
                 .collect()
@@ -886,9 +886,9 @@ class TestTraceViewer:
                     '"ts":%d,"dur":7,"args":{}}\n' % (2000 + i)
                 )
         with dftu_utils.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         out = str(tmp_path / "posix.pfw")
-        tv = dftu_utils.TraceViewer(gz, index_path=str(tmp_path))
+        tv = dftu_utils.TraceViewer(gz, index_dir=str(tmp_path))
         with tv.session() as s:
             by_cat = s.collect(tv.group_by("cat").agg("count", "mean:dur"))
             by_rank = s.collect(tv.group_by("rank").agg("count"))
@@ -981,8 +981,8 @@ class TestTraceViewer:
                 '"ts":1000,"dur":5,"args":{}}\n'
             )
         with dftu_utils.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
-            ix.ensure_indexed()
-        tv = dftu_utils.TraceViewer(gz, index_path=str(tmp_path))
+            ix.ensure()
+        tv = dftu_utils.TraceViewer(gz, index_dir=str(tmp_path))
         s = tv.session()
         h = s.collect(tv.group_by("cat").agg("count"))
         # no explicit execute(): the first result() triggers the shared scan.
@@ -1011,10 +1011,10 @@ class TestTraceViewer:
                     '"ts":%d,"dur":5,"args":{}}\n' % (2000 + i)
                 )
         with dftu_utils.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         df = (
             (
-                dftu_utils.TraceViewer(gz, index_path=str(tmp_path))
+                dftu_utils.TraceViewer(gz, index_dir=str(tmp_path))
                 .group_by("rank")
                 .agg("count")
                 .collect()
@@ -1035,9 +1035,9 @@ class TestTraceViewer:
                     '"ts":%d,"dur":%d,"args":{"ret":%d}}\n' % (1000 + i, 10 + i, 10 * (i + 1))
                 )
         with dftu_utils.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         tbl = (
-            dftu_utils.TraceViewer(gz, index_path=str(tmp_path))
+            dftu_utils.TraceViewer(gz, index_dir=str(tmp_path))
             .group_by("cat")
             .agg("sum:size")
             .collect()
@@ -1053,9 +1053,9 @@ class TestTraceViewer:
                     '"ts":%d,"dur":%d,"args":{"size":%d}}\n' % (1000 + i, 10 + i, 100 * (i + 1))
                 )
         with dftu_utils.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         tbl = (
-            dftu_utils.TraceViewer(gz, index_path=str(tmp_path))
+            dftu_utils.TraceViewer(gz, index_dir=str(tmp_path))
             .group_by("cat")
             .agg("count")
             .agg_numeric_args()
@@ -1099,9 +1099,9 @@ class TestTraceViewer:
                     '"ts":%d,"dur":2,"args":{}}\n' % (100 + i)
                 )
         with dftu_utils.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
 
-        tv = dftu_utils.TraceViewer(gz, index_path=str(tmp_path))
+        tv = dftu_utils.TraceViewer(gz, index_dir=str(tmp_path))
         native = tv.group_by("cat").agg("mean:dur").collect()
         assert native["mean_dur"].to_list()[0] == 2.0  # seconds
 

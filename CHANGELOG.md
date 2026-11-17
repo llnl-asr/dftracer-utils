@@ -158,6 +158,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Name the index location `index_dir` everywhere: `TraceViewer(files, index_dir=)`, `LiveTraceViewer(files, index_dir=)`, `CheckpointIndexer(gz_path, index_dir=)` and its `index_dir` property, `Index(index_dir)`, `write_shard_set(index_dir, ...)`, `consolidate_shard_set(index_dir)`, `distributed_index(index_dir=)`, `build_index_distributed(index_dir=)`, the dfanalyzer helpers (`index_dir_for`, `view_typed_frames`, `count_index_files`), `IndexStatus.index_dir`, the `index_dir` key of the Indexer status dict, of the manifest entries and of the `distributed_index` result, and the `index_dir` field of the `dftracer_stats` JSON.
+  In C++ and C, the `index_dir` parameter of `View::from_directory`, `LiveView` and `dftu_view_from_directory`, and the `index_dir` field of `TraceWriteOptions`.
+  The old spellings are gone.
+- Change `Indexer` to `Indexer(files, ...)`, where `files` is a path, a folder or a list, as for `TraceViewer`, and read it with the same code.
+  `ensure()` builds what is missing or stale and does nothing when the index is fresh, `build(force=False)` builds the missing tiers or, with `force=True`, rebuilds them all, and `status()` reads what needs work without building.
+  Both return an `IndexStatus`.
+  The `directory` and `force_rebuild` arguments and the `resolve` and `ensure_indexed` methods are gone.
+- Export the error classes (`DFTUtilsError` and its ten subclasses) and `DType` from `dftracer.utils`, and drop `schemas`, `Session` and `Handle` from `dftracer.utils.__all__`.
+  `Session` and `Handle` stay in `dftracer.utils.trace_viewer`, and the `typing`, `atexit` and `importlib` helpers no longer show as public names of the package.
 - Make the polars names canonical on `Series`, `Expr`, `DataFrame`, `LazyFrame` and the group-by classes, and build every pandas spelling from one table, `python/dftracer/utils/_aliases.py`: `fillna`, `astype`, `isna`, `notna`, `dropna`, `isin`, `groupby`, `sort_values`, `drop_duplicates`, `take`, `cumsum`, `ffill` and the rest are the same object as `fill_null`, `cast`, `is_null`, `is_not_null`, `drop_nulls`, `is_in`, `group_by`, `sort`, `unique`, `gather`, `cum_sum` and `forward_fill`.
   A pandas name with other keywords or another result (`sort_values(ascending=, na_position=)`, `nlargest`, `groupby(sort=)`) is a small function listed in the table.
   `Series`, `DataFrame`, `LazyFrame` and `Expr` take the same keywords for a shared name: `fill_null(value)`, `clip(lower, upper)`, `is_between(lower, upper)` and `sort(by, *, descending, nulls_last)`.

@@ -71,7 +71,7 @@ def trace(tmp_path_factory):
         files.append(path)
     idx = str(d / "index")
     with dftu.Indexer(files=files, index_dir=idx, checkpoint_size="4KB") as ix:
-        ix.ensure_indexed()
+        ix.ensure()
     return files, idx
 
 

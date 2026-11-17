@@ -227,12 +227,12 @@ dftu_view* dftu_view_from_files(const char* const* paths,
     return wrap(trace::views::detail::scan::from_files(std::move(files)));
 }
 
-dftu_view* dftu_view_from_directory(const char* dir, const char* index_path,
+dftu_view* dftu_view_from_directory(const char* dir, const char* index_dir,
                                     dftu_runtime* rt) {
     if (!dir) return nullptr;
     auto planned = runtime_of(rt)
                        .submit(trace::views::detail::scan::from_directory(
-                           dir, index_path ? index_path : ""))
+                           dir, index_dir ? index_dir : ""))
                        .get();
     if (!planned) return nullptr;
     trace::views::detail::scan::ScanPlan v = std::move(*planned);

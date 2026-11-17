@@ -114,7 +114,7 @@ class DistributedIndexResult(TypedDict):
 
     total_files: int
     per_worker: List[int]
-    index_path: str
+    index_dir: str
 
 
 def _worker_progress_forwarder(phase: str, batch: str) -> Callable[[int, int], None]:
@@ -358,7 +358,7 @@ def _apply_plan(tv: TraceViewer, plan: _Plan) -> TraceViewer:
 
 
 def _make_viewer(files: List[str], index_dir: str, plan: _Plan) -> TraceViewer:
-    return _apply_plan(TraceViewer(files, index_path=index_dir or None), plan)
+    return _apply_plan(TraceViewer(files, index_dir=index_dir or None), plan)
 
 
 def _dv_partial_task(files: List[str], index_dir: str, plan: _Plan) -> bytes:
@@ -964,7 +964,7 @@ def _build_index_task(
     shard_root: str,
     checkpoint_size: int,
     bloom_dimensions: Optional[List[str]],
-    force_rebuild: bool,
+    force: bool,
     parallelism: int,
     build_bloom: bool = True,
     aggregation_config: "Optional[AggregationConfig]" = None,
@@ -997,7 +997,7 @@ def _build_index_task(
         files,
         shard_root,
         checkpoint_size,
-        force_rebuild,
+        force,
         build_bloom,
         bloom_dimensions,
         parallelism,
@@ -1015,13 +1015,12 @@ def _build_index_task(
 
 
 def distributed_index(
-    directory: str = "",
-    files: Optional[List[str]] = None,
-    index_path: str = "",
+    files: "Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]]",
+    index_dir: str = "",
     client: "Optional[Client]" = None,
     checkpoint_size: Union[int, str] = 32 * 1024 * 1024,
     bloom_dimensions: Optional[List[str]] = None,
-    force_rebuild: bool = False,
+    force: bool = False,
     build_bloom: bool = True,
     partition: Literal["lpt", "round_robin"] = "lpt",
     parallelism_per_worker: int = 0,
@@ -1036,10 +1035,10 @@ def distributed_index(
          never split across workers: every part of its index is built from the
          whole file, by one worker with its own threads.
       3. Submit one Dask task per non-empty worker. Each task builds its files
-         as the shard `<index_path>/shards/<worker>`, a complete index root of
+         as the shard `<index_dir>/shards/<worker>`, a complete index root of
          its own, on node-local scratch when the destination warrants it.
-      4. The coordinator catalogs the arrived shards in `<index_path>/shards.json`
-         and merges them into `<index_path>/store` by moving their data files,
+      4. The coordinator catalogs the arrived shards in `<index_dir>/shards.json`
+         and merges them into `<index_dir>/store` by moving their data files,
          which leaves the manifest and the shard directories gone. A failed task
          fails the build and leaves the arrived shards in place, so a later call
          retries the merge without a rebuild.
@@ -1047,9 +1046,9 @@ def distributed_index(
          the index.
 
     Args:
-        directory: Directory containing trace files.
-        files: Explicit file list (alternative to directory).
-        index_path: Target .dftindex path (coordinator-writable).
+        files: A trace file, a directory scanned for trace files, or a list of
+            file paths, as for :class:`~dftracer.utils.Indexer`.
+        index_dir: Target .dftindex path (coordinator-writable).
         client: Dask distributed Client. None -> run tasks inline.
         partition: "lpt" (greedy longest-processing-time bin-pack) or
             "round_robin".
@@ -1057,13 +1056,13 @@ def distributed_index(
             (one coroutine thread per core).
 
     Returns:
-        dict with total_files, per_worker sizes and index_path.
+        dict with total_files, per_worker sizes and index_dir.
     """
     if dask is None:
         raise ImportError("dask is required for distributed_index")
     checkpoint_size = coerce_bytes(checkpoint_size, "checkpoint_size")
-    if not index_path:
-        raise ValueError("index_path is required")
+    if not index_dir:
+        raise ValueError("index_dir is required")
     from .indexer import AggregationConfig as _AggregationConfig
 
     agg_config = aggregation_config if aggregation_config is not None else _AggregationConfig()
@@ -1087,21 +1086,27 @@ def distributed_index(
 
     # 1. Enumerate files + sizes.
     _t0 = _time.monotonic()
-    if files is None:
-        if not directory:
-            raise ValueError("either directory or files is required")
+    if isinstance(files, (str, os.PathLike)) and os.path.isdir(os.fspath(files)):
+        directory = os.fspath(files)
         _log.info("distributed_index: scan_files(%s)", directory)
         entries = _scan_files(directory, list(INPUT_FILE_PATTERNS), True, None)
     else:
-        _log.info("distributed_index: sizing %d pre-listed files", len(files))
-        entries = [(p, os.path.getsize(p)) for p in files]
+        listed = (
+            [os.fspath(files)]
+            if isinstance(files, (str, os.PathLike))
+            else [os.fspath(f) for f in files]
+        )
+        if not listed:
+            raise ValueError("files must name at least one path")
+        _log.info("distributed_index: sizing %d pre-listed files", len(listed))
+        entries = [(p, os.path.getsize(p)) for p in listed]
     _log.info("distributed_index: scanned %d files in %.1fs", len(entries), _time.monotonic() - _t0)
 
     if not entries:
         return {
             "total_files": 0,
             "per_worker": [],
-            "index_path": index_path,
+            "index_dir": index_dir,
         }
 
     n_workers = 1
@@ -1112,18 +1117,17 @@ def distributed_index(
     all_paths = [p for (p, _) in entries]
     n_total_files = len(all_paths)
 
-    if not force_rebuild:
+    if not force:
         from .indexer import Indexer
 
         with Indexer(
             files=all_paths,
-            index_dir=index_path,
+            index_dir=index_dir,
             require_checkpoint=True,
             require_bloom=True,
             aggregation_config=agg_config,
-            force_rebuild=False,
         ) as _resolver:
-            _status = _resolver.resolve()
+            _status = _resolver.status()
         _needs = set(_status.needs_work)
         _log.info(
             "distributed_index: resolver reports %d/%d files need work",
@@ -1134,7 +1138,7 @@ def distributed_index(
             return {
                 "total_files": n_total_files,
                 "per_worker": [],
-                "index_path": index_path,
+                "index_dir": index_dir,
             }
         if len(_needs) < len(entries):
             entries = [(p, s) for (p, s) in entries if p in _needs]
@@ -1161,11 +1165,11 @@ def distributed_index(
         [len(u) for u in per_worker_files],
     )
 
-    index_root = index_path.rstrip("/")
+    index_dir = index_dir.rstrip("/")
     worker_file_lists: List[List[str]] = [
         [all_paths[i] for i in files_w] for files_w in per_worker_files
     ]
-    shard_dirs = [os.path.join(index_root, "shards", str(w)) for w in range(len(worker_file_lists))]
+    shard_dirs = [os.path.join(index_dir, "shards", str(w)) for w in range(len(worker_file_lists))]
 
     _t_build = _time.monotonic()
     worker_ids: List[int] = []
@@ -1180,7 +1184,7 @@ def distributed_index(
                 shard_dirs[w],
                 checkpoint_size,
                 bloom_dimensions,
-                force_rebuild,
+                force,
                 parallelism_per_worker,
                 build_bloom,
                 agg_config,
@@ -1202,7 +1206,7 @@ def distributed_index(
                         shard_dirs[w],
                         checkpoint_size,
                         bloom_dimensions,
-                        force_rebuild,
+                        force,
                         parallelism_per_worker,
                         build_bloom,
                         agg_config,
@@ -1223,17 +1227,17 @@ def distributed_index(
         from .dftracer_utils_ext import consolidate_shard_set, write_shard_set
 
         arrived = [shard_dirs[w] for w in worker_ids if os.path.isdir(shard_dirs[w])]
-        write_shard_set(index_root, arrived)
-        consolidate_shard_set(index_root)
+        write_shard_set(index_dir, arrived)
+        consolidate_shard_set(index_dir)
         _log.info(
             "distributed_index: merged %d shards into %s in %.1fs",
             len(arrived),
-            index_root,
+            index_dir,
             _time.monotonic() - _t_merge,
         )
 
         _t_meta = _time.monotonic()
-        db = _Index(index_path)
+        db = _Index(index_dir)
         db.write_agg_config(agg_config)
         _log.info(
             "distributed_index: agg meta writes done in %.2fs",
@@ -1244,5 +1248,5 @@ def distributed_index(
     return {
         "total_files": n_total_files,
         "per_worker": per_worker_file_counts,
-        "index_path": index_path,
+        "index_dir": index_dir,
     }

@@ -24,7 +24,7 @@ class TestCheckpointIndexer:
             gz_file = env.create_test_gzip_file()
 
             with dftu_utils.Indexer(files=[gz_file]) as indexer:
-                indexer.ensure_indexed()
+                indexer.ensure()
                 cp_indexer = indexer.get_checkpoint_indexer(gz_file)
 
                 assert cp_indexer.gz_path == gz_file
@@ -36,7 +36,7 @@ class TestCheckpointIndexer:
             gz_file = env.create_test_gzip_file()
 
             with dftu_utils.Indexer(files=[gz_file]) as indexer:
-                indexer.ensure_indexed()
+                indexer.ensure()
                 cp_indexer = indexer.get_checkpoint_indexer(gz_file)
 
                 max_bytes = cp_indexer.get_max_bytes()
@@ -58,7 +58,7 @@ class TestCheckpointIndexer:
                 files=[gz_file],
                 checkpoint_size=checkpoint_size,
             ) as indexer:
-                indexer.ensure_indexed()
+                indexer.ensure()
                 cp_indexer = indexer.get_checkpoint_indexer(gz_file)
 
                 max_bytes = cp_indexer.get_max_bytes()
@@ -78,17 +78,17 @@ class TestCheckpointIndexer:
             idx = env.temp_dir
 
             with dftu_utils.Indexer(files=[gz], index_dir=idx, checkpoint_size="512KB") as ix:
-                ix.ensure_indexed()
+                ix.ensure()
 
             # Same size: cached, no work.
             with dftu_utils.Indexer(files=[gz], index_dir=idx, checkpoint_size="512KB") as ix:
-                assert ix.resolve().needs_work == []
+                assert ix.status().needs_work == []
 
             # Different size: rebuild is required, then settles.
             with dftu_utils.Indexer(files=[gz], index_dir=idx, checkpoint_size="1MB") as ix:
-                assert gz in ix.resolve().needs_work
-                ix.ensure_indexed()
-                assert ix.resolve().needs_work == []
+                assert gz in ix.status().needs_work
+                ix.ensure()
+                assert ix.status().needs_work == []
 
 
 class TestNativeIndexerDirect:
@@ -102,7 +102,7 @@ class TestNativeIndexerDirect:
 
             with NativeIndexer(gz_file, index_path) as indexer:
                 assert indexer.gz_path == gz_file
-                assert indexer.index_path == index_path
+                assert indexer.index_dir == index_path
                 assert indexer.checkpoint_size > 0
 
     def test_native_indexer_build_and_rebuild(self):
@@ -117,7 +117,7 @@ class TestNativeIndexerDirect:
                 assert os.path.exists(index_path)
                 assert not indexer.need_rebuild()
 
-            with NativeIndexer(gz_file, index_path, force_rebuild=True) as indexer_force:
+            with NativeIndexer(gz_file, index_path, force=True) as indexer_force:
                 assert not indexer_force.need_rebuild()
                 indexer_force.build()
 
@@ -146,7 +146,7 @@ class TestCheckpointIndexerIntegration:
             gz_file = env.create_test_gzip_file()
 
             with dftu_utils.Indexer(files=[gz_file]) as indexer:
-                indexer.ensure_indexed()
+                indexer.ensure()
 
                 viewer = dftu_utils.TraceViewer(gz_file)
                 assert viewer.statistics()["duration_count"] > 0
@@ -158,7 +158,7 @@ class TestCheckpointIndexerIntegration:
             gz_file = env.create_test_gzip_file()
 
             with dftu_utils.Indexer(files=[gz_file]) as indexer:
-                indexer.ensure_indexed()
+                indexer.ensure()
 
                 counts = [
                     dftu_utils.TraceViewer(gz_file).statistics()["duration_count"] for _ in range(3)
@@ -231,7 +231,7 @@ class TestDirectoryIndexer:
             env.create_test_gzip_file()
 
             with dftu_utils.Indexer(env.temp_dir) as indexer:
-                status = indexer.resolve()
+                status = indexer.status()
                 assert isinstance(status, dftu_utils.IndexStatus)
                 assert status.total_files >= 1
                 assert len(status.needs_work) >= 1
@@ -245,31 +245,31 @@ class TestDirectoryIndexer:
             print(f"Files in dir: {os.listdir(env.temp_dir)}")
 
             with dftu_utils.Indexer(env.temp_dir) as indexer:
-                status_before = indexer.resolve()
+                status_before = indexer.status()
                 print(f"Before build: {status_before}")
                 assert len(status_before.needs_work) >= 1
-                assert status_before.index_path != ""
+                assert status_before.index_dir != ""
 
                 indexer.build()
 
-                assert os.path.isdir(status_before.index_path), (
-                    f"Index dir not created: {status_before.index_path}"
+                assert os.path.isdir(status_before.index_dir), (
+                    f"Index dir not created: {status_before.index_dir}"
                 )
-                print(f"Index dir contents: {os.listdir(status_before.index_path)}")
+                print(f"Index dir contents: {os.listdir(status_before.index_dir)}")
 
-                status_after = indexer.resolve()
+                status_after = indexer.status()
                 print(f"After build: {status_after}")
                 assert len(status_after.ready) >= 1, (
                     f"Expected ready>=1, got {len(status_after.ready)}"
                 )
 
     def test_indexer_ensure_indexed(self):
-        """Test ensure_indexed() builds if needed"""
+        """Test ensure() builds if needed"""
         with Environment() as env:
             env.create_test_gzip_file()
 
             with dftu_utils.Indexer(env.temp_dir) as indexer:
-                status = indexer.ensure_indexed()
+                status = indexer.ensure()
                 assert isinstance(status, dftu_utils.IndexStatus)
                 assert len(status.ready) >= 1
 
@@ -279,7 +279,7 @@ class TestDirectoryIndexer:
             env.create_test_gzip_file()
 
             with dftu_utils.Indexer(env.temp_dir, require_bloom=True) as indexer:
-                status = indexer.ensure_indexed()
+                status = indexer.ensure()
                 assert len(status.ready) >= 1
 
     def test_indexer_with_aggregation_config(self):
@@ -314,39 +314,39 @@ class TestDirectoryIndexer:
             total_files=5,
             ready=["a.pfw.gz", "b.pfw.gz"],
             needs_work=["c.pfw.gz"],
-            index_path="/tmp/index",
+            index_dir="/tmp/index",
         )
         assert status.total_files == 5
         assert len(status.ready) == 2
         assert len(status.needs_work) == 1
-        assert status.index_path == "/tmp/index"
+        assert status.index_dir == "/tmp/index"
 
-    def test_resolve_reports_aggregation_interval(self):
-        """resolve() surfaces the time interval of the cached aggregation tier."""
+    def test_status_reports_aggregation_interval(self):
+        """status() surfaces the time interval of the cached aggregation tier."""
         with Environment() as env:
             directory = env.create_indexed_traces(pids=[1])
             with dftu_utils.Indexer(
-                directory=directory,
+                directory,
                 aggregation_config=dftu_utils.AggregationConfig(time_interval_ms=5000),
             ) as indexer:
-                indexer.ensure_indexed()
-                assert indexer.resolve().aggregation_interval_us == 5_000_000
+                indexer.ensure()
+                assert indexer.status().aggregation_interval_us == 5_000_000
 
-    def test_ensure_indexed_rebuilds_on_interval_change(self):
+    def test_ensure_rebuilds_on_interval_change(self):
         """A new interval discards the stale aggregation tier and rebuilds it."""
         pa = pytest.importorskip("pyarrow")
         with Environment() as env:
             directory = env.create_indexed_traces(pids=[1, 2])
             with dftu_utils.Indexer(
-                directory=directory,
+                directory,
                 aggregation_config=dftu_utils.AggregationConfig(time_interval_ms=1000),
             ) as indexer:
-                indexer.ensure_indexed()
-                status = indexer.resolve()
+                indexer.ensure()
+                status = indexer.status()
                 assert status.aggregation_interval_us == 1_000_000
                 files = sorted(glob.glob(os.path.join(directory, "*.pfw.gz")))
                 tbl = (
-                    dftu_utils.TraceViewer(files, index_path=directory)
+                    dftu_utils.TraceViewer(files, index_dir=directory)
                     .group_by("name")
                     .agg("count")
                     .collect()
@@ -373,25 +373,70 @@ class TestDirectoryIndexer:
                 files=[file_path],
                 index_dir=env.temp_dir,
             ) as indexer:
-                status = indexer.resolve()
+                status = indexer.status()
                 assert status.total_files == 1
 
-    def test_indexer_files_and_directory(self):
-        """Test indexer with both files and directory (files take precedence)"""
+    def test_indexer_takes_a_path_a_folder_or_a_list(self):
+        """files is one file, a folder, or a list, as for TraceViewer."""
         with Environment() as env:
-            file_path = env.create_test_gzip_file()
+            first = env.create_test_gzip_file()
+            for spec, expected in (
+                (first, [first]),
+                (os.path.dirname(first), None),
+                ([first], [first]),
+                (os.path.dirname(first), None),
+            ):
+                with dftu_utils.Indexer(spec) as indexer:
+                    status = indexer.ensure()
+                    assert status.total_files >= 1
+                    assert status.needs_work == []
+                    if expected is not None:
+                        assert status.ready == expected
+            with dftu_utils.Indexer(os.fspath(first)) as indexer:
+                assert indexer.status().ready == [first]
 
-            with dftu_utils.Indexer(
-                directory=env.temp_dir,
-                files=[file_path],
-            ) as indexer:
-                status = indexer.resolve()
-                assert status.total_files >= 1
+    def test_indexer_empty_files_is_a_value_error(self):
+        with pytest.raises(ValueError, match="at least one path"):
+            dftu_utils.Indexer([])
 
-    def test_indexer_requires_directory_or_files(self):
-        """Test that indexer requires at least directory or files"""
-        with pytest.raises(ValueError, match="directory.*files"):
-            dftu_utils.Indexer()
+    def test_indexer_missing_file_is_a_typed_error(self):
+        indexer = dftu_utils.Indexer("/nonexistent/x.pfw.gz")
+        with pytest.raises(dftu_utils.DFTUtilsError):
+            indexer.ensure()
+
+    def test_ensure_is_a_noop_when_fresh_and_build_force_rebuilds(self):
+        with Environment() as env:
+            gz_file = env.create_test_gzip_file()
+            index_dir = os.path.join(env.temp_dir, "idx_force")
+            with dftu_utils.Indexer([gz_file], index_dir=index_dir) as indexer:
+                first = indexer.ensure()
+                assert first.ready == [gz_file]
+                stores = glob.glob(os.path.join(first.index_dir, "store", "*"))
+                assert stores
+                before = {p: os.stat(p).st_mtime_ns for p in stores}
+
+                again = indexer.ensure()
+                assert again.needs_work == []
+                assert {p: os.stat(p).st_mtime_ns for p in stores if os.path.exists(p)} == before
+
+                forced = indexer.build(force=True)
+                assert forced.ready == [gz_file]
+                after = {
+                    p: os.stat(p).st_mtime_ns
+                    for p in glob.glob(os.path.join(first.index_dir, "store", "*"))
+                }
+                assert after != before
+
+    def test_ensure_rebuilds_a_stale_file(self):
+        with Environment() as env:
+            gz_file = env.create_test_gzip_file()
+            index_dir = os.path.join(env.temp_dir, "idx_stale")
+            with dftu_utils.Indexer([gz_file], index_dir=index_dir) as indexer:
+                indexer.ensure()
+                assert indexer.status().needs_work == []
+                os.utime(gz_file, (1_000_000_000, 1_000_000_000))
+                assert indexer.status().needs_work == [gz_file]
+                assert indexer.ensure().needs_work == []
 
     def test_indexer_get_checkpoint_indexer(self):
         """Test get_checkpoint_indexer returns working checkpoint indexer"""
@@ -399,7 +444,7 @@ class TestDirectoryIndexer:
             gz_file = env.create_test_gzip_file()
 
             with dftu_utils.Indexer(env.temp_dir) as indexer:
-                indexer.ensure_indexed()
+                indexer.ensure()
 
                 cp_indexer = indexer.get_checkpoint_indexer(gz_file)
 
@@ -418,10 +463,10 @@ class TestDirectoryIndexer:
                 env.temp_dir,
                 index_dir=custom_index_dir,
             ) as indexer:
-                indexer.ensure_indexed()
+                indexer.ensure()
 
                 cp_indexer = indexer.get_checkpoint_indexer(gz_file)
-                assert custom_index_dir in cp_indexer.index_path
+                assert custom_index_dir in cp_indexer.index_dir
 
 
 class TestIndexerDfanalyzerAPIs:
@@ -430,7 +475,7 @@ class TestIndexerDfanalyzerAPIs:
     def _indexed(self, env):
         gz_file = env.create_dft_trace_file_with_pid("t.pfw.gz", 7)
         indexer = dftu_utils.Indexer(files=[gz_file], require_bloom=True)
-        indexer.ensure_indexed()
+        indexer.ensure()
         return indexer
 
     def test_rowset_files_hosts_strings(self):
@@ -459,7 +504,7 @@ class TestIndexerDfanalyzerAPIs:
                 files=[gz_file],
                 require_bloom=True,
             ) as indexer:
-                indexer.ensure_indexed()
+                indexer.ensure()
 
                 assert indexer.query_file_pids(gz_file) == {7}
 
@@ -473,7 +518,7 @@ class TestIndexerDfanalyzerAPIs:
                 files=[gz_file],
                 require_bloom=True,
             ) as indexer:
-                indexer.ensure_indexed()
+                indexer.ensure()
 
                 pids = indexer.query_file_pids(absent)
                 assert isinstance(pids, set)
@@ -489,7 +534,7 @@ class TestIndexerDfanalyzerAPIs:
                 files=[gz_file1, gz_file2],
                 require_bloom=True,
             ) as indexer:
-                indexer.ensure_indexed()
+                indexer.ensure()
 
                 all_pids = indexer.query_all_file_pids()
                 assert isinstance(all_pids, dict)
@@ -504,7 +549,7 @@ class TestIndexerDfanalyzerAPIs:
                 files=[gz_file],
                 require_bloom=True,
             ) as indexer:
-                indexer.ensure_indexed()
+                indexer.ensure()
 
                 assert indexer.query_file_info() == {gz_file: {7}}
                 assert indexer.query_file_info() == indexer.query_all_file_pids()
@@ -518,7 +563,7 @@ class TestIndexerDfanalyzerAPIs:
                 files=[gz_file],
                 require_bloom=True,
             ) as indexer:
-                indexer.ensure_indexed()
+                indexer.ensure()
 
                 all_pids = indexer.query_all_file_pids()
                 assert isinstance(all_pids, dict)
@@ -533,7 +578,7 @@ class TestIndexerDfanalyzerAPIs:
                 files=[gz_file],
                 require_bloom=True,
             ) as indexer:
-                indexer.ensure_indexed()
+                indexer.ensure()
 
                 files = indexer.rowset("files").to_dict()
                 all_pids = indexer.query_all_file_pids()
@@ -547,7 +592,7 @@ class TestAggTierQueryFilter:
 
     def _viewer(self, directory, query=None):
         files = sorted(glob.glob(os.path.join(directory, "*.pfw.gz")))
-        tv = dftu_utils.TraceViewer(files, index_path=directory)
+        tv = dftu_utils.TraceViewer(files, index_dir=directory)
         if query:
             tv = tv.filter(query)
         return tv.group_by("name", "pid").agg("count")
@@ -616,7 +661,7 @@ class TestCollectTypedRawFallback:
 
     def _viewer(self, directory):
         files = sorted(glob.glob(os.path.join(directory, "*.pfw.gz")))
-        return dftu_utils.TraceViewer(files, index_path=directory)
+        return dftu_utils.TraceViewer(files, index_dir=directory)
 
     def _agg_total(self, pa, base):
         t = pa.table(base.group_by("name").agg("count").collect())
@@ -661,8 +706,7 @@ class TestOccupancyMetrics:
         Indexer(
             files=[p],
             aggregation_config=AggregationConfig(time_interval_ms=interval_ms),
-            force_rebuild=True,
-        ).ensure_indexed()
+        ).build(force=True)
         return p
 
     def _index_files(self, env, per_file, interval_ms=1000):
@@ -679,8 +723,7 @@ class TestOccupancyMetrics:
         Indexer(
             files=paths,
             aggregation_config=AggregationConfig(time_interval_ms=interval_ms),
-            force_rebuild=True,
-        ).ensure_indexed()
+        ).build(force=True)
         return paths
 
     def test_concurrent_caps_at_window(self):
@@ -696,7 +739,7 @@ class TestOccupancyMetrics:
         ]
         with Environment() as env:
             p = self._index(env, lines)
-            tv = dftu_utils.TraceViewer([p], index_path=env.temp_dir)
+            tv = dftu_utils.TraceViewer([p], index_dir=env.temp_dir)
             t = pa.table(
                 tv.time_range(0, 500_000)
                 .filter('cat == "c" and ts < 500000')
@@ -720,7 +763,7 @@ class TestOccupancyMetrics:
         ]
         with Environment() as env:
             p = self._index(env, lines)
-            tv = dftu_utils.TraceViewer([p], index_path=env.temp_dir)
+            tv = dftu_utils.TraceViewer([p], index_dir=env.temp_dir)
             t = pa.table(
                 tv.time_range(0, 1_000_000)
                 .filter('cat == "c" and ts < 1000000')
@@ -742,7 +785,7 @@ class TestOccupancyMetrics:
         ]
         with Environment() as env:
             p = self._index(env, lines)
-            tv = dftu_utils.TraceViewer([p], index_path=env.temp_dir)
+            tv = dftu_utils.TraceViewer([p], index_dir=env.temp_dir)
             # Window excludes A (ts=0) and keeps only B [250000, 750000): busy is
             # B's duration, uncapped since it fits the window.
             win = pa.table(
@@ -771,7 +814,7 @@ class TestOccupancyMetrics:
         ]
         with Environment() as env:
             paths = self._index_files(env, [f0, f1])
-            tv = dftu_utils.TraceViewer(paths, index_path=env.temp_dir)
+            tv = dftu_utils.TraceViewer(paths, index_dir=env.temp_dir)
             t = pa.table(
                 tv.time_range(0, 500_000)
                 .filter('cat == "c" and ts < 500000')
@@ -793,7 +836,7 @@ class TestOccupancyMetrics:
         ]
         with Environment() as env:
             p = self._index(env, lines)
-            tv = dftu_utils.TraceViewer([p], index_path=env.temp_dir)
+            tv = dftu_utils.TraceViewer([p], index_dir=env.temp_dir)
             t = pa.table(
                 tv.time_range(0, 100_000)
                 .filter('cat == "c" and ts < 100000')
@@ -824,7 +867,7 @@ class TestOccupancyMetrics:
 
             def partial(path):
                 v = (
-                    dftu_utils.TraceViewer([path], index_path=env.temp_dir)
+                    dftu_utils.TraceViewer([path], index_dir=env.temp_dir)
                     .filter('cat == "c"')
                     .group_by("cat")
                     .agg("busy", "concurrency", "sum:dur")
@@ -846,7 +889,7 @@ class TestShardPartitionCompleteness:
 
     def _viewer(self, directory):
         files = sorted(glob.glob(os.path.join(directory, "*.pfw.gz")))
-        return dftu_utils.TraceViewer(files, index_path=directory).group_by("name").agg("count")
+        return dftu_utils.TraceViewer(files, index_dir=directory).group_by("name").agg("count")
 
     @staticmethod
     def _count(reg, pa):
@@ -911,7 +954,7 @@ class TestBloomFields:
     def _index(self, trace, fields, path_budget=1):
         cfg = dftu_utils.BloomConfig(fields=fields, path_budget=path_budget)
         with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
-            return ix.ensure_indexed()
+            return ix.ensure()
 
     def _scan(self, trace, tmp_path, dsl):
         return dftu_utils.TraceViewer(trace).filter(dsl).sink_json(str(tmp_path / "out.json"))
@@ -943,15 +986,15 @@ class TestBloomFields:
         self._index(trace, [])
         cfg = dftu_utils.BloomConfig(fields=["size"], path_budget=1)
         with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
-            assert len(ix.resolve().needs_work) == 1
-            assert len(ix.ensure_indexed().ready) == 1
+            assert len(ix.status().needs_work) == 1
+            assert len(ix.ensure().ready) == 1
         assert self._scan(trace, tmp_path, "size == 201")["chunks_skipped"] == 3
 
     def test_auto_fields_skip_chunks(self, tmp_path):
         trace = _member_trace(str(tmp_path / "t.pfw.gz"))
         cfg = dftu_utils.BloomConfig(auto_max_distinct=2)
         with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
-            assert len(ix.ensure_indexed().ready) == 1
+            assert len(ix.ensure().ready) == 1
         for dsl, matched, skipped in (
             ("size == 201", 100, 3),
             ("size > 250", 300, 3),
@@ -967,18 +1010,18 @@ class TestBloomFields:
         self._index(trace, [])
         cfg = dftu_utils.BloomConfig()
         with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
-            assert len(ix.resolve().needs_work) == 1
+            assert len(ix.status().needs_work) == 1
 
     def test_a_changed_stats_share_rebuilds(self, tmp_path):
         trace = _member_trace(str(tmp_path / "t.pfw.gz"))
         cfg = dftu_utils.BloomConfig(stats_share=0.1)
         with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
-            assert len(ix.ensure_indexed().ready) == 1
+            assert len(ix.ensure().ready) == 1
         with dftu_utils.Indexer(files=[trace], require_bloom=cfg, checkpoint_size="4KB") as ix:
-            assert len(ix.resolve().needs_work) == 0
+            assert len(ix.status().needs_work) == 0
         other = dftu_utils.BloomConfig(stats_share=0.2)
         with dftu_utils.Indexer(files=[trace], require_bloom=other, checkpoint_size="4KB") as ix:
-            assert len(ix.resolve().needs_work) == 1
+            assert len(ix.status().needs_work) == 1
 
     def test_evidence_setting_defaults(self):
         cfg = dftu_utils.BloomConfig()
@@ -1018,7 +1061,7 @@ class TestExtensions:
     def test_manifest_lists_every_extension(self, tmp_path):
         trace = _member_trace(str(tmp_path / "t.pfw.gz"))
         with self._indexer(trace) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
             (entry,) = ix.manifest()
         assert entry["path"] == trace
         names = {e["name"] for e in entry["extensions"]}
@@ -1040,7 +1083,7 @@ class TestExtensions:
     def test_explain_names_what_prunes(self, tmp_path):
         trace = _member_trace(str(tmp_path / "t.pfw.gz"))
         with self._indexer(trace) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
             (f,) = ix.explain("size == 201")
             with pytest.raises(dftu_utils.DFTUtilsValueError):
                 ix.explain("size ==")
@@ -1052,14 +1095,14 @@ class TestExtensions:
     def test_drop_then_build_restores_one_extension(self, tmp_path):
         trace = _member_trace(str(tmp_path / "t.pfw.gz"))
         with self._indexer(trace) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
             expected = self._matched(trace, tmp_path, "size == 201")
             status = ix.drop_extension("counts")
             assert status.needs_work == [trace]
             (entry,) = ix.manifest()
             assert "counts" not in {e["name"] for e in entry["extensions"]}
             assert self._matched(trace, tmp_path, "size == 201") == expected
-            assert ix.ensure_indexed().ready == [trace]
+            assert ix.ensure().ready == [trace]
             (entry,) = ix.manifest()
             assert "counts" in {e["name"] for e in entry["extensions"]}
             assert ix.rebuild_extension("bloom").ready == [trace]
@@ -1073,7 +1116,7 @@ class TestExtensions:
         for budget in (0, "64KB"):
             idx = str(tmp_path / f"idx_{budget}")
             with self._indexer(trace, index_dir=idx, memory_budget=budget) as ix:
-                assert ix.ensure_indexed().ready == [trace]
+                assert ix.ensure().ready == [trace]
                 explained.append(ix.explain("size == 201"))
         assert explained[0] == explained[1]
         with pytest.raises(ValueError):
@@ -1082,9 +1125,9 @@ class TestExtensions:
     def test_unrequested_extension_stays_dropped(self, tmp_path):
         trace = _member_trace(str(tmp_path / "t.pfw.gz"))
         with self._indexer(trace, extensions=["zonemap", "bloom", "postings"]) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
             ix.drop_extension("counts")
-            assert ix.resolve().needs_work == []
+            assert ix.status().needs_work == []
 
 
 class TestProfiles:
@@ -1104,7 +1147,7 @@ class TestProfiles:
     def test_generic_trace_is_indexed_and_pruned(self, tmp_path):
         trace = self._ndjson(str(tmp_path / "g.ndjson.gz"))
         with dftu_utils.Indexer(files=[trace], index_dir=str(tmp_path / "idx")) as ix:
-            assert ix.ensure_indexed().ready == [trace]
+            assert ix.ensure().ready == [trace]
             (f,) = ix.explain('op == "read"')
             (entry,) = ix.manifest()
         assert f["indexed"] and len(f["read"]) < f["chunks"]
@@ -1113,7 +1156,7 @@ class TestProfiles:
     def test_unknown_schema_raises(self, tmp_path):
         trace = self._ndjson(str(tmp_path / "g.ndjson.gz"))
         with pytest.raises(dftu_utils.DFTUtilsValueError):
-            dftu_utils.Indexer(files=[trace], schema="nope").resolve()
+            dftu_utils.Indexer(files=[trace], schema="nope").status()
 
 
 if __name__ == "__main__":
@@ -1135,7 +1178,7 @@ def test_status_reports_truncated_trace(tmp_path):
     cut = tmp_path / "cut.pfw.gz"
     cut.write_bytes(data[: len(data) // 2])
 
-    status = dftu_utils.Indexer(files=[str(full), str(cut)]).ensure_indexed()
+    status = dftu_utils.Indexer(files=[str(full), str(cut)]).ensure()
 
     assert sorted(status.ready) == sorted([str(full), str(cut)])
     assert status.truncated == [str(cut)]

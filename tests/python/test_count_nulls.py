@@ -97,7 +97,7 @@ def test_trace_view_counted_field_counts_present_rows(tmp_path):
                 + "\n"
             )
     with dft.Indexer(files=[str(path)]) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     def run(*specs):
         return TraceViewer(str(path)).group_by("cat").agg(*specs).collect().to_arrow().to_pydict()

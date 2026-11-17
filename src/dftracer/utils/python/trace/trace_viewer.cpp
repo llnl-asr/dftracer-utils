@@ -391,7 +391,7 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
     }
     PyObject* files = nullptr;
     PyObject* index_obj = nullptr;
-    if (!parse_kw<"O|O">(args, kwds, {"files", "index_path"}, &files,
+    if (!parse_kw<"O|O">(args, kwds, {"files", "index_dir"}, &files,
                          &index_obj))
         return -1;
     dftracer::utils::dstd::String index_dir;
@@ -402,22 +402,7 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
     }
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> paths;
     dftracer::utils::dstd::Optional<dftracer::utils::dstd::String> dir;
-    if (PyUnicode_Check(files)) {
-        const char* path = PyUnicode_AsUTF8(files);
-        if (!path) return -1;
-        const auto is_dir = dftracer::utils::dstd::fs::is_directory(
-            dftracer::utils::dstd::PathView(
-                dftracer::utils::dstd::StringView(path)));
-        if (is_dir.has_value() && *is_dir)
-            dir = DS(path);
-        else
-            paths.emplace_back(path);
-    } else if (!python::core::parse_string_seq(files,
-                                               "files must be a path or a "
-                                               "sequence of paths",
-                                               paths)) {
-        return -1;
-    }
+    if (!python::core::parse_trace_files(files, paths, dir)) return -1;
     View tv;
     if (dir) {
         if (!run_blocking([&] {
@@ -1300,7 +1285,7 @@ void ltv_dealloc(LiveTraceViewerObject* self) {
 int ltv_init(LiveTraceViewerObject* self, PyObject* args, PyObject* kwds) {
     PyObject* files = nullptr;
     PyObject* index_obj = nullptr;
-    if (!parse_kw<"O|O">(args, kwds, {"files", "index_path"}, &files,
+    if (!parse_kw<"O|O">(args, kwds, {"files", "index_dir"}, &files,
                          &index_obj))
         return -1;
     dstd::Vector<dstd::String> paths;

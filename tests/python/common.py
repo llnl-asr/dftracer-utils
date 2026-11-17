@@ -350,7 +350,7 @@ class Environment:
     def create_indexed_traces(self, pids=None, num_events=None):
         """Create trace files and build full index with aggregation.
 
-        Returns the temp directory path (use as directory= for Indexer).
+        Returns the temp directory path (pass it to Indexer).
         """
         from dftracer.utils import AggregationConfig, Indexer
 
@@ -364,9 +364,8 @@ class Environment:
         indexer = Indexer(
             files=files,
             aggregation_config=AggregationConfig(time_interval_ms=5000),
-            force_rebuild=True,
         )
-        indexer.ensure_indexed()
+        indexer.build(force=True)
         return self.temp_dir
 
     def get_index_path(self, gz_file_path):

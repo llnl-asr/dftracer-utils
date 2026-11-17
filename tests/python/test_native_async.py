@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from dftracer.utils import DataFrame, Indexer, Runtime, TaskHandle, col
+from dftracer.utils import DataFrame, Indexer, IndexStatus, Runtime, TaskHandle, col
 from dftracer.utils import dftracer_utils_ext as _ext
 
 from .common import Environment
@@ -64,19 +64,31 @@ class TestBuildAsync:
             with Indexer(files=[gz], index_dir=os.path.join(env.temp_dir, "idx_async")) as ix:
                 handle = ix.build_async()
                 assert isinstance(handle, TaskHandle)
-                assert handle.get() is None
-                assert ix.resolve().needs_work == []
+                async_status = handle.get()
+                assert isinstance(async_status, IndexStatus)
+                assert ix.status().needs_work == []
             with Indexer(files=[gz], index_dir=os.path.join(env.temp_dir, "idx_sync")) as ix:
-                ix.build()
-                assert ix.resolve().ready == [gz]
+                sync_status = ix.build()
+                assert ix.status().ready == [gz]
+            assert async_status.ready == sync_status.ready == [gz]
+            assert async_status.needs_work == sync_status.needs_work == []
+
+    def test_force_build_async_rebuilds_and_returns_status(self):
+        with Environment() as env:
+            gz = env.create_test_gzip_file()
+            with Indexer(files=[gz], index_dir=os.path.join(env.temp_dir, "idx_force")) as ix:
+                ix.ensure()
+                status = ix.build_async(force=True).get()
+                assert isinstance(status, IndexStatus)
+                assert status.ready == [gz]
 
     def test_get_twice_is_safe(self):
         with Environment() as env:
             gz = env.create_test_gzip_file()
             with Indexer(files=[gz]) as ix:
                 handle = ix.build_async()
-                assert handle.get() is None
-                assert handle.get() is None
+                assert isinstance(handle.get(), IndexStatus)
+                assert isinstance(handle.get(), IndexStatus)
                 handle.wait()
                 assert handle.done() is True
 
@@ -98,7 +110,7 @@ class TestBuildAsync:
             ix.build_async()
             gc.collect()
             ix.build()
-            assert ix.resolve().needs_work == []
+            assert ix.status().needs_work == []
 
     def test_polled_done_turns_true(self):
         with Environment() as env:
@@ -106,7 +118,7 @@ class TestBuildAsync:
             handle = Indexer(files=[gz]).build_async()
             _wait_done(handle)
             assert handle.done() is True
-            assert handle.get() is None
+            assert isinstance(handle.get(), IndexStatus)
 
 
 class TestCheckpointBuildAsync:

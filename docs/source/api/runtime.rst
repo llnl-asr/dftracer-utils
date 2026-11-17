@@ -83,11 +83,11 @@ needs nothing else.
 
    import dftracer.utils as dft
 
-   indexer = dft.Indexer(directory="traces/")
+   indexer = dft.Indexer("traces/")
    building = indexer.build_async()    # returns at once
    frame = lazy_frame.collect_async()  # a TaskHandle[DataFrame]
    print(building.done())              # False until the build ends
-   building.get()                      # None, or the error build() raises
+   building.get()                      # the IndexStatus build() returns, or its error
    df = frame.get()                    # the DataFrame collect() returns
 
 ``get()`` and ``wait()`` release the GIL while they block, so other Python

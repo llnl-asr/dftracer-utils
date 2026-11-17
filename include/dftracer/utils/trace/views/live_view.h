@@ -46,13 +46,13 @@ struct LiveFileStatus {
 /// member has not landed behind a later one.
 ///
 /// `paths` are files and directories. Each @ref snapshot scans a directory
-/// again, so new files join. `index_path` is as for View. The trace files are
+/// again, so new files join. `index_dir` is as for View. The trace files are
 /// not copied or changed. Plain uncompressed traces have no member boundaries
 /// and are not read. Not thread safe.
 class LiveView {
    public:
     explicit LiveView(dstd::Vector<dstd::String> paths,
-                      dstd::String index_path = "");
+                      dstd::String index_dir = "");
 
     /// Adds the members written since the last call to the index, once each,
     /// and returns a View of every whole member. Each file stops at its first
@@ -91,7 +91,7 @@ class LiveView {
     dstd::Result<dstd::Vector<PinnedFile>> refresh();
 
     dstd::Vector<dstd::String> paths_;
-    dstd::String index_path_;
+    dstd::String index_dir_;
     dstd::Vector<LiveFileStatus> status_;
     dstd::HashMap<dstd::String, ReturnedEnd> returned_;
 };

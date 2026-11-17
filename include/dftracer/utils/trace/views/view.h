@@ -255,15 +255,15 @@ struct TraceWriteOptions {
     bool compress = true;
     int level = 6;
     /// Build the member+bloom+stats index during the write (no re-inflate of
-    /// the output). `index_path` is the index DB directory; empty falls back to
+    /// the output). `index_dir` is the index DB directory; empty falls back to
     /// the indexer default location for `output_path`. When set, the write uses
     /// a single in-order member stream (scan/decompress stays parallel) so the
     /// index needs no post-hoc offset remap.
     bool build_index = false;
-    dstd::String index_path;
+    dstd::String index_dir;
     /// Roll to a new `part-<k>` file once a part reaches this many uncompressed
     /// bytes, so one large result splits into several indexed part files
-    /// sharing `index_path`. 0 = one file. Only honored on the indexed write
+    /// sharing `index_dir`. 0 = one file. Only honored on the indexed write
     /// path.
     std::size_t part_size = 0;
 };
@@ -725,11 +725,11 @@ class View : public dataframe::LazyOps<View> {
     /// Scans `dir` recursively for trace files (.pfw, .jsonl and
     /// .ndjson, plain or gzip), sorted by path; index, split and schemas
     /// directories are skipped. Each file's index resolves under
-    /// `index_path` (empty = beside the trace). The files with records must
+    /// `index_dir` (empty = beside the trace). The files with records must
     /// share one record_schema. A directory that cannot be listed is an Io
     /// error, kept as @ref status.
     static coro::CoroTask<View> from_directory(dstd::String dir,
-                                               dstd::String index_path = "");
+                                               dstd::String index_dir = "");
 
     /// The error this view kept: that of a builder that refused, or of the
     /// files whose index could not be read; success when it holds none.

@@ -1240,7 +1240,7 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_local() {
         topts.worker_count = cli->runtime_args.executor_threads;
         topts.compress = true;
         topts.build_index = !no_index;
-        topts.index_path = index_dir;
+        topts.index_dir = index_dir;
         auto written = co_await v.sink_trace(topts);
         if (!written) co_return written.error();
         stats = *written;

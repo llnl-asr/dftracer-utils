@@ -116,7 +116,7 @@ def test_view_and_dataframe_engines_agree(tmp_path):
                 + "\n"
             )
     with dft.Indexer(files=[str(path)]) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
     view = TraceViewer(str(path)).agg("set_union:args.v", "set_union:args.n").collect().to_pandas()
     frame = DataFrame.from_dict({"g": ["a"] * 3, "v": values, "n": names})
     df = frame.group_by("g").agg(v=col("v").set_union(), n=col("n").set_union()).to_pandas()

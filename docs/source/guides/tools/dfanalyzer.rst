@@ -25,7 +25,7 @@ of it.
 
 .. code-block:: python
 
-   from dftracer.utils.dfanalyzer import ensure_index, view_typed_frames, index_path_for
+   from dftracer.utils.dfanalyzer import ensure_index, view_typed_frames, index_dir_for
 
    trace_path = "./traces"
 
@@ -38,8 +38,8 @@ of it.
    )
 
    # 2. Read the {events, profiles, system} frames dfanalyzer consumes.
-   index_path = index_path_for(trace_path)
-   frames = view_typed_frames([trace_path], index_path)
+   index_dir = index_dir_for(trace_path)
+   frames = view_typed_frames([trace_path], index_dir)
    events_df = frames["events"]
    profiles_df = frames["profiles"]
    system_df = frames["system"]
@@ -47,7 +47,7 @@ of it.
 ``ensure_index`` resolves ``trace_path`` with ``resolve_trace_inputs`` (a
 directory, a glob, or a ``manifest.json`` with named trace groups), builds the
 index at the conventional ``<trace_path>/.dftindex`` location
-(``index_path_for``), and is inline/serial with no Dask client active.
+(``index_dir_for``), and is inline/serial with no Dask client active.
 
 Traces must be ``.pfw.gz``; ``resolve_trace_inputs`` only matches that suffix.
 
@@ -90,7 +90,7 @@ delegated to ``DaskTraceViewer.collect_typed`` instead of running locally:
 
    frames = view_typed_frames(
        [trace_path],
-       index_path,
+       index_dir,
        time_granularity=1.0,
        time_resolution=1e6,
        duql="dur >= 1000",   # optional duql predicate
@@ -115,7 +115,7 @@ one View chain:
 
    viewer = DFAnalyzerAggregatedTraceViewer(
        [trace_path],
-       index_path,
+       index_dir,
        hlm_config=HLMConfig(time_granularity=1.0, time_resolution=1e6),
    )
    hlm_df = viewer.hlm(["file_name", "cat"])           # from ph=X events

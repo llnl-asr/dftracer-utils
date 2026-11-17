@@ -31,7 +31,7 @@ DFANALYZER_SURFACE = {
     "ensure_index",
     "typed_group_keys",
     "finalize_view_partials",
-    "index_path_for",
+    "index_dir_for",
     "normalize_arrow_dtypes",
     "partial_arrow_view_groupby",
     "resolve_trace_inputs",
@@ -69,7 +69,7 @@ def test_every_public_name_is_importable_and_callable():
 def test_load_bearing_signatures_are_stable():
     # Parameter names dfanalyzer passes by keyword or relies on positionally.
     assert list(inspect.signature(dfa.typed_group_keys).parameters) == ["file_buckets"]
-    assert list(inspect.signature(dfa.index_path_for).parameters) == ["trace_path"]
+    assert list(inspect.signature(dfa.index_dir_for).parameters) == ["trace_path"]
 
     # The distributed typed-read entry point: dfanalyzer calls it positionally as
     # (time_granularity, time_resolution, group_keys, drop_file_patterns).

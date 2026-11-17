@@ -70,7 +70,7 @@ __all__ = [
     "ensure_index",
     "typed_group_keys",
     "finalize_view_partials",
-    "index_path_for",
+    "index_dir_for",
     "normalize_arrow_dtypes",
     "partial_arrow_view_groupby",
     "resolve_trace_inputs",
@@ -250,7 +250,7 @@ def _typed_event_frame(
 
 def view_typed_frames(
     files: List[str],
-    index_path: str,
+    index_dir: str,
     time_granularity: float = 1.0,
     time_resolution: float = 1e6,
     duql: Optional[str] = None,
@@ -276,13 +276,11 @@ def view_typed_frames(
     if client is None:
         from dftracer.utils import TraceViewer
 
-        tv: "Union[TraceViewer, DaskTraceViewer]" = TraceViewer(
-            files, index_path=index_path or None
-        )
+        tv: "Union[TraceViewer, DaskTraceViewer]" = TraceViewer(files, index_dir=index_dir or None)
     else:
         from .dask import DaskTraceViewer
 
-        tv = DaskTraceViewer(files, index_path or "", client=client)
+        tv = DaskTraceViewer(files, index_dir or "", client=client)
     if duql:
         tv = tv.filter(duql)
     typed = tv.group_by(*keys).time_bucket(bucket_us).agg(*_TYPED_AGGS).collect_typed()
@@ -333,7 +331,7 @@ def _frame_to_ipc(df: "pd.DataFrame") -> Optional[bytes]:
 
 def _typed_read_to_ipc(
     files: List[str],
-    index_path: str,
+    index_dir: str,
     time_granularity: float,
     time_resolution: float,
     duql: Optional[str] = None,
@@ -354,7 +352,7 @@ def _typed_read_to_ipc(
     from dftracer.utils import TraceViewer
 
     bucket_us = int(time_granularity * time_resolution)
-    tv: "TraceViewer" = TraceViewer(files, index_path=index_path or None)
+    tv: "TraceViewer" = TraceViewer(files, index_dir=index_dir or None)
     if duql:
         tv = tv.filter(duql)
     typed = (
@@ -819,7 +817,7 @@ def normalize_arrow_dtypes(df):
 
 
 def count_index_files(
-    files: List[str], index_path: str, ignored_patterns: Tuple[str, ...] = ()
+    files: List[str], index_dir: str, ignored_patterns: Tuple[str, ...] = ()
 ) -> int:
     """Distinct data files in the index, skipping paths containing any of
     `ignored_patterns`.
@@ -829,14 +827,14 @@ def count_index_files(
     filter files out of the analysis must pass the same patterns here, or the
     count reports files the analysis never used.
     """
-    rows = _open_readonly_indexer(files, index_path).rowset("files").to_dict()
+    rows = _open_readonly_indexer(files, index_dir).rowset("files").to_dict()
     table = {str(k): str(v) for k, v in zip(rows["fhash"], rows["path"])}
     if not ignored_patterns:
         return len(table)
     return sum(1 for name in table.values() if not any(p in name for p in ignored_patterns))
 
 
-def index_path_for(trace_path: str) -> str:
+def index_dir_for(trace_path: str) -> str:
     """Convention: the dftracer index lives next to the traces as `.dftindex`.
 
     For a directory that's `<trace_path>/.dftindex`; for a file or glob it is
@@ -893,9 +891,8 @@ def _coerce_profile_dtypes(df, output_columns, profile_window=None):
 
 
 def build_index_distributed(
-    directory="",
-    files=None,
-    index_path="",
+    files,
+    index_dir="",
     client=None,
     aggregation=None,
     progress: Optional[Callable[[int, int, str], None]] = None,
@@ -920,9 +917,8 @@ def build_index_distributed(
     if client is not None:
         register_auto_thread_plugin()
     return distributed_index(
-        directory=directory,
-        files=files,
-        index_path=index_path,
+        files,
+        index_dir=index_dir,
         client=client,
         aggregation_config=aggregation,
         progress=progress,
@@ -956,11 +952,10 @@ def ensure_index(
     directory, files = resolve_trace_inputs(trace_path, trace_groups)
     if not directory and not files:
         return
-    index_path = index_path_for(trace_path)
+    index_dir = index_dir_for(trace_path)
     build_index_distributed(
-        directory=directory,
-        files=files,
-        index_path=index_path,
+        directory or files,
+        index_dir=index_dir,
         client=client,
         aggregation=AggregationConfig(
             time_interval_ms=time_interval_ms, group_by_file=group_by_file

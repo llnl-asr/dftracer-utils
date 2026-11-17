@@ -3,6 +3,9 @@
 #define DFTRACER_UTILS_PYTHON_CORE_SEQ_HELPERS_H
 
 #include <Python.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -86,6 +89,29 @@ inline bool parse_string_seq(
     }
     Py_DECREF(seq);
     return true;
+}
+
+// Read the `files` argument of TraceViewer and Indexer: one path, a folder,
+// or a sequence of paths. A str naming a directory sets `dir`; any other str
+// is one entry of `paths`. A non-str, non-sequence sets a TypeError.
+inline bool parse_trace_files(
+    PyObject* files,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& paths,
+    dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>& dir) {
+    if (PyUnicode_Check(files)) {
+        const char* path = PyUnicode_AsUTF8(files);
+        if (!path) return false;
+        const auto is_dir = dftracer::utils::dstd::fs::is_directory(
+            dftracer::utils::dstd::PathView(
+                dftracer::utils::dstd::StringView(path)));
+        if (is_dir.has_value() && *is_dir)
+            dir = dftracer::utils::dstd::String(path);
+        else
+            paths.emplace_back(path);
+        return true;
+    }
+    return parse_string_seq(
+        files, "files must be a path or a sequence of paths", paths);
 }
 
 // Append the raw bytes of each item of a Python sequence to `out`; each item

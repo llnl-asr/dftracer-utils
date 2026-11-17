@@ -25,7 +25,7 @@ def indexed_trace():
     with Environment(lines=400) as env:
         gz = env.create_test_gzip_file()
         with dft.Indexer(files=[gz]) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         yield gz
 
 

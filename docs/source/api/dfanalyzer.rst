@@ -38,7 +38,7 @@ Index Building
 
 .. autofunction:: dftracer.utils.dfanalyzer.resolve_trace_inputs
 
-.. autofunction:: dftracer.utils.dfanalyzer.index_path_for
+.. autofunction:: dftracer.utils.dfanalyzer.index_dir_for
 
 .. autofunction:: dftracer.utils.dfanalyzer.count_index_files
 

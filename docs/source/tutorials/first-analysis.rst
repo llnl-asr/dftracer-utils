@@ -64,7 +64,7 @@ Python and C++ analysis paths both use it.
    import dftracer.utils as dft
 
    with dft.Indexer(files=["trace.pfw.gz"]) as ix:
-       ix.ensure_indexed()
+       ix.ensure()
 
 The CLI does the same without Python. It indexes every trace under a directory,
 so run ``dftracer_index .`` in the folder that holds ``trace.pfw.gz``.
@@ -352,7 +352,7 @@ What you learned
 
 - A trace is JSON lines, gzip-compressed for the Python reader (``.pfw.gz``);
   **index** it once
-  (``Indexer.ensure_indexed()`` or ``dftracer_index <dir>``) and both
+  (``Indexer.ensure()`` or ``dftracer_index <dir>``) and both
   languages read the same index.
 - **Query** it with ``TraceViewer`` (Python) or ``View`` (C++): ``group_by`` +
   ``agg`` + ``collect``, with aggregate columns named ``count`` / ``sum_dur`` /

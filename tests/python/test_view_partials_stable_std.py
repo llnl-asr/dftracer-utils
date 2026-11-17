@@ -141,13 +141,13 @@ def test_the_view_var_and_std_are_stable(tmp_path):
     with Indexer(
         files=files, index_dir=idx, aggregation_config=AggregationConfig(time_interval_ms=100000)
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
     check(
-        TraceViewer(files, index_path=idx).group_by("name").agg("var:dur", "std:dur").collect(),
+        TraceViewer(files, index_dir=idx).group_by("name").agg("var:dur", "std:dur").collect(),
         values,
     )
     check(
-        TraceViewer(files, index_path=None).group_by("name").agg("var:dur", "std:dur").collect(),
+        TraceViewer(files, index_dir=None).group_by("name").agg("var:dur", "std:dur").collect(),
         values,
     )
 
@@ -163,7 +163,7 @@ def test_the_distributed_view_merges_shards_stably(tmp_path):
     with Indexer(
         files=files, index_dir=idx, aggregation_config=AggregationConfig(time_interval_ms=100000)
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
     cluster = LocalCluster(n_workers=2, threads_per_worker=1, processes=False, silence_logs=40)
     client = Client(cluster)
     try:

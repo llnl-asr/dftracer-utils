@@ -653,7 +653,7 @@ dstd::String to_json(const dstd::Vector<FileManifest>& manifest) {
         if (i) out.push_back(',');
         out.append("{\"path\":");
         append_string(out, m.path);
-        out.append(",\"index_path\":");
+        out.append(",\"index_dir\":");
         append_string(out, m.index_path);
         out.append(",\"extensions\":[");
         for (std::size_t j = 0; j < m.extensions.size(); ++j) {

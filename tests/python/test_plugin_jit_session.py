@@ -33,9 +33,9 @@ def test_jit_plugin_fused_in_session(tmp_path):
     gz = str(tmp_path / "t.pfw.gz")
     write_trace(gz, 10, [100, 200, 300], ["f0"])
     with dftu.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
-    tv = dftu.TraceViewer(gz, index_path=str(tmp_path))
+    tv = dftu.TraceViewer(gz, index_dir=str(tmp_path))
     with tv.session() as s:
         by_cat = s.collect(tv.group_by("cat").agg("count"))
         counts = s.attach(Plugins([_SessionCounts]))
@@ -67,10 +67,10 @@ def test_session_attach_built_plugin_set(tmp_path):
     gz = str(tmp_path / "t.pfw.gz")
     write_trace(gz, 10, [100, 200, 300], ["f0"])
     with dftu.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     plugins = Plugins([_SessionCounts, _SessionDurs])
-    tv = dftu.TraceViewer(gz, index_path=str(tmp_path))
+    tv = dftu.TraceViewer(gz, index_dir=str(tmp_path))
     with tv.session() as s:
         by_cat = s.collect(tv.group_by("cat").agg("count"))
         attached = s.attach(plugins)
@@ -95,10 +95,10 @@ def test_session_attach_same_set_twice_folds_it_once_each(tmp_path):
     gz = str(tmp_path / "t.pfw.gz")
     write_trace(gz, 4, [100], ["f0"])
     with dftu.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     plugins = Plugins([_SessionCounts])
-    tv = dftu.TraceViewer(gz, index_path=str(tmp_path))
+    tv = dftu.TraceViewer(gz, index_dir=str(tmp_path))
     s = tv.session()
     first = s.attach(plugins)
     second = s.attach(plugins)
@@ -119,10 +119,10 @@ def test_session_attach_handle_read_before_execute_triggers_it(tmp_path):
     gz = str(tmp_path / "t.pfw.gz")
     write_trace(gz, 6, [100], ["f0"])
     with dftu.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     plugins = Plugins([_SessionCounts])
-    tv = dftu.TraceViewer(gz, index_path=str(tmp_path))
+    tv = dftu.TraceViewer(gz, index_dir=str(tmp_path))
     s = tv.session()
     attached = s.attach(plugins)
 
@@ -158,10 +158,10 @@ def test_session_attach_alone_applies_the_plugin_filter(tmp_path):
     n = 200
     files = _write_two_category_traces(tmp_path, n)
     with dftu.Indexer(files=files, index_dir=str(tmp_path)) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     plugins = Plugins([_SessionCountsPosix])
-    tv = dftu.TraceViewer(files, index_path=str(tmp_path))
+    tv = dftu.TraceViewer(files, index_dir=str(tmp_path))
     with tv.session() as s:
         attached = s.attach(plugins)
 
@@ -177,10 +177,10 @@ def test_session_attach_coscan_keeps_every_file(tmp_path):
     n = 200
     files = _write_two_category_traces(tmp_path, n)
     with dftu.Indexer(files=files, index_dir=str(tmp_path)) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     plugins = Plugins([_SessionCountsPosix])
-    tv = dftu.TraceViewer(files, index_path=str(tmp_path))
+    tv = dftu.TraceViewer(files, index_dir=str(tmp_path))
     with tv.session() as s:
         all_events = s.collect(tv.group_by().agg("count"))
         attached = s.attach(plugins)

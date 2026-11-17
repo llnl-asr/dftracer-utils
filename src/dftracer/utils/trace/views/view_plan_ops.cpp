@@ -393,7 +393,7 @@ ScanPlan from_file(dstd::String file_path, dstd::String index_path) {
 }
 
 coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
-                                        dstd::String index_path) {
+                                        dstd::String index_dir) {
     runtime::fs::FindOptions options;
     options.patterns =
         runtime::fs::names_of(common::constants::indexer::INPUT_FILE_PATTERNS);
@@ -415,7 +415,7 @@ coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
     for (auto& e : *found) {
         dstd::String fp(e.path.str());
         const dstd::String index =
-            internal::determine_index_path(fp, index_path);
+            internal::determine_index_path(fp, index_dir);
         files.push_back(ViewFile{fp, dstd::String(index.data(), index.size())});
     }
     std::sort(files.begin(), files.end(),

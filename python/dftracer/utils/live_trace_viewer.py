@@ -34,7 +34,7 @@ class LiveTraceViewer:
     """Tracks gzip trace files that may still be growing.
 
     ``files`` is a path, a directory scanned recursively for gzip traces, or a
-    sequence of paths. ``index_path`` is as for ``TraceViewer``. The files are
+    sequence of paths. ``index_dir`` is as for ``TraceViewer``. The files are
     not copied. This object holds no query ops: :meth:`snapshot` returns a normal
     ``TraceViewer``, which keeps its rows after later snapshots.
     """
@@ -44,7 +44,7 @@ class LiveTraceViewer:
     def __init__(
         self,
         files: Union[str, "os.PathLike[str]", Sequence[Union[str, "os.PathLike[str]"]]],
-        index_path: Optional[str] = None,
+        index_dir: Optional[str] = None,
         runtime: Any = None,
         record_schema: Any = None,
     ) -> None:
@@ -53,7 +53,7 @@ class LiveTraceViewer:
             if isinstance(files, (str, os.PathLike))
             else [os.fspath(f) for f in files]
         )
-        self._live = _ext._LiveTraceViewer(paths, index_path)
+        self._live = _ext._LiveTraceViewer(paths, index_dir)
         self._runtime = runtime
         self._record_schema = record_schema
 

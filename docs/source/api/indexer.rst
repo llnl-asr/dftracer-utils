@@ -22,7 +22,7 @@ How the indexer types relate:
 .. mermaid:: /_generated/py_indexer.mmd
 
 .. autoclass:: dftracer.utils.Indexer
-   :members: resolve, build, ensure_indexed, get_checkpoint_indexer, rowset, query_file_pids, query_all_file_pids, query_file_info
+   :members: status, ensure, build, get_checkpoint_indexer, rowset, query_file_pids, query_all_file_pids, query_file_info
    :undoc-members:
    :show-inheritance:
 
@@ -69,8 +69,9 @@ Exported from ``dftracer.utils``.
 IndexStatus
 -----------
 
-Result of :meth:`~dftracer.utils.Indexer.resolve` /
-:meth:`~dftracer.utils.Indexer.ensure_indexed`. Exported from
+Result of :meth:`~dftracer.utils.Indexer.status`,
+:meth:`~dftracer.utils.Indexer.ensure` and
+:meth:`~dftracer.utils.Indexer.build`. Exported from
 ``dftracer.utils``.
 
 .. autoclass:: dftracer.utils.IndexStatus
@@ -81,7 +82,7 @@ Result of :meth:`~dftracer.utils.Indexer.resolve` /
 CheckpointIndexer Class
 -----------------------
 
-.. autoclass:: dftracer.utils.CheckpointIndexer(gz_path: str, index_path: str | None = None, checkpoint_size: int = 1048576, force_rebuild: bool = False, build_bloom: bool = False, runtime: Runtime | None = None)
+.. autoclass:: dftracer.utils.CheckpointIndexer(gz_path: str, index_dir: str | None = None, checkpoint_size: int = 1048576, force: bool = False, build_bloom: bool = False, runtime: Runtime | None = None)
    :members:
    :undoc-members:
    :show-inheritance:

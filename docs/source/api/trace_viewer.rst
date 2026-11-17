@@ -18,7 +18,7 @@ index exists next to the traces, the same query is served from the index
    from dftracer.utils import TraceViewer
 
    # A directory is scanned recursively for .pfw.gz traces, in parallel.
-   view = TraceViewer("traces/")           # index_path optional; sidecar used when present
+   view = TraceViewer("traces/")           # index_dir optional; sidecar used when present
 
    # Top I/O calls by total time.
    df = (
@@ -34,10 +34,10 @@ Constructing a view
 
 .. code-block:: python
 
-   TraceViewer(files, index_path=None, runtime=None)
+   TraceViewer(files, index_dir=None, runtime=None)
 
 ``files`` is a directory (scanned recursively for ``.pfw.gz`` traces), a single
-file path, or a list of file paths. Pass ``index_path`` to point at an index
+file path, or a list of file paths. Pass ``index_dir`` to point at an index
 directory explicitly; omit it to use the sidecar convention. An optional
 :class:`~dftracer.utils.Runtime` controls the thread pool.
 
@@ -312,10 +312,10 @@ viewer and returns the final node DataFrame:
 Sessions
 --------
 
-``view.session()`` returns a :class:`~dftracer.utils.Session`. Plans and lazy
+``view.session()`` returns a :class:`~dftracer.utils.trace_viewer.Session`. Plans and lazy
 results registered on it run together, as :func:`~dftracer.utils.collect_all`
 runs them, at the end of the ``with`` block or on the first
-:meth:`Handle.result <dftracer.utils.Handle.result>`:
+:meth:`Handle.result <dftracer.utils.trace_viewer.Handle.result>`:
 
 .. code-block:: python
 
@@ -353,7 +353,7 @@ In C++ the same calls are ``trace::views::LiveView::snapshot()`` and ``status()`
        print(new.group_by("name").agg("count").collect())
 
 Nothing is copied.
-The index lives where ``TraceViewer`` puts it, or at ``index_path`` when you give one.
+The index lives where ``TraceViewer`` puts it, or at ``index_dir`` when you give one.
 A snapshot stays fixed, so an old snapshot keeps its rows after the file grows.
 ``new_rows()`` returns a viewer of the rows no earlier call returned, or ``None``.
 ``follow()`` yields those viewers, sleeps when there is nothing new and has no end, so stop iterating to stop.
@@ -398,11 +398,11 @@ How the viewer types relate and what they return:
    :members:
    :undoc-members:
 
-.. autoclass:: dftracer.utils.Session
+.. autoclass:: dftracer.utils.trace_viewer.Session
    :members:
    :undoc-members:
 
-.. autoclass:: dftracer.utils.Handle
+.. autoclass:: dftracer.utils.trace_viewer.Handle
    :members:
    :undoc-members:
 
@@ -411,6 +411,14 @@ How the viewer types relate and what they return:
    :undoc-members:
 
 .. autoclass:: dftracer.utils.LazyScalar
+   :members:
+   :undoc-members:
+
+.. autoclass:: dftracer.utils.BoundColumn
+   :members:
+   :undoc-members:
+
+.. autoclass:: dftracer.utils.SinkSummary
    :members:
    :undoc-members:
 

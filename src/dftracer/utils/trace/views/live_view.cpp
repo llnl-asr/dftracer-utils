@@ -90,8 +90,8 @@ View pinned_view(
 
 }  // namespace
 
-LiveView::LiveView(dstd::Vector<dstd::String> paths, dstd::String index_path)
-    : paths_(std::move(paths)), index_path_(std::move(index_path)) {}
+LiveView::LiveView(dstd::Vector<dstd::String> paths, dstd::String index_dir)
+    : paths_(std::move(paths)), index_dir_(std::move(index_dir)) {}
 
 dstd::Result<View> LiveView::snapshot() {
     auto fresh_files = refresh();
@@ -153,7 +153,7 @@ dstd::Result<dstd::Vector<LiveView::PinnedFile>> LiveView::refresh() {
 
     trace::index::build::ResolveAndBuildInput in;
     for (const auto& f : files) in.files.emplace_back(f);
-    in.index_dir = index_path_;
+    in.index_dir = index_dir_;
     in.require_checkpoints = true;
     in.whole_members = true;
     trace::index::build::ResolverResult built;
@@ -189,7 +189,7 @@ dstd::Result<dstd::Vector<LiveView::PinnedFile>> LiveView::refresh() {
         LiveFileStatus st;
         st.path = path;
         const dstd::String root =
-            internal::determine_index_path(path, index_path_);
+            internal::determine_index_path(path, index_dir_);
         std::uint64_t uc_end = 0;
         std::size_t members = 0;
         std::uint64_t hash = 0;

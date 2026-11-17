@@ -157,7 +157,7 @@ class TraceViewer(_LazyOps, _ext.TraceViewer):
     def __new__(
         cls,
         files: Any,
-        index_path: Optional[str] = None,
+        index_dir: Optional[str] = None,
         runtime: "Optional[Runtime]" = None,
         record_schema: "Union[str, Type[RecordSchema], None]" = None,
     ) -> "TraceViewer":
@@ -170,7 +170,7 @@ class TraceViewer(_LazyOps, _ext.TraceViewer):
             out = files
         else:
             out = _ext.TraceViewer.__new__(TraceViewer)
-            _ext.TraceViewer.__init__(out, files, index_path)
+            _ext.TraceViewer.__init__(out, files, index_dir)
         if record_schema is not None:
             out = _ext.TraceViewer.record_schema(out, schema_id(record_schema))
         if runtime is not None:
@@ -180,7 +180,7 @@ class TraceViewer(_LazyOps, _ext.TraceViewer):
     def __init__(
         self,
         files: Any,
-        index_path: Optional[str] = None,
+        index_dir: Optional[str] = None,
         runtime: "Optional[Runtime]" = None,
         record_schema: "Union[str, Type[RecordSchema], None]" = None,
     ) -> None:

@@ -77,8 +77,8 @@ static int CheckpointIndexer_init(CheckpointIndexerObject *self, PyObject *args,
     PyObject *runtime_arg = NULL;
 
     if (!parse_kw<"s|snppO">(args, kwds,
-                             {"gz_path", "index_path", "checkpoint_size",
-                              "force_rebuild", "build_bloom", "runtime"},
+                             {"gz_path", "index_dir", "checkpoint_size",
+                              "force", "build_bloom", "runtime"},
                              &gz_path, &index_path, &checkpoint_size,
                              &force_rebuild, &build_bloom, &runtime_arg)) {
         return -1;
@@ -435,7 +435,7 @@ static PyMethodDef CheckpointIndexer_methods[] = {
 static PyGetSetDef CheckpointIndexer_getsetters[] = {
     {"gz_path", (getter)CheckpointIndexer_gz_path, NULL,
      "Path to the gzip file", NULL},
-    {"index_path", (getter)CheckpointIndexer_index_path, NULL,
+    {"index_dir", (getter)CheckpointIndexer_index_path, NULL,
      "Path to the .dftindex store", NULL},
     {"checkpoint_size", (getter)CheckpointIndexer_checkpoint_size, NULL,
      "Checkpoint size in bytes", NULL},
@@ -451,8 +451,8 @@ PyTypeObject CheckpointIndexerType = {
     .tp_dealloc = (destructor)CheckpointIndexer_dealloc,
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
     .tp_doc =
-        "CheckpointIndexer(gz_path, index_path=None, checkpoint_size=33554432, "
-        "force_rebuild=False, build_bloom=False, runtime=None)\n"
+        "CheckpointIndexer(gz_path, index_dir=None, checkpoint_size=33554432, "
+        "force=False, build_bloom=False, runtime=None)\n"
         "--\n"
         "\n"
         "Checkpoint indexer for single-file checkpoint-level operations on a "
@@ -460,11 +460,11 @@ PyTypeObject CheckpointIndexerType = {
         "\n"
         "Args:\n"
         "    gz_path (str): Path to the gzip trace file.\n"
-        "    index_path (str or None): Path to the .dftindex store. If None,\n"
+        "    index_dir (str or None): Path to the .dftindex store. If None,\n"
         "        uses the root-local \".dftindex\" next to gz_path.\n"
         "    checkpoint_size (int): Checkpoint size in bytes for index\n"
         "        building (default 1 MB).\n"
-        "    force_rebuild (bool): If True, rebuild the index even if it\n"
+        "    force (bool): If True, rebuild the index even if it\n"
         "        exists.\n"
         "    build_bloom (bool): If True, build bloom filter data in the\n"
         "        index.\n"

@@ -203,9 +203,9 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
 
     if (!parse_kw<"Os|nppOnOOO">(
             args, kwds,
-            {"files", "index_dir", "checkpoint_size", "force_rebuild",
-             "build_bloom", "bloom_dimensions", "parallelism", "runtime",
-             "aggregation_config", "progress"},
+            {"files", "index_dir", "checkpoint_size", "force", "build_bloom",
+             "bloom_dimensions", "parallelism", "runtime", "aggregation_config",
+             "progress"},
             &files_obj, &index_dir, &checkpoint_size, &force_rebuild,
             &build_bloom, &bloom_dims_obj, &parallelism, &runtime_arg,
             &aggregation_config_obj, &progress_obj)) {
@@ -460,12 +460,12 @@ static PyMethodDef DistributionMethods[] = {
      "so the same string maps to the same 32-bit id in every worker "
      "process. Call once at worker startup BEFORE any aggregation work."},
     {"write_shard_set", DFTU_PYCFUNCTION(write_shard_set_fn), METH_VARARGS,
-     "write_shard_set(index_root, shard_dirs) -> None\n"
+     "write_shard_set(index_dir, shard_dirs) -> None\n"
      "Catalog `shard_dirs` as the shards of the index root, in the root's "
      "shards.json. A shard under the root is stored relative to it."},
     {"consolidate_shard_set", DFTU_PYCFUNCTION(consolidate_shard_set_fn),
      METH_VARARGS,
-     "consolidate_shard_set(index_root) -> int\n"
+     "consolidate_shard_set(index_dir) -> int\n"
      "Merge the shards the root's shards.json names into the root's own "
      "store by moving their data files, then remove the manifest and the "
      "shard directories. Returns the number of trace files the shards "

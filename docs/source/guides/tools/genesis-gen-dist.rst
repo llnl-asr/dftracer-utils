@@ -181,7 +181,7 @@ Query the output
 
    # Build the index once: it stores the runs row set.
    with Indexer(files=["genesis.pfw.gz"]) as ix:
-       ix.ensure_indexed()
+       ix.ensure()
        runs = ix.rowset("runs")  # one row per run, with the run keys
 
    tv = TraceViewer("genesis.pfw.gz")

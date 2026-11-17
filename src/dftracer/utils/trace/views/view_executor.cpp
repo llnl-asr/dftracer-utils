@@ -1110,7 +1110,7 @@ coro::CoroTask<dstd::Result<ExportStats>> run_materialize(
                  dftracer::utils::trace::index::view_parts_dir(dir)) /
              "part.pfw.gz")
                 .str());
-        opts.index_path = dir;
+        opts.index_dir = dir;
         opts.build_index = true;
         opts.compress = true;
         // One gzip member per index checkpoint, so the user's checkpoint_size

@@ -64,7 +64,7 @@ last indexed, so explicit indexing only warms it.
          from dftracer.utils import Indexer
 
          with Indexer("traces/") as ix:
-             ix.ensure_indexed()   # no-op if already built
+             ix.ensure()   # no-op if already built
 
    .. tab-item:: C++
 

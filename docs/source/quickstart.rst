@@ -211,16 +211,16 @@ Create and use indexes for faster access:
 
    from dftracer.utils import Indexer
 
-   # Create an indexer over a directory of traces (or pass files=[...])
+   # Create an indexer over a directory of traces (or pass a file or a list)
    indexer = Indexer("/path/to/traces")
 
-   # Resolve what is already indexed vs. what needs work
-   status = indexer.resolve()
+   # See what is already indexed vs. what needs work (builds nothing)
+   status = indexer.status()
    print(f"Total files: {status.total_files}")
    print(f"Ready: {len(status.ready)}, Needs work: {len(status.needs_work)}")
 
-   # Build any missing tiers (resolve + build in one call)
-   status = indexer.ensure_indexed()
+   # Build what is missing or stale; a no-op when fresh
+   status = indexer.ensure()
 
    # Get a checkpoint indexer for a single file
    ci = indexer.get_checkpoint_indexer("/path/to/traces/trace.pfw.gz")

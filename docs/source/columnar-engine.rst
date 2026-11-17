@@ -143,7 +143,7 @@ fully in the engine (via ``DataFrame.filter``, ``dftu_series_filter``) and retur
    slow = where(batch, (F.dur > lit(1000)) & (F.ret >= lit(0)))   # DataFrame
 
 Comparisons are numeric scalar predicates for now (string predicates stay in the
-``Field`` / ``Expr`` DSL, which also compiles to the index query string for
+``col`` / ``Expr`` DSL, which also compiles to the index query string for
 scan-time pushdown). A comparison can also take another column expression on its
 right side, ``col("a") >= col("b")``, in an eager ``DataFrame.filter`` and in a
 ``LazyFrame.filter``: the engine compares the two row by row (``expr_cmp_expr``),
@@ -165,7 +165,7 @@ stream (``bytes`` any Arrow IPC reader opens, no pyarrow needed) for transport.
 Arrow interop goes through the Arrow C Stream Interface, so a column or a frame
 crosses without a materialized copy in between: ``__arrow_c_stream__`` is on
 ``Series`` (``pa.chunked_array(series)``), on ``DataFrame`` (``pa.table(df)``) and on
-``LazyFrame`` (``pa.table(lf)``, ``pl.from_arrow(lf)``,
+``LazyFrame`` (``pa.table(lf)``, ``pl.DataFrame(lf)``,
 ``pa.RecordBatchReader.from_stream(lf)``). A ``LazyFrame`` stream runs the query in a
 background task, converts one batch per ``get_next``, and its ``release`` cancels the
 query and waits for the task. C++ has the same in

@@ -6,10 +6,8 @@ from typing import Optional
 from . import schemas  # noqa: F401
 from .columnar import (  # noqa: F401
     Agg,
-    ColumnExpr,
     Expr,
     F,
-    Field,
     GroupBy,
     Udaf,
     Udf,
@@ -133,8 +131,6 @@ __all__ = [
     "BloomConfig",
     "CheckpointIndexer",
     "Expr",
-    "Field",
-    "ColumnExpr",
     "col",
     "lit",
     "columnar",

@@ -30,8 +30,18 @@ _ROOT = Path(__file__).resolve().parents[2]
 _ALLOWLIST = Path(__file__).parent / "api_allowlist.txt"
 # Duplicate-code findings of `pylint --enable=duplicate-code python/` today. It
 # only goes down.
-_DUPLICATE_CODE_FINDINGS = 19
+_DUPLICATE_CODE_FINDINGS = 18
 _PYLINT_VERSION = "4.1.4"
+
+
+def _alias_table():
+    spec = importlib.util.spec_from_file_location(
+        "dftu_aliases", _ROOT / "python" / "dftracer" / "utils" / "_aliases.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _api_def():
@@ -142,11 +152,11 @@ def test_accessor_row_runs_its_op_like_the_series_method_of_the_op(row):
 
 
 def test_an_accessor_row_the_column_does_not_fit_raises_its_error():
-    with pytest.raises(TypeError, match="list_len: not a List column"):
+    with pytest.raises(dft.DFTUtilsValueError, match="list_len: not a List column"):
         dft.Series([1, 2]).list.len()
-    with pytest.raises(TypeError, match="list_get: not a List column"):
+    with pytest.raises(dft.DFTUtilsValueError, match="list_get: not a List column"):
         dft.Series([1, 2]).list.get(0)
-    with pytest.raises(TypeError, match="str_count: not a String column"):
+    with pytest.raises(dft.DFTUtilsValueError, match="str_count: not a String column"):
         dft.Series([1, 2]).str.count("a")
     with pytest.raises(TypeError):
         dft.Series(["a"]).str.zfill("x")
@@ -155,18 +165,18 @@ def test_an_accessor_row_the_column_does_not_fit_raises_its_error():
 
 
 def test_a_row_the_column_does_not_fit_raises_its_error():
-    with pytest.raises(TypeError, match="list_len: not a List column"):
+    with pytest.raises(dft.DFTUtilsValueError, match="list_len: not a List column"):
         ext.Series.list_len(dft.Series([1, 2]))
-    with pytest.raises(RuntimeError, match="null column"):
+    with pytest.raises(dft.DFTUtilsValueError, match="null column"):
         ext.Series.abs(dft.Series(["a"]))
 
 
 def test_scalar_rows_take_their_keywords_and_refuse_others():
     s = _float_series()
-    assert s.fillna(value=0.0).to_list() == s.fillna(0.0).to_list()
-    assert ext.Series.clip(s, lo=0, hi=1).to_list() == ext.Series.clip(s, 0, 1).to_list()
+    assert s.fill_null(value=0.0).to_list() == s.fill_null(0.0).to_list()
+    assert ext.Series.clip(s, lower=0, upper=1).to_list() == ext.Series.clip(s, 0, 1).to_list()
     with pytest.raises(TypeError):
-        ext.Series.clip(s, lo=0, hi=1, extra=2)
+        ext.Series.clip(s, lower=0, upper=1, extra=2)
     with pytest.raises(TypeError):
         ext.Series.abs(s, 1)
     with pytest.raises(TypeError):
@@ -249,7 +259,10 @@ def _allowlist(path=_ALLOWLIST):
 
 
 def _generated(cls_name):
-    return {r.name for r in ROWS if r.cls == cls_name or (cls_name == "Expr" and r.on_expr)}
+    aliases = {a.alias for a in _alias_table().ALIASES if a.cls == cls_name}
+    return {
+        r.name for r in ROWS if r.cls == cls_name or (cls_name == "Expr" and r.on_expr)
+    } | aliases
 
 
 def _row_tokens():

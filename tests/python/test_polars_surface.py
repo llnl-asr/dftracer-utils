@@ -71,8 +71,8 @@ def test_expression_column_ops_match_polars():
     # ewm follows pandas on a null row (the value repeats); polars gives null.
     ewm = _clean(df.apply(x.ewm_mean(0.5)).to_list())
     assert ewm == pytest.approx(df.to_pandas()["x"].ewm(alpha=0.5).mean().tolist(), nan_ok=True)
-    _both(df, x.sort(), px.sort(nulls_last=True))
-    _both(df, x.sort(descending=True), px.sort(descending=True, nulls_last=True))
+    _both(df, x.sort(), px.sort())
+    _both(df, x.sort(descending=True), px.sort(descending=True))
     _both(df, x.reverse(), px.reverse())
     _both(df, x.is_duplicated(), px.is_duplicated())
     _both(df, x.is_unique(), px.is_unique())

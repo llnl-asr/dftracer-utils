@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/python/core/api_methods.h>
+#include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/scalar_helpers.h>
 #include <dftracer/utils/python/frame/series_detail.h>
 
@@ -143,7 +144,7 @@ namespace {
 // when the op refused the column, and under the name of the source.
 PyObject* finish(const Row& row, Series&& out, const Series& source) {
     if (!out.valid() && row.err[0] != '\0') {
-        PyErr_SetString(PyExc_TypeError, row.err);
+        PyErr_SetString(core::g_dft_value_error, row.err);
         return nullptr;
     }
     return make_series(named_like(std::move(out), source));

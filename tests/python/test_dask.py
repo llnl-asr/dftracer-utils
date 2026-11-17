@@ -323,7 +323,7 @@ class TestDaskTraceViewer:
                 assert full.height > 1
                 # Builders after limit still shape the scan; the limit trims the
                 # merged result, not each shard.
-                one = base.limit(1).resolution("1ms").group_by("cat").agg("count", "busy:dur")
+                one = base.head(1).resolution("1ms").group_by("cat").agg("count", "busy:dur")
                 assert one.collect().height == 1
             finally:
                 client.close()

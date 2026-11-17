@@ -108,7 +108,7 @@ def test_series_properties_and_pandas_spellings():
     assert s.to_list() == [3, None, 1, 3] == s.tolist()
     assert _lst(s.isna()) == [False, True, False, False] == _lst(s.is_null())
     assert _lst(s.notna()) == [True, False, True, True] == _lst(s.is_not_null())
-    assert s.is_null(1) is True and s.is_null(0) is False
+    assert s.is_null_at(1) is True and s.is_null_at(0) is False
     assert _lst(s.isin([3])) == [True, False, False, True] == _lst(s.is_in([3]))
     assert _lst(s.dropna()) == _lst(s.drop_nulls()) == [3, 1, 3]
     assert _lst(s.fill_null(0)) == _lst(s.fillna(0)) == [3, 0, 1, 3]
@@ -120,11 +120,11 @@ def test_series_properties_and_pandas_spellings():
     assert _lst(s.cum_sum()) == _lst(s.cumsum())
     assert _lst(s.cum_max()) == _lst(s.cummax())
     assert _lst(s.cum_min()) == _lst(s.cummin())
-    assert _lst(s.sort_values()) == _lst(s.sort())
-    assert _lst(s.sort_values(ascending=False)) == _lst(s.sort(descending=True))
+    assert _lst(s.sort_values()) == _lst(s.sort(nulls_last=True))
+    assert _lst(s.sort_values(ascending=False)) == _lst(s.sort(descending=True, nulls_last=True))
     assert _lst(s.nlargest(2)) == _lst(s.top_k(2))
     assert _lst(s.nsmallest(2)) == _lst(s.bottom_k(2))
-    assert _lst(s.arg_sort()) == _lst(s.argsort())
+    assert _lst(s.arg_sort(nulls_last=True)) == _lst(s.argsort())
     assert _lst(s.gather(Series([0, 2]))) == _lst(s.take(Series([0, 2]))) == [3, 1]
     assert _lst(s.head()) == _lst(s)
     assert _lst(s.shift(periods=1)) == _lst(s.shift(1))
@@ -138,8 +138,10 @@ def test_series_statistics_and_windows():
     assert s.std(ddof=0) == s.stddev(sample=False)
     with pytest.raises(ValueError):
         s.var(ddof=2)
-    assert s.skew() == s.skewness()
-    assert s.kurt() == s.kurtosis()
+    assert s.skew(bias=True) == pytest.approx(0.6568077344996993)
+    assert s.skew() == pytest.approx(1.1376243669576889)
+    assert s.kurt() == pytest.approx(0.7576559546313795)
+    assert s.kurtosis() == pytest.approx(-1.0989792060491494)
     assert _lst(s.rolling(2).mean()) == _lst(s.rolling(2, "mean")) == _lst(s.rolling_mean(2))
     assert _lst(s.rolling(2).sum()) == _lst(s.rolling_sum(2))
     assert _lst(s.rolling(2).std()) == _lst(s.rolling_std(2))
@@ -258,7 +260,7 @@ def test_unique_subset_eager_and_lazy():
     assert _dict(df.unique("k")) == by_k
     assert _dict(df.unique(subset=["k"])) == by_k
     assert _dict(df.drop_duplicates(subset="k")) == by_k
-    assert _dict(df.distinct("k")) == by_k
+    assert _dict(df.unique(subset="k")) == by_k
     lazy = df.lazy().unique(subset="k")
     assert "unique [k]" in lazy.explain()
     assert _dict(lazy.collect()) == by_k

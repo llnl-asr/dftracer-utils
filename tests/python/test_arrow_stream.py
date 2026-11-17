@@ -56,12 +56,14 @@ def test_a_lazyframe_reader_closes_early():
 
 def test_polars_reads_every_stream():
     pl = pytest.importorskip("polars")
-    assert pl.from_arrow(_frame()).to_dict(as_series=False) == {
+    # pl.DataFrame is the Polars entry for a C stream; from_arrow reads one as a
+    # struct Series (Polars 2.1).
+    assert pl.DataFrame(_frame()).to_dict(as_series=False) == {
         "a": [1, 2, 3, 4],
         "b": [1.5, 2.5, 3.5, 4.5],
         "s": ["x", "y", "x", "z"],
     }
-    assert pl.from_arrow(_frame().lazy()).height == 4
+    assert pl.DataFrame(_frame().lazy()).height == 4
 
 
 _HOLD_GIL_SCRIPT = """

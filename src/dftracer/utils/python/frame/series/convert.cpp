@@ -14,6 +14,7 @@
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/python/core/errors.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -1001,7 +1002,8 @@ PyObject* Series_str_into(PyObject* self, PyObject* args) {
     if (!PyArg_ParseTuple(args, "O|O", &out, &na)) return nullptr;
     const Series& col = *a;
     if (col.type() != TypeId::String && col.type() != TypeId::LargeString) {
-        PyErr_SetString(PyExc_TypeError, "str_into needs a String column");
+        PyErr_SetString(core::g_dft_value_error,
+                        "str_into needs a String column");
         return nullptr;
     }
     Py_buffer view;

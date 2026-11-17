@@ -39,21 +39,21 @@
 #define PY_ALIAS(face, cls, alias, target, adapter)
 #endif
 
-PY_METHOD(Series, ffill, "dftu.series.ffill", NONE, SAME, KEEP, NO, "", "", "",
-          "ffill() -> nulls filled from the nearest present value before them (pad).")
-PY_METHOD(Series, bfill, "dftu.series.bfill", NONE, SAME, KEEP, NO, "", "", "",
-          "bfill() -> nulls filled from the nearest present value after them (backfill).")
+PY_METHOD(Series, forward_fill, "dftu.series.ffill", NONE, SAME, KEEP, NO, "", "", "",
+          "forward_fill() -> nulls filled from the nearest present value before them.")
+PY_METHOD(Series, backward_fill, "dftu.series.bfill", NONE, SAME, KEEP, NO, "", "", "",
+          "backward_fill() -> nulls filled from the nearest present value after them.")
 PY_METHOD(Series, unique, "dftu.series.unique", NONE, SAME, KEEP, NO, "", "", "",
           "Distinct values (ascending) -> Series.")
 PY_METHOD(Series, abs, "dftu.series.abs", NONE, SAME, KEEP, NO, "", "", "",
           "Elementwise absolute value (SIMD).")
 PY_METHOD(Series, round, "dftu.series.round", NONE, SAME, KEEP, NO, "", "", "",
           "Round floats to nearest (SIMD).")
-PY_METHOD(Series, cumsum, "dftu.series.cumsum", NONE, SAME, KEEP, NO, "", "", "",
+PY_METHOD(Series, cum_sum, "dftu.series.cumsum", NONE, SAME, KEEP, NO, "", "", "",
           "Cumulative sum -> Series.")
-PY_METHOD(Series, cummax, "dftu.series.cummax", NONE, SAME, KEEP, NO, "", "", "",
+PY_METHOD(Series, cum_max, "dftu.series.cummax", NONE, SAME, KEEP, NO, "", "", "",
           "Running maximum -> Series.")
-PY_METHOD(Series, cummin, "dftu.series.cummin", NONE, SAME, KEEP, NO, "", "", "",
+PY_METHOD(Series, cum_min, "dftu.series.cummin", NONE, SAME, KEEP, NO, "", "", "",
           "Running minimum -> Series.")
 PY_METHOD(Series, cum_prod, "dftu.series.cum_prod", NONE, SAME, KEEP, YES, "", "", "",
           "Running product -> Series.")
@@ -85,9 +85,9 @@ PY_METHOD(Series, exp, "dftu.series.exp", NONE, FLOAT, KEEP, NO, "", "", "",
           "Exponential -> Float64 Series.")
 PY_METHOD(Series, log, "dftu.series.log", NONE, FLOAT, KEEP, NO, "", "", "",
           "Natural log -> Float64 Series.")
-PY_METHOD(Series, _null_mask, "dftu.series.null_mask", NONE, BOOL, KEEP, NO, "", "", "",
+PY_METHOD(Series, is_null, "dftu.series.null_mask", NONE, BOOL, KEEP, NO, "", "", "",
           "Bool mask: row is null.")
-PY_METHOD(Series, _valid_mask, "dftu.series.valid_mask", NONE, BOOL, KEEP, NO, "", "", "",
+PY_METHOD(Series, is_not_null, "dftu.series.valid_mask", NONE, BOOL, KEEP, NO, "", "", "",
           "Bool mask: row is present.")
 PY_METHOD(Series, is_nan, "dftu.series.is_nan", NONE, BOOL, KEEP, YES, "", "", "",
           "Bool mask: value is NaN (SIMD).")
@@ -105,12 +105,12 @@ PY_METHOD(Series, reverse, "dftu.series.reverse", NONE, SAME, KEEP, YES, "", "",
           "Rows in reverse order -> Series.")
 PY_METHOD(Series, interpolate, "dftu.series.interpolate", NONE, FLOAT, KEEP, YES, "", "", "",
           "interpolate() -> Float64 Series with null interiors linearly filled.")
-PY_METHOD(Series, fillna, "dftu.series.fillna", SCALAR, SAME, KEEP, NO, "value", "", "",
-          "fillna(value) -> Series with nulls replaced.")
-PY_METHOD(Series, clip, "dftu.series.clip", NUMBER2, SAME, KEEP, NO, "lo", "hi", "",
-          "clip(lo, hi) -> Series clamped to [lo, hi] (SIMD).")
-PY_METHOD(Series, is_between, "dftu.series.is_between", NUMBER2, BOOL, KEEP, NO, "lo", "hi", "",
-          "is_between(lo, hi) -> Bool mask where lo <= value <= hi (SIMD).")
+PY_METHOD(Series, fill_null, "dftu.series.fillna", SCALAR, SAME, KEEP, NO, "value", "", "",
+          "fill_null(value) -> Series with nulls replaced.")
+PY_METHOD(Series, clip, "dftu.series.clip", NUMBER2, SAME, KEEP, NO, "lower", "upper", "",
+          "clip(lower, upper) -> Series clamped to [lower, upper] (SIMD).")
+PY_METHOD(Series, is_between, "dftu.series.is_between", NUMBER2, BOOL, KEEP, NO, "lower", "upper", "",
+          "is_between(lower, upper) -> Bool mask where lower <= value <= upper (SIMD).")
 PY_METHOD(Series, logical_not, "dftu.series.logical_not", NONE, BOOL, KEEP, NO, "", "", "",
           "Boolean NOT of a Bool column.")
 PY_METHOD(Series, str_strip, "dftu.series.str_strip", NONE, STR, KEEP, NO, "", "", "",
@@ -141,9 +141,9 @@ PY_METHOD(Series, arg_min, "dftu.series.arg_min", NONE, I64, KEEP, NO, "", "", "
           "Index of the minimum non-null value (-1 if none).")
 PY_METHOD(Series, arg_max, "dftu.series.arg_max", NONE, I64, KEEP, NO, "", "", "",
           "Index of the maximum non-null value (-1 if none).")
-PY_METHOD(Series, nunique, "dftu.series.nunique", NONE, I64, KEEP, NO, "", "", "",
+PY_METHOD(Series, n_unique, "dftu.series.nunique", NONE, I64, KEEP, NO, "", "", "",
           "Number of distinct values.")
-PY_METHOD(Series, skewness, "dftu.series.skewness", NONE, F64, KEEP, NO, "", "", "",
+PY_METHOD(Series, skew, "dftu.series.skewness", NONE, F64, KEEP, NO, "", "", "",
           "Population skewness.")
 PY_METHOD(Series, kurtosis, "dftu.series.kurtosis", NONE, F64, KEEP, NO, "", "", "",
           "Excess kurtosis.")
@@ -202,6 +202,16 @@ PY_METHOD(Str, zfill, "dftu.series.str_zfill", INT, STR, KEEP, NO, "width", "", 
           "zfill(width) -> String Series left-padded with '0' after any sign.")
 PY_METHOD(Str, join, "dftu.series.list_join", STR, STR, KEEP, NO, "sep", "", "list_join: not a List column of strings",
           "join(sep) -> String Series, each row's list of strings joined with sep.")
+PY_METHOD(Str, count_matches, "dftu.series.str_count", STR, INT, KEEP, NO, "pat", "", "str_count: not a String column",
+          "count_matches(pat) -> Int64 Series of non-overlapping occurrences of the literal pat.")
+PY_METHOD(Str, strip_chars_start, "dftu.series.str_lstrip", NONE, STR, KEEP, NO, "", "", "",
+          "strip_chars_start() -> String Series trimmed of leading ASCII whitespace.")
+PY_METHOD(Str, strip_chars_end, "dftu.series.str_rstrip", NONE, STR, KEEP, NO, "", "", "",
+          "strip_chars_end() -> String Series trimmed of trailing ASCII whitespace.")
+PY_METHOD(Str, strip_prefix, "dftu.series.str_remove_prefix", STR, STR, KEEP, NO, "prefix", "", "str_remove_prefix: not a String column",
+          "strip_prefix(prefix) -> String Series without a leading prefix.")
+PY_METHOD(Str, strip_suffix, "dftu.series.str_remove_suffix", STR, STR, KEEP, NO, "suffix", "", "str_remove_suffix: not a String column",
+          "strip_suffix(suffix) -> String Series without a trailing suffix.")
 PY_METHOD(List, len, "dftu.series.list_len", NONE, INT, KEEP, NO, "", "", "list_len: not a List column",
           "len() -> Int64 Series of each row's list length.")
 PY_METHOD(List, get, "dftu.series.list_get", INT, ANY, KEEP, NO, "index", "", "list_get: not a List column",

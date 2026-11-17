@@ -4,7 +4,7 @@
 ``DataFrame`` wraps the native ``_DataFrame`` handle: native frame ops plus
 Python-side Arrow/pandas/polars conversion and pickling. Every relational and
 reshape primitive - ``join``/``asof``/``interval``, ``window``/``gap_fill``,
-``unnest``/``explode``, ``melt``/``pivot``, ``concat``/``union``, ``distinct``,
+``unnest``/``explode``, ``melt``/``pivot``, ``concat``/``union``,
 ``sample``, ``top_k``, ``sort`` - is a native method that takes and returns
 ``DataFrame``s, running the SIMD kernels on the native columns; Arrow is crossed
 only at the edge (``to_arrow``/``from_arrow``), never as the operating boundary.
@@ -30,6 +30,7 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
+from ._aliases import install as _install_aliases
 from ._pandas_frame import _FramePandasMixin
 from ._polars_frame import _FramePolarsMixin
 from .enums import DType
@@ -42,7 +43,6 @@ from .series import (
     _pandas_nullable,
     _polars_via_arrow,
     _require_pyarrow,
-    _StrAccessor,
     _to_pandas,
 )
 
@@ -54,7 +54,7 @@ if TYPE_CHECKING:
     from pandas.api.extensions import ExtensionArray  # ty: ignore[import-not-found]
     from typing_extensions import Self
 
-    from .columnar import Agg, ColumnExpr, GroupBy, Named
+    from .columnar import Agg, Expr, GroupBy, Named
     from .indexing import At, ILoc, Loc, Resampler
     from .lazyframe import LazyFrame
 
@@ -713,9 +713,6 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
     def schema(self) -> "Dict[str, DType]":
         return {name: self[name].dtype for name in self.columns}
 
-    def limit(self, n: int = 5) -> "DataFrame":
-        return self._like(_ext.DataFrame.head(self, n))
-
     def drop(
         self, *names: "Union[str, Sequence[str]]", columns: Union[str, Sequence[str], None] = None
     ) -> "DataFrame":
@@ -752,9 +749,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
             return _ext._series_nulls(int(kind), n)
         return _ext._series_nulls(int(kind), n).fillna(value)
 
-    def assign(
-        self, **columns: "Union[Series, ColumnExpr, bool, int, float, str, None]"
-    ) -> "DataFrame":
+    def assign(self, **columns: "Union[Series, Expr, bool, int, float, str, None]") -> "DataFrame":
         """Add or replace columns from Series, column expressions or Python
         scalars (pandas ``assign``; polars ``with_columns``). A scalar, or
         ``lit(value)``, gives a column of the frame's row count holding it;
@@ -772,7 +767,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         return out
 
     def with_columns(
-        self, *named: "Named", **columns: "Union[Series, ColumnExpr, bool, int, float, str, None]"
+        self, *named: "Named", **columns: "Union[Series, Expr, bool, int, float, str, None]"
     ) -> "DataFrame":
         """:meth:`assign`, also taking named expressions positionally
         (``with_columns((col("a") * 2).alias("b"))``, the polars spelling)."""
@@ -786,41 +781,24 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         return out.assign(**columns)
 
     def cast(
-        self, dtypes: "Union[Mapping[str, Union[str, int, DType, type]], str, int, DType, type]"
+        self, dtype: "Union[Mapping[str, Union[str, int, DType, type]], str, int, DType, type]"
     ) -> "DataFrame":
-        """Cast columns (polars ``cast``; pandas ``astype``). A mapping casts
+        """Cast columns (``astype`` is the pandas name). A mapping casts
         only the named columns; a single dtype casts every column to it. If a
         column cannot be cast the call raises ``TypeError`` that names the column
         and the two types, and no frame is returned."""
-        if not isinstance(dtypes, Mapping):
-            dtypes = {name: dtypes for name in self.columns}
+        if not isinstance(dtype, Mapping):
+            dtype = {name: dtype for name in self.columns}
         casted: Dict[str, Series] = {}
-        for name, dtype in dtypes.items():
+        for name, target in dtype.items():
             try:
-                casted[name] = _ext.DataFrame.__getitem__(self, name).astype(dtype)
+                casted[name] = _ext.DataFrame.__getitem__(self, name).cast(target)
             except TypeError as e:
-                raise TypeError(f"astype: column {name!r}: {e}") from None
+                raise TypeError(f"cast: column {name!r}: {e}") from None
         out = self
         for name, column in casted.items():
             out = _ext.DataFrame.with_column(out, name, column)
         return out
-
-    def astype(
-        self, dtypes: "Union[Mapping[str, Union[str, int, DType, type]], str, int, DType, type]"
-    ) -> "DataFrame":
-        out = self.cast(dtypes)
-        for name in self.columns:
-            # A bool column that became text is spelled True/False, as Series.astype does.
-            was_bool = int(self[name].dtype) == int(DType.BOOL)
-            if was_bool and int(out[name].dtype) == int(DType.STRING):
-                out = out.with_column(name, _StrAccessor(out[name]).capitalize())
-        return out
-
-    def dropna(self) -> "DataFrame":
-        return self._like(_ext.DataFrame.drop_nulls(self))
-
-    def fillna(self, value: Union[int, float]) -> "DataFrame":
-        return self._like(_ext.DataFrame.fill_null(self, value))
 
     def duplicated(
         self,
@@ -843,9 +821,6 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
             raise ValueError(f"duplicated: keep must be 'first', 'last' or False, not {keep!r}")
         return frame.groupby(cols, dropna=False).cumcount()["cumcount"] > 0
 
-    def gather(self, indices: "Union[Series, Sequence[int]]") -> "DataFrame":
-        return self.take(indices)
-
     def groupby(
         self,
         by: "Union[str, Series, Sequence[Union[str, Series]]]",
@@ -853,7 +828,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         dropna: bool = True,
         sort: bool = True,
     ) -> "Any":
-        """The pandas spelling of :meth:`group_by`. With ``sort`` (the pandas
+        """The pandas ``groupby``: :meth:`group_by` with ``sort``. With ``sort`` (the pandas
         default) every aggregate result is ordered ascending by the key
         columns, nulls last; ``sort=False`` keeps the engine's group order."""
         out = self.group_by(by, *aggs, dropna=dropna)
@@ -870,10 +845,12 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         return out
 
     def nlargest(self, n: int, columns: str) -> "DataFrame":
-        return self._like(_ext.DataFrame.topk(self, columns, n, True))
+        """The pandas ``nlargest``: :meth:`top_k` of ``columns`` with ``n``."""
+        return self.top_k(columns, n, True)
 
     def nsmallest(self, n: int, columns: str) -> "DataFrame":
-        return self._like(_ext.DataFrame.topk(self, columns, n, False))
+        """The pandas ``nsmallest``: :meth:`top_k` of ``columns`` with ``n``."""
+        return self.top_k(columns, n, False)
 
     def pivot_table(
         self,
@@ -914,7 +891,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         return (_dataframe_from_bytes, (_ext.DataFrame.to_bytes(self),))
 
     def apply(
-        self, func: "Union[ColumnExpr, Callable[..., object]]", axis: int = 0
+        self, func: "Union[Expr, Callable[..., object]]", axis: int = 0
     ) -> "Union[Series, DataFrame]":
         """With a column expression: evaluate it against this frame and return
         the resulting :class:`~dftracer.utils.Series` (``df.apply(F.a / F.b)``
@@ -930,9 +907,9 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         thing runs fused in the engine. Otherwise it runs in Python per row,
         with a warning naming why. See ``_apply``."""
         from ._apply import apply_rows
-        from .columnar import ColumnExpr
+        from .columnar import Expr
 
-        if isinstance(func, ColumnExpr):
+        if isinstance(func, Expr):
             return func.apply(self)
         if not callable(func):
             raise TypeError(
@@ -1211,13 +1188,8 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         return self._like(_ext.DataFrame.unnest(self, column, bool(keep_empty)))
 
     def top_k(self, name: str, k: int, largest: bool = True) -> "DataFrame":
-        """The ``k`` best rows by column ``name`` (alias of the native
-        :meth:`topk`)."""
+        """The ``k`` best rows by column ``name`` (the native :meth:`topk`)."""
         return self._like(_ext.DataFrame.topk(self, name, k, largest))
-
-    def distinct(self, subset: "str | Sequence[str] | None" = None) -> "DataFrame":
-        """Drop duplicate rows, keeping the first (alias of :meth:`unique`)."""
-        return self._like(_ext.DataFrame.unique(self, subset))
 
     def sort_values(
         self,
@@ -1225,40 +1197,36 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         ascending: Union[bool, Sequence[bool]] = True,
         na_position: Literal["first", "last"] = "last",
     ) -> "DataFrame":
-        """Order rows by one column or several, pandas-style. ``by`` and
-        ``ascending`` each accept a scalar or a sequence; a sequence
-        ``ascending`` maps one flag per column in ``by`` (a single flag
-        broadcasts to every key). ``na_position="first"`` puts the rows whose
-        key is null before the rest (one key only)."""
-        names = [by] if isinstance(by, str) else list(by)
+        """The pandas ``sort_values``: :meth:`sort` with ``ascending`` (a flag
+        or one per column in ``by``) and ``na_position`` (nulls last by
+        default, unlike :meth:`sort`)."""
+        if na_position not in ("first", "last"):
+            raise ValueError("na_position must be 'first' or 'last'")
         if isinstance(ascending, bool):
             descending: Union[bool, "list[bool]"] = not ascending
         else:
             descending = [not a for a in ascending]
-        if na_position == "first":
-            return self._sort_nulls_first(names, descending)
-        if na_position != "last":
-            raise ValueError("na_position must be 'first' or 'last'")
-        if len(names) == 1 and isinstance(descending, bool):
-            return self._like(_ext.DataFrame.sort_by(self, names[0], descending))
-        return self._like(_ext.DataFrame.sort_by_multi(self, names, descending))
+        return self.sort(by, descending=descending, nulls_last=na_position == "last")
 
     def sort(
         self,
         by: Union[str, Sequence[str]],
-        descending: bool = False,
-        nulls_last: bool = True,
+        *,
+        descending: Union[bool, Sequence[bool]] = False,
+        nulls_last: bool = False,
     ) -> "DataFrame":
         """Order rows by one column (``by`` a name) or lexicographically by
-        several (``by`` a list); the fluent spelling over the native
-        :meth:`sort_by` / :meth:`sort_by_multi`. See :meth:`sort_values` for
-        the pandas-style ``ascending`` spelling (accepts a per-column list).
-        ``nulls_last=False`` puts the null-keyed rows first (one key only)."""
-        if not nulls_last:
-            return self._sort_nulls_first([by] if isinstance(by, str) else list(by), descending)
-        if isinstance(by, str):
-            return self._like(_ext.DataFrame.sort_by(self, by, descending))
-        return self._like(_ext.DataFrame.sort_by_multi(self, list(by), descending))
+        several (``by`` a list); ``descending`` is a flag or one per column.
+        The rows whose key is null come first, or last with
+        ``nulls_last=True`` (the polars keywords and default); a NaN sorts
+        after every number and apart from the nulls."""
+        names = [by] if isinstance(by, str) else list(by)
+        flags = descending if isinstance(descending, bool) else list(descending)
+        if not nulls_last and any(_ext.DataFrame.__getitem__(self, n).null_count for n in names):
+            return self._sort_nulls_first(names, flags)
+        if len(names) == 1 and isinstance(flags, bool):
+            return self._like(_ext.DataFrame.sort_by(self, names[0], flags))
+        return self._like(_ext.DataFrame.sort_by_multi(self, names, flags))
 
     def _sort_nulls_first(
         self, names: List[str], descending: Union[bool, "list[bool]"]
@@ -1283,18 +1251,18 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
     # -- native engine ops (SIMD/relational kernels, wrapped from the C extension) --
     def filter(
         self,
-        mask: "Union[Series, ColumnExpr, None]" = None,
+        predicate: "Union[Series, Expr, None]" = None,
         *,
         items: Optional[Sequence[str]] = None,
         like: Optional[str] = None,
         regex: Optional[str] = None,
     ) -> "DataFrame":
-        """Rows or columns. With ``mask`` (a Bool Series, or a column expression
+        """Rows or columns. With ``predicate`` (a Bool Series, or a column expression
         evaluated against this frame): the rows where it is true. With the
         pandas keywords ``items`` / ``like`` / ``regex``: the columns whose
         name is listed / contains ``like`` / matches ``regex``."""
         keyed = [k for k in (items, like, regex) if k is not None]
-        if len(keyed) > 1 or (keyed and mask is not None):
+        if len(keyed) > 1 or (keyed and predicate is not None):
             raise TypeError("filter() takes a row mask, or one of items= / like= / regex=")
         if items is not None:
             return self._like(_ext.DataFrame.select(self, *[c for c in items if c in self]))
@@ -1307,11 +1275,11 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
             return self._like(
                 _ext.DataFrame.select(self, *[c for c in self.columns if pat.search(c)])
             )
-        if mask is None:
+        if predicate is None:
             raise TypeError("filter() needs a row mask or one of items= / like= / regex=")
-        if not isinstance(mask, Series):
-            mask = mask.apply(self)
-        return self._like(_ext.DataFrame.filter(self, mask))
+        if not isinstance(predicate, Series):
+            predicate = predicate.apply(self)
+        return self._like(_ext.DataFrame.filter(self, predicate))
 
     def select(self, *items: object) -> "DataFrame":
         """Project to ``items``: column names, bare column expressions, or
@@ -1346,9 +1314,9 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
     def with_column(self, name: str, col: "Series") -> "DataFrame":
         return self._like(_ext.DataFrame.with_column(self, name, col))
 
-    def take(self, indices: "Union[Series, Sequence[int]]") -> "DataFrame":
+    def gather(self, indices: "Union[Series, Sequence[int]]") -> "DataFrame":
         """The rows at ``indices`` (a Series or a list; any order, repeats
-        allowed)."""
+        allowed); ``take`` is the pandas name."""
         return self._like(_ext.DataFrame.take(self, _indices(indices)))
 
     def head(self, n: int = 5) -> "DataFrame":
@@ -1368,11 +1336,8 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
 
     def unique(self, subset: "str | Sequence[str] | None" = None) -> "DataFrame":
         """Distinct rows, keeping the first occurrence, keyed on every column
-        or on ``subset`` (pandas ``drop_duplicates(subset=)``)."""
+        or on ``subset`` (``drop_duplicates`` is the pandas name)."""
         return self._like(_ext.DataFrame.unique(self, subset))
-
-    def drop_duplicates(self, subset: "str | Sequence[str] | None" = None) -> "DataFrame":
-        return self._like(_ext.DataFrame.drop_duplicates(self, subset))
 
     def lazy(self) -> "LazyFrame":
         """Start a deferred query over this batch. Ops are recorded and nothing
@@ -1680,35 +1645,62 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
             f"agg({func!r}, axis=1): the per-row reductions are sum, mean, min, max and count"
         )
 
-    aggregate = agg
-
     # The pandas ``df.sum()`` family: one row, one aggregate per column.
     def sum(self) -> "DataFrame":
-        return self.reduce("sum")
+        return self.reduce(agg="sum")
 
     def mean(self) -> "DataFrame":
-        return self.reduce("mean")
+        return self.reduce(agg="mean")
 
     def min(self) -> "DataFrame":
-        return self.reduce("min")
+        return self.reduce(agg="min")
 
     def max(self) -> "DataFrame":
-        return self.reduce("max")
+        return self.reduce(agg="max")
 
     def count(self) -> "DataFrame":
-        return self.reduce("count_valid")
+        return self.reduce(agg="count_valid")
 
     def var(self) -> "DataFrame":
-        return self.reduce("var")
+        return self.reduce(agg="var")
 
     def std(self) -> "DataFrame":
-        return self.reduce("std")
+        return self.reduce(agg="std")
 
     def skew(self) -> "DataFrame":
-        return self.reduce("skew")
+        """The pandas unbiased skewness of every column, one row (see :meth:`Series.skew`)."""
+        from .columnar import GroupBy
+
+        return GroupBy(self, []).skew()
 
     def kurt(self) -> "DataFrame":
-        return self.reduce("kurt")
+        """The pandas unbiased excess kurtosis of every column, one row."""
+        from .columnar import GroupBy
+
+        return GroupBy(self, []).kurt()
+
+    # BEGIN GENERATED aliases from _aliases.py by scripts/gen_pyi.py
+    if TYPE_CHECKING:
+        aggregate = agg
+        astype = cast
+        dropna = drop_nulls
+        fillna = fill_null
+        drop_duplicates = unique
+        take = gather
+        divide = _FramePandasMixin.div
+        truediv = _FramePandasMixin.div
+        multiply = _FramePandasMixin.mul
+        subtract = _FramePandasMixin.sub
+        product = _FramePandasMixin.prod
+        rtruediv = _FramePandasMixin.rdiv
+        map = _FramePandasMixin.applymap
+        isnull = _FramePandasMixin.isna
+        notnull = _FramePandasMixin.notna
+        backfill = _FramePandasMixin.bfill
+        pad = _FramePandasMixin.ffill
+        limit = head
+        pass
+    # END GENERATED aliases
 
 
 def _frame_of(columns: "List[Tuple[str, object]]", read: "Callable[[Any], Series]") -> DataFrame:
@@ -1768,4 +1760,5 @@ def _dataframe_from_arrow(table: "pa.Table") -> DataFrame:
     return DataFrame(_arrow_native("_dataframe_from_arrow")(table))
 
 
+_install_aliases("DataFrame", DataFrame)
 _ext._bind_types(DataFrame=DataFrame)

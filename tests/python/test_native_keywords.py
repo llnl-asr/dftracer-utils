@@ -18,6 +18,7 @@ OLD_KEYWORDS = [
     ("add_scalar", ("v",)),
     ("bottom_k", ("k",)),
     ("child", ("i",)),
+    ("clip", ("lower", "upper")),
     ("div_scalar", ("v",)),
     ("dot", ("other",)),
     ("dt_format", ("fmt", "unit")),
@@ -25,10 +26,10 @@ OLD_KEYWORDS = [
     ("dt_round", ("every", "mode")),
     ("ewm_mean", ("alpha",)),
     ("ewm_std", ("alpha",)),
-    ("fillna", ("value",)),
-    ("filter", ("mask",)),
+    ("fill_null", ("value",)),
+    ("filter", ("predicate",)),
     ("floordiv", ("other",)),
-    ("is_between", ("lo", "hi")),
+    ("is_between", ("lower", "upper")),
     ("list_get", ("index",)),
     ("list_join", ("sep",)),
     ("logical", ("op", "other")),
@@ -48,7 +49,7 @@ OLD_KEYWORDS = [
     ("rolling_std", ("window",)),
     ("rolling_sum", ("window",)),
     ("rolling_var", ("window",)),
-    ("search_sorted", ("values",)),
+    ("search_sorted", ("element",)),
     ("slice", ("offset", "length")),
     ("str_case", ("code",)),
     ("str_cat", ("other",)),
@@ -99,11 +100,12 @@ def test_native_method_accepts_the_old_keyword_names(method, keywords):
 
 def test_keyword_calls_give_the_positional_results():
     s = Series([1.0, None, 3.0, 4.0], name="x")
-    assert s.fillna(value=0).to_list() == s.fillna(0).to_list() == [1.0, 0.0, 3.0, 4.0]
+    assert s.fill_null(value=0).to_list() == s.fill_null(0).to_list() == [1.0, 0.0, 3.0, 4.0]
     assert s.quantile(q=0.5) == s.quantile(0.5)
-    assert s.is_between(lo=1, hi=3).to_list() == s.is_between(1, 3).to_list()
+    assert s.is_between(lower=1, upper=3).to_list() == s.is_between(1, 3).to_list()
+    assert s.clip(lower=2, upper=3).to_list() == s.clip(2, 3).to_list()
     mask = Series([True, False, True, False])
-    assert s.filter(mask=mask).to_list() == s.filter(mask).to_list() == [1.0, 3.0]
+    assert s.filter(predicate=mask).to_list() == s.filter(mask).to_list() == [1.0, 3.0]
     assert s.slice(offset=1, length=2).to_list() == s.slice(1, 2).to_list()
     assert s.top_k(k=2).to_list() == s.top_k(2).to_list()
     assert s.rolling_quantile(window=2, q=0.5).to_list() == s.rolling_quantile(2, 0.5).to_list()
@@ -117,15 +119,16 @@ def test_keyword_calls_give_the_positional_results():
 def test_a_wrong_keyword_is_still_an_error():
     s = Series([1, 2])
     with pytest.raises(TypeError, match="keyword"):
-        s.is_between(lo=1, hi=2, nope=3)
+        s.is_between(lower=1, upper=2, nope=3)
     with pytest.raises(TypeError):
-        s.is_between(lo=1)
+        s.is_between(lower=1)
 
 
 # (accessor, method, the old keyword names with valid values, in order). Frozen
 # from the signatures of the Python accessor methods the rows replaced.
 ACCESSOR_KEYWORDS = [
     ("str", "count", {"pat": "a"}),
+    ("str", "count_matches", {"pat": "a"}),
     ("str", "endswith", {"pat": "c"}),
     ("str", "ends_with", {"suffix": "c"}),
     ("str", "find", {"sub": "b"}),
@@ -136,6 +139,8 @@ ACCESSOR_KEYWORDS = [
     ("str", "replace_all", {"pat": "a", "repl": "z"}),
     ("str", "rfind", {"sub": "b"}),
     ("str", "startswith", {"pat": "a"}),
+    ("str", "strip_prefix", {"prefix": "a"}),
+    ("str", "strip_suffix", {"suffix": "c"}),
     ("str", "starts_with", {"prefix": "a"}),
     ("str", "zfill", {"width": 5}),
     ("list", "get", {"index": 1}),
@@ -168,7 +173,7 @@ def test_an_unknown_keyword_is_named_like_python_does():
     with pytest.raises(TypeError, match=r"get\(\) got an unexpected keyword argument 'i'"):
         words.str.split("b").list.get(i=0)
     with pytest.raises(TypeError, match=r"clip\(\) got an unexpected keyword argument 'extra'"):
-        Series([1.0]).clip(lo=0, hi=1, extra=2)
+        Series([1.0]).clip(lower=0, upper=1, extra=2)
     with pytest.raises(
         TypeError, match=r"memory_budget_advice\(\) got an unexpected keyword argument 'nope'"
     ):

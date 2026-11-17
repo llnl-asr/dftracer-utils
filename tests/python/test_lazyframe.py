@@ -157,8 +157,8 @@ def test_select_named_expr_with_columns_and_nulls_first_sort():
     with pytest.raises(TypeError, match="alias"):
         df.lazy().select(col("v") * 2)
 
-    assert _dict(df.lazy().sort("k").collect())["k"] == [1, 2, 3, None]
-    assert _dict(df.lazy().sort("k", nulls_last=False).collect())["k"] == [None, 1, 2, 3]
+    assert _dict(df.lazy().sort("k").collect())["k"] == [None, 1, 2, 3]
+    assert _dict(df.lazy().sort("k", nulls_last=True).collect())["k"] == [1, 2, 3, None]
     assert _dict(df.lazy().sort("k", descending=True, nulls_last=False).collect())["k"] == [
         None,
         3,

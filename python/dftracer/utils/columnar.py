@@ -49,6 +49,7 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
+from ._aliases import install as _install_aliases
 from .dataframe import DataFrame
 from .enums import DType
 from .series import (
@@ -78,8 +79,6 @@ __all__ = [
     "columnar",
     "eval_many",
     "Expr",
-    "ColumnExpr",
-    "Field",
     "F",
     "Value",
     "where",
@@ -402,9 +401,9 @@ class Expr:
     def __str__(self) -> str:
         return self._dsl()
 
-    def clip(self, lo: Union[int, float], hi: Union[int, float]) -> "Expr":
-        """Clamp each value to ``[lo, hi]`` (elementwise, SIMD)."""
-        return _Clip(self, lo, hi)
+    def clip(self, lower: Union[int, float], upper: Union[int, float]) -> "Expr":
+        """Clamp each value to ``[lower, upper]`` (elementwise, SIMD)."""
+        return _Clip(self, lower, upper)
 
     def cast(
         self, dtype: "Literal['int64', 'uint64', 'float64', 'bool', 'string', 'binary']"
@@ -417,13 +416,13 @@ class Expr:
         when the plan runs."""
         return _Cast(_CAST_CODES[dtype], self)
 
-    def fillna(self, fill: Union[int, float]) -> "Expr":
-        """Replace nulls with ``fill`` (elementwise)."""
-        return _Fillna(self, fill)
+    def fill_null(self, value: Union[int, float]) -> "Expr":
+        """Replace nulls with ``value`` (elementwise)."""
+        return _Fillna(self, value)
 
-    def is_between(self, lo: Union[int, float], hi: Union[int, float]) -> "Expr":
-        """Bool mask of ``lo <= x <= hi`` (desugars to two compares)."""
-        return (self >= lo) & (self <= hi)
+    def is_between(self, lower: Union[int, float], upper: Union[int, float]) -> "Expr":
+        """Bool mask of ``lower <= x <= upper`` (desugars to two compares)."""
+        return (self >= lower) & (self <= upper)
 
     def where(self, cond: "Expr", other: "Union[Expr, int, float]") -> "Expr":
         """Per row, this value where ``cond`` holds, else ``other`` (pandas
@@ -436,15 +435,12 @@ class Expr:
         return _Select(_as_expr(cond), _wrap(other), self)
 
     def is_null(self) -> "Expr":
-        """Bool mask of the null rows (pandas ``isna``, polars ``is_null``)."""
+        """Bool mask of the null rows."""
         return _IsNull(self, True)
 
     def is_not_null(self) -> "Expr":
-        """Bool mask of the present rows (pandas ``notna``)."""
+        """Bool mask of the present rows."""
         return _IsNull(self, False)
-
-    isna = is_null
-    notna = is_not_null
 
     # -- the column ops: the whole column at once (polars spellings) ----------
     def _op(
@@ -473,49 +469,10 @@ class Expr:
     def cum_min(self) -> "Expr":
         return self._op("dftu.series.cummin")
 
-    # pandas names of the methods above.
-    def cumsum(self) -> "Expr":
-        return self.cum_sum()
-
-    def cumprod(self) -> "Expr":
-        return self.cum_prod()
-
-    def cummax(self) -> "Expr":
-        return self.cum_max()
-
-    def cummin(self) -> "Expr":
-        return self.cum_min()
-
-    def ffill(self) -> "Expr":
-        return self.forward_fill()
-
-    def bfill(self) -> "Expr":
-        return self.backward_fill()
-
-    def isin(self, values: Sequence[Value]) -> "Expr":
-        return self.is_in(values)
-
-    def startswith(self, prefix: "Union[str, Expr]") -> "Expr":
-        return self.starts_with(prefix)
-
-    def endswith(self, suffix: "Union[str, Expr]") -> "Expr":
-        return self.ends_with(suffix)
-
-    def isnull(self) -> "Expr":
-        return self.is_null()
-
-    def notnull(self) -> "Expr":
-        return self.is_not_null()
-
     def between(self, left: Union[int, float], right: Union[int, float]) -> "Expr":
-        """Bool mask of ``left <= x <= right``, both ends included as pandas'
-        default ``inclusive="both"``."""
+        """The pandas ``between``: :meth:`is_between` with both ends included,
+        pandas' default ``inclusive="both"``."""
         return self.is_between(left, right)
-
-    def astype(
-        self, dtype: "Literal['int64', 'uint64', 'float64', 'bool', 'string', 'binary']"
-    ) -> "Expr":
-        return self.cast(dtype)
 
     def shift(self, n: int = 1) -> "Expr":
         return self._op("dftu.series.shift", a=int(n), n=int(n))
@@ -532,9 +489,6 @@ class Expr:
 
     def backward_fill(self) -> "Expr":
         return self._op("dftu.series.bfill")
-
-    def fill_null(self, value: Union[int, float]) -> "Expr":
-        return self.fillna(value)
 
     def rolling_sum(self, window_size: int) -> "Expr":
         """The trailing window of ``window_size`` rows (``rolling_mean`` /
@@ -582,13 +536,23 @@ class Expr:
     def ewm_std(self, alpha: float) -> "Expr":
         return self._op("dftu.series.ewm_std", a=float(alpha))
 
-    def sort(self, descending: bool = False) -> "Expr":
+    def sort(self, *, descending: bool = False, nulls_last: bool = False) -> "Expr":
         """This column's values in order (the other columns do not move, as
-        polars ``col.sort()`` inside ``with_columns``)."""
-        return self._op("dftu.series.sort", a=1 if descending else 0)
+        polars ``col.sort()`` inside ``with_columns``). Nulls come first, or
+        last with ``nulls_last=True``. The kernel places nulls last, so nulls
+        first is the opposite sort, reversed."""
+        if nulls_last:
+            return self._op("dftu.series.sort", a=1 if descending else 0)
+        return self._op("dftu.series.sort", a=0 if descending else 1).reverse()
 
-    def arg_sort(self, descending: bool = False) -> "Expr":
-        return self._op("dftu.series.argsort", a=1 if descending else 0)
+    def arg_sort(self, descending: bool = False, nulls_last: bool = False) -> "Expr":
+        """The row indices that sort this column; nulls first by default, or
+        last with ``nulls_last=True``. Nulls first is the opposite argsort,
+        reversed, so equal values and several nulls come in reverse index order
+        (the sorted values are the same)."""
+        if nulls_last:
+            return self._op("dftu.series.argsort", a=1 if descending else 0)
+        return self._op("dftu.series.argsort", a=0 if descending else 1).reverse()
 
     def duplicated(self, keep: "Union[Literal['first', 'last'], bool]" = "first") -> "Expr":
         """Bool mask of the values that repeat an earlier one (pandas
@@ -1188,8 +1152,25 @@ class Expr:
                 return lambda: _Unary(name, self)
             raise AttributeError(name)
 
-
-ColumnExpr = Expr
+    # BEGIN GENERATED aliases from _aliases.py by scripts/gen_pyi.py
+    if TYPE_CHECKING:
+        isna = is_null
+        isnull = is_null
+        notna = is_not_null
+        notnull = is_not_null
+        isin = is_in
+        astype = cast
+        fillna = fill_null
+        cumsum = cum_sum
+        cumprod = cum_prod
+        cummax = cum_max
+        cummin = cum_min
+        ffill = forward_fill
+        bfill = backward_fill
+        startswith = starts_with
+        endswith = ends_with
+        pass
+    # END GENERATED aliases
 
 
 def _expr_method(name: str, op: str, doc: str) -> "Callable[[Expr], Expr]":
@@ -1213,6 +1194,7 @@ def _install_api_methods() -> None:
 
 
 _install_api_methods()
+_install_aliases("Expr", Expr)
 
 
 def _wrap(x: object) -> Expr:
@@ -1241,10 +1223,6 @@ class _Col(Expr):
 
 class _AnyCol(_Col):
     """``any(name)``: renders to duql; no column to evaluate."""
-
-
-#: Back-compat alias: ``Field("dur")`` is the field leaf, same as ``F.dur``.
-Field = _Col
 
 
 class Named:
@@ -1666,6 +1644,14 @@ class _ColumnOpNode(Expr):
         self.spec = spec
 
 
+def _no_expand(name: str, expand: bool) -> None:
+    if expand:
+        raise NotImplementedError(
+            f"{name}(expand=True) makes a column per piece, which an expression cannot; "
+            "use Series.str or take the pieces with .get(i)"
+        )
+
+
 class _ExprStr:
     """``col.str``: the string ops as expression nodes where the evaluator
     has them, column ops otherwise."""
@@ -1675,8 +1661,17 @@ class _ExprStr:
     def __init__(self, e: Expr) -> None:
         self._e = e
 
-    def contains(self, pattern: "Union[str, Expr]") -> Expr:
-        return self._e.contains(pattern)
+    def contains(self, pat: "Union[str, Expr]", case: bool = True, regex: bool = False) -> Expr:
+        """Substring predicate, or with ``regex=True`` a regex search; the
+        keywords of ``Series.str.contains``. ``pat`` may be an expression for
+        a substring test."""
+        if regex:
+            if not case:
+                raise NotImplementedError("case-insensitive regex has no kernel; lower() first")
+            if isinstance(pat, Expr):
+                raise TypeError("contains(regex=True) needs a str pattern")
+            return self._e.regex(pat)
+        return self._e.contains(pat, case)
 
     def starts_with(self, prefix: "Union[str, Expr]") -> Expr:
         return self._e.starts_with(prefix)
@@ -1705,29 +1700,36 @@ class _ExprStr:
     def len_chars(self) -> Expr:
         return self._e.len_chars()
 
-    def find(self, needle: str) -> Expr:
-        return self._e.find(needle)
+    def find(self, sub: str) -> Expr:
+        return self._e.find(sub)
 
-    def replace(self, old: str, new: str) -> Expr:
-        return self._e.replace(old, new)
+    def replace(self, pat: str, repl: str, n: int = -1) -> Expr:
+        """Literal replace: every occurrence (``n=-1``) or the first
+        (``n=1``), as ``Series.str.replace``."""
+        if n == -1:
+            return self._e.replace_all(pat, repl)
+        if n == 1:
+            return self._e.replace(pat, repl)
+        raise NotImplementedError("replace() supports n=-1 (all) or n=1 (first)")
 
-    def replace_all(self, old: "Union[str, Expr]", new: "Union[str, Expr]") -> Expr:
-        return self._e.replace_all(old, new)
+    def replace_all(self, pat: "Union[str, Expr]", repl: "Union[str, Expr]") -> Expr:
+        return self._e.replace_all(pat, repl)
 
-    def slice(self, offset: int, length: int) -> Expr:
-        return self._e.slice(offset, length)
+    def slice(self, start: int = 0, stop: Optional[int] = None) -> Expr:
+        """Byte substring ``[start, stop)``, as ``Series.str.slice``."""
+        return self._e.slice(start, -1 if stop is None else max(stop - start, 0))
 
-    def pad_start(self, length: int, fill_char: str = " ") -> Expr:
-        return self._e._op("dftu.series.str_pad_start", a=int(length), text=fill_char)
+    def pad_start(self, width: int, fill: str = " ") -> Expr:
+        return self._e._op("dftu.series.str_pad_start", a=int(width), text=fill)
 
-    def pad_end(self, length: int, fill_char: str = " ") -> Expr:
-        return self._e._op("dftu.series.str_pad_end", a=int(length), text=fill_char)
+    def pad_end(self, width: int, fill: str = " ") -> Expr:
+        return self._e._op("dftu.series.str_pad_end", a=int(width), text=fill)
 
-    def zfill(self, length: int) -> Expr:
-        return self._e._op("dftu.series.str_zfill", a=int(length))
+    def zfill(self, width: int) -> Expr:
+        return self._e._op("dftu.series.str_zfill", a=int(width))
 
-    def count_matches(self, pattern: str) -> Expr:
-        return self._e._op("dftu.series.str_count", text=pattern)
+    def count_matches(self, pat: str) -> Expr:
+        return self._e._op("dftu.series.str_count", text=pat)
 
     def strip_prefix(self, prefix: str) -> Expr:
         return self._e._op("dftu.series.str_remove_prefix", text=prefix)
@@ -1736,21 +1738,21 @@ class _ExprStr:
         return self._e._op("dftu.series.str_remove_suffix", text=suffix)
 
     def to_titlecase(self) -> Expr:
-        return self._e._op("dftu.series.str_case", a=2)
+        return self._e._op("dftu.series.str_case", a=1)
 
     def regex_replace(self, pat: str, to: str) -> Expr:
         return self._e.regex_replace(pat, to)
 
-    def extract(self, pattern: str, group_index: int = 1) -> Expr:
-        return self._e._op("dftu.series.str_extract", a=int(group_index), text=pattern)
+    def extract(self, pat: str, group: int = 1) -> Expr:
+        return self._e._op("dftu.series.str_extract", a=int(group), text=pat)
 
     # The pandas names of the methods above, and of the expression's own
     # string methods.
-    def startswith(self, prefix: "Union[str, Expr]") -> Expr:
-        return self.starts_with(prefix)
+    def startswith(self, pat: "Union[str, Expr]") -> Expr:
+        return self.starts_with(pat)
 
-    def endswith(self, suffix: "Union[str, Expr]") -> Expr:
-        return self.ends_with(suffix)
+    def endswith(self, pat: "Union[str, Expr]") -> Expr:
+        return self.ends_with(pat)
 
     def len(self) -> Expr:
         return self.len_chars()
@@ -1758,10 +1760,18 @@ class _ExprStr:
     def isascii(self) -> Expr:
         return self._e.isascii()
 
-    def encode(self, encoding: str = "utf-8") -> Expr:
+    def encode(self, encoding: str = "utf-8", errors: str = "strict") -> Expr:
         return self._e.encode(encoding)
 
-    def decode(self, encoding: str = "utf-8") -> Expr:
+    def decode(self, encoding: str = "utf-8", errors: str = "null") -> Expr:
+        """Each binary value read as UTF-8 text, null where it is not valid.
+        ``errors="strict"`` (the ``Series.str.decode`` default) would raise at
+        evaluation, which a lazy expression cannot do: it raises
+        ``NotImplementedError``; the default here is ``"null"``."""
+        if errors not in ("strict", "null"):
+            raise ValueError(f"decode: errors must be 'strict' or 'null', not {errors!r}")
+        if errors == "strict":
+            raise NotImplementedError("decode(errors='strict') has no lazy form; use errors='null'")
         return self._e.decode(encoding)
 
     def capitalize(self) -> Expr:
@@ -1770,7 +1780,9 @@ class _ExprStr:
     def casefold(self) -> Expr:
         return self._e.casefold()
 
-    def cat(self, others: "Optional[Expr]" = None, sep: str = "") -> Expr:
+    def cat(self, others: "Union[Expr, str, None]" = None, sep: str = "") -> Expr:
+        if isinstance(others, str):
+            others = lit(others)
         return self._e.cat(others, sep)
 
     def center(self, width: int, fillchar: str = " ") -> Expr:
@@ -1806,8 +1818,8 @@ class _ExprStr:
             break_on_hyphens,
         )
 
-    def fullmatch(self, pattern: str) -> Expr:
-        return self._e.fullmatch(pattern)
+    def fullmatch(self, pat: str) -> Expr:
+        return self._e.fullmatch(pat)
 
     def get(self, i: int) -> Expr:
         return self._e.get(i)
@@ -1865,7 +1877,11 @@ class _ExprStr:
     ) -> Expr:
         return self._e.pad(width, side, fillchar)
 
-    def partition(self, sep: str = " ") -> Expr:
+    def partition(self, sep: str = " ", expand: bool = False) -> Expr:
+        """A 3-element list column. ``expand=True`` would be three columns,
+        which an expression cannot make: it raises ``NotImplementedError``
+        (``Series.str.partition`` expands by default)."""
+        _no_expand("partition", expand)
         return self._e.partition(sep)
 
     def removeprefix(self, prefix: str) -> Expr:
@@ -1886,10 +1902,12 @@ class _ExprStr:
     def rjust(self, width: int, fillchar: str = " ") -> Expr:
         return self._e.rjust(width, fillchar)
 
-    def rpartition(self, sep: str = " ") -> Expr:
+    def rpartition(self, sep: str = " ", expand: bool = False) -> Expr:
+        _no_expand("rpartition", expand)
         return self._e.rpartition(sep)
 
-    def rsplit(self, pat: str) -> Expr:
+    def rsplit(self, pat: str, expand: bool = False) -> Expr:
+        _no_expand("rsplit", expand)
         return self._e.rsplit(pat)
 
     def rstrip(self) -> Expr:
@@ -1898,7 +1916,8 @@ class _ExprStr:
     def slice_replace(self, start: int = 0, stop: "Optional[int]" = None, repl: str = "") -> Expr:
         return self._e.slice_replace(start, stop, repl)
 
-    def split(self, pat: str) -> Expr:
+    def split(self, pat: str, expand: bool = False) -> Expr:
+        _no_expand("split", expand)
         return self._e.split(pat)
 
     def strip(self) -> Expr:
@@ -1965,11 +1984,49 @@ class _ExprDt:
         return self._part(8)
 
     def weekday(self) -> Expr:
-        """Monday 1 .. Sunday 7, as polars."""
+        """Monday 1 .. Sunday 7, as polars; ``dayofweek`` is the pandas
+        count from 0."""
         return self._part(9) + 1
+
+    def dayofweek(self) -> Expr:
+        """Monday is 0, as the pandas property (``day_of_week`` likewise)."""
+        return self._part(9)
+
+    day_of_week = dayofweek
 
     def ordinal_day(self) -> Expr:
         return self._part(10)
+
+    def dayofyear(self) -> Expr:
+        """As :meth:`ordinal_day` (the pandas name, ``day_of_year`` likewise)."""
+        return self._part(10)
+
+    day_of_year = dayofyear
+
+    def days_in_month(self) -> Expr:
+        return self._part(13)
+
+    daysinmonth = days_in_month
+
+    def is_month_start(self) -> Expr:
+        return self._part(2) == 1
+
+    def is_month_end(self) -> Expr:
+        return (self._part(2) - self._part(13)) == 0
+
+    def is_year_start(self) -> Expr:
+        return self._part(10) == 1
+
+    def is_year_end(self) -> Expr:
+        return (self._part(1) == 12) & (self._part(2) == 31)
+
+    def is_quarter_start(self) -> Expr:
+        # The month is the first of its quarter: month - 1 == 3 * (quarter - 1).
+        first_month = (self._part(1) - 1) - (self._part(11) - 1) * 3
+        return (self._part(2) == 1) & (first_month == 0)
+
+    def is_quarter_end(self) -> Expr:
+        return self.is_month_end() & ((self._part(1) - self._part(11) * 3) == 0)
 
     def quarter(self) -> Expr:
         return self._part(11)
@@ -1995,11 +2052,51 @@ class _ExprDt:
 
     def truncate(self, every: "Union[int, str]") -> Expr:
         """Each instant floored to a multiple of ``every`` (a pandas offset
-        string or a count of the column's units); ``round`` likewise."""
+        string or a count of the column's units); ``floor`` is the pandas
+        name, ``ceil`` and ``round`` likewise."""
         return self._round(every, 0)
 
-    def round(self, every: "Union[int, str]") -> Expr:
-        return self._round(every, 2)
+    def floor(self, freq: "Union[int, str]") -> Expr:
+        """As :meth:`truncate` (the pandas name)."""
+        return self._round(freq, 0)
+
+    def ceil(self, freq: "Union[int, str]") -> Expr:
+        """Each instant ceiled to a multiple of ``freq``."""
+        return self._round(freq, 1)
+
+    def round(self, freq: "Union[int, str]") -> Expr:
+        return self._round(freq, 2)
+
+    def normalize(self) -> Expr:
+        """Each instant at midnight of its day."""
+        return self._round("1d", 0)
+
+    def total_seconds(self) -> Expr:
+        """Each value as seconds (Float64), for a Duration or an Int64 read
+        in the accessor's unit. Computed from nanoseconds, so the last bit of
+        a Float64 can differ from ``Series.dt.total_seconds`` on a coarser
+        unit."""
+        return self.epoch("ns").cast("float64") / 1_000_000_000
+
+    def tz_localize(self, tz: Optional[str]) -> Expr:
+        """A naive Timestamp column marked as ``tz`` (``None`` strips the
+        zone). Only UTC can mark a naive column. A column that is already
+        aware is not refused here, as ``Series.dt.tz_localize`` does: the
+        zone is not known before the plan runs."""
+        if tz is None:
+            return self._e._op("dftu.series.with_timezone", text="")
+        if tz.upper() not in ("UTC", "ETC/UTC", "Z", "GMT"):
+            raise ValueError(
+                f"tz_localize: only UTC can mark a naive column, not {tz!r} "
+                "(no zone database in the engine)"
+            )
+        return self._e._op("dftu.series.with_timezone", text=tz)
+
+    def tz_convert(self, tz: Optional[str]) -> Expr:
+        """The same instants shown in zone ``tz`` (``None`` for the naive UTC
+        column); no tick moves. A naive column is not refused here, as
+        ``Series.dt.tz_convert`` does."""
+        return self._e._op("dftu.series.with_timezone", text=tz or "")
 
     def _round(self, every: "Union[int, str]", mode: int) -> Expr:
         from .indexing import rule_to_units
@@ -3099,6 +3196,14 @@ def _agg_specs_from_pandas_forms(
     return specs
 
 
+def _unbiased_moment(agg: str, value: Any, n: Any, constant: bool, minimum: int) -> float:
+    if value is None or n < minimum or constant:
+        return float("nan")
+    if agg == "skew":
+        return value * math.sqrt(n * (n - 1)) / (n - 2)
+    return (n - 1) / ((n - 2) * (n - 3)) * ((n + 1) * value + 6)
+
+
 class GroupBy:
     """A lazy group-by over a native ``DataFrame`` (zero or more key columns;
     none makes the whole frame one group). ``.agg(...)`` takes aggregate
@@ -3189,8 +3294,6 @@ class GroupBy:
             out = out.rename({c: c[len(prefix) :] for c in out.columns if c.startswith(prefix)})
         return self._sorted(out)
 
-    aggregate = agg
-
     def reduce(self, agg: str) -> DataFrame:
         """One engine aggregate by name over every eligible non-key column,
         each under its own name (the ``.sum()`` family's engine)."""
@@ -3226,10 +3329,37 @@ class GroupBy:
         return self.reduce("std")
 
     def skew(self) -> DataFrame:
-        return self.reduce("skew")
+        """The pandas unbiased skewness per group and column (NaN below three
+        values and for a constant column, as pandas 3)."""
+        return self._unbiased("skew", 3)
 
     def kurt(self) -> DataFrame:
-        return self.reduce("kurt")
+        """The pandas unbiased excess kurtosis per group and column (NaN below
+        four values and for a constant column, as pandas 3)."""
+        return self._unbiased("kurt", 4)
+
+    def _unbiased(self, agg: str, minimum: int) -> DataFrame:
+        # The engine aggregates are the population moments; the pandas
+        # estimators rescale them by the group's count.
+        pop = self.reduce(agg)
+        counts = self.reduce("count_valid")
+        lows = self.reduce("min")
+        highs = self.reduce("max")
+        out = pop
+        for name in pop.columns:
+            if name in self._keys:
+                continue
+            values = [
+                _unbiased_moment(agg, v, n, lo == hi, minimum)
+                for v, n, lo, hi in zip(
+                    pop[name].to_list(),
+                    counts[name].to_list(),
+                    lows[name].to_list(),
+                    highs[name].to_list(),
+                )
+            ]
+            out = _ext.DataFrame.with_column(out, name, Series(values, dtype="float64"))
+        return out
 
     def first(self) -> DataFrame:
         return self.reduce("first")
@@ -3297,8 +3427,6 @@ class GroupBy:
 
     def prod(self) -> DataFrame:
         return self.reduce("prod")
-
-    product = prod
 
     def median(self) -> DataFrame:
         """The exact median of each numeric column per group (pandas
@@ -4120,3 +4248,6 @@ def _binop(op: str, left: _EvalResult, right: _EvalResult) -> "Series":
     if isinstance(right, _ColVal) and op in ("+", "*"):  # scalar op col (commutes)
         return getattr(_ext.Series, _SCALAR_OP[op])(right.value, left.value)
     raise NotImplementedError(f"scalar {op} column needs a vec kernel (not yet available)")
+
+
+_install_aliases("GroupBy", GroupBy)

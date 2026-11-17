@@ -1344,8 +1344,7 @@ prefix, and none can take a built-in's name.
 Explain
 ~~~~~~~
 
-``View::explain_duql``, ``TraceViewer.explain_duql`` (also
-``explain_query``),
+``View::explain_duql``, ``TraceViewer.explain_duql``,
 ``dftu_view_explain_duql`` and ``dftracer_view -q ... --explain`` print
 the plan without scanning, one step per line:
 

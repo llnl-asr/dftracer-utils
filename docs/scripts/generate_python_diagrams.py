@@ -34,7 +34,7 @@ class PyClass:
 
 # api page -> the class short-names it documents (from the .rst autodoc targets).
 PAGE_CLASSES = {
-    "columnar": ["Expr", "ColumnExpr", "Columnar", "Agg", "GroupBy"],
+    "columnar": ["Expr", "Columnar", "Agg", "GroupBy"],
     "dataframe": ["DataFrame"],
     "series": ["Series"],
     "trace_viewer": ["TraceViewer", "Session", "Handle", "Containment"],

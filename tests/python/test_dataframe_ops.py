@@ -737,7 +737,7 @@ def test_melt_concat_union_distinct_sample_topk_sort():
         da.concat(db, how="sideways")
 
     dup = _df({"k": [1, 1, 2]})
-    assert sorted(_col(dup.distinct(), "k")) == [1, 2]
+    assert sorted(_col(dup.unique(), "k")) == [1, 2]
 
     big = _df({"k": list(range(100))})
     assert big.sample(5, seed=1).num_rows == 5
@@ -903,8 +903,9 @@ def test_sort_nulls_first_select_expr_and_with_columns():
     from dftracer.utils import col
 
     df = _df({"k": [1, None, 3, 2], "v": [1.0, 2.0, 3.0, 4.0]})
-    assert _col(df.sort("k"), "k") == [1, 2, 3, None]
-    assert _col(df.sort("k", nulls_last=False), "k") == [None, 1, 2, 3]
+    assert _col(df.sort("k"), "k") == [None, 1, 2, 3]
+    assert _col(df.sort("k", nulls_last=True), "k") == [1, 2, 3, None]
+    assert _col(df.sort_values("k"), "k") == [1, 2, 3, None]
     assert _col(df.sort("k", descending=True, nulls_last=False), "v") == [2.0, 3.0, 4.0, 1.0]
     assert _col(df.sort_values("k", na_position="first"), "v") == [2.0, 1.0, 4.0, 3.0]
     assert df.sort("k", nulls_last=False).columns == ["k", "v"]

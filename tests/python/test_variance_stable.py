@@ -84,8 +84,8 @@ def test_skew_and_kurt_with_an_offset():
     v = normal(1e9, 1.0, N, 3)
     ref = two_pass(v)
     f = frame(v)
-    assert near(f["x"].skew(), ref["skew"])
-    assert near(f["x"].kurt(), ref["kurt"])
+    assert near(f["x"].skew(bias=True), ref["skew"])
+    assert near(f["x"].kurtosis(), ref["kurt"])
     assert near(group_value(f, "skew"), ref["skew"])
     assert near(group_value(f, "kurt"), ref["kurt"])
 
@@ -96,7 +96,7 @@ def test_accuracy_holds_across_the_parallel_chunk_boundary(n):
     ref = two_pass(v)
     f = frame(v)
     assert rel(f["x"].std(), ref["std"]) < TOL
-    assert near(f["x"].skew(), ref["skew"])
+    assert near(f["x"].skew(bias=True), ref["skew"])
 
 
 def test_constant_columns_have_zero_std():

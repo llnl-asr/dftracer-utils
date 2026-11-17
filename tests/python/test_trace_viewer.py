@@ -89,7 +89,7 @@ class TestTraceViewer:
     def test_phase_metadata_row_query_returns_filtered_rows(self):
         # A phase("metadata") row query (no group_by/agg) must return the
         # metadata records as rows, args flattened, and honor the query filter.
-        from dftracer.utils import Field
+        from dftracer.utils import col
 
         with Environment(lines=1) as env:
             rows = [
@@ -127,14 +127,14 @@ class TestTraceViewer:
             filtered = (
                 TraceViewer(gz)
                 .phase("metadata")
-                .filter(Field("args.name") == "time_metric")
+                .filter(col("args.name") == "time_metric")
                 .collect()
             )
             assert filtered.height == 1
             assert filtered.to_dict()["args.value"][0] == "NS"
 
             # A non-matching filter proves the query really runs on metadata.
-            none = TraceViewer(gz).phase("metadata").filter(Field("args.name") == "nope").collect()
+            none = TraceViewer(gz).phase("metadata").filter(col("args.name") == "nope").collect()
             assert none.height == 0
 
             # A normal event row query never includes the metadata record.
@@ -594,11 +594,10 @@ class TestTraceViewer:
                 )
 
             view = TraceViewer(gz).phase("any")
-            assert len(view.query('name == "EH"').collect()) == 2
-            assert len(view.query("name == $n", n="ET").collect()) == 1
-            assert view.explain_query("name == $n", n="ET") == view.explain_duql(
-                "name == $n", n="ET"
-            )
+            assert len(view.duql('name == "EH"').collect()) == 2
+            assert len(view.duql("name == $n", n="ET").collect()) == 1
+            plan_text = view.explain_duql("name == $n", n="ET")
+            assert isinstance(plan_text, str) and plan_text
 
             view = TraceViewer(gz)
             with view.session() as s:
@@ -912,7 +911,7 @@ class TestTraceViewer:
 
         # per-plan sort_by/limit apply to that plan only.
         with tv.session() as s2:
-            top = s2.collect(tv.group_by("cat").agg("count").sort_by("count", True).limit(1))
+            top = s2.collect(tv.group_by("cat").agg("count").sort_by("count", True).head(1))
         top_df = top.result().to_pandas()
         assert len(top_df) == 1 and top_df.iloc[0]["cat"] == "posix"
 

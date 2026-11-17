@@ -130,9 +130,9 @@ duration is at least 100 microseconds.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer, Field
+         from dftracer.utils import TraceViewer, col
 
-         q = Field("name").like("%r%") & (Field("dur") >= 100)
+         q = col("name").like("%r%") & (col("dur") >= 100)
 
          df = (
              TraceViewer("app.pfw.gz")

@@ -145,7 +145,7 @@ def test_arithmetic_and_scans_match_pandas(a, b):
     assert _same(s.expanding().mean().to_list(), ps.expanding().mean().tolist())
     assert _same(s.ewm(alpha=0.4).mean().to_list(), ps.ewm(alpha=0.4).mean().tolist(), rel=1e-6)
     assert _same(s.rank().to_list(), ps.rank().tolist())
-    assert _same(s.sort().to_list(), ps.sort_values().tolist())
+    assert _same(s.sort(nulls_last=True).to_list(), ps.sort_values().tolist())
     present = [v for v in a if v is not None]
     if present:
         assert math.isclose(s.sum(), sum(present), rel_tol=1e-9, abs_tol=1e-6)

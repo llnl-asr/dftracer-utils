@@ -7,6 +7,7 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/scalar_helpers.h>
 #include <dftracer/utils/python/frame/ops.h>
 #include <dftracer/utils/python/frame/series.h>
@@ -202,7 +203,7 @@ PyObject* op_run(PyObject*, PyObject* args) {
     if (dftu_op_kind_of(op->sig) == DFTU_OP_KIND_SERIES) {
         dftu_series* out = dftu_op_run(op, in, n_series, &arg);
         if (!out) {
-            PyErr_Format(PyExc_RuntimeError, "op '%s' failed", name);
+            PyErr_Format(core::g_dft_value_error, "op '%s' failed", name);
             return nullptr;
         }
         return wrap_vec_column(dataframe::Series{out});
@@ -210,7 +211,7 @@ PyObject* op_run(PyObject*, PyObject* args) {
     int ok = 0;
     dftu_scalar r = dftu_op_run_aggregate(op, in[0], &arg, &ok);
     if (!ok) {
-        PyErr_Format(PyExc_RuntimeError, "op '%s' failed", name);
+        PyErr_Format(core::g_dft_value_error, "op '%s' failed", name);
         return nullptr;
     }
     return scalar_to_py(r);

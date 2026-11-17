@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add the methods `Series.is_null_at(i)`, `Series.str.count_matches`, `strip_chars_start`, `strip_chars_end`, `strip_prefix`, `strip_suffix`, `to_titlecase`, `Series.dt.epoch`, `iso_year`, `ordinal_day`, `week`, `truncate`, and on `Expr.dt` `ceil`, `floor`, `normalize`, `total_seconds`, `tz_localize`, `tz_convert`, `dayofweek`, `dayofyear`, `days_in_month` and the `is_month_start` family.
 - Add the native types `StrAccessor`, `DtAccessor` and `ListAccessor` behind `Series.str`, `Series.dt` and `Series.list`.
   The accessor methods that are exactly one kernel (`lower`, `strip`, `len_chars`, `startswith`, `find`, `replace_all`, `zfill`, `list.len`, `list.get` and the rest of the rows with class `Str` or `List` in `core/api.def`) are generated from that table and typed in the `.pyi` by `scripts/gen_pyi.py`; a wrong call count or keyword now gives the message of the native argument parser.
 - Add the native types `Rolling` and `Ewm` behind `Series.rolling(window)` and `Series.ewm(...)`, and the native `Series.rolling_sum`, `rolling_mean`, `rolling_min` and `rolling_max`.
@@ -150,6 +151,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make the polars names canonical on `Series`, `Expr`, `DataFrame`, `LazyFrame` and the group-by classes, and build every pandas spelling from one table, `python/dftracer/utils/_aliases.py`: `fillna`, `astype`, `isna`, `notna`, `dropna`, `isin`, `groupby`, `sort_values`, `drop_duplicates`, `take`, `cumsum`, `ffill` and the rest are the same object as `fill_null`, `cast`, `is_null`, `is_not_null`, `drop_nulls`, `is_in`, `group_by`, `sort`, `unique`, `gather`, `cum_sum` and `forward_fill`.
+  A pandas name with other keywords or another result (`sort_values(ascending=, na_position=)`, `nlargest`, `groupby(sort=)`) is a small function listed in the table.
+  `Series`, `DataFrame`, `LazyFrame` and `Expr` take the same keywords for a shared name: `fill_null(value)`, `clip(lower, upper)`, `is_between(lower, upper)` and `sort(by, *, descending, nulls_last)`.
+  `sort` puts nulls first by default, as polars, on `Series`, `DataFrame`, `LazyFrame` and `Expr` (`Expr.sort(nulls_last=False)` runs, where it raised); `sort_values` keeps the pandas `na_position="last"` default.
+  `Series.skew()` and `Series.kurt()`, `DataFrame.skew`, `DataFrame.kurt` and the group-by `skew` and `kurt` give the pandas unbiased values; `Series.skew(bias=True)` and `Series.kurtosis(fisher=True, bias=True)` give the polars ones.
+- Make `.str`, `.dt` and `.list` agree between a `Series` and an `Expr`.
+  A polars-only name (`dt.epoch`, `iso_year`, `ordinal_day`, `week`, `truncate`; `str.count_matches`, `strip_chars_start`, `strip_chars_end`, `strip_prefix`, `strip_suffix`, `to_titlecase`) is a method on both with polars results; a pandas-only name (`dt.dayofweek`, `is_month_start`, `floor`, `ceil`, `normalize`, `total_seconds`, `tz_localize`, `tz_convert`, `days_in_month`, ...) is a property on a `Series` and a method on an `Expr`.
+  `Expr.str` methods take the keywords of `Series.str` (`pat`, `case`, `regex`, `n`, `errors`, `expand`, `width`, `sub`, `repl`, `group`, `start`, `stop`), so `col("s").str.replace("a", "b")` replaces every occurrence as `Series.str.replace` does, and `Expr.dt.round` takes `freq`.
+- Make `Series.unique(maintain_order=False)` keep a null as one value (sorted, nulls first; first-occurrence order with `maintain_order=True`), as polars, and `Series.drop_duplicates(keep=)` give the pandas result; both dropped the nulls before.
+  `arg_sort` takes `nulls_last` (default `False`, as `sort`) on `Series` and `Expr`, `search_sorted` takes a scalar and `side=`, and `Series.add`, `sub`, `mul` and `truediv` take a scalar; `divide`, `div`, `multiply`, `subtract`, `at`, `loc` and `iat` are table aliases.
+  `DataFrame.kurtosis` gives the polars value per column and `kurt` the pandas one.
+- Raise `DFTUtilsValueError` when a method meets a column of a type it does not take, on a `Series` and when an `Expr` runs, where a `Series` raised `TypeError` or `RuntimeError` and an `Expr` any of the three.
+- Fix `Expr.str.to_titlecase`, which swapped the case instead of title-casing.
 - Release the GIL around every `Series` kernel and every eager `DataFrame` op on 16384 or more rows, so two Python threads run two long kernels at once.
   `Series.to_pylist`, `np_parts` and the other calls that build Python objects keep the GIL.
 - Make the native `Series` the public class: `dftracer.utils.Series` subclasses the extension's `Series`, and the native calls return it directly, so a call such as `s.abs()` runs the native method with no Python wrapper in between (`s.abs()` 252 ns to 46 ns and `df["x"]` 228 ns to 82 ns, in `benchmarks/python/call_bench.py`).
@@ -812,6 +826,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove `ColumnExpr` and `Field` (use `Expr` and `col`), `TraceViewer.query` and `explain_query` (use `duql` and `explain_duql`), `TraceViewer.limit` and `DaskTraceViewer.limit` (use `head`) and `DaskTraceViewer.query` (use `duql`), and the native `Series.cast(type_id)`, which `cast(dtype)` replaces.
+  `DataFrame.limit` and `LazyFrame.limit` stay as the polars alias of `head`, and `DataFrame.query` stays as the pandas name.
+- Remove the native method names `Series.fillna`, `cumsum`, `cummax`, `cummin`, `nunique`, `ffill`, `bfill`, `skewness`, `_null_mask` and `_valid_mask`; they are the aliases `fillna`, `cumsum`, ... of `fill_null`, `cum_sum`, `cum_max`, `cum_min`, `n_unique`, `forward_fill`, `backward_fill`, `skew`, `is_null` and `is_not_null`, and `Series.is_null(i)` is `is_null_at(i)`.
 - Remove `read_arrow_files_parallel`, `TraceReaderIterator` and `_MemoryViewBatch` from `dftracer_utils_ext`, and `_ArrowStreamingIterator` as a module attribute; `LazyFrame.stream` still yields frames.
   Read `.arrow` files with `pyarrow.ipc.open_file` and `DataFrame.from_arrow`.
 - Remove `common::str_cat`. Build a message with `dstd::fmt<"...">(args)` and append text in a loop with `dstd::fmt_append<"...">(out, args)`, both in `dftracer/utils/dstd/fmt.h`: the format string is checked at compile time and the result is sized once.

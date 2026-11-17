@@ -1191,8 +1191,8 @@ def test_series_null_metadata():
 
     nullable = _series_from_arrow(pa.array([1, None, 3], pa.int64()))
     assert nullable.null_count == 1
-    assert nullable.is_null(1) is True
-    assert nullable.is_null(0) is False
+    assert nullable.is_null_at(1) is True
+    assert nullable.is_null_at(0) is False
 
 
 def test_series_comparison_operators():
@@ -1466,11 +1466,11 @@ def test_columnar_expr_apply_direct_no_wrapper():
 
 
 def test_query_F_shorthand_and_callable():
-    from dftracer.utils.columnar import F, Field
+    from dftracer.utils.columnar import F, col
 
-    assert str(F.dur > 100) == str(Field("dur") > 100)
-    assert str(F("args.level") == 3) == str(Field("args.level") == 3)
-    assert str(F["args.level"] == 3) == str(Field("args.level") == 3)
+    assert str(F.dur > 100) == str(col("dur") > 100)
+    assert str(F("args.level") == 3) == str(col("args.level") == 3)
+    assert str(F["args.level"] == 3) == str(col("args.level") == 3)
 
 
 def test_host_ops_registered_by_name(tmp_path):

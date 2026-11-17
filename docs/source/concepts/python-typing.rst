@@ -48,7 +48,7 @@ The annotations span the whole public surface, not just the entry points:
   build a typed ``Expr``; ``apply`` is typed ``-> Series`` and ``eval_many``
   ``-> List[Series]``, so a lazy expression graph is checked before it is
   evaluated on the engine.
-- **duql.** The fluent ``Field`` builder is typed, so a predicate
+- **duql.** The fluent ``col`` builder is typed, so a predicate
   assembled in Python is checked before it is serialized and run as a mask.
 - **Enumerations.** The op selectors and kinds that cross the boundary
   (``Phase``, ``GroupKey``, ``AggOp``) are Python enums that mirror the C enum

@@ -5,9 +5,9 @@ The pandas and polars surfaces
 
 The frame types are a drop-in for both pandas and polars: swap ``pandas``
 (or ``polars``) for ``dftracer.utils`` and most code runs unchanged, on the
-SIMD engine, eagerly or as a plan. pandas convention is primary for names,
-argument names and default semantics; the polars spellings sit alongside as
-thin aliases on the same objects. Every method here is a composition of
+SIMD engine, eagerly or as a plan. polars names are canonical; the pandas
+spellings are aliases from one table, with pandas keywords and pandas
+results, on the same objects. Every method here is a composition of
 engine ops (nothing runs in Python per row), and every value is checked
 against pandas or polars on the same data in ``tests/python/test_pandas_surface.py``
 and ``test_polars_surface.py``. ``benchmarks/dataframe_vs_pandas_polars.py``
@@ -15,6 +15,116 @@ is the proof at scale: its pandas column and ours are the same code
 (``df[df["v"] > 0.5]``, ``groupby("k")["v"].agg(["sum", "mean"])``,
 ``nlargest``, ``.str.contains``), checked for the same result and timed
 side by side; see :doc:`../runtime/performance`.
+
+
+.. _pandas-polars-names:
+
+Names: one per idea
+-------------------
+
+A method has one canonical name, the polars one: ``fill_null``, ``is_null``,
+``is_not_null``, ``cast``, ``is_in``, ``drop_nulls``, ``n_unique``,
+``cum_sum``, ``forward_fill``, ``group_by``, ``sort``, ``unique``, ``gather``,
+``head``. The pandas spelling is an alias, the same object under another
+name, from one table (``python/dftracer/utils/_aliases.py``) that each class
+reads when it is built; ``s.fillna`` **is** ``s.fill_null``. A pandas name
+whose keywords or result differ from the canonical method is a small function
+in its class (marked "own signature" below), so ``df.sort_values("a",
+ascending=False, na_position="first")`` and ``df.groupby("k").sum()`` give what
+pandas gives, while ``df.sort("a", descending=True, nulls_last=False)`` gives
+the polars call.
+
+.. list-table:: Aliases by class
+   :header-rows: 1
+   :widths: 14 56 30
+
+   * - Class
+     - pandas spellings (alias = canonical)
+     - polars spellings
+   * - ``Series``
+     - ``aggregate`` = ``agg``, ``astype`` = ``cast``, ``isna`` = ``is_null``, ``isnull`` = ``is_null``, ``notna`` = ``is_not_null``, ``notnull`` = ``is_not_null``, ``dropna`` = ``drop_nulls``, ``fillna`` = ``fill_null``, ``isin`` = ``is_in``, ``nunique`` = ``n_unique``, ``prod`` = ``product``, ``argmax`` = ``arg_max``, ``idxmax`` = ``arg_max``, ``argmin`` = ``arg_min``, ``idxmin`` = ``arg_min``, ``cumsum`` = ``cum_sum``, ``cumprod`` = ``cum_prod``, ``cummax`` = ``cum_max``, ``cummin`` = ``cum_min``, ``searchsorted`` = ``search_sorted``, ``tolist`` = ``to_list``, ``ffill`` = ``forward_fill``, ``pad`` = ``forward_fill``, ``bfill`` = ``backward_fill``, ``backfill`` = ``backward_fill``, ``kurt`` (own signature) = ``kurtosis``, ``take`` = ``gather``, ``iat`` = ``iloc``, ``at`` = ``iloc``, ``loc`` = ``iloc``, ``rtruediv`` = ``rdiv``, ``divide`` = ``truediv``, ``div`` = ``truediv``, ``multiply`` = ``mul``, ``subtract`` = ``sub``, ``sort_values`` (own signature) = ``sort``, ``nlargest`` (own signature) = ``top_k``, ``nsmallest`` (own signature) = ``bottom_k``, ``drop_duplicates`` (own signature) = ``unique``, ``between`` (own signature) = ``is_between``
+     - none
+   * - ``Expr``
+     - ``isna`` = ``is_null``, ``isnull`` = ``is_null``, ``notna`` = ``is_not_null``, ``notnull`` = ``is_not_null``, ``isin`` = ``is_in``, ``astype`` = ``cast``, ``fillna`` = ``fill_null``, ``cumsum`` = ``cum_sum``, ``cumprod`` = ``cum_prod``, ``cummax`` = ``cum_max``, ``cummin`` = ``cum_min``, ``ffill`` = ``forward_fill``, ``bfill`` = ``backward_fill``, ``between`` (own signature) = ``is_between``, ``startswith`` = ``starts_with``, ``endswith`` = ``ends_with``
+     - none
+   * - ``DataFrame``
+     - ``aggregate`` = ``agg``, ``astype`` = ``cast``, ``dropna`` = ``drop_nulls``, ``fillna`` = ``fill_null``, ``groupby`` (own signature) = ``group_by``, ``sort_values`` (own signature) = ``sort``, ``drop_duplicates`` = ``unique``, ``take`` = ``gather``, ``nlargest`` (own signature) = ``top_k``, ``nsmallest`` (own signature) = ``top_k``, ``divide`` = ``div``, ``truediv`` = ``div``, ``multiply`` = ``mul``, ``subtract`` = ``sub``, ``product`` = ``prod``, ``rtruediv`` = ``rdiv``, ``map`` = ``applymap``, ``isnull`` = ``isna``, ``notnull`` = ``notna``, ``backfill`` = ``bfill``, ``pad`` = ``ffill``
+     - ``limit`` = ``head``
+   * - ``LazyFrame``
+     - ``aggregate`` = ``agg``, ``sort_values`` (own signature) = ``sort``, ``drop_duplicates`` = ``unique``, ``take`` = ``gather``
+     - ``limit`` = ``head``
+   * - ``GroupBy``
+     - ``aggregate`` = ``agg``, ``product`` = ``prod``
+     - none
+   * - ``LazyGroupBy``
+     - ``aggregate`` = ``agg``, ``product`` = ``prod``
+     - none
+
+Moments: ``skew`` and ``kurt`` follow the name. ``Series.skew()`` and
+``Series.kurt()`` are the pandas estimators (unbiased; NaN below three values
+for ``skew`` and four for ``kurt``, and for a constant column, as pandas 3;
+pandas 2 gives 0.0 there), and so are ``DataFrame.skew``, ``DataFrame.kurt``
+and the group-by ``skew`` and ``kurt``. The polars keywords give the polars
+values: ``Series.skew(bias=True)`` and ``Series.kurtosis(fisher=True,
+bias=True)`` are the population moments (NaN for one value or a constant
+column, null for no values), ``kurtosis(bias=False)`` the unbiased one (null
+below four values), and ``DataFrame.kurtosis`` gives the same value per
+column. ``skew`` is one name in both libraries; our ``Series``
+attribute names are pandas-shaped, so ``Series.skew()`` follows pandas and
+``Expr.skew()`` follows polars (the population value). The ``"skew:col"`` and
+``"kurt:col"`` aggregate strings, ``col(...).skew()`` and the lazy ``skew()`` and
+``kurt()`` are the engine's population moments.
+
+The keywords that a name shares across ``Series``, ``DataFrame``,
+``LazyFrame`` and ``Expr`` are the same: ``fill_null(value)``, ``shift(n)``,
+``clip(lower, upper)``, ``cast(dtype)``, ``head(n)``, and
+``sort(by, *, descending=False, nulls_last=False)`` (``by`` on a frame). Nulls
+come first by default, as in polars; a NaN sorts after every number and apart
+from the nulls. ``sort_values(by, ascending=True, na_position="last")`` keeps
+the pandas defaults (nulls last); pandas treats a NaN as missing, ours stays a
+value. A null-first sort of a frame runs the engine sort over a 0 / 1 presence
+key ahead of each key (only when a key has nulls, in an eager frame; always in
+a lazy plan); ``Expr.sort`` runs the opposite sort and reverses it.
+
+``unique(maintain_order=False)`` is the polars one: the distinct values, a null
+kept once, sorted with nulls first, or in order of first occurrence with
+``maintain_order=True``; ``drop_duplicates(keep="first")`` is the pandas result
+(first-occurrence order, one null kept). ``arg_sort(descending, nulls_last=False)``
+has the ``sort`` keywords and default, so ``s.gather(s.arg_sort())`` is
+``s.sort()`` (on an ``Expr``, equal values and several nulls come in reverse index
+order). ``search_sorted(element, side="left")`` takes a scalar (an int) or
+values, and ``side`` ``"left"``, ``"right"`` or ``"any"``. ``mul``, ``sub``,
+``add`` and ``truediv`` take a Series or a scalar.
+
+``s.is_null()`` is the Bool mask; ``s.is_null_at(i)`` is the bool for one row.
+``s.cast(dtype)`` takes a ``DType``, its name, its code or a Python type.
+
+The accessors follow the same rule. Where pandas and polars share a name, the
+object decides the shape: a ``Series`` is pandas-shaped, so
+``s.dt.year``, ``s.dt.weekday`` (Monday is 0) and ``s.dt.dayofyear`` are
+properties that give a ``Series``, and ``s.str.partition(",")`` gives a frame
+of three columns; an ``Expr`` is polars-shaped, so ``col("t").dt.year()`` and
+``col("t").dt.weekday()`` (Monday is 1) are methods and
+``col("s").str.partition(",")`` is one list column. A name only polars has
+(``dt.epoch``, ``dt.iso_year``, ``dt.ordinal_day``, ``dt.week``,
+``dt.truncate``, ``str.count_matches``, ``str.strip_chars_start``,
+``str.strip_chars_end``, ``str.strip_prefix``, ``str.strip_suffix``,
+``str.to_titlecase``) is a method on both sides with polars results; a name
+only pandas has (``dt.dayofweek``, ``dt.is_month_start``, ``dt.floor``,
+``dt.tz_localize``, ...) is a property on a ``Series`` and a method on an
+``Expr``. An ``Expr`` method takes the keywords of the ``Series`` method of
+the same name (``pat``, ``case``, ``regex``, ``n``, ``errors``, ``expand``,
+``width``, ``sub``, ``repl``, ``freq``). What an expression cannot do raises
+``NotImplementedError`` and says so: ``str.get_dummies``, ``str.cat()`` without
+``others``, ``str.extractall``, ``expand=True`` on ``partition`` and ``split``,
+``decode(errors="strict")``. A method on a column of the wrong type raises
+``DFTUtilsValueError``, on a ``Series`` and when an ``Expr`` runs.
+
+Removed: ``ColumnExpr`` and ``Field`` (use ``Expr`` and ``col``),
+``TraceViewer.query`` and ``explain_query`` (use ``duql`` and ``explain_duql``),
+``TraceViewer.limit`` (use ``head``; ``DataFrame.limit`` and
+``LazyFrame.limit`` stay as the polars alias of ``head``) and the native
+``Series.cast(type_id)`` (``cast`` takes the dtype).
 
 The index is a named column
 -----------------------------

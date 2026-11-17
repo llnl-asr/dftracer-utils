@@ -36,6 +36,7 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
+from ._aliases import install as _install_aliases
 from ._trace_lazy import _LazyOps
 from ._units import coerce_bytes, coerce_duration
 from .columnar import Agg, Expr, _Col
@@ -249,18 +250,10 @@ class TraceViewer(_LazyOps, _ext.TraceViewer):
         stages filter events in the scan; later stages run on its columns."""
         return self._trace(_ext.TraceViewer.duql(self, text, params))
 
-    def query(self, text: str, **params: DuqlParam) -> "TraceViewer":
-        """Same as :meth:`duql`."""
-        return self.duql(text, **params)
-
     def explain_duql(self, text: str, **params: DuqlParam) -> str:
         """The plan :meth:`duql` builds, one step per line, without
         scanning."""
         return _ext.TraceViewer.explain_duql(self, text, params)
-
-    def explain_query(self, text: str, **params: DuqlParam) -> str:
-        """Same as :meth:`explain_duql`."""
-        return self.explain_duql(text, **params)
 
     def select(self, *items: object) -> "TraceViewer":
         """Project to ``items``, as :meth:`LazyFrame.select`. Names on raw
@@ -296,9 +289,6 @@ class TraceViewer(_LazyOps, _ext.TraceViewer):
 
     def head(self, n: int = 5) -> "TraceViewer":
         return self._absorbed(self._plan().head(n))
-
-    def limit(self, n: int = 5) -> "TraceViewer":
-        return self._absorbed(self._plan().limit(n))
 
     def slice(self, offset: int, length: int) -> "TraceViewer":
         return self._absorbed(self._plan().slice(offset, length))
@@ -782,4 +772,5 @@ class Session:
             self.execute()
 
 
+_install_aliases("LazyFrame", TraceViewer, faces=("pandas",))
 _ext._bind_types(TraceViewer=TraceViewer)

@@ -81,7 +81,7 @@ aggregated output.
      - Interpret/scale the trace's native time unit (see the :doc:`quickstart <../quickstart>`).
    * - ``select(*cols)``
      - Names on raw events are the fields the scan reads (a bare arg name such as ``"size"`` reads ``args.size``); after ``group_by`` / ``agg`` it projects the output.
-   * - ``head(n)`` / ``limit(n)`` / ``offset(n)`` / ``slice(offset, length)``
+   * - ``head(n)`` / ``offset(n)`` / ``slice(offset, length)``
      - Paginate the result rows.
    * - ``group_by(*keys)``
      - Group by zero or more keys; no keys folds every event into one row.

@@ -85,8 +85,8 @@ name of its column, so ``df["dur"].name`` is ``"dur"``. ``from_pandas`` and
 polars' default name ``""`` means no name), and ``to_pandas`` and ``to_polars``
 give it back.
 
-An op that makes a Series from one Series (``abs``, ``cast``, ``fillna``,
-``cumsum``, ``rolling``, a string op, ``sort``, ``filter``, a slice) gives the
+An op that makes a Series from one Series (``abs``, ``cast``, ``fill_null``,
+``cum_sum``, ``rolling``, a string op, ``sort``, ``filter``, a slice) gives the
 result the same name. A binary op between two Series (``+``, ``-``, ``*``, ``/``,
 a comparison, ``&``, ``|``) keeps the name only when both names are equal. A
 reduction returns a scalar, so it has no name, and the index array of
@@ -182,7 +182,8 @@ Reducers
          std::int64_t hi = dur.max().i64();
 
 Also available on both sides: ``min``, ``product``, ``median``, ``skewness``,
-``kurtosis``, ``mode``, ``all``, ``any``, ``arg_min``, ``arg_max``, ``nunique``.
+``kurtosis``, ``mode``, ``all``, ``any``, ``arg_min``, ``arg_max``, ``nunique``
+(``n_unique`` in Python; ``nunique`` is its pandas name).
 
 Element-wise kernels
 ----------------------
@@ -196,9 +197,9 @@ Element-wise kernels
          positive = dur.abs()
          bounded = dur.clip(0, 1000)
          rounded = dur.round()      # also ceil() floor() trunc() sign()
-         filled = dur.fillna(0)
+         filled = dur.fill_null(0)  # fillna is the pandas name
          root = dur.sqrt()          # also exp() log()
-         as_f64 = dur.cast(10)      # TypeId ordinal: Float64 = 10
+         as_f64 = dur.cast("float64")  # a DType, its name, its code or a Python type
          encoded = names.dictionary_encode()
          interp = dur.interpolate() # linear fill of interior nulls, edges stay null
 

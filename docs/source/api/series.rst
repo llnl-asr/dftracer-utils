@@ -36,7 +36,8 @@ How Series relates to its wrapper base:
 
 The ``s.str``, ``s.dt`` and ``s.list`` accessors are properties of ``Series`` and
 of ``Expr``; the accessor methods are listed in the Series methods above under
-their ``str_*``, ``dt_*`` and ``list_*`` flat names.
+their ``str_*``, ``dt_*`` and ``list_*`` flat names. The pandas and polars
+spellings of one method are aliases; see :ref:`pandas-polars-names`.
 
 Windows
 -------

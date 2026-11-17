@@ -151,38 +151,25 @@ ALLOWLIST = {
 
 
 # Python methods backed by a registered op under another leaf name, on top of
-# FOLDS: the pandas / polars spellings the wrapper adds as thin aliases.
+# FOLDS: the canonical names whose op has another leaf name. The pandas and
+# polars spellings come from python/dftracer/utils/_aliases.py, each backed as
+# its target is.
 PY_ALIASES = {
     "Series": {
-        "astype": "cast",
-        "isna": "null_mask",
-        "isnull": "null_mask",
-        "notna": "valid_mask",
-        "notnull": "valid_mask",
         "is_not_null": "valid_mask",
-        "isin": "is_in",
-        "dropna": "drop_nulls",
         "fill_null": "fillna",
+        "is_null": "null_mask",
+        "forward_fill": "ffill",
+        "backward_fill": "bfill",
         "full_like": "add_scalar",
         "var": "variance",
         "std": "stddev",
         "skew": "skewness",
-        "kurt": "kurtosis",
         "n_unique": "nunique",
-        "prod": "product",
-        "argmin": "arg_min",
-        "argmax": "arg_max",
-        "idxmin": "arg_min",
-        "idxmax": "arg_max",
         "arg_sort": "argsort",
-        "cumprod": "cum_prod",
         "cum_sum": "cumsum",
         "cum_max": "cummax",
         "cum_min": "cummin",
-        "sort_values": "sort",
-        "nlargest": "top_k",
-        "nsmallest": "bottom_k",
-        "searchsorted": "search_sorted",
         "gather": "take",
         "rolling_sum": "rolling",
         "rolling_mean": "rolling",
@@ -205,8 +192,6 @@ PY_ALIASES = {
         "case_when": "where",
         "truncate": "slice",
         "iloc": "take",
-        "loc": "take",
-        "iat": "take",
         "at": "take",
         "first_valid_index": "valid_mask",
         "last_valid_index": "valid_mask",
@@ -224,7 +209,6 @@ PY_ALIASES = {
         "pop": "take",
         "describe": "reduce",
         "agg": "reduce",
-        "aggregate": "reduce",
         "transform": "reduce",
         "divide": "div",
         "truediv": "div",
@@ -234,14 +218,11 @@ PY_ALIASES = {
         "rsub": "sub",
         "rmul": "mul",
         "rdiv": "div",
-        "rtruediv": "div",
         "rfloordiv": "floordiv",
         "rmod": "mod",
         "rpow": "pow",
         "divmod": "floordiv",
         "rdivmod": "floordiv",
-        "pad": "ffill",
-        "backfill": "bfill",
         "groupby": "reduce",
         "explode": "take",
         "reset_index": "take",
@@ -250,25 +231,16 @@ PY_ALIASES = {
         "distinct": "unique",
         "top_k": "topk",
         "sort": "sort_by",
-        "sort_values": "sort_by_multi",
         "merge": "join",
         "query": "mask",
-        "limit": "head",
         "drop": "select",
         "assign": "with_column",
         "with_columns": "with_column",
         "cast": "with_column",
-        "astype": "with_column",
-        "dropna": "drop_nulls",
-        "fillna": "fill_null",
         "duplicated": "is_duplicated",
         "gather": "take",
-        "groupby": "group_by",
-        "nlargest": "topk",
-        "nsmallest": "topk",
         "pivot_table": "pivot",
         "agg": "group_by",
-        "aggregate": "group_by",
         "sum": "reduce",
         "mean": "reduce",
         "min": "reduce",
@@ -313,13 +285,10 @@ PY_ALIASES = {
         "rank": "rank",
         "interpolate": "interpolate",
         "isna": "null_mask",
-        "isnull": "null_mask",
         "notna": "valid_mask",
-        "notnull": "valid_mask",
         "where": "where",
         "replace": "where",
         "applymap": "with_column",
-        "map": "with_column",
         "transform": "with_column",
         "add": "add",
         "sub": "sub",
@@ -329,11 +298,6 @@ PY_ALIASES = {
         "rsub": "sub",
         "rmul": "mul",
         "rdiv": "div",
-        "truediv": "div",
-        "rtruediv": "div",
-        "divide": "div",
-        "multiply": "mul",
-        "subtract": "sub",
         "floordiv": "floordiv",
         "rfloordiv": "floordiv",
         "mod": "mod",
@@ -342,8 +306,6 @@ PY_ALIASES = {
         "rpow": "pow",
         "ffill": "ffill",
         "bfill": "bfill",
-        "pad": "ffill",
-        "backfill": "bfill",
         "eq": "compare",
         "ne": "compare",
         "lt": "compare",
@@ -354,7 +316,6 @@ PY_ALIASES = {
         "quantile": "quantile",
         "nunique": "nunique",
         "prod": "product",
-        "product": "product",
         "sem": "stddev",
         "mode": "mode",
         "idxmax": "arg_max",
@@ -419,9 +380,7 @@ PY_ALIASES = {
         "loc": "filter",
         "reset_index": "with_row_index",
         "resample": "group_by_dynamic",
-        "limit": "head",
         "sort": "sort_by",
-        "sort_values": "sort_by",
         "gather": "take",
         "union": "concat",
         "window": "window",
@@ -429,7 +388,6 @@ PY_ALIASES = {
         "asof": "asof",
         "interval": "interval",
         "agg": "group_by",
-        "aggregate": "group_by",
         "sum": "reduce",
         "mean": "reduce",
         "min": "reduce",
@@ -464,7 +422,7 @@ PY_ALLOWLIST = {
         "dt",
         "child",
         "encoding",
-        "is_null",
+        "is_null_at",
         "length",
         "null_count",
         "num_children",
@@ -612,6 +570,19 @@ REACHED_AS = {
 }
 
 
+def _alias_rows():
+    """The rows of the alias tables, python/dftracer/utils/_aliases.py."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "dftu_aliases", Path(__file__).resolve().parents[1] / "python/dftracer/utils/_aliases.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.ALIASES
+
+
 def python_surface():
     """(class name -> public method names, registry leaves by bucket) from the
     installed dftracer.utils extension. A wrapper forwards unknown attributes
@@ -652,6 +623,9 @@ def check_python() -> list[str]:
         bucket = REGISTRY_BUCKET[class_name]
         reg = registered[bucket]
         backed = {**FOLDS[class_name], **PY_ALIASES[class_name]}
+        for row in _alias_rows():
+            if row.cls == class_name:
+                backed.setdefault(row.alias, backed.get(row.target, row.target))
         python_only = sorted(
             n
             for n in names

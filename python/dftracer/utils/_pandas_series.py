@@ -165,9 +165,12 @@ class _SeriesPandasMixin:
             raise ValueError("between: inclusive must be both, neither, left or right")
         return lo.logical(0, hi)
 
-    def drop_duplicates(self) -> "Series":
-        """Distinct values, first occurrence order (:meth:`unique`)."""
-        return self._s().unique()
+    def drop_duplicates(self, keep: Union[str, bool] = "first") -> "Series":
+        """The pandas ``drop_duplicates``: the values that are not a repeat,
+        in order, one null kept. ``keep`` is ``"first"`` (default), ``"last"``
+        or ``False`` (drop every value that repeats). See :meth:`unique`."""
+        s = self._s()
+        return s.filter(~s.duplicated(keep))
 
     def duplicated(self, keep: Union[str, bool] = "first") -> "Series":
         """Bool mask of the repeated occurrences: with ``keep="first"`` the
@@ -241,8 +244,8 @@ class _SeriesPandasMixin:
         values, sorted, nulls dropped) and ``codes`` each value's position in
         it, -1 for a null (pandas numbers uniques by first occurrence)."""
         s = self._s()
-        uniques = s.unique()
-        codes = uniques.search_sorted(s.fillna(0) if s.null_count else s)
+        uniques = s.drop_nulls().unique()
+        codes = cast("Series", uniques.search_sorted(s.fillna(0) if s.null_count else s))
         if s.null_count:
             codes = codes.mask(s.isna(), -1)
         return codes, uniques
@@ -435,23 +438,9 @@ class _SeriesPandasMixin:
         names = list(func)
         return DataFrame({"statistic": names, "value": [getattr(s, n)() for n in names]})
 
-    aggregate = agg
-
     def transform(self, func: Union[str, Callable[["Series"], "Series"]]) -> "Series":
         s = self._s()
         return getattr(s, func)() if isinstance(func, str) else func(s)
-
-    def divide(self, other: Union["Series", _Scalar]) -> "Series":
-        return self._s() / other  # type: ignore[operator]
-
-    def multiply(self, other: Union["Series", _Scalar]) -> "Series":
-        return self._s() * other  # type: ignore[operator]
-
-    def subtract(self, other: Union["Series", _Scalar]) -> "Series":
-        return self._s() - other  # type: ignore[operator]
-
-    def truediv(self, other: Union["Series", _Scalar]) -> "Series":
-        return self._s() / other  # type: ignore[operator]
 
     def radd(self, other: _Scalar) -> "Series":
         return self._s() + other  # type: ignore[operator]
@@ -472,8 +461,6 @@ class _SeriesPandasMixin:
 
     def __rtruediv__(self, other: _Scalar) -> "Series":
         return self.rdiv(other)
-
-    rtruediv = rdiv
 
     def case_when(self, caselist: Sequence[Tuple["Series", Union["Series", _Scalar]]]) -> "Series":
         """Replace where each ``(condition, replacement)`` holds, first match
@@ -501,14 +488,6 @@ class _SeriesPandasMixin:
     @property
     def iloc(self) -> "_SeriesILoc":
         return _SeriesILoc(self._s())
-
-    loc = iloc
-
-    @property
-    def iat(self) -> "_SeriesILoc":
-        return _SeriesILoc(self._s())
-
-    at = iat
 
     def to_csv(self, path: Optional[str] = None, **kwargs: Any) -> Optional[str]:
         return self._s().to_pandas().to_csv(path, index=False, **kwargs)

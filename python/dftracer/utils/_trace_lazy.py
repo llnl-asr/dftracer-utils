@@ -196,10 +196,11 @@ class _LazyOps(_ext.TraceViewer):
     def kurt(self) -> "LazyFrame":
         return self.lazy().kurt()
 
-    def take(self, indices: Sequence[int]) -> "LazyFrame":
-        """Keep the rows at ``indices`` (any order, repeats allowed). Not
-        streaming: the whole frame is resident before the indices apply."""
-        return self.lazy().take(indices)
+    def gather(self, indices: Sequence[int]) -> "LazyFrame":
+        """Keep the rows at ``indices`` (any order, repeats allowed); ``take``
+        is the pandas name. Not streaming: the whole frame is resident before
+        the indices apply."""
+        return self.lazy().gather(indices)
 
     def filter_mask(self, mask: "Series") -> "LazyFrame":
         """Keep rows where the precomputed Bool ``mask`` is true, aligned by
@@ -220,14 +221,15 @@ class _LazyOps(_ext.TraceViewer):
     def sort(
         self,
         by: Union[str, Sequence[str]],
+        *,
         descending: Union[bool, Sequence[bool]] = False,
-        nulls_last: bool = True,
+        nulls_last: bool = False,
     ) -> "LazyFrame":
         """Sort by one column (external merge sort) or lexicographically by
-        several; the polars spelling over :meth:`sort_by` / :meth:`sort_by_multi`.
-        ``nulls_last=False`` puts the null-keyed rows first: a hidden 0 / 1
-        presence column sorts ahead of each key."""
-        return self.lazy().sort(by, descending, nulls_last)
+        several, over :meth:`sort_by` / :meth:`sort_by_multi`. The null-keyed
+        rows come first, or last with ``nulls_last=True`` (the polars keywords
+        and default): a hidden 0 / 1 presence column sorts ahead of each key."""
+        return self.lazy().sort(by, descending=descending, nulls_last=nulls_last)
 
     def sort_values(
         self,
@@ -235,12 +237,9 @@ class _LazyOps(_ext.TraceViewer):
         ascending: Union[bool, Sequence[bool]] = True,
         na_position: Literal["first", "last"] = "last",
     ) -> "LazyFrame":
-        """The pandas spelling of :meth:`sort`."""
+        """The pandas ``sort_values``: :meth:`sort` with ``ascending`` and
+        ``na_position`` (nulls last by default, unlike :meth:`sort`)."""
         return self.lazy().sort_values(by, ascending, na_position)
-
-    def gather(self, indices: Sequence[int]) -> "LazyFrame":
-        """The polars spelling of :meth:`take`."""
-        return self.lazy().gather(indices)
 
     def join(
         self,
@@ -271,12 +270,8 @@ class _LazyOps(_ext.TraceViewer):
 
     def unique(self, subset: "str | Sequence[str] | None" = None) -> "LazyFrame":
         """Distinct rows, first occurrence, in original order, keyed on every
-        column or on ``subset``."""
+        column or on ``subset`` (``drop_duplicates`` is the pandas name)."""
         return self.lazy().unique(subset)
-
-    def drop_duplicates(self, subset: "str | Sequence[str] | None" = None) -> "LazyFrame":
-        """Alias of :meth:`unique`."""
-        return self.lazy().drop_duplicates(subset)
 
     def sample(self, n: int, seed: int = 0) -> "LazyFrame":
         """A deterministic ``n``-row sample."""
@@ -350,5 +345,5 @@ class _LazyOps(_ext.TraceViewer):
     def __arrow_c_stream__(self, requested_schema: Optional[object] = None) -> object:
         """Stream the query through the Arrow C Stream Interface: one batch per
         ``get_next``, run on the native pool, so ``pa.RecordBatchReader.from_stream``
-        and ``pl.from_arrow`` read it without a full collect."""
+        and ``pl.DataFrame`` read it without a full collect."""
         return self.lazy().__arrow_c_stream__(requested_schema)

@@ -353,7 +353,7 @@ def _apply_plan(tv: TraceViewer, plan: _Plan) -> TraceViewer:
     if plan.offset is not None:
         tv = tv.offset(plan.offset)
     if plan.limit is not None:
-        tv = tv.limit(plan.limit)
+        tv = tv.head(plan.limit)
     return tv
 
 
@@ -397,7 +397,7 @@ def _dv_events_task(
         plan = replace(plan, filters=plan.filters + (f"ts >= {int(cursor)}",))
     # Order by ts before the limit so each shard yields its smallest-ts page;
     # the ts cursor would otherwise skip the events a shard dropped.
-    df = _make_viewer(files, index_dir, plan).sort_by("ts").limit(page_size).collect()
+    df = _make_viewer(files, index_dir, plan).sort_by("ts").head(page_size).collect()
     return df.to_arrow() if df.height else None
 
 
@@ -560,9 +560,6 @@ class DaskTraceViewer:
     def duql(self, dsl: str) -> "DaskTraceViewer":
         return self.filter(dsl)
 
-    def query(self, dsl: str) -> "DaskTraceViewer":
-        return self.filter(dsl)
-
     def phase(self, phase: PhaseArg) -> "DaskTraceViewer":
         return self._clone(replace(self._plan, phase=phase))
 
@@ -606,7 +603,7 @@ class DaskTraceViewer:
     def auto_spill(self) -> "DaskTraceViewer":
         return self._clone(replace(self._plan, auto_spill=True))
 
-    def limit(self, n: int) -> "DaskTraceViewer":
+    def head(self, n: int) -> "DaskTraceViewer":
         return self._clone(replace(self._plan, limit=int(n)))
 
     def offset(self, n: int) -> "DaskTraceViewer":

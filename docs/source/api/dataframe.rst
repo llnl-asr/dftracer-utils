@@ -40,7 +40,7 @@ How the DataFrame wrapper relates to Series and its native base:
 --------------------
 
 ``df.apply(expr)`` is the frame-first spelling of evaluating a
-:class:`~dftracer.utils.columnar.ColumnExpr`, equivalent to
+:class:`~dftracer.utils.Expr`, equivalent to
 ``expr.apply(df)``:
 
 .. code-block:: python

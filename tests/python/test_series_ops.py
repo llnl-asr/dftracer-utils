@@ -37,7 +37,7 @@ def test_moment_statistics():
     assert s.variance() == pytest.approx(2.5)
     assert s.stddev() == pytest.approx(2.5**0.5)
     # skewness of a symmetric sample is ~0.
-    assert abs(s.skewness()) < 1e-9
+    assert abs(s.skew()) < 1e-9
 
 
 def test_elementwise_return_series():
@@ -71,7 +71,7 @@ def test_boolean_masks():
     assert isinstance(s.is_between(2.0, 3.0), Series)
     assert s.is_between(2.0, 3.0).to_numpy().tolist() == [False, True, True, False]
     assert isinstance(s.is_nan(), Series)  # mask op
-    assert s.is_null(0) is False  # element-level null check
+    assert s.is_null_at(0) is False  # element-level null check
 
 
 def test_mask_operators():

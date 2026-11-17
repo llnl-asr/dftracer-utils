@@ -200,12 +200,6 @@ class _FramePandasMixin(_ext.DataFrame):
     def rpow(self, other: Operand) -> "DataFrame":
         return self._binary(other, "__pow__", reverse=True)
 
-    truediv = div
-    rtruediv = rdiv
-    subtract = sub
-    multiply = mul
-    divide = div
-
     def __floordiv__(self, other: Operand) -> "DataFrame":
         return self.floordiv(other)
 
@@ -325,9 +319,11 @@ class _FramePandasMixin(_ext.DataFrame):
     def pct_change(self) -> "DataFrame":
         return self._map_columns(lambda s: s.pct_change())
 
-    def shift(self, periods: int = 1) -> "DataFrame":
-        """Every column shifted by ``periods`` rows (negative looks ahead)."""
-        return self._map_columns(lambda s: s.shift(periods), numeric_only=False)
+    def shift(self, n: int = 1, *, periods: Optional[int] = None) -> "DataFrame":
+        """Every column shifted by ``n`` rows (negative looks ahead);
+        ``periods`` is the pandas keyword."""
+        rows = n if periods is None else periods
+        return self._map_columns(lambda s: s.shift(rows), numeric_only=False)
 
     def rank(
         self,
@@ -373,20 +369,13 @@ class _FramePandasMixin(_ext.DataFrame):
     def bfill(self) -> "DataFrame":
         return self._map_columns(lambda s: s.bfill(), numeric_only=False)
 
-    pad = ffill
-    backfill = bfill
-
     def isna(self) -> "DataFrame":
         """A Bool frame: true where a value is null (``isnull`` / ``notna`` /
         ``notnull`` likewise)."""
         return self._map_columns(lambda s: s.isna(), numeric_only=False)
 
-    isnull = isna
-
     def notna(self) -> "DataFrame":
         return self._map_columns(lambda s: s.notna(), numeric_only=False)
-
-    notnull = notna
 
     def where(self, cond: Series, other: Union[int, float, None] = None) -> "DataFrame":
         """Each numeric column where the row mask ``cond`` holds, else ``other``
@@ -411,8 +400,6 @@ class _FramePandasMixin(_ext.DataFrame):
         """``func`` over every element, column by column (:meth:`Series.apply`
         per column; the pandas ``map``)."""
         return self._map_columns(lambda s: s.apply(func), numeric_only=False)
-
-    map = applymap
 
     def transform(self, func: Union[str, Callable[[Series], Series]]) -> "DataFrame":
         """``func`` (a Series -> Series function over every column, or a
@@ -448,8 +435,6 @@ class _FramePandasMixin(_ext.DataFrame):
 
     def prod(self) -> "DataFrame":
         return self._reduce_scalar(lambda s: s.product())
-
-    product = prod
 
     def sem(self) -> "DataFrame":
         """Standard error of the mean: ``std / sqrt(count)`` per column."""
@@ -876,8 +861,12 @@ class _FramePandasMixin(_ext.DataFrame):
         out._index = [name]
         return out
 
-    def kurtosis(self) -> "DataFrame":
-        return self._frame().kurt()
+    def kurtosis(self, fisher: bool = True, bias: bool = True) -> "DataFrame":
+        """The polars ``kurtosis`` of every numeric column, one row (see
+        :meth:`Series.kurtosis`); ``kurt`` is the pandas estimator."""
+        frame = self._frame()
+        names = frame.reduce("kurt").columns
+        return type(frame)({n: [frame[n].kurtosis(fisher, bias)] for n in names})
 
     def swapaxes(self, axis1: object = 0, axis2: object = 1) -> "DataFrame":
         """pandas ``swapaxes``: the transpose (a frame has the two axes)."""

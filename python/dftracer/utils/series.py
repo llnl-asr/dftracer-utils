@@ -12,8 +12,10 @@ polars spellings. ``dataframe.DataFrame`` is the frame counterpart.
 
 from __future__ import annotations
 
+import bisect
 import builtins
 import json
+import math
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -32,6 +34,7 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
+from ._aliases import install as _install_aliases
 from ._pandas_series import _SeriesPandasMixin
 from .enums import _DTYPE_BY_NAME, DType
 
@@ -192,7 +195,7 @@ def _temporal_numpy(native: "Series", dtype: DType) -> "np.ndarray":
     unit = _TEMPORAL_KINDS[dtype] or _NUMPY_UNITS[native.time_unit]
     phys = native._physical()
     if dtype == DType.DATE32:
-        phys = phys.cast(int(DType.INT64))
+        phys = phys._cast(int(DType.INT64))
     if phys.null_count:
         phys = phys.fillna(_NAT)
     kind = "timedelta64" if dtype == DType.DURATION else "datetime64"
@@ -579,7 +582,7 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
                 "_bind_types, so an instance of a subclass would come back as a Series"
             )
         if isinstance(data, Series):
-            out = data.share() if dtype is None else data.cast(int(dtype))
+            out = data.share() if dtype is None else data._cast(int(dtype))
         elif hasattr(data, "__arrow_c_array__"):
             out = _series_from_arrow(data)
         else:
@@ -844,9 +847,6 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
     def rdivmod(self, other: _Scalar) -> "Tuple[Series[Scalar], Series[Scalar]]":
         return other // self, other % self
 
-    pad = _ext.Series.ffill
-    backfill = _ext.Series.bfill
-
     # Comparisons return a boolean mask Series, ``==`` and ``!=`` included,
     # as pandas and polars; a Series is therefore unhashable, as theirs are.
     # A string scalar compares the text of a String column.
@@ -878,10 +878,23 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
 
     # -- native engine ops (SIMD kernels, wrapped from the C extension) --------
 
-    def div(self, other: "Union[Series, int, float]") -> "Series[float]":
-        """True division (pandas ``div``): integer operands widen to Float64
-        first. The engine's integer-truncating kernel is ``ops.series.div``."""
+    def truediv(self, other: "Union[Series, int, float]") -> "Series[float]":
+        """True division (the polars name; ``div`` and ``divide`` are the
+        pandas ones): integer operands widen to Float64 first. The engine's
+        integer-truncating kernel is ``ops.series.div``."""
         return self / other
+
+    def add(self, other: "_SeriesOrScalar") -> "Series":
+        """``self + other``; ``other`` is a Series or a scalar."""
+        return self + other  # type: ignore[operator]
+
+    def sub(self, other: "_SeriesOrScalar") -> "Series":
+        """``self - other``; ``other`` is a Series or a scalar."""
+        return self - other  # type: ignore[operator]
+
+    def mul(self, other: "_SeriesOrScalar") -> "Series":
+        """``self * other``; ``other`` is a Series or a scalar."""
+        return self * other  # type: ignore[operator]
 
     def apply(self, func: "Callable[[T_co], _R]") -> "Series[_R]":
         """``func`` over each element (pandas ``Series.apply``), engine-first:
@@ -901,7 +914,7 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         return cast("Series[_R]", apply_series(self, func, "Series.map"))
 
     @overload
-    def astype(
+    def cast(
         self,
         dtype: Literal[
             DType.INT8,
@@ -915,26 +928,22 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         ],
     ) -> "Series[int]": ...
     @overload
-    def astype(self, dtype: Literal[DType.FLOAT32, DType.FLOAT64]) -> "Series[float]": ...
+    def cast(self, dtype: Literal[DType.FLOAT32, DType.FLOAT64]) -> "Series[float]": ...
     @overload
-    def astype(self, dtype: Literal[DType.BOOL]) -> "Series[bool]": ...
+    def cast(self, dtype: Literal[DType.BOOL]) -> "Series[bool]": ...
     @overload
-    def astype(
-        self, dtype: Literal[DType.STRING, DType.LARGE_STRING]
-    ) -> "Series[builtins.str]": ...
+    def cast(self, dtype: Literal[DType.STRING, DType.LARGE_STRING]) -> "Series[builtins.str]": ...
     @overload
-    def astype(self, dtype: "builtins.type[int]") -> "Series[int]": ...
+    def cast(self, dtype: "builtins.type[int]") -> "Series[int]": ...
     @overload
-    def astype(self, dtype: "builtins.type[float]") -> "Series[float]": ...
+    def cast(self, dtype: "builtins.type[float]") -> "Series[float]": ...
     @overload
-    def astype(self, dtype: "builtins.type[bool]") -> "Series[bool]": ...
+    def cast(self, dtype: "builtins.type[bool]") -> "Series[bool]": ...
     @overload
-    def astype(self, dtype: "builtins.type[builtins.str]") -> "Series[builtins.str]": ...
+    def cast(self, dtype: "builtins.type[builtins.str]") -> "Series[builtins.str]": ...
     @overload
-    def astype(
-        self, dtype: "Union[builtins.str, int, DType, builtins.type]"
-    ) -> "Series[Scalar]": ...
-    def astype(self, dtype: "Union[builtins.str, int, DType, builtins.type]") -> "Series[Scalar]":
+    def cast(self, dtype: "Union[builtins.str, int, DType, builtins.type]") -> "Series[Scalar]": ...
+    def cast(self, dtype: "Union[builtins.str, int, DType, builtins.type]") -> "Series[Scalar]":
         """Cast to ``dtype``: a :class:`~dftracer.utils.enums.DType`, its
         int code, a dtype name (``"int64"``, ``"Float64"``, case-insensitive;
         matches the ``DType`` member names), a Python type (``str``, ``int``,
@@ -944,17 +953,15 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         them; the native cast under it and the C++ and C APIs spell them
         ``true`` / ``false``); integers and floats cast to
         bool (zero false, a NaN or null null). A pair the engine does not
-        support raises ``TypeError`` naming both types. The pandas-style primary
-        spelling of :meth:`cast`."""
+        support raises ``TypeError`` naming both types. ``astype`` is the pandas
+        name."""
         target = _resolve_dtype(dtype)
-        out = super().cast(target)
+        out = super()._cast(target)
         if int(target) == int(DType.STRING) and int(self.dtype) == int(DType.BOOL):
             out = _StrAccessor(
                 out
             ).capitalize()  # the engine says true/false; Python says True/False
         return out
-
-    cast = astype
 
     def compare_series(self, other: "Series", op: int) -> "Series[bool]":
         """Row by row against ``other`` (``op`` a ``_CMP_*`` code): a Bool
@@ -1036,21 +1043,19 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
 
     def clip(
         self,
-        lo: Union[int, float, None] = None,
-        hi: Union[int, float, None] = None,
-        *,
         lower: Union[int, float, None] = None,
         upper: Union[int, float, None] = None,
+        *,
         lower_bound: Union[int, float, None] = None,
         upper_bound: Union[int, float, None] = None,
     ) -> Self:
-        """Clamp to ``[lo, hi]``. ``lower`` / ``upper`` (pandas) and
-        ``lower_bound`` / ``upper_bound`` (polars) name the same two bounds. One
-        bound is enough: ``clip(lower=0)`` raises values below 0 to 0 and leaves
-        the rest, ``clip(upper=b)`` is the mirror. A null stays null. With no
-        bound it raises ``TypeError``."""
-        lo = _first_set(lo, lower, lower_bound)
-        hi = _first_set(hi, upper, upper_bound)
+        """Clamp to ``[lower, upper]`` (``lower_bound`` / ``upper_bound``, the
+        polars keywords, name the same two bounds). One bound is enough:
+        ``clip(lower=0)`` raises values below 0 to 0 and leaves the rest,
+        ``clip(upper=b)`` is the mirror. A null stays null. With no bound it
+        raises ``TypeError``."""
+        lo = _first_set(lower, lower_bound)
+        hi = _first_set(upper, upper_bound)
         if lo is None and hi is None:
             raise TypeError("clip() needs a lower bound, an upper bound, or both")
         if lo is None or hi is None:
@@ -1155,30 +1160,17 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         target = self.dtype
         if isinstance(value, float) or target not in _NUMERIC_DTYPES:
             target = DType.FLOAT64 if isinstance(value, float) else DType.INT64
-        return self.isna().astype(target).mul_scalar(0).add_scalar(value)
+        return self.is_null().cast(target).mul_scalar(0).add_scalar(value)
 
     def mode(self) -> "Series[Scalar]":
         """The most frequent value as a one-element Series (pandas returns every
         mode; the engine keeps one)."""
         return Series([super().mode()])
 
-    def take(self, indices: "Union[Series, Sequence[int]]") -> Self:
+    def gather(self, indices: "Union[Series, Sequence[int]]") -> Self:
         """The rows at ``indices`` (a Series or a list; any order, repeats
-        allowed)."""
+        allowed); ``take`` is the pandas name."""
         return super().take(_indices(indices))
-
-    @overload
-    def is_null(self) -> "Series[bool]": ...
-    @overload
-    def is_null(self, i: int) -> bool: ...
-    def is_null(self, i: Optional[int] = None) -> "Union[bool, Series[bool]]":
-        """With ``i``, whether row ``i`` is null; without, the Bool mask of
-        null rows (polars ``is_null()``, pandas ``isna()``)."""
-        if i is None:
-            return self._null_mask()
-        return super().is_null(i)
-
-    is_not_null = _ext.Series._valid_mask
 
     @property
     def is_unique(self) -> bool:
@@ -1195,7 +1187,7 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
             items = list(values)
             if not items:
                 # Present and null at once: false on every row.
-                return self.isna().logical(0, self.notna())
+                return self.is_null().logical(0, self.is_not_null())
             values = Series.from_list(items)
         return super().is_in(values)
 
@@ -1244,24 +1236,6 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
             return [None if v is None else json.loads(cast(str, v)) for v in values]
         return values
 
-    def tolist(self) -> List[Optional[T_co]]:  # ty: ignore[invalid-generic-class]
-        return self.to_list()
-
-    isna = _ext.Series._null_mask
-
-    isnull = _ext.Series._null_mask
-
-    notna = _ext.Series._valid_mask
-
-    notnull = _ext.Series._valid_mask
-
-    def isin(self, values: "Union[Series, Sequence[object]]") -> "Series[bool]":
-        return self.is_in(values)
-
-    dropna = _ext.Series.drop_nulls
-
-    fill_null = _ext.Series.fillna
-
     def var(self, ddof: int = 1) -> float:
         """Variance with ``ddof`` degrees of freedom (0 = population, 1 =
         sample, the pandas default); the engine has kernels for those two.
@@ -1276,46 +1250,120 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
             return float("nan")
         return self.stddev(_ddof_sample(ddof))
 
-    skew = _ext.Series.skewness
+    def arg_sort(self, descending: bool = False, nulls_last: bool = False) -> "Series[int]":
+        """The row indices that sort the values, so ``s.gather(s.arg_sort())``
+        is ``s.sort()`` for the same keywords. Nulls come first, or last with
+        ``nulls_last=True`` (the polars keywords and default)."""
+        order = self.argsort(descending)
+        nulls = self.null_count
+        if nulls_last or not nulls:
+            return order
+        size = len(order)
+        return order.gather(list(range(size - nulls, size)) + list(range(size - nulls)))
 
-    kurt = _ext.Series.kurtosis
+    def unique(self, *, maintain_order: bool = False) -> Self:
+        """The distinct values, a null kept as one value (the polars
+        ``unique``). With ``maintain_order=False`` (default) they are sorted,
+        nulls first; with ``True`` they are in order of first occurrence.
+        ``drop_duplicates`` is the pandas name."""
+        if not self.null_count and not maintain_order:
+            return super().unique()
+        kept = self.filter(~self.duplicated())
+        return kept if maintain_order else kept.sort()
 
-    n_unique = _ext.Series.nunique
+    @overload
+    def search_sorted(self, element: "Union[int, float]", side: builtins.str = "left") -> int: ...
 
-    prod = _ext.Series.product
+    @overload
+    def search_sorted(
+        self, element: "Union[Series, Sequence[Union[int, float]]]", side: builtins.str = "left"
+    ) -> "Series[int]": ...
 
-    argmin = _ext.Series.arg_min
+    def search_sorted(self, element: Any, side: builtins.str = "left") -> Any:
+        """The insertion index of ``element`` into this sorted numeric Series:
+        an int for a scalar, a Series for a Series or a list. ``side`` is
+        ``"left"`` (default; ``"any"`` is the same), or ``"right"`` to insert
+        after equal values."""
+        if side not in ("left", "right", "any"):
+            raise ValueError("search_sorted: side must be 'left', 'right' or 'any'")
+        scalar = isinstance(element, (int, float))
+        needles = Series([element]) if scalar else element
+        if not isinstance(needles, Series):
+            needles = Series(list(needles))
+        if side == "right":
+            values = cast("List[Any]", self.to_list())
+            found = Series(
+                [bisect.bisect_right(values, v) for v in cast("List[Any]", needles.to_list())]
+            )
+        else:
+            found = _ext.Series.search_sorted(self, needles)
+        return found.to_list()[0] if scalar else found
 
-    argmax = _ext.Series.arg_max
+    def skew(self, bias: bool = False) -> Optional[float]:
+        """The pandas ``skew`` (unbiased; NaN below three values and for a
+        constant column, as pandas 3) by default; ``bias=True`` is the polars population
+        skewness (NaN for a constant column, null for no values)."""
+        n = self.count()
+        pop = _ext.Series.skew(self)
+        if bias:
+            return _population(self, n, pop)
+        if n < 3 or _is_constant(self):
+            return float("nan")
+        return pop * math.sqrt(n * (n - 1)) / (n - 2)
 
-    idxmin = _ext.Series.arg_min
+    def kurtosis(self, fisher: bool = True, bias: bool = True) -> Optional[float]:
+        """The polars ``kurtosis``, with the polars defaults: the population
+        excess kurtosis (NaN for one value or a constant column, null for no
+        values); ``fisher=False`` adds 3, ``bias=False`` is the unbiased
+        estimator (null below four values). ``kurt`` is the pandas name and
+        gives the pandas estimator."""
+        n = self.count()
+        pop = _ext.Series.kurtosis(self)
+        if bias:
+            value = _population(self, n, pop)
+        elif n < 4:
+            return None
+        elif _is_constant(self):
+            value = float("nan")
+        else:
+            value = _unbiased_kurtosis(pop, n)
+        if value is not None and not fisher:
+            value += 3.0
+        return value
 
-    idxmax = _ext.Series.arg_max
+    def kurt(self) -> float:
+        """The pandas ``kurt``: unbiased excess kurtosis, NaN below four
+        values and for a constant column (pandas 3)."""
+        n = self.count()
+        if n < 4 or _is_constant(self):
+            return float("nan")
+        return _unbiased_kurtosis(_ext.Series.kurtosis(self), n)
 
-    def arg_sort(self, descending: bool = False) -> "Series[int]":
-        return self.argsort(descending)
+    def sort(self, *, descending: bool = False, nulls_last: bool = False) -> Self:
+        """The values in order. Nulls come first, or last with
+        ``nulls_last=True`` (the polars keywords and default); a NaN sorts
+        after every number and apart from the nulls, as polars."""
+        out = super().sort(descending)
+        nulls = self.null_count
+        if not nulls or nulls_last:
+            return out
+        size = len(out)
+        return out.gather(list(range(size - nulls, size)) + list(range(size - nulls)))
 
-    cumprod = _ext.Series.cum_prod
-
-    cum_sum = _ext.Series.cumsum
-
-    cum_max = _ext.Series.cummax
-
-    cum_min = _ext.Series.cummin
-
-    def sort_values(self, ascending: bool = True) -> Self:
-        return self.sort(not ascending)
+    def sort_values(self, ascending: bool = True, na_position: builtins.str = "last") -> Self:
+        """The pandas ``sort_values``: :meth:`sort` with ``ascending`` and
+        ``na_position`` (nulls last by default, unlike :meth:`sort`)."""
+        if na_position not in ("first", "last"):
+            raise ValueError("na_position must be 'first' or 'last'")
+        return self.sort(descending=not ascending, nulls_last=na_position == "last")
 
     def nlargest(self, n: int = 5) -> Self:
+        """The pandas ``nlargest``: :meth:`top_k` with ``n``."""
         return self.top_k(n)
 
     def nsmallest(self, n: int = 5) -> Self:
+        """The pandas ``nsmallest``: :meth:`bottom_k` with ``n``."""
         return self.bottom_k(n)
-
-    searchsorted = _ext.Series.search_sorted
-
-    def gather(self, indices: "Union[Series, Sequence[int]]") -> Self:
-        return self.take(indices)
 
     # ``s.str``: string methods under both spellings, pandas (``s.str.lower()``,
     # ``s.str.contains("x")``, ``s.str.len()``) and polars
@@ -1336,6 +1384,63 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
 
     def __reduce__(self) -> "Tuple[Callable[[bytes], Series], Tuple[bytes, ...]]":
         return (_series_from_bytes, (self.to_bytes(),))
+
+    # BEGIN GENERATED aliases from _aliases.py by scripts/gen_pyi.py
+    if TYPE_CHECKING:
+        aggregate = _SeriesPandasMixin.agg
+        astype = cast
+        isna = _ext.Series.is_null
+        isnull = _ext.Series.is_null
+        notna = _ext.Series.is_not_null
+        notnull = _ext.Series.is_not_null
+        dropna = _ext.Series.drop_nulls
+        fillna = _ext.Series.fill_null
+        isin = is_in
+        nunique = _ext.Series.n_unique
+        prod = _ext.Series.product
+        argmax = _ext.Series.arg_max
+        idxmax = _ext.Series.arg_max
+        argmin = _ext.Series.arg_min
+        idxmin = _ext.Series.arg_min
+        cumsum = _ext.Series.cum_sum
+        cumprod = _ext.Series.cum_prod
+        cummax = _ext.Series.cum_max
+        cummin = _ext.Series.cum_min
+        searchsorted = search_sorted
+        tolist = to_list
+        ffill = _ext.Series.forward_fill
+        pad = _ext.Series.forward_fill
+        bfill = _ext.Series.backward_fill
+        backfill = _ext.Series.backward_fill
+        take = gather
+        iat = _SeriesPandasMixin.iloc
+        at = _SeriesPandasMixin.iloc
+        loc = _SeriesPandasMixin.iloc
+        rtruediv = _SeriesPandasMixin.rdiv
+        divide = truediv
+        div = truediv
+        multiply = mul
+        subtract = sub
+        pass
+    # END GENERATED aliases
+
+
+def _is_constant(s: "Series") -> bool:
+    return s.min() == s.max()
+
+
+def _population(s: "Series", n: int, value: float) -> Optional[float]:
+    """The polars population moment: null with no values, NaN for one value or
+    a constant column."""
+    if n == 0:
+        return None
+    if n == 1 or _is_constant(s):
+        return float("nan")
+    return value
+
+
+def _unbiased_kurtosis(population: float, n: int) -> float:
+    return (n - 1) / ((n - 2) * (n - 3)) * ((n + 1) * population + 6)
 
 
 def _indices(indices: "Union[Series, Sequence[int]]") -> List[int]:
@@ -1446,10 +1551,11 @@ class _DtAccessor(_ext.DtAccessor):
     (``s.dt("ns")`` picks another unit). Naive: a timezone is ignored and
     every part is UTC, as pandas on a tz-naive column."""
 
-    __slots__ = ("_unit",)
+    __slots__ = ("_unit", "_given")
 
     def __new__(cls, series: Series, unit: Optional[str] = None) -> "_DtAccessor":
         self = _dt_accessor_new(cls, series)
+        self._given = unit
         unit = _dt_unit(series.type, series.time_unit, unit)
         if unit not in _TIME_UNITS:
             raise ValueError("dt: unit must be s, ms, us or ns")
@@ -1560,6 +1666,32 @@ class _DtAccessor(_ext.DtAccessor):
     def is_quarter_end(self) -> Series:
         return self.is_month_end.logical(0, self.month.mod(3).eq(0))
 
+    def ordinal_day(self) -> Series:
+        """The day of the year, from 1 (the polars name; ``dayofyear`` is the
+        pandas property)."""
+        return self._part(10)
+
+    def iso_year(self) -> Series:
+        """The ISO 8601 year of the week the instant falls in."""
+        return self._part(15)
+
+    def week(self) -> Series:
+        """The ISO 8601 week number, from 1."""
+        return self._part(14)
+
+    def epoch(self, time_unit: str = "us") -> "Series[int]":
+        """Each instant as an integer count of ``time_unit`` (``"ns"``,
+        ``"us"``, ``"ms"``, ``"s"`` or ``"d"``) since the epoch, from the
+        column's own unit; a coarser unit floors."""
+        from ._expr_ops import _EPOCH_NS, ColumnOp, run_column_op
+
+        if time_unit not in _EPOCH_NS:
+            raise ValueError("epoch: time_unit must be ns, us, ms, s or d")
+        spec = ColumnOp(
+            "dftu.series.cast", None, 0, 0, time_unit, None, "epoch", 0, None, self._given
+        )
+        return cast("Series[int]", run_column_op(self._s, spec, None))
+
     def isocalendar(self) -> "DataFrame":
         """A frame of ISO ``year``, ``week`` and ``day`` (Monday = 1)."""
         from .dataframe import DataFrame
@@ -1582,6 +1714,10 @@ class _DtAccessor(_ext.DtAccessor):
         ``"D"``, or a count of the column's units); ``ceil`` and ``round``
         (half to even) likewise."""
         return self._s.dt_round(self._every(freq), 0)
+
+    def truncate(self, every: "Union[int, str]") -> Series:
+        """As :meth:`floor` (the polars name)."""
+        return self.floor(every)
 
     def ceil(self, freq: "Union[int, str]") -> Series:
         return self._s.dt_round(self._every(freq), 1)
@@ -1720,6 +1856,10 @@ class _StrAccessor(_ext.StrAccessor):
     # it is by the case forms and fails the character classes).
     def capitalize(self) -> "Series[builtins.str]":
         return self._s.str_case(0)
+
+    def to_titlecase(self) -> "Series[builtins.str]":
+        """As :meth:`title` (the polars name)."""
+        return self._s.str_case(1)
 
     def title(self) -> "Series[builtins.str]":
         return self._s.str_case(1)
@@ -1965,4 +2105,5 @@ def _series_from_arrow(array: "Union[pa.Array, pa.ChunkedArray]") -> Series:
     return _arrow_native("_series_from_arrow")(array)
 
 
+_install_aliases("Series", Series)
 _ext._bind_types(Series=Series)

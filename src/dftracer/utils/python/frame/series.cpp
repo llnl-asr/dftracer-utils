@@ -14,6 +14,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/python/core/api_methods.h>
+#include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/method.h>
 #include <dftracer/utils/python/core/type_helpers.h>
 #include <dftracer/utils/python/frame/series.h>
@@ -56,7 +57,7 @@ Series named_like(Series out, const Series& a, const Series& b) {
 
 PyObject* make_series(Series&& col) {
     if (!col.valid()) {
-        PyErr_SetString(PyExc_RuntimeError,
+        PyErr_SetString(core::g_dft_value_error,
                         "dataframe kernel produced a null column");
         return nullptr;
     }
@@ -322,7 +323,7 @@ PyMethodDef Series_methods[] = {
      METH_VARARGS | METH_KEYWORDS,
      "pow(other, reverse=False) -> a ** other; Int64 for two integers (a "
      "negative exponent is null), else Float64."},
-    {"cast", Series_cast, METH_O,
+    {"_cast", Series_cast, METH_O,
      "Cast to a TypeId code; TypeError names both types for a pair the engine "
      "refuses."},
     {"prim", DFTU_PYCFUNCTION((core::kw_one<"prim", "op", Series_prim>)),
@@ -451,7 +452,7 @@ PyMethodDef Series_methods[] = {
      "where(mask, other) -> Series: this value where the Bool mask is true, "
      "else other's (a null mask row takes other)."},
     {"filter",
-     DFTU_PYCFUNCTION((core::kw_one<"filter", "mask", Series_filter>)),
+     DFTU_PYCFUNCTION((core::kw_one<"filter", "predicate", Series_filter>)),
      METH_VARARGS | METH_KEYWORDS,
      "filter(mask) -> Series keeping rows where the Bool mask is true."},
     {"argsort", DFTU_PYCFUNCTION(Series_argsort), METH_VARARGS | METH_KEYWORDS,
@@ -677,7 +678,8 @@ PyMethodDef Series_methods[] = {
      METH_VARARGS | METH_KEYWORDS,
      "with_timezone(tz) -> this Timestamp column under zone tz ('' for "
      "naive), the same instants and buffers."},
-    {"is_null", Series_is_null, METH_O, "is_null(i) -> whether row i is null."},
+    {"is_null_at", Series_is_null, METH_O,
+     "is_null_at(i) -> whether row i is null."},
     {"num_children", Series_num_children, METH_NOARGS,
      "Child count: 1 for a List, the field count for a Struct, else 0."},
     {"child", DFTU_PYCFUNCTION((core::kw_one<"child", "i", Series_child>)),

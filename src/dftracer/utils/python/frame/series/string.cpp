@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/frame/series_detail.h>
 
 #include <cstddef>
@@ -193,7 +194,7 @@ PyObject* Series_str_extract(PyObject* self, PyObject* args) {
         return a->str_extract(pattern, static_cast<std::int64_t>(group));
     });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_ValueError,
+        PyErr_SetString(core::g_dft_value_error,
                         "str_extract: the pattern does not compile");
         return nullptr;
     }
@@ -211,7 +212,7 @@ PyObject* Series_str_regex_replace(PyObject* self, PyObject* args) {
         kernel(*a, [&] { return a->str_regex_replace(pattern, repl); });
     if (!out.valid()) {
         PyErr_SetString(
-            PyExc_ValueError,
+            core::g_dft_value_error,
             "str_regex_replace: the pattern or the replacement is invalid");
         return nullptr;
     }
@@ -226,7 +227,7 @@ PyObject* Series_list_get(PyObject* self, PyObject* arg) {
     Series out = kernel(
         *a, [&] { return a->list_get(static_cast<std::int64_t>(index)); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError, "list_get: not a List column");
+        PyErr_SetString(core::g_dft_value_error, "list_get: not a List column");
         return nullptr;
     }
     return make_series(std::move(out));
@@ -244,7 +245,7 @@ PyObject* str_arg_op(PyObject* self, PyObject* arg, const char* name) {
     if (!as_str_view(arg, &s)) return nullptr;
     Series out = kernel(*a, [&] { return (a->*Method)(s); });
     if (!out.valid()) {
-        PyErr_Format(PyExc_TypeError, "%s: not a String column", name);
+        PyErr_Format(core::g_dft_value_error, "%s: not a String column", name);
         return nullptr;
     }
     return make_series(std::move(out));
@@ -267,7 +268,8 @@ PyObject* Series_str_case(PyObject* self, PyObject* arg) {
     Series out = kernel(
         *a, [&] { return a->str_case(static_cast<std::int32_t>(code)); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError, "str_case: not a String column");
+        PyErr_SetString(core::g_dft_value_error,
+                        "str_case: not a String column");
         return nullptr;
     }
     return make_series(std::move(out));
@@ -287,7 +289,7 @@ PyObject* Series_str_is(PyObject* self, PyObject* arg) {
     Series out =
         kernel(*a, [&] { return a->str_is(static_cast<std::int32_t>(code)); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError, "str_is: not a String column");
+        PyErr_SetString(core::g_dft_value_error, "str_is: not a String column");
         return nullptr;
     }
     return make_series(std::move(out));
@@ -314,7 +316,7 @@ PyObject* Series_str_findall(PyObject* self, PyObject* arg) {
     if (!as_str_view(arg, &pattern)) return nullptr;
     Series out = kernel(*a, [&] { return a->str_findall(pattern); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_ValueError,
+        PyErr_SetString(core::g_dft_value_error,
                         "str_findall: not a String column, or the pattern "
                         "does not compile");
         return nullptr;
@@ -329,7 +331,7 @@ PyObject* Series_list_join(PyObject* self, PyObject* arg) {
     if (!as_str_view(arg, &sep)) return nullptr;
     Series out = kernel(*a, [&] { return a->list_join(sep); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError,
+        PyErr_SetString(core::g_dft_value_error,
                         "list_join: not a List column of strings");
         return nullptr;
     }
@@ -348,7 +350,8 @@ PyObject* Series_str_repeat(PyObject* self, PyObject* arg) {
     Series out =
         kernel(*a, [&] { return a->str_repeat(static_cast<std::int64_t>(n)); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError, "str_repeat: not a String column");
+        PyErr_SetString(core::g_dft_value_error,
+                        "str_repeat: not a String column");
         return nullptr;
     }
     return make_series(std::move(out));
@@ -366,7 +369,8 @@ PyObject* Series_str_center(PyObject* self, PyObject* args, PyObject* kwds) {
     Series out = kernel(
         *a, [&] { return a->str_center(static_cast<std::int64_t>(width), f); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError, "str_center: not a String column");
+        PyErr_SetString(core::g_dft_value_error,
+                        "str_center: not a String column");
         return nullptr;
     }
     return make_series(std::move(out));
@@ -380,7 +384,7 @@ PyObject* Series_str_cat(PyObject* self, PyObject* other) {
     if (!b) return nullptr;
     Series out = kernel(*a, [&] { return a->str_cat(*b); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError,
+        PyErr_SetString(core::g_dft_value_error,
                         "str_cat: both must be String columns of one length");
         return nullptr;
     }
@@ -404,7 +408,8 @@ PyObject* Series_str_partition(PyObject* self, PyObject* args, PyObject* kwds) {
     Series out =
         kernel(*a, [&] { return a->str_partition(sep, from_right != 0); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError, "str_partition: not a String column");
+        PyErr_SetString(core::g_dft_value_error,
+                        "str_partition: not a String column");
         return nullptr;
     }
     return make_series(std::move(out));
@@ -423,7 +428,8 @@ PyObject* Series_str_normalize(PyObject* self, PyObject* arg) {
     Series out = kernel(
         *a, [&] { return a->str_normalize(static_cast<std::int32_t>(form)); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError, "str_normalize: not a String column");
+        PyErr_SetString(core::g_dft_value_error,
+                        "str_normalize: not a String column");
         return nullptr;
     }
     return make_series(std::move(out));
@@ -443,7 +449,7 @@ PyObject* Series_str_translate(PyObject* self, PyObject* args) {
     if (!to) return nullptr;
     Series out = kernel(*a, [&] { return a->str_translate(*from, *to); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_ValueError,
+        PyErr_SetString(core::g_dft_value_error,
                         "str_translate: not a String column, or the table is "
                         "not one distinct codepoint per key");
         return nullptr;
@@ -465,7 +471,7 @@ PyObject* Series_str_wrap(PyObject* self, PyObject* args) {
         return a->str_wrap(static_cast<std::int64_t>(width), flags);
     });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError,
+        PyErr_SetString(core::g_dft_value_error,
                         "str_wrap: not a String column, or bad flags");
         return nullptr;
     }
@@ -489,7 +495,7 @@ PyObject* Series_dt_part(PyObject* self, PyObject* args) {
     }
     Series out = kernel(*a, [&] { return a->dt_part(part, unit); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError,
+        PyErr_SetString(core::g_dft_value_error,
                         "dt_part: not a Timestamp, Date, Duration or Int64 "
                         "column");
         return nullptr;
@@ -516,7 +522,7 @@ PyObject* Series_dt_format(PyObject* self, PyObject* args) {
         dstd::String msg = "dt_format: invalid format '";
         msg.append(fmt);
         msg.append("' or not a Timestamp, Date or Int64 column");
-        PyErr_SetString(PyExc_ValueError, msg.c_str());
+        PyErr_SetString(core::g_dft_value_error, msg.c_str());
         return nullptr;
     }
     return make_series(std::move(out));
@@ -542,7 +548,7 @@ PyObject* Series_dt_round(PyObject* self, PyObject* args) {
         return a->dt_round(static_cast<std::int64_t>(every), mode);
     });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError,
+        PyErr_SetString(core::g_dft_value_error,
                         "dt_round: not a Timestamp, Duration or Int64 column");
         return nullptr;
     }
@@ -557,7 +563,7 @@ PyObject* Series_with_timezone(PyObject* self, PyObject* arg) {
     if (!as_str_view(arg, &tz)) return nullptr;
     Series out = kernel(*a, [&] { return a->with_timezone(tz); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError,
+        PyErr_SetString(core::g_dft_value_error,
                         "with_timezone: not a Timestamp column");
         return nullptr;
     }

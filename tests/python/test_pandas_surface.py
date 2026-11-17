@@ -12,7 +12,7 @@ import pytest
 pa = pytest.importorskip("pyarrow")
 pd = pytest.importorskip("pandas")
 
-from dftracer.utils import DataFrame, Series, col  # noqa: E402
+from dftracer.utils import DataFrame, DFTUtilsValueError, Series, col  # noqa: E402
 
 # include_groups= landed in pandas 2.2; before it, apply() forwards the keyword
 # to the function.
@@ -213,7 +213,7 @@ def test_series_surface_matches_pandas():
     assert s.between(1, 3, "left").to_list() == [False, True, None, False, True]
     with pytest.raises(ValueError):
         s.between(1, 2, "sideways")
-    assert s.drop_duplicates().to_list() == [1, 2, 3]  # unique: sorted, nulls out
+    assert s.drop_duplicates().to_list() == [None if pd.isna(v) else v for v in p.drop_duplicates()]
     assert s.duplicated().to_list() == p.duplicated().tolist()
     assert s.duplicated("last").to_list() == p.duplicated("last").tolist()
     assert s.duplicated(False).to_list() == p.duplicated(False).tolist()
@@ -480,7 +480,7 @@ def test_str_batch_matches_pandas():
         s.str.get(-1)
     with pytest.raises(ValueError):
         s.str.findall("(")
-    with pytest.raises(TypeError):
+    with pytest.raises(DFTUtilsValueError):
         Series([1, 2]).str.count("a")
     dummies = p.str.get_dummies("-").to_dict("list")
     dummies.pop("", None)  # pandas 3 emits a column for the empty token
@@ -556,7 +556,7 @@ def test_dt_accessor_matches_pandas():
     assert Series([None, 0]).dt.year.to_list() == [None, 1970]
     with pytest.raises(ValueError):
         s.dt("weeks")
-    with pytest.raises(TypeError):
+    with pytest.raises(DFTUtilsValueError):
         Series(["x"]).dt.year
     with pytest.raises(ValueError):
         s.dt.floor("1ns")  # not a whole number of the column's unit
@@ -571,7 +571,7 @@ def test_dt_accessor_matches_pandas():
     assert ts.astype("int64").to_list() == [0, 1_700_000_000_123_456_789]
     dates = Series.from_arrow(pa.array([0, 19000], pa.date32()))
     assert dates.dt.day.to_list() == pd.to_datetime(pd.Series([0, 19000]), unit="D").dt.day.tolist()
-    with pytest.raises(TypeError):
+    with pytest.raises(DFTUtilsValueError):
         dates.dt.floor("1d")  # a date has no sub-day instant to round
     dur = Series.from_arrow(pa.array([1_500_000, 90_000_000], pa.duration("us")))
     assert dur.dt.total_seconds().to_list() == [1.5, 90.0]
@@ -891,7 +891,7 @@ def test_tz_localize_and_tz_convert_match_pandas():
         utc.dt.tz_localize("UTC")
     with pytest.raises(TypeError, match="naive"):
         s.dt.tz_convert("UTC")
-    with pytest.raises(TypeError):
+    with pytest.raises(DFTUtilsValueError):
         Series([1, 2]).dt.tz_localize("UTC")
 
     df = DataFrame({"ts": s, "v": [1, 2, 3]}).set_index("ts")
@@ -1001,7 +1001,7 @@ def test_last_pandas_names_match_pandas():
     assert q.set_index("a").rename_axis("idx")._index == ["idx"]
     with pytest.raises(ValueError):
         q.rename_axis("idx")
-    _same(q.kurtosis(), pq.kurtosis(numeric_only=True).to_frame().T)
+    _same(q.kurt(), pq.kurtosis(numeric_only=True).to_frame().T)
     assert _d(q.select("a", "b").swapaxes()) == _d(q.select("a", "b").T)
 
     s = Series([1.0, None, 3.0, None, 5.0])

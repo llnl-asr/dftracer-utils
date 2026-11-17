@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from dftracer.utils import DataFrame, Series
+from dftracer.utils import DataFrame, DFTUtilsValueError, Series
 
 N = 1003  # not a multiple of 8, so the last validity byte is partial
 
@@ -141,5 +141,5 @@ def test_str_into_checks_its_destination():
         col._str_into(np.empty(2, dtype=object), None)  # wrong length
     with pytest.raises(ValueError):
         col._str_into(np.empty(3, dtype=np.int64), None)  # not an object array
-    with pytest.raises(TypeError):
+    with pytest.raises(DFTUtilsValueError):
         DataFrame.from_dict({"x": [1, 2]})["x"]._str_into(np.empty(2, dtype=object), None)

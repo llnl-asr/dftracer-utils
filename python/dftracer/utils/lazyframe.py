@@ -33,6 +33,7 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
+from ._aliases import install as _install_aliases
 from .columnar import Expr, _as_expr, _Col, _emit_ast, col
 from .dataframe import DataFrame, JoinHow, WindowSpec, _names, _norm_window_spec
 from .runtime import TaskHandle
@@ -306,10 +307,6 @@ class LazyFrame(_ext.LazyFrame):
         """The first ``n`` rows."""
         return self._like(_ext.LazyFrame.head(self, n))
 
-    def limit(self, n: int = 5) -> "LazyFrame":
-        """The first ``n`` rows (polars spelling of :meth:`head`)."""
-        return self._like(_ext.LazyFrame.head(self, n))
-
     def tail(self, n: int = 5) -> "LazyFrame":
         """The last ``n`` rows."""
         return self._like(_ext.LazyFrame.tail(self, n))
@@ -457,8 +454,6 @@ class LazyFrame(_ext.LazyFrame):
             raise NotImplementedError("agg(axis=1): no per-row reduction across columns")
         return LazyGroupBy(self, []).agg(*([] if func is None else [func]), **named)
 
-    aggregate = agg
-
     def sum(self) -> "LazyFrame":
         return self.reduce("sum")
 
@@ -490,9 +485,10 @@ class LazyFrame(_ext.LazyFrame):
         """Sort by one column (external merge sort, bounded memory)."""
         return self._like(_ext.LazyFrame.sort_by(self, name, descending))
 
-    def take(self, indices: Sequence[int]) -> "LazyFrame":
-        """Keep the rows at ``indices`` (any order, repeats allowed). Not
-        streaming: the whole frame is resident before the indices apply."""
+    def gather(self, indices: Sequence[int]) -> "LazyFrame":
+        """Keep the rows at ``indices`` (any order, repeats allowed); ``take``
+        is the pandas name. Not streaming: the whole frame is resident before
+        the indices apply."""
         return self._like(_ext.LazyFrame.take(self, list(indices)))
 
     def filter_mask(self, mask: "Series") -> "LazyFrame":
@@ -514,13 +510,14 @@ class LazyFrame(_ext.LazyFrame):
     def sort(
         self,
         by: Union[str, Sequence[str]],
+        *,
         descending: Union[bool, Sequence[bool]] = False,
-        nulls_last: bool = True,
+        nulls_last: bool = False,
     ) -> "LazyFrame":
         """Sort by one column (external merge sort) or lexicographically by
-        several; the polars spelling over :meth:`sort_by` / :meth:`sort_by_multi`.
-        ``nulls_last=False`` puts the null-keyed rows first: a hidden 0 / 1
-        presence column sorts ahead of each key."""
+        several, over :meth:`sort_by` / :meth:`sort_by_multi`. The null-keyed
+        rows come first, or last with ``nulls_last=True`` (the polars keywords
+        and default): a hidden 0 / 1 presence column sorts ahead of each key."""
         names = [by] if isinstance(by, str) else list(by)
         if not nulls_last:
             from .dataframe import _nulls_first_keys
@@ -542,16 +539,15 @@ class LazyFrame(_ext.LazyFrame):
         ascending: Union[bool, Sequence[bool]] = True,
         na_position: Literal["first", "last"] = "last",
     ) -> "LazyFrame":
-        """The pandas spelling of :meth:`sort`."""
+        """The pandas ``sort_values``: :meth:`sort` with ``ascending`` and
+        ``na_position`` (nulls last by default, unlike :meth:`sort`)."""
         if na_position not in ("first", "last"):
             raise ValueError("na_position must be 'first' or 'last'")
         if isinstance(ascending, bool):
-            return self.sort(by, not ascending, nulls_last=na_position == "last")
-        return self.sort(by, [not a for a in ascending], nulls_last=na_position == "last")
-
-    def gather(self, indices: Sequence[int]) -> "LazyFrame":
-        """The polars spelling of :meth:`take`."""
-        return self.take(indices)
+            return self.sort(by, descending=not ascending, nulls_last=na_position == "last")
+        return self.sort(
+            by, descending=[not a for a in ascending], nulls_last=na_position == "last"
+        )
 
     def join(
         self,
@@ -595,12 +591,8 @@ class LazyFrame(_ext.LazyFrame):
 
     def unique(self, subset: "str | Sequence[str] | None" = None) -> "LazyFrame":
         """Distinct rows, first occurrence, in original order, keyed on every
-        column or on ``subset``."""
+        column or on ``subset`` (``drop_duplicates`` is the pandas name)."""
         return self._like(_ext.LazyFrame.unique(self, subset))
-
-    def drop_duplicates(self, subset: "str | Sequence[str] | None" = None) -> "LazyFrame":
-        """Alias of :meth:`unique`."""
-        return self._like(_ext.LazyFrame.drop_duplicates(self, subset))
 
     def sample(self, n: int, seed: int = 0) -> "LazyFrame":
         """A deterministic ``n``-row sample."""
@@ -712,7 +704,7 @@ class LazyFrame(_ext.LazyFrame):
     def __arrow_c_stream__(self, requested_schema: Optional[object] = None) -> object:
         """Stream the query through the Arrow C Stream Interface: one batch per
         ``get_next``, run on the native pool, so ``pa.RecordBatchReader.from_stream``
-        and ``pl.from_arrow`` read it without a full collect."""
+        and ``pl.DataFrame`` read it without a full collect."""
         return _ext.LazyFrame.__arrow_c_stream__(self, requested_schema, self._runtime)
 
     def __copy__(self) -> "LazyFrame":
@@ -758,6 +750,15 @@ class LazyFrame(_ext.LazyFrame):
         except Exception:  # noqa: BLE001 - repr must never raise
             return "<LazyFrame>"
         return "<LazyFrame>\n" + plan
+
+    # BEGIN GENERATED aliases from _aliases.py by scripts/gen_pyi.py
+    if TYPE_CHECKING:
+        aggregate = agg
+        drop_duplicates = unique
+        take = gather
+        limit = head
+        pass
+    # END GENERATED aliases
 
 
 def dynamic_aggs(
@@ -936,8 +937,6 @@ class LazyGroupBy:
         strings = agg_spec_strings(self._source, self._keys, specs, named)
         return self._grouped(_ext.LazyFrame.group_by(self._source, self._keys, strings))
 
-    aggregate = agg
-
     def reduce(self, agg: str) -> LazyFrame:
         native = self._source
         if not self._keys:
@@ -1052,8 +1051,6 @@ class LazyGroupBy:
 
     def prod(self) -> LazyFrame:
         return self.reduce("prod")
-
-    product = prod
 
     def median(self) -> LazyFrame:
         """The exact median of each numeric column per group (pandas
@@ -1467,4 +1464,6 @@ def collect_all(
     return out
 
 
+_install_aliases("LazyFrame", LazyFrame)
+_install_aliases("LazyGroupBy", LazyGroupBy)
 _ext._bind_types(LazyFrame=LazyFrame)

@@ -188,11 +188,6 @@ struct PromiseBase : detail::FrameAllocation {
     /// A flag outside the frame that cancels this task and those it awaits,
     /// set through the future of a @ref Scope spawn.
     const std::atomic<bool>* cancel_source{nullptr};
-    /// A chain of flags that cancel this task and every task it awaits, with no
-    /// scope or stop source behind it. A task that owns a node sets it before
-    /// it is awaited, and its launch links the node to the awaiter's chain; an
-    /// awaited task with no node takes its awaiter's chain.
-    const CancelLink* cancel_link{nullptr};
     std::atomic<bool> cancel_flag{false};
     /// Written before the awaiter is released and read after.
     bool cancelled{false};
@@ -212,6 +207,12 @@ struct PromiseBase : detail::FrameAllocation {
     detail::ParentEnd parent_end{nullptr};
     PromiseBase* root_promise{nullptr};
     detail::RunContext context;
+    /// A chain of flags that cancel this task and every task it awaits, with no
+    /// scope or stop source behind it. A task that owns a node sets it before
+    /// it is awaited, and its launch links the node to the awaiter's chain; an
+    /// awaited task with no node takes its awaiter's chain. Kept after the hot
+    /// fields so they keep their offsets.
+    const CancelLink* cancel_link{nullptr};
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
     void* trace_handle{nullptr};  ///< logging::coro_trace enter/leave handle
     const char* trace_file{nullptr};  ///< coroutine definition site

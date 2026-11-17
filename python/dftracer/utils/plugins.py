@@ -159,14 +159,15 @@ class Plugins:
         result_names: Dict[str, str] = {}
         specs = []
         for plugin in plugins:
+            cfg = config.get(_plugin_key(plugin))
             if isinstance(plugin, str):
                 path = plugin
             else:
                 from . import jit
 
+                cfg = jit.plugin_config(plugin, cfg)
                 result_names.update(jit.plugin_result_names(plugin))
                 path = jit.compile_class(plugin)
-            cfg = config.get(_plugin_key(plugin))
             specs.append((path, json.dumps(cfg) if cfg is not None else None))
         self._native = _NativePlugins(specs, result_names or None, runtime)
 

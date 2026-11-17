@@ -112,9 +112,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Add `yaml::Document::parse` with a `yaml::RunJobs` hook that indexes one large text in chunks on the caller's threads and joins them, with the same result and errors as the one-thread parse.
   A 200 MB text parsed 5 to 7 times faster on 14 threads and 7 to 9 times faster on 48.
 - Add the Arrow buffer getters `dftu_series_validity`, `dftu_series_chunk_count`/`dftu_series_chunk`, `dftu_series_dictionary_codes`/`dftu_series_dictionary_values` and `dftu_series_view_buffer_count`/`dftu_series_view_data`/`dftu_series_view_buffer`, add `dftu_series_new_string_borrowed`, and make `dftu_series_new_flat_borrowed` and `dftu_series_new_string_view` borrow the validity bitmap, so a plugin builds Arrow arrays from a column and hands Arrow memory back with no copy (`examples/plugins/arrow_convert.c`).
+- Add a dataclass config for `@jit.plugin`: annotate the class with `config: Cfg`, where `Cfg` is a (frozen) dataclass of `int`, `float`, `bool` and `str` fields or `Optional` of one, and read `self.config.<field>` in the body.
+  Defaults come from the dataclass, `Plugins` checks the values before the load and raises `JitError` that names a missing required field, an unknown key or a wrong type, and a field of another type is a compile error at the field.
+  Each loaded plugin instance holds its own config, so two instances of one plugin with different values do not disturb each other.
+  A `str` field is copied into the instance, compares with an event string and may be a key, and an `Optional` field set to `None` stays unset even when its default is a value.
+- Name the position of every JIT compile error, `JitOpError` included (it is now a `JitError`): a `JitError` reads `<file>:<line>:<col>: <reason>` and then the source line, and carries `file`, `line`, `col`, `source` and `reason`.
+- Check the public `jit` surface with `mypy --strict` as well as `ty`, from the fixtures in `tests/python/typing/`, and type `jit.each_event`, `jit.record`, `jit.vfold`, `jit.series` and `JitPackage.plugin` and `JitPackage.series` so a wrong use is a type error.
 
 ### Changed
 
+- Replace `jit.config(jit.i64)` with the dataclass config above, read as `self.config.threshold` in place of `self.threshold`, and declare a `jit.record` as monoid values (`count = jit.count()`) in place of annotations (`count: jit.count`), so a type checker accepts both.
 - The distributed code is its own library, `libdftracer_utils_comm`, in `src/dftracer/utils/comm/` under `dftracer::utils::comm`, and `libdftracer_utils_runtime` no longer links MPI. The ctest `comm_no_upward` keeps `comm` below `store`, and `mpi_only_in_comm_mpi` keeps `<mpi.h>` inside `comm/mpi/`.
 
 - `dftracer_server` keeps its viz summary in the index store of each trace folder, namespace `server.viz_summary`, in place of one `.dftviz_summary` file per index directory. A restart serves it from the store, and a changed, added or removed trace file makes the server compute it again. An old `.dftviz_summary` file is ignored.

@@ -254,6 +254,78 @@ The ordering rule matters here exactly as it does in C++: a producer's
 can publish for a hand-written C++ consumer and vice versa; both sides go
 through the same ``DFTU_SVC_PORTS`` machinery.
 
+.. _jit-config:
+
+Runtime configuration
+---------------------
+
+A plugin takes load-time settings through a dataclass. Annotate the class with
+``config: Cfg``, where ``Cfg`` is a (frozen) dataclass, and read each field in
+the body as ``self.config.<field>``:
+
+.. code-block:: python
+
+   from dataclasses import dataclass
+   from typing import Optional
+
+   @dataclass(frozen=True)
+   class Cfg:
+       threshold: int = 0         # int, float, bool and str are native values
+       label: str = "read"
+       cap: Optional[int] = None  # Optional of one of them may be unset
+
+   @jit.plugin
+   class Slow:
+       config: Cfg
+       slow = jit.map(key=(jit.i64,), value=jit.count())
+
+       @jit.each_event
+       def step(self, e):
+           if e.dur > self.config.threshold and e.name == self.config.label:
+               self.slow[(e.pid,)] += 1
+
+   Plugins([Slow], config={"Slow": {"threshold": 45}})
+
+Defaults come from the dataclass: a field the config leaves out takes its
+default, and a field with no default is required. Plugins checks the values
+before it loads the plugin and raises ``JitError`` that names the field when a
+required field is missing, a key is not a field, or a value has the wrong type
+(an ``int`` is accepted for a ``float`` field; a ``bool`` is not an ``int``). A
+field of any other type, such as a list, is a compile error that points at the
+field in the dataclass.
+
+In the body a numeric field is a number and a ``bool`` field may stand alone as
+a guard (``if self.config.enabled:``). A ``str`` field compares with an event
+string (``e.name == self.config.label``) and may be a ``str_`` key; it cannot be
+used in arithmetic. ``self.config.cap is None`` and ``is not None`` test an
+``Optional`` field; read as a number, an unset field is ``0``.
+
+Each loaded ``Plugins`` instance holds its own config, so two instances of one
+plugin with different values can run side by side, one after the other or on
+different threads. A ``str`` value (NUL bytes included) is copied into the
+instance when it loads and freed when the instance is destroyed; the plugin
+never reads the caller's string after the load. An ``Optional`` field that the
+config sets to ``None`` stays unset even when the dataclass default is a value.
+
+Compile errors
+--------------
+
+Every compile error is a ``JitError`` with one stable form: the position of the
+offending node, the reason, then the source line.
+
+.. code-block:: text
+
+   plugins/slow.py:14:13: unsupported in @jit.each_event: for loop; use a raw C++ plugin
+               for x in events:
+
+``<file>:<line>:<col>:`` is where the JIT stopped, with 1-based line and column.
+``JitError`` also carries them as ``file``, ``line``, ``col``, ``source`` and
+``reason``. A construct in the ``each_event`` body or a ``vfold`` body points at
+the node inside it; a class-level mistake points at the class or at the
+attribute; a bad ``jit.map(...)`` or ``jit.topk(...)`` call points at the call
+in your code. ``@jit.op`` bodies raise ``JitOpError``, a subclass of
+``JitError``, with the same position form.
+
 Raw bodies: the full ABI without leaving JIT
 --------------------------------------------
 

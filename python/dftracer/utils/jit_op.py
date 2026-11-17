@@ -24,11 +24,11 @@ Example::
 from __future__ import annotations
 
 import ast
-import inspect
-import textwrap
 from typing import TYPE_CHECKING, Callable, List, Optional, Sequence, Tuple, TypedDict, Union, cast
 
 from . import _plugin_build
+from ._c_text import c_str_literal as _c_str_literal
+from ._jit_errors import JitError, _Source
 from .enums import DType
 
 if TYPE_CHECKING:
@@ -109,8 +109,11 @@ _NONCOMMUTATIVE = {ast.Sub, ast.Div}
 _FUSABLE_TYPE_ID = {"DFTU_T_I64": int(DType.INT64), "DFTU_T_F64": int(DType.FLOAT64)}
 
 
-class JitOpError(Exception):
-    """A compose-op body outside the supported subset (arithmetic on the input)."""
+class JitOpError(JitError):
+    """A compose-op body outside the supported subset (arithmetic on the input).
+
+    A :class:`~dftracer.utils.jit.JitError`: it names the file, line and column
+    of the offending node of the op body."""
 
 
 # One leaf stage of an Op: the string fields feed the C emitter, `node` is the
@@ -179,6 +182,15 @@ def _type_of(t: object) -> str:
 
 
 def _lower(node: ast.expr, var: str, in_type: str, literals: List[str]) -> str:
+    try:
+        return _lower_node(node, var, in_type, literals)
+    except JitOpError as exc:
+        if exc.node is None:
+            exc.node = node
+        raise
+
+
+def _lower_node(node: ast.expr, var: str, in_type: str, literals: List[str]) -> str:
     """Lower an op body expression on the single input `var` to C, with the
     input bound to the local `x`. `literals` collects the string constants a
     DFTU_T_STR comparison references, as placeholders `__LIT<n>__` the
@@ -333,8 +345,16 @@ def op(fn: Callable[..., object]) -> Op:
     The body must be a single ``return <arithmetic on the argument>``; anything
     else raises :class:`JitOpError` at decoration time.
     """
+    source = _Source(fn)
+    try:
+        return _op_from(fn, source)
+    except JitOpError as exc:
+        raise source.relocate(exc, ast.parse(source.text).body[0]) from None
+
+
+def _op_from(fn: Callable[..., object], source: _Source) -> Op:
     ann = getattr(fn, "__annotations__", {})
-    tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    tree = ast.parse(source.text)
     func = tree.body[0]
     if not isinstance(func, ast.FunctionDef) or len(func.args.args) != 1:
         raise JitOpError("@op needs a function of exactly one typed argument")
@@ -435,10 +455,6 @@ def _emit(op_obj: Op) -> str:
         ]
     lines += [f"    *out = g_{len(op_obj.stages) - 1};", "    return DFTU_OK;", "}", ""]
     return "\n".join(lines)
-
-
-def _c_str_literal(s: str) -> str:
-    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def emit_inline(op_obj: Op, c_name: str) -> str:

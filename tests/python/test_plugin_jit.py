@@ -287,8 +287,8 @@ def test_jit_dict_value_positional_and_named():
 def test_jit_record_value_form():
     @jit.record
     class Stats:
-        count: jit.count
-        dur: jit.sum
+        count = jit.count()
+        dur = jit.sum()
 
     @jit.plugin
     class Wide:

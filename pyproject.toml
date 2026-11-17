@@ -177,6 +177,21 @@ import-not-found = "ignore"
 missing-attribute = "ignore"
 unused-ignore-comment = "ignore"
 
+[tool.mypy]
+# Used only by tests/python/test_jit_typing.py: `mypy --strict` on the typed JIT
+# fixtures and the JIT modules. The rest of the package is followed silently.
+mypy_path = "python"
+explicit_package_bases = true
+follow_imports = "silent"
+
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*", "pandas", "pandas.*", "pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "dftracer.utils.dftracer_utils_ext"
+ignore_errors = true
+
 [tool.setuptools_scm]
 version_scheme = "no-guess-dev"
 # no-guess-dev = {tag}.post1.dev{distance}: after the tag, but a pre-release,

@@ -34,27 +34,44 @@ from __future__ import annotations
 
 import ast
 import builtins
+import dataclasses
 import inspect
+import math
 import subprocess
 import textwrap
+import types
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
+    Any,
     Callable,
     Dict,
     Generic,
     List,
+    Literal,
+    Mapping,
     NoReturn,
+    Optional,
     Protocol,
     Tuple,
     TypeVar,
+    Union,
     cast,
+    get_type_hints,
     overload,
 )
 
 from .. import _plugin_build, jit_op
+from .._c_text import c_str_literal as _c_str_literal
+from .._jit_errors import JitError as JitError
+from .._jit_errors import _class_error, _Source
 from ..jit_op import Op, compile_op, op, run_op
 from . import ops as ops
+
+if TYPE_CHECKING:
+    from ..columnar import Expr
+    from ..plugins import JSONValue
+    from .ops import Result
 
 # Python 3.8 wraps a subscript's slice in ast.Index; 3.9+ stores the value
 # directly, and 3.14 may drop the class entirely, so resolve it defensively.
@@ -65,7 +82,7 @@ def _unwrap_index(node: ast.expr) -> ast.expr:
     # _AST_INDEX is resolved at runtime, so the type checker cannot narrow node
     # to ast.Index here; read .value dynamically.
     if _AST_INDEX is not None and isinstance(node, _AST_INDEX):
-        return getattr(node, "value", node)
+        return cast(ast.expr, getattr(node, "value", node))
     return node
 
 
@@ -124,7 +141,6 @@ __all__ = [
     "regr_intercept",
     "regr_r2",
     "record",
-    "config",
     "each_event",
     "vfold",
     "each_batch",
@@ -197,14 +213,12 @@ __all__ = [
 ]
 
 
-class JitError(Exception):
-    """A construct outside the supported ``@jit.each_event`` subset."""
-
+JitError.__module__ = __name__
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
 K = TypeVar("K")
-V = TypeVar("V")
+V = TypeVar("V", bound="_Monoid | type[object]")
 K1 = TypeVar("K1")
 K2 = TypeVar("K2")
 K3 = TypeVar("K3")
@@ -244,28 +258,6 @@ u32: _Type[int] = _Type("DFTU_T_U32")
 u64: _Type[int] = _Type("DFTU_T_U64")
 f32: _Type[float] = _Type("DFTU_T_F32")
 f64: _Type[float] = _Type("DFTU_T_F64")
-
-
-class _Config(Generic[T_co]):
-    """A runtime config field marker (jit.config). Read from the plugin's load
-    config into a file-scope static and referenced in the body as self.<name>."""
-
-    __slots__ = ("dft",)
-
-    def __init__(self, dft: str) -> None:
-        self.dft = dft
-
-
-def config(of: "_Type[T_co]") -> T_co:
-    """Declare a runtime config field bound at construction from Plugins config.
-
-    ``threshold = jit.config(jit.i64)`` reads ``config["threshold"]`` into the
-    plugin and the body reads it as ``self.threshold``. Any numeric type works
-    (all integer/float widths ride the int64/double slot); a string config is
-    not supported yet (interning it needs the host, absent at load time)."""
-    if of.dft in ("DFTU_T_STR", "DFTU_T_BYTES"):
-        raise JitError("jit.config supports a numeric type; a string config is not supported yet")
-    return cast(T_co, _Config(of.dft))
 
 
 class _Sentinel:
@@ -462,7 +454,7 @@ def sum() -> Sum:
 # value cannot be read at Python runtime.
 
 
-def _prim(name: str):
+def _prim(name: str) -> Callable[..., int]:
     def marker(*args: int) -> int:
         raise JitError(
             f"jit.{name} is a plugin primitive; use it inside a @jit.each_event "
@@ -537,7 +529,7 @@ fastrange = _prim("fastrange")
 :func:`mix64` for hash bucketing. 0 when n is 0. ``dftu_fastrange_u64``."""
 
 
-def _primf(name: str):
+def _primf(name: str) -> Callable[..., float]:
     def marker(*args: float) -> float:
         raise JitError(
             f"jit.{name} is a plugin primitive; use it inside a @jit.each_event "
@@ -607,7 +599,7 @@ def _minmax_elem(op: str, of: "_Type[object]") -> str:
 def min() -> "Min[int]": ...
 @overload
 def min(of: "_Type[T]") -> "Min[T]": ...
-def min(of: "_Type[object]" = u64) -> "Min[object]":
+def min(of: "_Type[Any]" = u64) -> "Min[Any]":
     """A typed min value (default u64); ``of=`` picks the int or float element.
 
     ``.observe(v)`` contributes."""
@@ -618,7 +610,7 @@ def min(of: "_Type[object]" = u64) -> "Min[object]":
 def max() -> "Max[int]": ...
 @overload
 def max(of: "_Type[T]") -> "Max[T]": ...
-def max(of: "_Type[object]" = u64) -> "Max[object]":
+def max(of: "_Type[Any]" = u64) -> "Max[Any]":
     """A typed max value (default u64); ``of=`` picks the int or float element.
 
     ``.observe(v)`` contributes."""
@@ -663,7 +655,7 @@ def _elem_of(fn: str, of: "_Type[object]") -> str:
 def set() -> "SetV[Str]": ...
 @overload
 def set(of: "_Type[T]") -> "SetV[T]": ...
-def set(of: "_Type[object]" = str_) -> "SetV[object]":
+def set(of: "_Type[Any]" = str_) -> "SetV[Any]":
     """A set value collecting distinct elements added with ``.observe``.
 
     ``of=jit.str_`` (default) observes strings, ``of=jit.i64`` int64 values.
@@ -676,7 +668,7 @@ def set(of: "_Type[object]" = str_) -> "SetV[object]":
 def list() -> "ListV[Str]": ...
 @overload
 def list(of: "_Type[T]") -> "ListV[T]": ...
-def list(of: "_Type[object]" = str_) -> "ListV[object]":
+def list(of: "_Type[Any]" = str_) -> "ListV[Any]":
     """An ordered-list value collecting elements added with ``.append``.
 
     ``of=jit.str_`` (default) collects strings, ``of=jit.i64`` int64 values;
@@ -812,7 +804,7 @@ def regr_r2() -> AggReduce:
 def argmin() -> "ArgMin[Str]": ...
 @overload
 def argmin(of: "_Type[T]") -> "ArgMin[T]": ...
-def argmin(of: "_Type[object]" = str_) -> "ArgMin[object]":
+def argmin(of: "_Type[Any]" = str_) -> "ArgMin[Any]":
     """An argmin value: keep the payload whose ``by=`` key is smallest.
 
     ``of=jit.str_`` (default) observes a string payload, ``of=jit.i64`` an
@@ -825,7 +817,7 @@ def argmin(of: "_Type[object]" = str_) -> "ArgMin[object]":
 def argmax() -> "ArgMax[Str]": ...
 @overload
 def argmax(of: "_Type[T]") -> "ArgMax[T]": ...
-def argmax(of: "_Type[object]" = str_) -> "ArgMax[object]":
+def argmax(of: "_Type[Any]" = str_) -> "ArgMax[Any]":
     """An argmax value: keep the payload whose ``by=`` key is largest.
 
     ``of=jit.str_`` (default) observes a string payload, ``of=jit.i64`` an
@@ -844,7 +836,7 @@ def _check_k(op: str, k: int) -> float:
 def topk(k: int) -> "TopK[Str]": ...
 @overload
 def topk(k: int, of: "_Type[T]") -> "TopK[T]": ...
-def topk(k: int, of: "_Type[object]" = str_) -> "TopK[object]":
+def topk(k: int, of: "_Type[Any]" = str_) -> "TopK[Any]":
     """A bounded top-k value: keep the k payloads at the k largest ``by=`` keys.
 
     ``of=jit.str_`` (default) observes string payloads, ``of=jit.i64`` int64
@@ -859,7 +851,7 @@ def topk(k: int, of: "_Type[object]" = str_) -> "TopK[object]":
 def bottomk(k: int) -> "BottomK[Str]": ...
 @overload
 def bottomk(k: int, of: "_Type[T]") -> "BottomK[T]": ...
-def bottomk(k: int, of: "_Type[object]" = str_) -> "BottomK[object]":
+def bottomk(k: int, of: "_Type[Any]" = str_) -> "BottomK[Any]":
     """A bounded bottom-k value: keep the k payloads at the k smallest ``by=``
     keys, mirroring :func:`topk`."""
     return BottomK(
@@ -874,7 +866,7 @@ def bottomk(k: int, of: "_Type[object]" = str_) -> "BottomK[object]":
 def approx_topk(k: int) -> "ApproxTopK[Str]": ...
 @overload
 def approx_topk(k: int, of: "_Type[T]") -> "ApproxTopK[T]": ...
-def approx_topk(k: int, of: "_Type[object]" = str_) -> "ApproxTopK[object]":
+def approx_topk(k: int, of: "_Type[Any]" = str_) -> "ApproxTopK[Any]":
     """An approximate heavy-hitters value: the k most FREQUENT observed values
     (SpaceSaving), in bounded memory. Contribute with ``.observe(value)``."""
     return ApproxTopK(
@@ -888,7 +880,7 @@ def approx_topk(k: int, of: "_Type[object]" = str_) -> "ApproxTopK[object]":
 def sample(k: int) -> "Sample[Str]": ...
 @overload
 def sample(k: int, of: "_Type[T]") -> "Sample[T]": ...
-def sample(k: int, of: "_Type[object]" = str_) -> "Sample[object]":
+def sample(k: int, of: "_Type[Any]" = str_) -> "Sample[Any]":
     """A deterministic mergeable sample of k items, a list<string> of their
     reprs; contribute with ``.observe(item)``."""
     return Sample("DFTU_AGG_SAMPLE", param=_check_k("sample", k), elem=_elem_of("sample", of))
@@ -924,6 +916,7 @@ class Map(Generic[K, V]):
 
 
 _MapDecl = Map
+_AnyMap = Map[Any, Any]
 
 
 class Event(Protocol):
@@ -954,27 +947,15 @@ class _Record:
         self.monoids = monoids
 
 
-def _as_monoid(v: object) -> _Monoid:
-    if isinstance(v, _Monoid):
-        return v
-    if callable(v):
-        r = cast(Callable[[], object], v)()
-        if isinstance(r, _Monoid):
-            return r
-    raise JitError("record field must be a jit monoid such as jit.count or jit.sum")
+def record(cls: type[_C]) -> type[_C]:
+    """Class decorator: turn monoid-valued attributes into a named product value.
 
-
-def record(cls: type) -> type:
-    """Class decorator: turn monoid-annotated fields into a named product value.
-
-    Each annotation (``count: jit.count``) declares one value component in
+    Each attribute (``count = jit.count()``) declares one value component in
     declaration order; pass the class as a :func:`map` ``value``."""
-    anns = dict(getattr(cls, "__annotations__", {}))
-    if not anns:
-        raise JitError("@jit.record needs at least one monoid-annotated field")
-    names = tuple(anns.keys())
-    monoids = tuple(_as_monoid(v) for v in anns.values())
-    setattr(cls, "_jit_record", _Record(names, monoids))
+    fields = {k: v for k, v in vars(cls).items() if isinstance(v, _Monoid)}
+    if not fields:
+        raise JitError("@jit.record needs at least one monoid attribute such as jit.count()")
+    setattr(cls, "_jit_record", _Record(tuple(fields), tuple(fields.values())))
     return cls
 
 
@@ -1028,14 +1009,6 @@ def map(
     *, key: "Tuple[_Type[K1], _Type[K2], _Type[K3], _Type[K4]]", value: "Tuple[_Monoid, ...]"
 ) -> "Map[Tuple[K1, K2, K3, K4], Product]": ...
 @overload
-def map(
-    *, key: "Tuple[_Type[object], ...]", value: "Dict[str, _Monoid]"
-) -> "Map[Tuple[object, ...], Product]": ...
-@overload
-def map(
-    *, key: "Tuple[_Type[object], ...]", value: "Tuple[_Monoid, ...]"
-) -> "Map[Tuple[object, ...], Product]": ...
-@overload
 def map(*, key: "_Type[K1]", value: V) -> "Map[Tuple[K1], V]": ...
 @overload
 def map(*, key: "Tuple[_Type[K1]]", value: V) -> "Map[Tuple[K1], V]": ...
@@ -1050,8 +1023,16 @@ def map(
     *, key: "Tuple[_Type[K1], _Type[K2], _Type[K3], _Type[K4]]", value: V
 ) -> "Map[Tuple[K1, K2, K3, K4], V]": ...
 @overload
+def map(
+    *, key: "Tuple[_Type[object], ...]", value: "Dict[str, _Monoid]"
+) -> "Map[Tuple[object, ...], Product]": ...
+@overload
+def map(
+    *, key: "Tuple[_Type[object], ...]", value: "Tuple[_Monoid, ...]"
+) -> "Map[Tuple[object, ...], Product]": ...
+@overload
 def map(*, key: "Tuple[_Type[object], ...]", value: V) -> "Map[Tuple[object, ...], V]": ...
-def map(key: "Tuple[_Type[object], ...] | _Type[object]", value: object) -> "Map[object, object]":
+def map(key: "Tuple[_Type[Any], ...] | _Type[Any]", value: object) -> "Map[Any, Any]":
     """Declare a keyed accumulator: a typed-tuple key, and either one value
     reduction, a tuple of reductions (a positional product), a dict of
     name->reduction, or a :func:`record` class (both named products).
@@ -1178,9 +1159,15 @@ class _EachEvent:
         self.raw = raw
 
 
+@overload
+def each_event(fn: Callable[..., None]) -> _EachEvent: ...
+@overload
+def each_event(*, raw: Literal[False] = ...) -> Callable[[Callable[..., None]], _EachEvent]: ...
+@overload
+def each_event(*, raw: Literal[True]) -> Callable[[Callable[..., str]], _EachEvent]: ...
 def each_event(
-    fn: Callable[..., object] | None = None, *, raw: bool = False
-) -> _EachEvent | Callable[[Callable[..., object]], _EachEvent]:
+    fn: Callable[..., Any] | None = None, *, raw: bool = False
+) -> _EachEvent | Callable[[Callable[..., Any]], _EachEvent]:
     """Mark the one per-event method to AST-compile.
 
     With ``raw=True`` the method instead returns a C++ string spliced verbatim
@@ -1204,7 +1191,7 @@ class _EachBatch:
         self.fn = fn
 
 
-def each_batch(fn: Callable[..., object]) -> _EachBatch:
+def each_batch(fn: Callable[..., None]) -> _EachBatch:
     """Mark the one per-batch method of a :func:`vfold`.
 
     It takes ``(self, df)`` where ``df`` is the current scan batch as columns.
@@ -1235,10 +1222,6 @@ class JitPlugin:
         # False when built under an implicit __main__ identity (a script or
         # notebook with no JitPackage namespace); build() refuses those.
         self.shippable = shippable
-
-
-def _c_str_literal(s: str) -> str:
-    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def _top_level_package(module: str) -> str:
@@ -1332,15 +1315,25 @@ class JitPackage:
         namespace to fall back on - :meth:`build` refuses those."""
         return not (_module_of(cls) == "__main__" and self.namespace is None)
 
+    @overload
+    def plugin(self, cls: type[_C]) -> type[_C]: ...
+    @overload
+    def plugin(self, cls: None = None) -> Callable[[type[_C]], type[_C]]: ...
     def plugin(self, cls: "type | None" = None) -> "type | Callable[[type], type]":
         """Like :func:`plugin`, but names every map/port under this package."""
         if cls is None:
             return lambda c: _build_plugin(c, self)
         return _build_plugin(cls, self)
 
+    @overload
+    def series(self, fn: "Callable[..., Expr]") -> "Callable[..., Result]": ...
+    @overload
     def series(
-        self, fn: "Callable[..., object] | None" = None, *, module: "str | None" = None
-    ) -> object:
+        self, fn: None = None, *, module: "str | None" = None
+    ) -> "Callable[[Callable[..., Expr]], Callable[..., Result]]": ...
+    def series(
+        self, fn: "Callable[..., Expr] | None" = None, *, module: "str | None" = None
+    ) -> "Callable[..., Result] | Callable[[Callable[..., Expr]], Callable[..., Result]]":
         """Like :func:`series`, but the default op name comes from this
         package instead of the raw ``__module__``."""
         if fn is None:
@@ -1612,8 +1605,15 @@ def _describe(node: ast.AST) -> str:
     return _CONSTRUCT.get(type(node), type(node).__name__)
 
 
-def _reject(what: str) -> NoReturn:
-    raise JitError(f"unsupported in @jit.each_event: {what}; use a raw C++ plugin")
+def _reject_at(reason: str, node: "ast.AST | None" = None) -> NoReturn:
+    """Fail the compile at ``node``; the compiler turns it into file:line:col."""
+    err = JitError(reason, locate=False)
+    err.node = node
+    raise err
+
+
+def _reject(what: str, node: "ast.AST | None" = None) -> NoReturn:
+    _reject_at(f"unsupported in @jit.each_event: {what}; use a raw C++ plugin", node)
 
 
 _I64_MIN = -(1 << 63)
@@ -1638,7 +1638,7 @@ def _key_ctype(ktype: str) -> Tuple[str, str]:
     return _KEY_CTYPE.get(ktype, ("int64_t", "DFTU_TYPE_INT64"))
 
 
-def _out_name(decl: _MapDecl, comp: int) -> str:
+def _out_name(decl: _AnyMap, comp: int) -> str:
     """Result column name for value component ``comp``."""
     if not decl.is_product:
         return "value"
@@ -1650,15 +1650,16 @@ def _out_name(decl: _MapDecl, comp: int) -> str:
 class _Compiler:
     def __init__(
         self,
-        maps: Dict[str, _MapDecl],
+        maps: Dict[str, _AnyMap],
         ops: Dict[str, Op] | None = None,
         ports: Dict[str, _Port] | None = None,
-        config_fields: "Dict[str, bool] | None" = None,
+        config_fields: "Dict[str, _CfgField] | None" = None,
     ) -> None:
         self.maps = maps
         self.ports = ports if ports is not None else {}
-        # Config fields {name: is_f64}; each_event reads them as self.<name>,
-        # lowering to the file-scope _cfg_<name> static set at load.
+        # The plugin's config dataclass fields; each_event reads them as
+        # self.config.<name>, lowering to the file-scope _cfg_<name> static set
+        # at load.
         self.config_fields = config_fields if config_fields is not None else {}
         # Referenced @jit.op transforms, inlined into the plugin as static C
         # functions the moment the body calls one.
@@ -1680,21 +1681,46 @@ class _Compiler:
         # shared within the current scope.
         self._cse: Dict[str, Tuple[str, bool]] = {}
         self._cse_n = 0
+        # The statement being compiled, where an error without a node points.
+        self._cur: ast.AST | None = None
 
     def lower(self, fn: Callable[..., object]) -> List[str]:
-        src = textwrap.dedent(inspect.getsource(fn))
-        mod = ast.parse(src)
+        source = _Source(fn)
+        try:
+            return self._lower(fn, source)
+        except JitError as exc:
+            raise source.relocate(exc, self._cur) from None
+
+    def _lower(self, fn: Callable[..., object], source: _Source) -> List[str]:
+        mod = ast.parse(source.text)
         funcs = [n for n in mod.body if isinstance(n, ast.FunctionDef)]
         if len(funcs) != 1:
-            _reject("each_event must decorate a single method")
+            _reject("each_event must decorate a single method", mod.body[0])
         fn_ast = funcs[0]
+        self._cur = fn_ast
         params = fn_ast.args.args
         if len(params) != 2:
-            _reject("each_event must take exactly (self, e)")
+            _reject("each_event must take exactly (self, e)", fn_ast)
         self.self_name = params[0].arg
         self.event_name = params[1].arg
         defs, lines = self._compile_scope(fn_ast.body)
         return defs + lines
+
+    def _cfg_field(self, node: ast.expr) -> "_CfgField | None":
+        """The config field ``self.config.<name>`` names, else None."""
+        if not (
+            self.config_fields
+            and isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr == "config"
+            and isinstance(node.value.value, ast.Name)
+            and node.value.value.id == self.self_name
+        ):
+            return None
+        field = self.config_fields.get(node.attr)
+        if field is None:
+            _reject(f"unknown config field self.config.{node.attr}", node)
+        return field
 
     def _slice_elts(self, sl: ast.expr) -> List[ast.expr]:
         sl = _unwrap_index(sl)
@@ -1727,6 +1753,7 @@ class _Compiler:
             d = ast.dump(node)
             if d in self._cse:
                 continue
+            self._cur = node
             expr, is_float = self._arith(node)
             name = f"_cse{self._cse_n}"
             self._cse_n += 1
@@ -1751,9 +1778,10 @@ class _Compiler:
         return False
 
     def _stmt(self, stmt: ast.stmt) -> List[str]:
+        self._cur = stmt
         if isinstance(stmt, ast.If):
             if stmt.orelse:
-                _reject("else / elif branch")
+                _reject("else / elif branch", stmt.orelse[0])
             guard = self._compare(stmt.test)
             defs, body = self._compile_scope(stmt.body)
             lines = [f"if ({guard}) {{"]
@@ -1771,15 +1799,34 @@ class _Compiler:
             if isinstance(func, ast.Attribute) and func.attr == "append":
                 return self._append(stmt.value)
             return self._observe(stmt.value)
-        _reject(_describe(stmt))
+        _reject(_describe(stmt), stmt)
 
     def _compare(self, node: ast.expr) -> str:
+        flag = self._cfg_field(node)
+        if flag is not None and flag.kind == "bool":
+            return f"_cfg_{flag.name} != 0"
+        if isinstance(node, ast.Compare) and len(node.ops) == 1:
+            if isinstance(node.ops[0], (ast.Is, ast.IsNot)):
+                opt = self._cfg_field(node.left)
+                other = node.comparators[0]
+                if (
+                    opt is None
+                    or not opt.optional
+                    or not (isinstance(other, ast.Constant) and other.value is None)
+                ):
+                    _reject(
+                        "`is` comparison (only self.config.<optional field> is None / is not None)",
+                        node,
+                    )
+                return (
+                    f"!_has_{opt.name}" if isinstance(node.ops[0], ast.Is) else f"_has_{opt.name}"
+                )
         if not isinstance(node, ast.Compare) or len(node.ops) != 1:
-            _reject("guard must be a single comparison on e.<field>")
+            _reject("guard must be a single comparison on e.<field>", node)
         op_t = type(node.ops[0])
         op = _CMP_OP.get(op_t)
         if op is None:
-            _reject("comparison operator")
+            _reject("comparison operator", node)
         str_cmp = self._str_compare(node.left, node.comparators[0], op_t)
         if str_cmp is not None:
             return str_cmp
@@ -1788,20 +1835,31 @@ class _Compiler:
         return f"{left} {op} {right}"
 
     def _str_compare(self, a: ast.expr, b: ast.expr, op_t: type) -> str | None:
-        a_lit = isinstance(a, ast.Constant) and isinstance(a.value, str)
-        b_lit = isinstance(b, ast.Constant) and isinstance(b.value, str)
+        a_lit = self._is_str_literal(a)
+        b_lit = self._is_str_literal(b)
         if not a_lit and not b_lit:
             return None
         if op_t not in (ast.Eq, ast.NotEq):
-            _reject("string comparison operator other than == / !=")
+            _reject("string comparison operator other than == / !=", a)
         lit_node, field_node = (a, b) if a_lit else (b, a)
         operand = self._str_operand(field_node)
         if operand is None:
-            _reject("string literal compared to a non-string e.<field>")
-        assert isinstance(lit_node, ast.Constant) and isinstance(lit_node.value, str)
-        cached = self._str_literal(lit_node.value)
+            _reject("string literal compared to a non-string e.<field>", a)
+        cfg = self._cfg_field(lit_node)
+        if cfg is not None:
+            cached = f"_cfgs_{cfg.name}"
+        else:
+            assert isinstance(lit_node, ast.Constant) and isinstance(lit_node.value, str)
+            cached = self._str_literal(lit_node.value)
         op = _CMP_OP[op_t]
         return f"{operand} {op} {cached}"
+
+    def _is_str_literal(self, node: ast.expr) -> bool:
+        """A string literal, or a str config field (an interned constant)."""
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return True
+        cfg = self._cfg_field(node)
+        return cfg is not None and cfg.kind == "str"
 
     def _str_operand(self, node: ast.expr) -> str | None:
         if (
@@ -1829,12 +1887,12 @@ class _Compiler:
             return None
         method = node.func.attr
         if method not in _ARG_METHODS:
-            _reject(f"event method e.{method}(...); use arg_i64 / arg_f64 / arg_str")
+            _reject(f"event method e.{method}(...); use arg_i64 / arg_f64 / arg_str", node)
         if len(node.args) != 1 or node.keywords:
-            _reject(f"e.{method} takes exactly one string-literal arg name")
+            _reject(f"e.{method} takes exactly one string-literal arg name", node)
         name_node = node.args[0]
         if not (isinstance(name_node, ast.Constant) and isinstance(name_node.value, str)):
-            _reject(f"e.{method} arg name must be a string literal")
+            _reject(f"e.{method} arg name must be a string literal", name_node)
         return method, name_node.value
 
     def _prim_call(self, node: ast.expr) -> Tuple[str, str, List[ast.expr]] | None:
@@ -1851,10 +1909,10 @@ class _Compiler:
         prim = node.func.attr
         spec = _PRIM_C.get(prim)
         if spec is None:
-            _reject(f"jit.{prim}(...) in an expression; expected a numeric primitive")
+            _reject(f"jit.{prim}(...) in an expression; expected a numeric primitive", node)
         c_fn, arity, cast = spec
         if len(node.args) != arity or node.keywords:
-            _reject(f"jit.{prim}() takes exactly {arity} argument(s)")
+            _reject(f"jit.{prim}() takes exactly {arity} argument(s)", node)
         return c_fn, cast, builtins.list(node.args)
 
     def _op_call(self, node: ast.expr) -> Tuple[str, bool] | None:
@@ -1869,7 +1927,7 @@ class _Compiler:
         name = node.func.id
         op_obj = self.ops[name]
         if len(node.args) != 1 or node.keywords:
-            _reject(f"jit.op '{name}' takes exactly one positional argument")
+            _reject(f"jit.op '{name}' takes exactly one positional argument", node)
         c_name = f"dftu_jitop_{name}"
         if name not in self.op_emitted:
             self.op_defs.append(jit_op.emit_inline(op_obj, c_name))
@@ -1903,7 +1961,7 @@ class _Compiler:
             comp_name = node.attr
             node = node.value
         if not isinstance(node, ast.Subscript):
-            _reject("assignment target (expected self.<map>[(...)])")
+            _reject("assignment target (expected self.<map>[(...)])", target)
         subs: List[ast.expr] = []
         cur: ast.expr = node
         while isinstance(cur, ast.Subscript):
@@ -1916,35 +1974,37 @@ class _Compiler:
             and isinstance(base.value, ast.Name)
             and base.value.id == self.self_name
         ):
-            _reject("assignment target (expected self.<map>[(...)])")
+            _reject("assignment target (expected self.<map>[(...)])", target)
         decl = self.maps.get(base.attr)
         if decl is None:
-            _reject(f"unknown map self.{base.attr}")
+            _reject(f"unknown map self.{base.attr}", base)
         return self._resolve_flat(base.attr, decl, subs, comp_name)
 
     def _resolve_flat(
-        self, attr: str, decl: _MapDecl, subs: List[ast.expr], comp_name: str | None
+        self, attr: str, decl: _AnyMap, subs: List[ast.expr], comp_name: str | None
     ) -> Tuple[str, List[ast.expr], int, _Monoid]:
         if decl.is_product:
             keys = self._keys(subs[0])
             comp_node = subs[1] if len(subs) > 1 else None
             if len(subs) > 2:
-                _reject(f"too many subscripts for product map self.{attr}")
+                _reject(f"too many subscripts for product map self.{attr}", subs[2])
             if comp_name is not None:
                 comp = self._named_comp(comp_name, decl, attr)
             elif comp_node is not None:
                 comp = self._comp(comp_node, decl, attr)
             else:
-                _reject(f"product map self.{attr} add without a component")
+                _reject(f"product map self.{attr} add without a component", subs[0])
         else:
             if comp_name is not None:
-                _reject(f"single-value map self.{attr} add with a component")
+                _reject(f"single-value map self.{attr} add with a component", subs[0])
             keys = []
             for sl in subs:
                 keys.extend(self._keys(sl))
             comp = 0
         if len(keys) != len(decl.key_types):
-            _reject(f"self.{attr} takes {len(decl.key_types)} key components, got {len(keys)}")
+            _reject(
+                f"self.{attr} takes {len(decl.key_types)} key components, got {len(keys)}", subs[0]
+            )
         return attr, keys, comp, decl.values[comp]
 
     def _publish_target(self, target: ast.expr) -> str | None:
@@ -1960,10 +2020,10 @@ class _Compiler:
     def _publish(self, name: str, value: ast.expr) -> List[str]:
         port = self.ports[name]
         if port.role != "publish":
-            _reject(f"self.{name} is a jit.consume port; read its value, do not += into it")
+            _reject(f"self.{name} is a jit.consume port; read its value, do not += into it", value)
         expr, saw_float = self._arith(value)
         if not port.is_f64 and saw_float:
-            _reject("float value into a u64 publish port")
+            _reject("float value into a u64 publish port", value)
         cast = "double" if port.is_f64 else "uint64_t"
         return [f"_pub_{name} += ({cast})({expr});"]
 
@@ -1975,39 +2035,39 @@ class _Compiler:
 
     def _aug(self, stmt: ast.AugAssign) -> List[str]:
         if not isinstance(stmt.op, ast.Add):
-            _reject("augmented operator other than +=")
+            _reject("augmented operator other than +=", stmt)
         pub = self._publish_target(stmt.target)
         if pub is not None:
             return self._publish(pub, stmt.value)
         attr, keys, comp, monoid = self._resolve_accum(stmt.target)
         if monoid.dft in _LIST_OPS:
-            _reject("+= on an ordered-list monoid; use .append(elem, order_by=<expr>)")
+            _reject("+= on an ordered-list monoid; use .append(elem, order_by=<expr>)", stmt)
         if monoid.dft not in _ADDITIVE_OPS:
-            _reject(f"+= on the non-additive monoid {monoid.dft}; use .observe(v) instead")
+            _reject(f"+= on the non-additive monoid {monoid.dft}; use .observe(v) instead", stmt)
         return self._emit_row(attr, keys, comp, monoid, stmt.value, None)
 
     def _observe(self, call: ast.Call) -> List[str]:
         func = call.func
         if not (isinstance(func, ast.Attribute) and func.attr == "observe"):
-            _reject("method call other than .observe(v)")
+            _reject("method call other than .observe(v)", call)
         attr, keys, comp, monoid = self._resolve_accum(func.value)
         if monoid.dft in _LIST_OPS:
-            _reject(".observe on an ordered-list monoid; use .append(elem, order_by=<expr>)")
+            _reject(".observe on an ordered-list monoid; use .append(elem, order_by=<expr>)", call)
         by: ast.expr | None = None
         if monoid.needs_by:
             if len(call.args) != 1:
-                _reject(".observe takes one payload and by=<expr>")
+                _reject(".observe takes one payload and by=<expr>", call)
             for kw in call.keywords:
                 if kw.arg == "by":
                     by = kw.value
                 else:
-                    _reject(f".observe keyword other than by ({kw.arg})")
+                    _reject(f".observe keyword other than by ({kw.arg})", kw.value)
             if by is None:
-                raise JitError(
-                    f"self.{attr} .observe requires by=<expr>; the by key ranks the payloads"
+                _reject_at(
+                    f"self.{attr} .observe requires by=<expr>; the by key ranks the payloads", call
                 )
         elif len(call.args) != 1 or call.keywords:
-            _reject(".observe expects exactly one value argument")
+            _reject(".observe expects exactly one value argument", call)
         self._check_element(call.args[0], monoid)
         return self._emit_row(attr, keys, comp, monoid, call.args[0], by)
 
@@ -2015,19 +2075,19 @@ class _Compiler:
         func = call.func
         assert isinstance(func, ast.Attribute)
         if len(call.args) != 1:
-            _reject(".append expects exactly one element argument")
+            _reject(".append expects exactly one element argument", call)
         order: ast.expr | None = None
         for kw in call.keywords:
             if kw.arg == "order_by":
                 order = kw.value
             else:
-                _reject(f".append keyword other than order_by ({kw.arg})")
+                _reject(f".append keyword other than order_by ({kw.arg})", kw.value)
         attr, keys, comp, monoid = self._resolve_accum(func.value)
         if monoid.dft not in _LIST_OPS:
-            _reject(f".append on the non-list monoid {monoid.dft}; use += or .observe(v)")
+            _reject(f".append on the non-list monoid {monoid.dft}; use += or .observe(v)", call)
         if order is None:
-            raise JitError(
-                "ordered list requires order_by=<expr>; order-by-arrival is not parallel-safe"
+            _reject_at(
+                "ordered list requires order_by=<expr>; order-by-arrival is not parallel-safe", call
             )
         self._check_element(call.args[0], monoid)
         return self._emit_row(attr, keys, comp, monoid, call.args[0], order)
@@ -2042,14 +2102,16 @@ class _Compiler:
             return
         is_str = self._is_str_element(node)
         if monoid.elem == "str" and not is_str:
-            raise JitError(
+            _reject_at(
                 "a str-valued element must be a string field such as e.name; "
-                "use of=jit.i64 for an int64 value"
+                "use of=jit.i64 for an int64 value",
+                node,
             )
         if monoid.elem == "i64" and is_str:
-            raise JitError(
+            _reject_at(
                 "an i64-valued element must be an int64 expr such as e.dur; "
-                "use of=jit.str_ for a string value"
+                "use of=jit.str_ for a string value",
+                node,
             )
 
     def _is_str_element(self, node: ast.expr) -> bool:
@@ -2103,20 +2165,20 @@ class _Compiler:
         lines.append("}")
         return lines
 
-    def _comp(self, node: ast.expr, decl: _MapDecl, attr: str) -> int:
+    def _comp(self, node: ast.expr, decl: _AnyMap, attr: str) -> int:
         node = _unwrap_index(node)
         if (
             not isinstance(node, ast.Constant)
             or not isinstance(node.value, int)
             or isinstance(node.value, bool)
         ):
-            _reject("component index (expected an integer literal)")
+            _reject("component index (expected an integer literal)", node)
         comp = node.value
         if comp < 0 or comp >= len(decl.values):
-            _reject(f"component index {comp} out of range for self.{attr}")
+            _reject(f"component index {comp} out of range for self.{attr}", node)
         return comp
 
-    def _named_comp(self, name: str, decl: _MapDecl, attr: str) -> int:
+    def _named_comp(self, name: str, decl: _AnyMap, attr: str) -> int:
         names = decl.value_names
         if names is None or name not in names:
             _reject(f"unknown value component .{name} for self.{attr}")
@@ -2145,18 +2207,19 @@ class _Compiler:
         if arg is not None:
             expr, _ = self._lower_arg(*arg)
             return expr
+        cfg = self._cfg_field(node)
+        if cfg is not None:
+            return f"_cfgs_{cfg.name}" if cfg.kind == "str" else f"_cfg_{cfg.name}"
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
             if node.value.id == self.self_name and node.attr in self.ports:
                 return self._consume_ref(node.attr)
-            if node.value.id == self.self_name and node.attr in self.config_fields:
-                return f"_cfg_{node.attr}"
             if node.value.id == self.event_name:
                 return self._field(node.attr)
             if node.attr == "NONE":
                 return "DFTU_STR_NONE"
         if isinstance(node, ast.Constant):
             return self._const(node)
-        _reject(_describe(node))
+        _reject(_describe(node), node)
 
     def _rhs(self, node: ast.expr, elem: str) -> str:
         """Cast an expression into a value buffer of family ``elem``."""
@@ -2164,7 +2227,7 @@ class _Compiler:
             return f"(dftu_str)({self._value(node)})"
         expr, saw_float = self._arith(node)
         if elem != "f64" and saw_float:
-            _reject("float value into a u64 monoid component")
+            _reject("float value into a u64 monoid component", node)
         return f"({'double' if elem == 'f64' else 'int64_t'})({expr})"
 
     def _arith(self, node: ast.expr) -> Tuple[str, bool]:
@@ -2175,7 +2238,7 @@ class _Compiler:
         if isinstance(node, ast.BinOp):
             sym = _ARITH_OP.get(type(node.op))
             if sym is None:
-                _reject("arithmetic operator (only + - * / are allowed)")
+                _reject("arithmetic operator (only + - * / are allowed)", node)
             left, lf = self._arith(node.left)
             right, rf = self._arith(node.right)
             return f"({left} {sym} {right})", lf or rf or isinstance(node.op, ast.Div)
@@ -2190,34 +2253,37 @@ class _Compiler:
         arg = self._arg_call(node)
         if arg is not None:
             return self._lower_arg(*arg)
+        cfg = self._cfg_field(node)
+        if cfg is not None:
+            if cfg.kind == "str":
+                _reject(f"string config field self.config.{cfg.name} in arithmetic", node)
+            return f"_cfg_{cfg.name}", cfg.kind == "float"
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
             if node.value.id == self.self_name and node.attr in self.ports:
                 port = self.ports[node.attr]
                 return self._consume_ref(node.attr), port.is_f64
-            if node.value.id == self.self_name and node.attr in self.config_fields:
-                return f"_cfg_{node.attr}", self.config_fields[node.attr]
             if node.value.id == self.event_name:
                 return self._field(node.attr), False
         if isinstance(node, ast.Constant):
             v = node.value
             if isinstance(v, bool):
-                _reject("boolean literal")
+                _reject("boolean literal", node)
             if isinstance(v, int):
                 return _int_literal(v), False
             if isinstance(v, float):
                 return repr(v), True
-            _reject("literal (only integer or float literals are allowed)")
-        _reject(_describe(node))
+            _reject("literal (only integer or float literals are allowed)", node)
+        _reject(_describe(node), node)
 
     def _const(self, node: ast.Constant) -> str:
         v = node.value
         if isinstance(v, bool):
-            _reject("boolean literal")
+            _reject("boolean literal", node)
         if isinstance(v, int):
             return _int_literal(v)
         if isinstance(v, float):
-            _reject("float literal")
-        _reject("literal (only integer literals are allowed)")
+            _reject("float literal", node)
+        _reject("literal (only integer literals are allowed)", node)
 
     def _field(self, attr: str) -> str:
         expr = _FIELD_EXPR.get(attr)
@@ -2351,7 +2417,7 @@ def _quantile_name(q: float) -> str:
     return f"p{q * 100:g}"
 
 
-def _agg_specs(decl: _MapDecl) -> List[Tuple[str, str, str, str, str]]:
+def _agg_specs(decl: _AnyMap) -> List[Tuple[str, str, str, str, str]]:
     """The (op, value, out, param, by) dftu_agg_col rows for one accumulator."""
     specs: List[Tuple[str, str, str, str, str]] = []
     for c, m in enumerate(decl.values):
@@ -2380,7 +2446,7 @@ def _agg_specs(decl: _MapDecl) -> List[Tuple[str, str, str, str, str]]:
     return specs
 
 
-def _emit_buffers(attr: str, decl: _MapDecl, rows: int) -> List[str]:
+def _emit_buffers(attr: str, decl: _AnyMap, rows: int) -> List[str]:
     """Per-batch row buffers for one accumulator, sized to the batch."""
     out = [
         f"    uint32_t _cap_{attr} = (uint32_t)n * {rows}u;",
@@ -2415,7 +2481,7 @@ def _emit_buffers(attr: str, decl: _MapDecl, rows: int) -> List[str]:
     return out
 
 
-def _emit_flush(attr: str, decl: _MapDecl, wire_name: str) -> List[str]:
+def _emit_flush(attr: str, decl: _AnyMap, wire_name: str) -> List[str]:
     """Build one batch frame from the row buffers and fold it into the
     DFTU_SVC_AGG accumulator named ``wire_name`` (the package-qualified id;
     ``attr`` only ever names local C buffers)."""
@@ -2488,11 +2554,11 @@ def _emit_flush(attr: str, decl: _MapDecl, wire_name: str) -> List[str]:
     if decl.is_product:
         out.append(f"            uint8_t* _bm_{attr} = NULL;")
     ci = 0
-    for cname, expr in cols:
+    for cname, col_expr in cols:
         if decl.is_product and cname.startswith("v"):
-            c = cname[1:]
-            out.append(f"            _bm_{attr} = dftu_jit_bitmap(_o{c}_{attr}, _n_{attr});")
-        out.append(f"            _cols[{ci}] = {expr[0]};")
+            comp = cname[1:]
+            out.append(f"            _bm_{attr} = dftu_jit_bitmap(_o{comp}_{attr}, _n_{attr});")
+        out.append(f"            _cols[{ci}] = {col_expr[0]};")
         out.append(f"            _cnames[{ci}] = {_c_str_literal(cname)};")
         if decl.is_product and cname.startswith("v"):
             out.append(f"            free(_bm_{attr});")
@@ -2519,7 +2585,7 @@ def _emit_flush(attr: str, decl: _MapDecl, wire_name: str) -> List[str]:
     return out
 
 
-def _emit_frees(attr: str, decl: _MapDecl) -> List[str]:
+def _emit_frees(attr: str, decl: _AnyMap) -> List[str]:
     out = [f"    free(_k{idx}_{attr});" for idx in range(len(decl.key_types))]
     for c, m in enumerate(decl.values):
         out.append(f"    free(_v{c}_{attr});")
@@ -2531,7 +2597,7 @@ def _emit_frees(attr: str, decl: _MapDecl) -> List[str]:
 
 
 def _emit(
-    maps: Dict[str, _MapDecl],
+    maps: Dict[str, _AnyMap],
     body: List[str],
     fields_used: builtins.set[str],
     plan_duql: str | None,
@@ -2541,7 +2607,7 @@ def _emit(
     rows_per_event: Dict[str, int],
     op_defs: List[str] | None = None,
     ports: Dict[str, _Port] | None = None,
-    config_fields: "Dict[str, bool] | None" = None,
+    config_fields: "Dict[str, _CfgField] | None" = None,
     raw_event: bool = False,
     map_ids: "Dict[str, str] | None" = None,
 ) -> str:
@@ -2578,23 +2644,43 @@ def _emit(
         out += _BITMAP_HELPER
     for fn_src in op_defs:
         out += [fn_src, ""]
-    for idx, _ in enumerate(str_literals):
-        out.append(f"static dftu_str lit_{idx};")
-    if str_literals:
-        out += ["static int lits_resolved = 0;", ""]
     cfgs = config_fields if config_fields is not None else {}
-    for cn, is_f in cfgs.items():
-        out.append(f"static {'double' if is_f else 'int64_t'} _cfg_{cn} = 0;")
+    str_cfgs = [f for f in cfgs.values() if f.kind == "str"]
+    # Config and interned literals belong to one loaded instance (DftuInst) and
+    # one worker slice (DftuSlice), never to file-scope statics: two instances of
+    # one library keep their own values, and slices need no lock.
     if cfgs:
-        out.append("")
+        out.append("struct DftuCfg {")
+        out += [f"    {m}" for f in cfgs.values() for m in f.members()]
+        out += [
+            "};",
+            "",
+            "struct DftuInst {",
+            "    dftu_plugin plugin;",
+            "    DftuCfg cfg;",
+            "};",
+            "",
+        ]
+    has_slice = bool(str_literals or cfgs)
+    if has_slice:
+        out += [
+            "struct DftuSlice {",
+            *(["    const DftuCfg* cfg;"] if cfgs else []),
+            "    int resolved;",
+            f"    dftu_str lit_ids[{builtins.max(len(str_literals), 1)}];",
+            f"    dftu_str cfg_ids[{builtins.max(len(str_cfgs), 1)}];",
+            "};",
+            "",
+        ]
     # A plugin that reads config declares its keys, so the host rejects a
     # config key this plugin does not read instead of ignoring it. A plugin
     # with no config fields declares nothing and stays unvalidated.
     if cfgs:
         out.append("static const dftu_config_key g_config_keys[] = {")
-        for cn, is_f in cfgs.items():
-            kind = "DFTU_VAL_F64" if is_f else "DFTU_VAL_I64"
-            out.append(f"    {{{_c_str_literal(cn)}, {kind}, 0, NULL}},")
+        for f in cfgs.values():
+            out.append(
+                f"    {{{_c_str_literal(f.name)}, {f.value_kind()}, {int(f.required)}, NULL}},"
+            )
         out += [
             "    {NULL, DFTU_CONFIG_ANY, 0, NULL},",
             "};",
@@ -2605,14 +2691,24 @@ def _emit(
             "}",
             "",
         ]
-    # Config reads for the factory: (void)config then one dftu_as_* per field.
+    # Config reads for the factory: one block per field, defaults from the dataclass.
     cfg_reads = "\n".join(
         ["    (void)config;"]
-        + [
-            f"    _cfg_{cn} = dftu_as_{'f64' if is_f else 'i64'}"
-            f"(dftu_obj_get(config, {_c_str_literal(cn)}), {'0.0' if is_f else '0'});"
-            for cn, is_f in cfgs.items()
-        ]
+        + (
+            [
+                "    DftuInst* inst = (DftuInst*)calloc(1, sizeof(DftuInst));",
+                '    if (!inst) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");',
+                "    DftuCfg* _c = &inst->cfg;",
+            ]
+            if cfgs
+            else []
+        )
+        + [ln for f in cfgs.values() for ln in f.factory_reads()]
+        + (
+            ["    dftu_plugin& g_plugin = inst->plugin;", "    g_plugin.self = inst;"]
+            if cfgs
+            else ["    g_plugin.self = NULL;"]
+        )
     )
     if plan_duql is not None:
         out += [
@@ -2648,13 +2744,26 @@ def _emit(
         sorted(_wire_id(p) for _, p in sub_ports),
     )
     out += name_defs
+    if has_slice:
+        out += [
+            "static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {",
+            "    (void)self;",
+            "    DftuSlice* s = (DftuSlice*)calloc(1, sizeof(DftuSlice));",
+            '    if (!s) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");',
+        ]
+        if cfgs:
+            out.append("    s->cfg = &((DftuInst*)self)->cfg;")
+        out += ["    *out = s;", "    return DFTU_OK;", "}", ""]
+    else:
+        out += [
+            "static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {",
+            "    (void)self;",
+            "    *out = calloc(1, 1);",
+            '    return *out ? DFTU_OK : dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");',
+            "}",
+            "",
+        ]
     out += [
-        "static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {",
-        "    (void)self;",
-        "    *out = calloc(1, 1);",
-        '    return *out ? DFTU_OK : dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");',
-        "}",
-        "",
         "static dftu_status on_batch(dftu_ctx* ctx, void* slice, const dftu_dataframe* df,",
         "                            const dftu_plugin_host* host) {",
         "    (void)slice;",
@@ -2671,13 +2780,29 @@ def _emit(
     else:
         out.append("    (void)_agg;")
     out.append("    int64_t n = dftu_dataframe_num_rows(df);")
-    if str_literals:
-        out.append("    if (!lits_resolved) {")
+    if has_slice:
+        out.append("    DftuSlice* _sl = (DftuSlice*)slice;")
+        if cfgs:
+            out.append("    const DftuCfg* _c = _sl->cfg;")
+        out.append("    if (!_sl->resolved) {")
         for idx, lit in enumerate(str_literals):
             blen = len(lit.encode("utf-8"))
-            out.append(f"        lit_{idx} = host->intern(host->h, {_c_str_literal(lit)}, {blen});")
-        out.append("        lits_resolved = 1;")
-        out.append("    }")
+            out.append(
+                f"        _sl->lit_ids[{idx}] = host->intern(host->h, {_c_str_literal(lit)}, {blen});"
+            )
+        for idx, f in enumerate(str_cfgs):
+            out.append(
+                f"        _sl->cfg_ids[{idx}] = host->intern(host->h, _c->v_{f.name}, _c->l_{f.name});"
+            )
+        out += ["        _sl->resolved = 1;", "    }"]
+        for idx, _ in enumerate(str_literals):
+            out.append(f"    const dftu_str lit_{idx} = _sl->lit_ids[{idx}];")
+            out.append(f"    (void)lit_{idx};")
+        for idx, f in enumerate(str_cfgs):
+            out.append(f"    const dftu_str _cfgs_{f.name} = _sl->cfg_ids[{idx}];")
+            out.append(f"    (void)_cfgs_{f.name};")
+        for f in cfgs.values():
+            out += f.locals_()
     for field in sorted(fields_used):
         out.append(
             f"    dftu_jit_col _col_{field} = dftu_jit_resolve(df, {_c_str_literal(field)});"
@@ -2734,10 +2859,20 @@ def _emit(
             "",
             "static void destroy_slice(void* slice) { free(slice); }",
             "",
-            "static void destroy(void* self) { (void)self; }",
-            "",
-            "static dftu_plugin g_plugin;",
-            "",
+        ]
+        + (
+            ["static void destroy(void* self) {", "    DftuInst* inst = (DftuInst*)self;"]
+            + [f"    free(inst->cfg.v_{f.name});" for f in str_cfgs]
+            + ["    free(inst);", "}", ""]
+            if cfgs
+            else [
+                "static void destroy(void* self) { (void)self; }",
+                "",
+                "static dftu_plugin g_plugin;",
+                "",
+            ]
+        )
+        + [
             'DFTU_PLUGIN_INFO("dftracer.jit", NULL)',
             "",
             "DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h,",
@@ -2747,7 +2882,6 @@ def _emit(
             "    (void)h;",
             cfg_reads,
             "    g_plugin.struct_size = sizeof(g_plugin);",
-            "    g_plugin.self = NULL;",
             f"    g_plugin.plan_duql = {plan_duql_field};",
             "    g_plugin.make_slice = make_slice;",
             "    g_plugin.on_batch = on_batch;",
@@ -2781,7 +2915,11 @@ def _raw_body(fn: Callable[..., object]) -> List[str]:
     argc = getattr(fn, "__code__").co_argcount
     result = fn(*([None] * argc))
     if not isinstance(result, str):
-        raise JitError("@jit.each_event(raw=True) method must return a C++ body string")
+        source = _Source(fn)
+        raise source.error(
+            "@jit.each_event(raw=True) method must return a C++ body string",
+            ast.parse(source.text).body[0],
+        )
     return textwrap.dedent(result).splitlines()
 
 
@@ -2796,24 +2934,276 @@ def _referenced_ops(fn: Callable[..., object]) -> Dict[str, Op]:
     return {name: val for name, val in scope.items() if isinstance(val, Op)}
 
 
+# ---- dataclass config ------------------------------------------------------
+
+_CFG_KINDS: Dict[type, str] = {bool: "bool", int: "int", float: "float", str: "str"}
+_CFG_NATIVE_KIND = {
+    "bool": "DFTU_VAL_BOOL",
+    "int": "DFTU_VAL_I64",
+    "float": "DFTU_VAL_F64",
+    "str": "DFTU_VAL_STR",
+}
+
+
+class _CfgField:
+    """One field of a plugin's config dataclass: a value of ``kind`` (int,
+    float, bool or str) that is optionally None, with the dataclass default."""
+
+    __slots__ = ("name", "kind", "optional", "default", "required")
+
+    def __init__(
+        self,
+        name: str,
+        kind: str,
+        optional: bool,
+        default: "Union[int, float, bool, str, None]",
+        required: bool,
+    ) -> None:
+        self.name = name
+        self.kind = kind
+        self.optional = optional
+        self.default = default
+        self.required = required
+
+    def value_kind(self) -> str:
+        # An optional field may be sent as null, so only the key is declared.
+        return "DFTU_CONFIG_ANY" if self.optional else _CFG_NATIVE_KIND[self.kind]
+
+    def members(self) -> List[str]:
+        """The DftuCfg members of one loaded instance. A prefix per member kind
+        keeps every name apart: ``v_`` value, ``l_`` string length, ``h_`` set."""
+        n = self.name
+        if self.kind == "str":
+            out = [f"char* v_{n};", f"uint32_t l_{n};"]
+        elif self.kind == "float":
+            out = [f"double v_{n};"]
+        else:
+            out = [f"int64_t v_{n};"]
+        if self.optional:
+            out.append(f"int h_{n};")
+        return out
+
+    def locals_(self) -> List[str]:
+        """The on_batch locals the body reads (``_cfg_``, ``_has_``); a string's
+        interned id is ``_cfgs_`` and is declared where it is resolved."""
+        n = self.name
+        out: List[str] = []
+        if self.kind != "str":
+            ctype = "double" if self.kind == "float" else "int64_t"
+            out += [f"    const {ctype} _cfg_{n} = _c->v_{n};", f"    (void)_cfg_{n};"]
+        if self.optional:
+            out += [f"    const int _has_{n} = _c->h_{n};", f"    (void)_has_{n};"]
+        return out
+
+    def _c_default(self) -> str:
+        d = self.default
+        if d is None:
+            return "0.0" if self.kind == "float" else "0"
+        if self.kind == "float":
+            return repr(float(d))
+        if self.kind == "bool":
+            return "1" if d else "0"
+        return _int_literal(int(d))
+
+    def factory_reads(self) -> List[str]:
+        """The factory statements that load the field into the instance's
+        DftuCfg, falling back to the dataclass default when the key is absent
+        and to unset when it is null."""
+        n = self.name
+        key = _c_str_literal(n)
+        out = ["    {", f"        const dftu_value* v = dftu_obj_get(config, {key});"]
+        if self.optional:
+            out += [
+                "        int is_null = v != NULL && v->kind == DFTU_VAL_NULL;",
+                f"        _c->h_{n} = is_null ? 0 : (v != NULL ? 1 : {0 if self.default is None else 1});",
+            ]
+            # An optional key is declared with any kind so it may be null, which
+            # leaves the host no type check to make; make it here.
+            if self.kind == "str":
+                ok = "v->kind == DFTU_VAL_STR"
+            else:
+                ok = (
+                    "v->kind == DFTU_VAL_BOOL || v->kind == DFTU_VAL_I64 || v->kind == DFTU_VAL_F64"
+                )
+            out += [
+                f"        if (v != NULL && !is_null && !({ok})) {{",
+                "            destroy(inst);",
+                "            return dftu_fail(ctx, DFTU_E_INVALID,",
+                f"                             {_c_str_literal(f'config key {n!r} has the wrong type')});",
+                "        }",
+            ]
+        else:
+            out.append("        int is_null = 0;")
+        if self.kind == "str":
+            default = "" if self.default is None else str(self.default)
+            blen = len(default.encode("utf-8"))
+            out += [
+                "        uint32_t len = 0;",
+                "        const char* text = is_null ? NULL : dftu_as_str(v, &len);",
+                f"        if (!text && !is_null) {{ text = {_c_str_literal(default)}; len = {blen}; }}",
+                "        char* copy = (char*)malloc((size_t)len + 1);",
+                "        if (!copy) {",
+                "            destroy(inst);",
+                '            return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");',
+                "        }",
+                "        if (len) memcpy(copy, text, len);",
+                "        copy[len] = 0;",
+                f"        _c->v_{n} = copy;",
+                f"        _c->l_{n} = len;",
+            ]
+        else:
+            fn = {"float": "dftu_as_f64", "bool": "dftu_as_bool"}.get(self.kind, "dftu_as_i64")
+            out.append(f"        _c->v_{n} = is_null ? 0 : {fn}(v, {self._c_default()});")
+        out.append("    }")
+        return out
+
+
+def _cfg_kind(tp: object) -> "Tuple[str, bool] | None":
+    """(kind, is_optional) for a supported config field type, else None."""
+    if isinstance(tp, type) and tp in _CFG_KINDS:
+        return _CFG_KINDS[tp], False
+    union_type = getattr(types, "UnionType", None)
+    origin = getattr(tp, "__origin__", None)
+    if origin is Union or (union_type is not None and isinstance(tp, union_type)):
+        args = [a for a in getattr(tp, "__args__", ()) if a is not type(None)]
+        if len(args) == 1 and isinstance(args[0], type) and args[0] in _CFG_KINDS:
+            return _CFG_KINDS[args[0]], True
+    return None
+
+
+def _type_hints(obj: type) -> Dict[str, object]:
+    try:
+        return get_type_hints(obj)
+    except (NameError, TypeError):
+        return dict(getattr(obj, "__dict__", {}).get("__annotations__", {}))
+
+
+def _config_fields(cls: type) -> Dict[str, _CfgField]:
+    """The fields of the dataclass ``cls`` declares as ``config: Cfg``; empty
+    when it declares none. Raises :class:`JitError` at the offending annotation
+    for a config type that is not a dataclass or a field type that has no
+    native form."""
+    if "config" not in cls.__dict__.get("__annotations__", {}):
+        return {}
+    cfg_type = _type_hints(cls).get("config")
+    if not (isinstance(cfg_type, type) and dataclasses.is_dataclass(cfg_type)):
+        raise _class_error(
+            cls,
+            f"@jit.plugin config must be annotated with a dataclass, got {cfg_type!r}",
+            "config",
+        )
+    hints = _type_hints(cfg_type)
+    fields: Dict[str, _CfgField] = {}
+    for f in dataclasses.fields(cfg_type):
+        if not f.name.isascii():
+            raise _class_error(cfg_type, f"config field '{f.name}' must have an ASCII name", f.name)
+        tp = hints.get(f.name, f.type)
+        kind = _cfg_kind(tp)
+        if kind is None:
+            raise _class_error(
+                cfg_type,
+                f"config field '{f.name}' has type {tp!r}; a config field is an int, float, "
+                "bool or str, or Optional of one",
+                f.name,
+            )
+        if f.default_factory is not dataclasses.MISSING:
+            raise _class_error(
+                cfg_type,
+                f"config field '{f.name}' uses default_factory; give it a plain default",
+                f.name,
+            )
+        has_default = f.default is not dataclasses.MISSING
+        if (
+            has_default
+            and not (f.default is None and kind[1])
+            and not _cfg_value_ok(kind[0], f.default)
+        ):
+            raise _class_error(
+                cfg_type,
+                f"config field '{f.name}' has default {f.default!r}, not a {kind[0]}",
+                f.name,
+            )
+        default = cast("Union[int, float, bool, str, None]", f.default) if has_default else None
+        if kind[0] == "float" and isinstance(default, float) and not math.isfinite(default):
+            raise _class_error(cfg_type, f"config field '{f.name}' default must be finite", f.name)
+        fields[f.name] = _CfgField(f.name, kind[0], kind[1], default, not has_default)
+    return fields
+
+
+def _cfg_value_ok(kind: str, value: object) -> bool:
+    if kind == "bool":
+        return isinstance(value, bool)
+    if kind == "str":
+        return isinstance(value, str)
+    if isinstance(value, bool):
+        return False
+    return isinstance(value, (int, float)) if kind == "float" else isinstance(value, int)
+
+
+def _check_cfg_value(
+    plugin: str, field: _CfgField, value: "JSONValue"
+) -> "Union[int, float, bool, str, None]":
+    if value is None and field.optional:
+        return None
+    if not _cfg_value_ok(field.kind, value):
+        expected = f"Optional[{field.kind}]" if field.optional else field.kind
+        raise JitError(
+            f"{plugin} config field '{field.name}' expects {expected}, got "
+            f"{type(value).__name__} ({value!r})"
+        )
+    if field.kind == "float":
+        return float(cast(float, value))
+    return cast("Union[int, bool, str]", value)
+
+
+def plugin_config(
+    cls: type, config: "Optional[Mapping[str, JSONValue]]"
+) -> "Optional[Dict[str, JSONValue]]":
+    """The load config for ``cls``, checked against its config dataclass.
+
+    A plugin without a ``config: Cfg`` annotation gets ``config`` back as is.
+    Otherwise every key must be a field, a required field must be present, a
+    value must have its field's type (an int is accepted for a float), and the
+    dataclass default fills an absent field; an optional field that is None is
+    sent as null, which is how a caller turns an Optional field off even when its
+    default is a value. Raises :class:`JitError` naming the field."""
+    fields = getattr(cls, "_jit_config", None)
+    if fields is None:
+        return dict(config) if config is not None else None
+    given = dict(config) if config is not None else {}
+    name = cls.__name__
+    for key in given:
+        if key not in fields:
+            raise JitError(
+                f"{name} has no config field '{key}'; its fields are {', '.join(fields) or 'none'}"
+            )
+    out: Dict[str, JSONValue] = {}
+    for fname, field in fields.items():
+        if fname in given:
+            value = given[fname]
+        elif field.required:
+            raise JitError(f"{name} config field '{fname}' is required and was not given")
+        else:
+            value = field.default
+        out[fname] = _check_cfg_value(name, field, value)
+    return out
+
+
 def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
     pkg = package if package is not None else _DEFAULT_PACKAGE
-    maps: Dict[str, _MapDecl] = {}
+    maps: Dict[str, _AnyMap] = {}
     ports: Dict[str, _Port] = {}
-    configs: Dict[str, _Config] = {}
     each: List[_EachEvent] = []
     for attr, val in vars(cls).items():
         if isinstance(val, _MapDecl):
             maps[attr] = val
         elif isinstance(val, _Port):
             ports[attr] = val
-        elif isinstance(val, _Config):
-            configs[attr] = val
         elif isinstance(val, _EachEvent):
             each.append(val)
     if not maps and not ports:
-        raise JitError(
-            "@jit.plugin needs at least one jit.map or jit.publish/jit.consume attribute"
+        raise _class_error(
+            cls, "@jit.plugin needs at least one jit.map or jit.publish/jit.consume attribute"
         )
     # A publish port's wire id is only knowable once its class is built: it is
     # package + module + class + attribute, resolved here so a later
@@ -2824,18 +3214,19 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
     map_ids = {attr: pkg.identity(cls, attr) for attr in maps}
     for attr, decl in maps.items():
         if decl.is_product and any(m.elem == "str" for m in decl.values):
-            raise JitError(
+            raise _class_error(
+                cls,
                 f"@jit.plugin map '{attr}': a string-valued reduction "
                 "(jit.set/list/argmin/argmax/topk/sample with of=jit.str_) cannot be a "
-                "product component; declare it as its own jit.map"
+                "product component; declare it as its own jit.map",
+                attr,
             )
     if len(each) != 1:
-        raise JitError("@jit.plugin needs exactly one @jit.each_event method")
+        raise _class_error(cls, "@jit.plugin needs exactly one @jit.each_event method")
     plan_duql = getattr(cls, "plan_duql", None)
     if plan_duql is not None and not isinstance(plan_duql, str):
-        raise JitError("@jit.plugin plan_duql must be a query DSL string")
-    # {name: is_f64} for config fields, read into a body-visible static.
-    config_f64 = {n: c.dft in ("DFTU_T_F64", "DFTU_T_F32") for n, c in configs.items()}
+        raise _class_error(cls, "@jit.plugin plan_duql must be a query DSL string", "plan_duql")
+    configs = _config_fields(cls)
     op_defs: List[str] = []
     if each[0].raw:
         body = _raw_body(each[0].fn)
@@ -2853,7 +3244,7 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
             maps,
             _referenced_ops(each[0].fn),
             ports=ports,
-            config_fields=config_f64,
+            config_fields=configs,
         )
         body = compiler.lower(each[0].fn)
         fields_used = compiler.fields_used
@@ -2873,13 +3264,15 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
         rows_per_event,
         op_defs,
         ports,
-        config_f64,
+        configs,
         raw_event=each[0].raw,
         map_ids=map_ids,
     )
     result_names = {qid: attr for attr, qid in map_ids.items()}
     plugin = JitPlugin(cls.__name__, source, {}, result_names, pkg.shippable(cls))
     setattr(cls, "_jit_plugin", plugin)
+    if configs:
+        setattr(cls, "_jit_config", configs)
     return cls
 
 
@@ -2933,10 +3326,23 @@ def _vfold_specs(opd: Dict[str, object]) -> List[Tuple[str, str, str, str, str]]
 def _compile_vfold(
     fn: Callable[..., object],
     accums: Dict[str, _Monoid],
-    maps: Dict[str, _MapDecl],
+    maps: Dict[str, _AnyMap],
 ) -> Tuple[List[Dict[str, object]], "builtins.set[str]"]:
-    tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    source = _Source(fn)
+    try:
+        return _compile_vfold_body(source, accums, maps)
+    except JitError as exc:
+        raise source.relocate(exc, source.cur) from None
+
+
+def _compile_vfold_body(
+    source: _Source,
+    accums: Dict[str, _Monoid],
+    maps: Dict[str, _AnyMap],
+) -> Tuple[List[Dict[str, object]], "builtins.set[str]"]:
+    tree = ast.parse(source.text)
     func = tree.body[0]
+    source.cur = func
     if not isinstance(func, ast.FunctionDef):
         raise JitError("@jit.each_batch must decorate a function")
     ops: List[Dict[str, object]] = []
@@ -2946,6 +3352,7 @@ def _compile_vfold(
         'or self.<map>[df["k"]] += df["v"]'
     )
     for stmt in func.body:
+        source.cur = stmt
         if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
             continue  # docstring
         if not (isinstance(stmt, ast.AugAssign) and isinstance(stmt.op, ast.Add)):
@@ -3178,9 +3585,9 @@ def _emit_vfold(
     return "\n".join(out)
 
 
-def _build_vfold(cls: type) -> type:
+def _build_vfold(cls: type[_C]) -> type[_C]:
     accums: Dict[str, _Monoid] = {}
-    maps: Dict[str, _MapDecl] = {}
+    maps: Dict[str, _AnyMap] = {}
     batch: List[_EachBatch] = []
     for attr, val in vars(cls).items():
         if isinstance(val, _MapDecl):
@@ -3191,18 +3598,22 @@ def _build_vfold(cls: type) -> type:
             batch.append(val)
     for attr, m in maps.items():
         if m.is_product:
-            raise JitError(
-                f"@jit.vfold: '{attr}' must be a simple jit.map(key=<type>, value=<reduction>)"
+            raise _class_error(
+                cls,
+                f"@jit.vfold: '{attr}' must be a simple jit.map(key=<type>, value=<reduction>)",
+                attr,
             )
         if not m.key_types:
-            raise JitError(f"@jit.vfold: '{attr}' needs at least one key")
+            raise _class_error(cls, f"@jit.vfold: '{attr}' needs at least one key", attr)
     if not accums and not maps:
-        raise JitError("@jit.vfold needs an accumulator (jit.sum()/min()/max()) or a jit.map")
+        raise _class_error(
+            cls, "@jit.vfold needs an accumulator (jit.sum()/min()/max()) or a jit.map"
+        )
     if len(batch) != 1:
-        raise JitError("@jit.vfold needs exactly one @jit.each_batch method")
+        raise _class_error(cls, "@jit.vfold needs exactly one @jit.each_batch method")
     plan_duql = getattr(cls, "plan_duql", None)
     if plan_duql is not None and not isinstance(plan_duql, str):
-        raise JitError("@jit.vfold plan_duql must be a query DSL string")
+        raise _class_error(cls, "@jit.vfold plan_duql must be a query DSL string", "plan_duql")
     # Every batch's dyn arg columns are resolved unconditionally now (no
     # needs() negotiation), so the field set from _compile_vfold is only used
     # for its own validation, not to gate what on_batch resolves.
@@ -3212,7 +3623,7 @@ def _build_vfold(cls: type) -> type:
     return cls
 
 
-def vfold(cls: type) -> type:
+def vfold(cls: type[_C]) -> type[_C]:
     """Author a vectorized fold: a per-batch fold whose body runs SIMD column
     ops on the batch and folds them into scalar accumulators or keyed maps.
 
@@ -3241,7 +3652,7 @@ _HOST_NAME_PREFIX = "dftu."
 
 
 def _series_module(
-    fn: Callable[..., object], module: "str | None", package: "JitPackage | None"
+    fn: Callable[..., Expr], module: "str | None", package: "JitPackage | None"
 ) -> str:
     if module is not None:
         mod = module
@@ -3264,8 +3675,8 @@ def _series_module(
 
 
 def _series_impl(
-    fn: Callable[..., object], module: "str | None", package: "JitPackage | None" = None
-) -> Callable[..., object]:
+    fn: Callable[..., Expr], module: "str | None", package: "JitPackage | None" = None
+) -> Callable[..., Result]:
     from ..columnar import Expr, col
     from . import ops as _ops
 
@@ -3286,7 +3697,15 @@ def _series_impl(
     return _ops.get(name)
 
 
-def series(fn: "Callable[..., object] | None" = None, *, module: "str | None" = None) -> object:
+@overload
+def series(fn: "Callable[..., Expr]") -> "Callable[..., Result]": ...
+@overload
+def series(
+    fn: None = None, *, module: "str | None" = None
+) -> "Callable[[Callable[..., Expr]], Callable[..., Result]]": ...
+def series(
+    fn: "Callable[..., Expr] | None" = None, *, module: "str | None" = None
+) -> "Callable[..., Result] | Callable[[Callable[..., Expr]], Callable[..., Result]]":
     """Author a reusable column op from an expression over its arguments.
 
     The body builds a lazy column expression from its Series arguments using the
@@ -3377,7 +3796,7 @@ def compile_plugin(
             raise _plugin_build.PluginBuildError(proc.stderr)
         return str(out_path)
     except _plugin_build.PluginBuildError as exc:
-        raise JitError(f"jit compile failed:\n{exc}") from exc
+        raise JitError(f"jit compile failed:\n{exc}", locate=False) from exc
 
 
 def compile_class(obj: object) -> str:
@@ -3411,6 +3830,6 @@ def provided_names(cls: type) -> Dict[str, str]:
         raise TypeError("expected a @jit.plugin-decorated class")
     names: Dict[str, str] = {attr: qid for qid, attr in spec.result_names.items()}
     for attr, val in vars(cls).items():
-        if isinstance(val, _Port) and val.role == "publish":
+        if isinstance(val, _Port) and val.role == "publish" and val.name is not None:
             names[attr] = val.name
     return names

@@ -25,7 +25,7 @@ string, an int, a char) follow the op's signature. The call returns a Series for
 a column op, or a Python scalar for a reducer.
 """
 
-from typing import TYPE_CHECKING, Callable, Dict, List, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Union, cast
 
 from .. import dftracer_utils_ext as _ext
 from ..series import Series, _unwrap, _wrap
@@ -73,7 +73,7 @@ def run(name: str, *args: Operand) -> Result:
             raise TypeError(f"op '{name}' takes {uop.n_args} argument(s), got {len(args)}")
         source = {f"__x{i}__": a for i, a in enumerate(args)}
         return uop.expr.apply(source)
-    return _wrap(_ext.op_run(name, *(_unwrap(a) for a in args)))
+    return cast(Result, _wrap(_ext.op_run(name, *(_unwrap(a) for a in args))))
 
 
 def get(name: str) -> Callable[..., Result]:
@@ -158,7 +158,7 @@ class _ModuleNs:
         return get(key if key is not None else full)
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Union[Callable[..., Result], _ModuleNs]:
     # A user op's literal path, or a built-in with "dftu." elided -> a bound
     # callable; ops.<module> -> a namespace.
     key = _resolve(name)

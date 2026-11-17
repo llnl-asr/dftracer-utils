@@ -119,23 +119,33 @@ coro::CoroTask<dstd::Result<ResolverResult>> resolve_and_build_once(
         co_return result;
     }
 
-    // A forced rebuild rebuilds every file whole, so every tier is stale.
-    dstd::HashSet<dstd::String> stale_tiers(
+    // A stale tier is the index-wide config or layout, so the whole root is
+    // cleared. A forced rebuild rebuilds only its own files, so it clears only
+    // their rows: a trace folder that shares the root keeps its tier.
+    const dstd::HashSet<dstd::String> stale_tiers(
         result.stale_aggregation_roots.begin(),
         result.stale_aggregation_roots.end());
-    if (input.force_rebuild)
+    for (const auto& root : stale_tiers) {
+        auto cleared = clear_aggregation(root);
+        if (!cleared) co_return cleared.error();
+    }
+    if (input.force_rebuild) {
+        dstd::Map<dstd::String, dstd::Vector<dstd::String>> forced_by_root;
         for (const auto& file : result.all_files) {
             auto root =
                 trace::internal::determine_index_path(file, input.index_dir);
+            if (stale_tiers.contains(root)) continue;
+            forced_by_root[std::move(root)].push_back(file);
+        }
+        for (const auto& [root, files] : forced_by_root) {
             const dstd::String store_path = trace::index::store_dir(root);
             auto checking = runtime::fs::exists(dstd::PathView(store_path));
             auto has_store = co_await std::move(checking);
             if (!has_store.has_value()) co_return has_store.error();
-            if (*has_store) stale_tiers.insert(std::move(root));
+            if (!*has_store) continue;
+            auto cleared = clear_aggregation_files(root, files);
+            if (!cleared) co_return cleared.error();
         }
-    for (const auto& root : stale_tiers) {
-        auto cleared = clear_aggregation(root);
-        if (!cleared) co_return cleared.error();
     }
 
     dstd::Vector<dstd::String> files_needing_work;

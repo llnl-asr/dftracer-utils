@@ -3,7 +3,10 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/trace/index/build/aggregation_run.h>
 #include <dftracer/utils/trace/index/index.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
@@ -61,6 +64,23 @@ dstd::Result<void> clear_aggregation(const dstd::String& index_path) {
         trace::index::normalize_index_root(index_path));
     if (!target) return target.error();
     return trace::index::schemas::dft::agg::tier::clear(*target);
+}
+
+dstd::Result<void> clear_aggregation_files(
+    const dstd::String& index_path, const dstd::Vector<dstd::String>& files) {
+    DFTRACER_UTILS_LOG_INFO("Clearing the aggregation rows of {} files in {}",
+                            files.size(), index_path);
+    auto target = trace::index::Index::open(
+        trace::index::normalize_index_root(index_path));
+    if (!target) return target.error();
+    dstd::Vector<dstd::String> logical;
+    logical.reserve(files.size());
+    for (const dstd::String& file : files)
+        logical.push_back(fileio::get_logical_path(file));
+    dstd::Vector<dstd::StringView> views(logical.begin(), logical.end());
+    return trace::index::schemas::dft::agg::tier::clear_files(
+        *target,
+        dstd::Span<const dstd::StringView>(views.data(), views.size()));
 }
 
 }  // namespace dftracer::utils::trace::index::build

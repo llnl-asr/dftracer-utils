@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -60,6 +61,13 @@ dstd::Result<void> write_time_bounds(const Index& index, TimeBounds bounds);
 /// Removes every record of the aggregation tier from `index`, the config and
 /// the time bounds included. Blocking.
 dstd::Result<void> clear(const Index& index);
+
+/// Removes the aggregation records of the files in `paths`, their logical
+/// paths, and nothing else: the records of other files, the config and the
+/// time bounds stay. A path with no records is skipped. Blocking; the views
+/// need only outlive the call.
+dstd::Result<void> clear_files(const Index& index,
+                               dstd::Span<const dstd::StringView> paths);
 
 }  // namespace dftracer::utils::trace::index::schemas::dft::agg::tier
 

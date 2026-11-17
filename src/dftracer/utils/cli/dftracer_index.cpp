@@ -319,15 +319,18 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     const dstd::String agg_index =
         trace::internal::determine_index_path(input_files.front(), index_dir);
-    if (force_rebuild) {
-        auto agg_exists = dstd::fs::exists(dstd::PathView(agg_index));
-        if (!agg_exists.has_value())
-            co_return cli::report_error(agg_exists.error());
-        if (*agg_exists) stale_tiers.insert(agg_index);
-    }
     for (const auto& root : stale_tiers) {
         auto cleared = clear_aggregation(root);
         if (!cleared) co_return cli::report_error(cleared.error());
+    }
+    if (force_rebuild && !stale_tiers.contains(agg_index)) {
+        auto agg_exists = dstd::fs::exists(dstd::PathView(agg_index));
+        if (!agg_exists.has_value())
+            co_return cli::report_error(agg_exists.error());
+        if (*agg_exists) {
+            auto cleared = clear_aggregation_files(agg_index, input_files);
+            if (!cleared) co_return cli::report_error(cleared.error());
+        }
     }
 
     auto batch_config = dstd::make_shared<IndexBuildBatchConfig>();

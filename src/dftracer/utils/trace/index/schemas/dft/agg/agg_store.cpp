@@ -111,6 +111,18 @@ dstd::Result<void> write_time_bounds(const Index& index, TimeBounds bounds) {
     return publish_meta(index, TIME_BOUNDS_NAME, value);
 }
 
+dstd::Result<void> clear_files(const Index& index,
+                               dstd::Span<const dstd::StringView> paths) {
+    dstd::Expected<void, dstd::Error> dropped;
+    auto ran = default_runtime().block_on(
+        coro::named("aggregation files clear", [&]() -> coro::CoroTask<void> {
+            dropped = co_await remove_extension(
+                index, trace::index::store::layout::Ext::Agg, paths);
+        }()));
+    if (!ran) return ran.error();
+    return dropped;
+}
+
 dstd::Result<void> clear(const Index& index) {
     auto snapshot = index.snapshot();
     if (!snapshot) return snapshot.error();
@@ -119,16 +131,9 @@ dstd::Result<void> clear(const Index& index) {
     dstd::Vector<dstd::StringView> paths;
     paths.reserve(files->size());
     for (const FileRef& file : *files) paths.push_back(file.path());
-    const dstd::Span<const dstd::StringView> listed(paths.data(), paths.size());
-
-    dstd::Expected<void, dstd::Error> dropped;
-    auto ran = default_runtime().block_on(
-        coro::named("aggregation tier clear", [&]() -> coro::CoroTask<void> {
-            dropped = co_await remove_extension(
-                index, trace::index::store::layout::Ext::Agg, listed);
-        }()));
-    if (!ran) return ran.error();
-    if (!dropped) return dropped.error();
+    auto dropped = clear_files(
+        index, dstd::Span<const dstd::StringView>(paths.data(), paths.size()));
+    if (!dropped) return dropped;
     for (const dstd::StringView name : META_NAMES) {
         auto gone = drop_meta(index, name);
         if (!gone) return gone;

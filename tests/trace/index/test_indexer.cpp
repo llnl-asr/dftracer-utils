@@ -278,6 +278,39 @@ TEST_SUITE("Indexer") {
         rt.shutdown();
     }
 
+    TEST_CASE("a forced build keeps the aggregation of another folder") {
+        Runtime rt(4);
+        dftu_utils_test::TestEnvironment env(10);
+        const dstd::Path root(env.dir());
+        const dstd::Path dir_a = root / "folder_a";
+        const dstd::Path dir_b = root / "folder_b";
+        REQUIRE(dstd::fs::create_directories(dir_a).has_value());
+        REQUIRE(dstd::fs::create_directories(dir_b).has_value());
+        const auto source_a = env.create_dft_test_gzip_file(30);
+        const auto source_b = env.create_dft_test_gzip_file(40);
+        const dstd::String a((dir_a / "a.pfw.gz").str());
+        const dstd::String b((dir_b / "b.pfw.gz").str());
+        REQUIRE(dstd::fs::copy_file(source_a, a, dstd::fs::CopyMode::Overwrite)
+                    .has_value());
+        REQUIRE(dstd::fs::copy_file(source_b, b, dstd::fs::CopyMode::Overwrite)
+                    .has_value());
+
+        IndexerOptions options = with_runtime(rt);
+        options.index_dir = dstd::String((root / "shared_index").str());
+        auto ix_a = dftu_utils_test::ok(Indexer::open({a}, options));
+        auto ix_b = dftu_utils_test::ok(Indexer::open({b}, options));
+        dftu_utils_test::ok(ix_a.build());
+        dftu_utils_test::ok(ix_b.build());
+        CHECK(dftu_utils_test::ok(ix_b.status()).needs_work.empty());
+
+        auto forced = dftu_utils_test::ok(ix_a.rebuild());
+        CHECK(forced.indexed == 1);
+        CHECK(forced.needs_work.empty());
+        CHECK(dftu_utils_test::ok(ix_b.status()).needs_work.empty());
+        CHECK(dftu_utils_test::ok(ix_b.build()).indexed == 0);
+        rt.shutdown();
+    }
+
     TEST_CASE("async and blocking forms agree") {
         Runtime rt(4);
         dftu_utils_test::TestEnvironment env_a(10);

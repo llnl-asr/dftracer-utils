@@ -91,27 +91,89 @@ inline bool parse_string_seq(
     return true;
 }
 
+// Append one path of the `files` argument to `paths` unless it is there
+// already. `item` is a str or an os.PathLike that gives a str; bytes and any
+// other type set a TypeError. A directory sets a ValueError when
+// `reject_directory` is set.
+inline bool add_trace_path(
+    PyObject* item,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& paths,
+    bool reject_directory) {
+    if (PyBytes_Check(item)) {
+        PyErr_SetString(PyExc_TypeError,
+                        "a path must be a str or an os.PathLike of str");
+        return false;
+    }
+    PyObject* fs = PyOS_FSPath(item);
+    if (!fs) return false;
+    if (!PyUnicode_Check(fs)) {
+        Py_DECREF(fs);
+        PyErr_SetString(PyExc_TypeError,
+                        "a path must be a str or an os.PathLike of str");
+        return false;
+    }
+    Py_ssize_t len = 0;
+    const char* s = PyUnicode_AsUTF8AndSize(fs, &len);
+    if (!s) {
+        Py_DECREF(fs);
+        return false;
+    }
+    const dftracer::utils::dstd::StringView path(s,
+                                                 static_cast<std::size_t>(len));
+    if (reject_directory) {
+        const auto is_dir = dftracer::utils::dstd::fs::is_directory(
+            dftracer::utils::dstd::PathView(path));
+        if (is_dir.has_value() && *is_dir) {
+            PyErr_Format(PyExc_ValueError,
+                         "a directory must be the only path, not an item of "
+                         "a list: %U",
+                         fs);
+            Py_DECREF(fs);
+            return false;
+        }
+    }
+    bool seen = false;
+    for (const auto& known : paths)
+        if (known == path) {
+            seen = true;
+            break;
+        }
+    if (!seen) paths.emplace_back(path);
+    Py_DECREF(fs);
+    return true;
+}
+
 // Read the `files` argument of TraceViewer and Indexer: one path, a folder,
-// or a sequence of paths. A str naming a directory sets `dir`; any other str
-// is one entry of `paths`. A non-str, non-sequence sets a TypeError.
+// or a sequence of paths. A path is a str or an os.PathLike. One path that
+// names a directory sets `dir`; any other single path is one entry of `paths`.
+// A sequence fills `paths` in order and keeps the first of equal paths; a
+// directory in it sets a ValueError. Any other type sets a TypeError.
 inline bool parse_trace_files(
     PyObject* files,
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& paths,
     dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>& dir) {
-    if (PyUnicode_Check(files)) {
-        const char* path = PyUnicode_AsUTF8(files);
-        if (!path) return false;
+    if (PyUnicode_Check(files) || PyObject_HasAttrString(files, "__fspath__")) {
+        if (!add_trace_path(files, paths, false)) return false;
         const auto is_dir = dftracer::utils::dstd::fs::is_directory(
-            dftracer::utils::dstd::PathView(
-                dftracer::utils::dstd::StringView(path)));
-        if (is_dir.has_value() && *is_dir)
-            dir = dftracer::utils::dstd::String(path);
-        else
-            paths.emplace_back(path);
+            dftracer::utils::dstd::PathView(paths.back()));
+        if (is_dir.has_value() && *is_dir) {
+            dir = std::move(paths.back());
+            paths.pop_back();
+        }
         return true;
     }
-    return parse_string_seq(
-        files, "files must be a path or a sequence of paths", paths);
+    PyObject* seq =
+        PySequence_Fast(files, "files must be a path or a sequence of paths");
+    if (!seq) return false;
+    const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        if (!add_trace_path(PySequence_Fast_GET_ITEM(seq, i), paths, true)) {
+            Py_DECREF(seq);
+            return false;
+        }
+    }
+    Py_DECREF(seq);
+    return true;
 }
 
 // Append the raw bytes of each item of a Python sequence to `out`; each item

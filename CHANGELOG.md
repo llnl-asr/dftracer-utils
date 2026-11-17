@@ -158,6 +158,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- `TraceViewer(files)` and `Indexer(files)` take one input form: a `str` or `os.PathLike`, or a list or tuple of them. One directory is scanned; a directory inside a list is a `ValueError`; a path given twice is read once.
 - Name the index location `index_dir` everywhere: `TraceViewer(files, index_dir=)`, `LiveTraceViewer(files, index_dir=)`, `CheckpointIndexer(gz_path, index_dir=)` and its `index_dir` property, `Index(index_dir)`, `write_shard_set(index_dir, ...)`, `consolidate_shard_set(index_dir)`, `distributed_index(index_dir=)`, `build_index_distributed(index_dir=)`, the dfanalyzer helpers (`index_dir_for`, `view_typed_frames`, `count_index_files`), `IndexStatus.index_dir`, the `index_dir` key of the Indexer status dict, of the manifest entries and of the `distributed_index` result, and the `index_dir` field of the `dftracer_stats` JSON.
   In C++ and C, the `index_dir` parameter of `View::from_directory`, `LiveView` and `dftu_view_from_directory`, and the `index_dir` field of `TraceWriteOptions`.
   The old spellings are gone.
@@ -907,6 +908,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- A forced index build (`Indexer.build(force=True)`, `dftracer_index --force`) of one trace folder no longer clears the aggregation of other folders that share its `index_dir`; only the forced files' aggregation rows are rebuilt.
 - `group_by(...).agg(...)` keeps the type of a temporal column: `min`, `max`, `first` and `last` of a Timestamp (any unit and zone), Date32, Date64, Time32, Time64 or Duration give that type, the `sum` of a Duration is a Duration and the `mean` of a Timestamp or a Duration keeps its type, as pandas and Polars do; they gave an Int64 column that later `.dt` calls read as microseconds.
   The lazy plan `schema` after `group_by(...).agg(...)` and `group_by_dynamic` carries the same types, from one rule in `agg_output_type`.
 - `group_by(...).agg(...)` with `first` or `last` gives null for a group with no present value, for every column type; it gave `0` or an empty string.

@@ -124,9 +124,20 @@ class Indexer:
     - Tier 3: Aggregation data, built by every build
 
     Args:
-        files: A trace file, a directory scanned recursively for trace files
-            (.pfw, .jsonl and .ndjson, plain or gzip), or a list of file
-            paths, as for :class:`~dftracer.utils.TraceViewer`.
+        files: A path (``str`` or ``os.PathLike``) or a sequence of paths,
+            with the same rule as :class:`~dftracer.utils.TraceViewer`. One
+            path that names a directory is scanned recursively for trace
+            files (.pfw, .jsonl and .ndjson, plain or gzip); a directory
+            inside a sequence raises ``ValueError``. A repeated path is
+            indexed once. A glob is not expanded, so it is a missing path and
+            raises ``DFTUtilsNotFoundError``, as does any missing path, on the
+            first ``status``, ``ensure`` or ``build`` (``TraceViewer`` raises
+            it at ``collect()``, as it reads nothing before). An empty
+            sequence raises ``ValueError``, since there is nothing to index
+            (``TraceViewer`` takes it as a view of no rows); an empty
+            directory is an index of no files. A file that is not a trace raises
+            ``DFTUtilsIOError`` when ``ensure`` or ``build`` indexes it;
+            ``status`` reads no content, so it does not.
         index_dir: Directory for .dftindex stores (default: next to files).
         require_checkpoint: Build checkpoint tier (default True).
         require_bloom: Build the bloom tier: True for the defaults, or a
@@ -190,13 +201,8 @@ class Indexer:
 
         # Build native indexer
         native_runtime = runtime._native if runtime else None
-        paths = (
-            os.fspath(files)
-            if isinstance(files, (str, os.PathLike))
-            else [os.fspath(f) for f in files]
-        )
         self._native = _NativeIndexer(
-            files=paths,
+            files=files,
             index_dir=index_dir,
             require_checkpoint=require_checkpoint,
             require_bloom=bool(require_bloom),

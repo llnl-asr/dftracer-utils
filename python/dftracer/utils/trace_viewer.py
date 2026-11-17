@@ -143,8 +143,21 @@ def _partial(frame: DataFrame) -> bytes:
 
 
 class TraceViewer(_LazyOps, _ext.TraceViewer):
-    """A lazy view over trace files (a file, a directory or a list of files);
-    see the module docstring. ``record_schema`` names a registered record
+    """A lazy view over trace files; see the module docstring.
+
+    ``files`` is a path (``str`` or ``os.PathLike``) or a sequence of paths,
+    with the same rule as :class:`~dftracer.utils.Indexer`. One path that names
+    a directory is scanned recursively for trace files; a directory inside a
+    sequence raises ``ValueError``. A repeated path is read once. A glob is not
+    expanded, so it is a missing path. Nothing is read when the view is
+    built, so a missing path or a file that is not a trace raises a
+    ``DFTUtilsError`` at ``collect()`` (``Indexer`` raises a missing path on
+    its first ``status``, ``ensure`` or ``build``, and a non-trace file when
+    it indexes it). An empty sequence and an empty directory are views of no
+    rows, so a worker with no shard can still build one (``Indexer`` raises
+    ``ValueError`` for an empty sequence).
+
+    ``record_schema`` names a registered record
     schema (an id or a :class:`dftracer.utils.schemas.RecordSchema` class) to
     read the files as, instead of their recorded or detected one; an
     unregistered id raises ``DFTUtilsValueError``."""

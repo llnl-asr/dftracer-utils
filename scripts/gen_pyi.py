@@ -19,9 +19,10 @@ tests/python/test_api_table.py runs the check.
 """
 
 import argparse
+import re
 import sys
 from pathlib import Path
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import api_def  # noqa: E402
@@ -36,7 +37,21 @@ RESULT_TYPES: Dict[str, str] = {
     "BOOL": '"PublicSeries[bool]"',
     "INT": '"PublicSeries[int]"',
     "FLOAT": '"PublicSeries[float]"',
+    "STR": '"PublicSeries[str]"',
 }
+
+
+VALUE_RESULTS: Dict[str, List[str]] = {
+    "I64": ["int"],
+    "F64": ["float"],
+    "ELEMENT": ["Optional[T_co]"],
+}
+# SCALAR: a number of the column's own type, int or float, else either.
+SCALAR_OVERLOADS = (
+    ('self: "Series[int]"', "int"),
+    ('self: "Series[float]"', "float"),
+    ('self: "Series[Scalar]"', "Union[int, float]"),
+)
 
 
 def series_lines(rows: List[api_def.Row]) -> List[str]:
@@ -52,7 +67,14 @@ def series_lines(rows: List[api_def.Row]) -> List[str]:
             params = "".join(f", {k}: Union[int, float]" for k in r.keywords)
         else:
             raise ValueError(f"{r.name}: unknown args token {r.args}")
-        out.append(f"    def {r.name}(self{params}) -> {RESULT_TYPES[r.result]}: ...")
+        if r.result == "SCALAR":
+            for self_type, result in SCALAR_OVERLOADS:
+                out.append("    @overload")
+                out.append(f"    def {r.name}({self_type}{params}) -> {result}: ...")
+        elif r.result in VALUE_RESULTS:
+            out.append(f"    def {r.name}(self{params}) -> {VALUE_RESULTS[r.result][0]}: ...")
+        else:
+            out.append(f"    def {r.name}(self{params}) -> {RESULT_TYPES[r.result]}: ...")
     return out
 
 
@@ -66,10 +88,24 @@ def expr_lines(rows: List[api_def.Row]) -> List[str]:
     return out
 
 
-TARGETS: Dict[str, Callable[[List[api_def.Row]], List[str]]] = {
-    "dftracer_utils_ext.pyi": series_lines,
-    "columnar.py": expr_lines,
+TARGETS: Dict[str, Tuple[Callable, Callable, str]] = {
+    "dftracer_utils_ext.pyi": (series_lines, lambda r: r.cls == "Series", "class Series("),
+    "columnar.py": (expr_lines, lambda r: r.on_expr, "class Expr:"),
 }
+
+
+def hand_duplicates(text: str, names: List[str], scope: str) -> List[str]:
+    """Names of generated methods that the class starting at the line `scope`
+    also declares by hand outside its generated region."""
+    src = text.split("\n")
+    first = next(i for i, line in enumerate(src) if line.startswith(scope))
+    last = next(
+        (i for i in range(first + 1, len(src)) if src[i] and not src[i][0].isspace()), len(src)
+    )
+    begin = next(i for i in range(first, last) if src[i].strip() == BEGIN)
+    end = next(i for i in range(begin, last) if src[i].strip() == END)
+    outside = "\n".join(src[first:begin] + src[end:last])
+    return [n for n in names if re.search(rf"^\s+def {n}\(", outside, re.M)]
 
 
 def render(text: str, lines: List[str]) -> str:
@@ -85,10 +121,14 @@ def main() -> int:
     args = parser.parse_args()
     rows = api_def.rows()
     stale = []
-    for name, make in TARGETS.items():
+    for name, (make, select, scope) in TARGETS.items():
         path = PKG / name
         old = path.read_text(encoding="utf-8")
         new = render(old, make(rows))
+        clash = hand_duplicates(old, [r.name for r in rows if select(r)], scope)
+        if clash:
+            print(f"{name}: declared by hand and generated: {clash}", file=sys.stderr)
+            return 1
         if new != old:
             stale.append(name)
             if not args.check:

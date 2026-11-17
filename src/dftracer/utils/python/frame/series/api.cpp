@@ -4,6 +4,7 @@
 #include <dftracer/utils/python/frame/series_detail.h>
 
 #include <array>
+#include <cstdint>
 
 namespace dftracer::utils::python::core::api {
 
@@ -14,6 +15,8 @@ using frame::series_detail::Held;
 using frame::series_detail::kernel;
 using frame::series_detail::make_series;
 using frame::series_detail::named_like;
+using frame::series_detail::scalar_to_py;
+using frame::series_detail::without_gil;
 
 const char* args_name(Args a) {
     switch (a) {
@@ -37,6 +40,16 @@ const char* result_name(Result r) {
             return "INT";
         case Result::Float:
             return "FLOAT";
+        case Result::Str:
+            return "STR";
+        case Result::I64:
+            return "I64";
+        case Result::F64:
+            return "F64";
+        case Result::Scalar:
+            return "SCALAR";
+        case Result::Element:
+            return "ELEMENT";
     }
     return "";
 }
@@ -61,7 +74,22 @@ std::array<dftu_op_generic_fn, ROW_COUNT> g_bound{};
 [[gnu::noinline]] dftu_op_generic_fn bind_fn(std::size_t id) {
     const Row& row = ROWS[id];
     const dftu_op_desc* d = dftu_op_find(row.op);
-    bool ok = d && DFTU_OP_SIG_RET(d->sig) == DFTU_TOK_SERIES &&
+    dftu_op_tok want_result = DFTU_TOK_SERIES;
+    switch (row.result) {
+        case Result::I64:
+            want_result = DFTU_TOK_I64;
+            break;
+        case Result::F64:
+            want_result = DFTU_TOK_F64;
+            break;
+        case Result::Scalar:
+        case Result::Element:
+            want_result = DFTU_TOK_SCALAR;
+            break;
+        default:
+            break;
+    }
+    bool ok = d && DFTU_OP_SIG_RET(d->sig) == want_result &&
               DFTU_OP_SIG_ARG(d->sig, 0) == DFTU_TOK_SERIES;
     const std::size_t n = arg_count(row.args);
     for (std::size_t i = 0; ok && i < 3; ++i) {
@@ -85,6 +113,46 @@ inline dftu_op_generic_fn bound_fn(std::size_t id) {
 
 }  // namespace
 
+namespace {
+
+// The Python object for the column a row's op returned: the error the row names
+// when the op refused the column, and under the name of the source.
+PyObject* finish(const Row& row, Series&& out, const Series& source) {
+    if (!out.valid() && row.err[0] != '\0') {
+        PyErr_SetString(PyExc_TypeError, row.err);
+        return nullptr;
+    }
+    return make_series(named_like(std::move(out), source));
+}
+
+}  // namespace
+
+PyObject* run_value_noargs(std::size_t id, PyObject* self) {
+    Held held_a(self);
+    Series* a = held_a.get();
+    if (!a) return nullptr;
+    dftu_op_generic_fn op = bound_fn(id);
+    if (!op) return nullptr;
+    switch (ROWS[id].result) {
+        case Result::I64: {
+            auto fn =
+                reinterpret_cast<std::int64_t (*)(const dftu_series*)>(op);
+            return PyLong_FromLongLong(
+                without_gil(a->length(), [&] { return fn(a->handle()); }));
+        }
+        case Result::F64: {
+            auto fn = reinterpret_cast<double (*)(const dftu_series*)>(op);
+            return PyFloat_FromDouble(
+                without_gil(a->length(), [&] { return fn(a->handle()); }));
+        }
+        default: {
+            auto fn = reinterpret_cast<dftu_scalar (*)(const dftu_series*)>(op);
+            return scalar_to_py(
+                without_gil(a->length(), [&] { return fn(a->handle()); }));
+        }
+    }
+}
+
 PyObject* run_op_noargs(std::size_t id, PyObject* self) {
     Held held_a(self);
     Series* a = held_a.get();
@@ -92,8 +160,8 @@ PyObject* run_op_noargs(std::size_t id, PyObject* self) {
     dftu_op_generic_fn op = bound_fn(id);
     if (!op) return nullptr;
     auto fn = reinterpret_cast<dftu_series* (*)(const dftu_series*)>(op);
-    return make_series(
-        named_like(kernel(*a, [&] { return Series{fn(a->handle())}; }), *a));
+    return finish(ROWS[id], kernel(*a, [&] { return Series{fn(a->handle())}; }),
+                  *a);
 }
 
 PyObject* run_op(std::size_t id, PyObject* self, PyObject* args, PyObject* kw) {
@@ -117,8 +185,9 @@ PyObject* run_op(std::size_t id, PyObject* self, PyObject* args, PyObject* kw) {
             if (!py_to_scalar(value, &s)) return nullptr;
             auto fn = reinterpret_cast<dftu_series* (*)(const dftu_series*,
                                                         dftu_scalar)>(op);
-            return make_series(named_like(
-                kernel(*a, [&] { return Series{fn(a->handle(), s)}; }), *a));
+            return finish(
+                row, kernel(*a, [&] { return Series{fn(a->handle(), s)}; }),
+                *a);
         }
         case Args::Number2: {
             PyObject* lo = nullptr;
@@ -137,9 +206,10 @@ PyObject* run_op(std::size_t id, PyObject* self, PyObject* args, PyObject* kw) {
                 reinterpret_cast<dftu_series* (*)(const dftu_series*,
                                                   dftu_scalar, dftu_scalar)>(
                     op);
-            return make_series(named_like(
+            return finish(
+                row,
                 kernel(*a, [&] { return Series{fn(a->handle(), slo, shi)}; }),
-                *a));
+                *a);
         }
     }
     return nullptr;
@@ -160,9 +230,9 @@ PyObject* rows_as_tuple() {
             PyTuple_SET_ITEM(kws, static_cast<Py_ssize_t>(k),
                              PyUnicode_FromString(r.kw[k]));
         PyObject* row =
-            Py_BuildValue("(ssssssOOs)", r.cls, r.name, r.op, args_name(r.args),
-                          result_name(r.result), "KEEP",
-                          r.on_expr ? Py_True : Py_False, kws, r.doc);
+            Py_BuildValue("(ssssssOOss)", r.cls, r.name, r.op,
+                          args_name(r.args), result_name(r.result), "KEEP",
+                          r.on_expr ? Py_True : Py_False, kws, r.err, r.doc);
         Py_DECREF(kws);
         if (!row) {
             Py_DECREF(out);

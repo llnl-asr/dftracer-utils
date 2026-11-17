@@ -327,8 +327,6 @@ PyMethodDef Series_methods[] = {
      DFTU_PYCFUNCTION((core::kw_pair<Series_logical, "op", "other">)),
      METH_VARARGS | METH_KEYWORDS,
      "logical(op, other) -> Bool column (op is a DFTU_LOGICAL_* code)."},
-    {"logical_not", Series_logical_not, METH_NOARGS,
-     "Boolean NOT of a Bool column."},
     {"__arrow_c_stream__", Series_arrow_c_stream, METH_VARARGS,
      "Stream the column: one Arrow array per chunk."},
     {"__arrow_c_array__", Series_arrow_c_array, METH_VARARGS,
@@ -341,9 +339,6 @@ PyMethodDef Series_methods[] = {
      METH_VARARGS | METH_KEYWORDS, "variance(sample=True) -> float."},
     {"stddev", DFTU_PYCFUNCTION(Series_stddev), METH_VARARGS | METH_KEYWORDS,
      "stddev(sample=True) -> float."},
-    {"skewness", Series_skewness, METH_NOARGS, "Population skewness."},
-    {"kurtosis", Series_kurtosis, METH_NOARGS, "Excess kurtosis."},
-    {"nunique", Series_nunique, METH_NOARGS, "Number of distinct values."},
     {"value_counts", Series_value_counts, METH_NOARGS,
      "value_counts() -> DataFrame of distinct values and counts, "
      "most-frequent first."},
@@ -420,20 +415,10 @@ PyMethodDef Series_methods[] = {
     {"mean", series_reduce_f64<&Series::mean>, METH_NOARGS,
      "Mean of the valid values; a bool column gives the fraction that is "
      "True. Raises TypeError for a column type with no sum."},
-    {"count", series_reduce_i64<&Series::count>, METH_NOARGS,
-     "Non-null row count -> int."},
-    {"product", series_reduce_scalar<&Series::product>, METH_NOARGS,
-     "Product of non-null values -> scalar."},
-    {"mode", series_reduce_scalar<&Series::mode>, METH_NOARGS,
-     "Most frequent non-null value -> scalar."},
     {"all", Series_all, METH_NOARGS,
      "Whether every non-null Bool value is true."},
     {"any", Series_any, METH_NOARGS,
      "Whether any non-null Bool value is true."},
-    {"arg_min", series_reduce_i64<&Series::arg_min>, METH_NOARGS,
-     "Index of the minimum non-null value (-1 if none)."},
-    {"arg_max", series_reduce_i64<&Series::arg_max>, METH_NOARGS,
-     "Index of the maximum non-null value (-1 if none)."},
     {"take", Series_take, METH_O,
      "take(indices) -> Series gathered at the given row indices."},
     {"where", Series_where, METH_VARARGS,
@@ -508,31 +493,9 @@ PyMethodDef Series_methods[] = {
      METH_VARARGS | METH_KEYWORDS,
      "str_search(pattern) -> Bool Series where the duql regex matches "
      "anywhere in the string."},
-    {"str_len_bytes", Series_str_len_bytes, METH_NOARGS,
-     "str_len_bytes() -> Int64 Series of per-row byte length."},
-    {"str_len_chars", Series_str_len_chars, METH_NOARGS,
-     "str_len_chars() -> Int64 Series of per-row UTF-8 codepoint count."},
     {"str_find", DFTU_PYCFUNCTION((core::kw_one<"needle", Series_str_find>)),
      METH_VARARGS | METH_KEYWORDS,
      "str_find(needle) -> Int64 Series of the first byte index, or -1."},
-    {"fnv1a", Series_fnv1a, METH_NOARGS,
-     "fnv1a() -> UInt64 Series of the FNV-1a 64 hash of each row's bytes."},
-    {"hex64_parse", Series_hex64_parse, METH_NOARGS,
-     "hex64_parse() -> UInt64 Series parsing each row as hex64; unparsable "
-     "rows are null."},
-    {"hex64_format", Series_hex64_format, METH_NOARGS,
-     "hex64_format() -> String Series formatting each UInt64/Int64 row as "
-     "dftracer's 16-lowercase-hex-digit form; the inverse of hex64_parse."},
-    {"to_lowercase", Series_to_lowercase, METH_NOARGS,
-     "to_lowercase() -> String Series, ASCII case fold (non-ASCII unchanged)."},
-    {"to_uppercase", Series_to_uppercase, METH_NOARGS,
-     "to_uppercase() -> String Series, ASCII case fold (non-ASCII unchanged)."},
-    {"str_strip", Series_str_strip, METH_NOARGS,
-     "str_strip() -> String Series trimmed of ASCII whitespace both ends."},
-    {"str_lstrip", Series_str_lstrip, METH_NOARGS,
-     "str_lstrip() -> String Series trimmed of leading ASCII whitespace."},
-    {"str_rstrip", Series_str_rstrip, METH_NOARGS,
-     "str_rstrip() -> String Series trimmed of trailing ASCII whitespace."},
     {"str_replace",
      DFTU_PYCFUNCTION((core::kw_pair<Series_str_replace, "pat", "repl">)),
      METH_VARARGS | METH_KEYWORDS,
@@ -569,8 +532,6 @@ PyMethodDef Series_methods[] = {
      "str_regex_replace(pattern, to) -> String Series with every regex match "
      "replaced by to ($n, ${n}, ${name} insert a group, $$ a dollar sign). "
      "Raises ValueError for an invalid pattern or replacement."},
-    {"list_len", Series_list_len, METH_NOARGS,
-     "list_len() -> Int64 Series of each row's list length."},
     {"list_get", DFTU_PYCFUNCTION((core::kw_one<"index", Series_list_get>)),
      METH_VARARGS | METH_KEYWORDS,
      "list_get(index) -> the element at index of each row's list (negative "
@@ -664,12 +625,13 @@ PyMethodDef Series_methods[] = {
      "child(i) -> child Series (List: 0=values; Struct: field i)."},
 #define API_PICK_Series(id, name, args, doc) API_ENTRY(id, name, args, doc)
 #define PY_METHOD(cls, name, op, args, result, name_rule, on_expr, kw0, kw1, \
-                  doc)                                                       \
+                  err, doc)                                                  \
     API_PICK_##cls(core::api::row_id(#cls, #name), #name, args, doc)
 #include <dftracer/utils/python/core/api.def>
     {nullptr, nullptr, 0, nullptr}};
 
 PySequenceMethods Series_as_sequence = {};
+PyNumberMethods Series_as_number = {};
 PyBufferProcs Series_as_buffer = {};
 
 PyGetSetDef Series_getset[] = {
@@ -734,6 +696,15 @@ int init_series(PyObject* m) {
     SeriesType.tp_dealloc = reinterpret_cast<destructor>(Series_dealloc);
     Series_as_sequence.sq_length = Series_length_sq;
     SeriesType.tp_as_sequence = &Series_as_sequence;
+    Series_as_number.nb_add = Series_nb_add;
+    Series_as_number.nb_subtract = Series_nb_sub;
+    Series_as_number.nb_multiply = Series_nb_mul;
+    Series_as_number.nb_true_divide = Series_nb_true_divide;
+    Series_as_number.nb_floor_divide = Series_nb_floor_divide;
+    Series_as_number.nb_remainder = Series_nb_remainder;
+    Series_as_number.nb_power = Series_nb_power;
+    SeriesType.tp_as_number = &Series_as_number;
+    SeriesType.tp_richcompare = Series_richcompare;
     Series_as_buffer.bf_getbuffer = Series_getbuffer;
     SeriesType.tp_as_buffer = &Series_as_buffer;
     SeriesType.tp_methods = Series_methods;

@@ -13,15 +13,21 @@
 // puts its entries in its method table with
 //
 //   #define PY_METHOD(cls, name, op, args, result, name_rule, on_expr, kw0, \
-//                     kw1, doc)                                              \
-//       API_PICK_##cls(ID_##cls##_##name, #name, args, doc)
+//                     kw1, err, doc)                                         \
+//       API_PICK_##cls(core::api::row_id(#cls, #name), #name, args, doc)
 //   #include <dftracer/utils/python/core/api.def>
 //
 // and defines API_PICK_<Class> as API_ENTRY, the other classes as nothing.
 namespace dftracer::utils::python::core::api {
 
 enum class Args { None, Scalar, Number2 };
-enum class Result { Same, Bool, Int, Float };
+enum class Result { Same, Bool, Int, Float, Str, I64, F64, Scalar, Element };
+
+/// Whether a row's result is a Python value, not a Series.
+constexpr bool is_value(Result r) {
+    return r == Result::I64 || r == Result::F64 || r == Result::Scalar ||
+           r == Result::Element;
+}
 enum class NameRule { Keep };
 
 struct Row {
@@ -33,6 +39,7 @@ struct Row {
     NameRule name_rule;
     bool on_expr;
     const char* kw[2];
+    const char* err;
     const char* doc;
 };
 
@@ -43,13 +50,18 @@ struct Row {
 #define API_RESULT_BOOL Result::Bool
 #define API_RESULT_INT Result::Int
 #define API_RESULT_FLOAT Result::Float
+#define API_RESULT_STR Result::Str
+#define API_RESULT_I64 Result::I64
+#define API_RESULT_F64 Result::F64
+#define API_RESULT_SCALAR Result::Scalar
+#define API_RESULT_ELEMENT Result::Element
 #define API_NAME_RULE_KEEP NameRule::Keep
 #define API_FLAG_NO false
 #define API_FLAG_YES true
 
 inline constexpr Row ROWS[] = {
 #define PY_METHOD(cls, name, op, args, result, name_rule, on_expr, kw0, kw1, \
-                  doc)                                                       \
+                  err, doc)                                                  \
     {#cls,                                                                   \
      #name,                                                                  \
      op,                                                                     \
@@ -58,6 +70,7 @@ inline constexpr Row ROWS[] = {
      API_NAME_RULE_##name_rule,                                              \
      API_FLAG_##on_expr,                                                     \
      {kw0, kw1},                                                             \
+     err,                                                                    \
      doc},
 #include <dftracer/utils/python/core/api.def>
 };
@@ -84,13 +97,19 @@ PyObject* run_op(std::size_t id, PyObject* self, PyObject* args, PyObject* kw);
 /// run_op for a row with Args::NONE, without the argument tuple.
 PyObject* run_op_noargs(std::size_t id, PyObject* self);
 
+/// run_op_noargs for a row whose result is a value, not a Series.
+PyObject* run_value_noargs(std::size_t id, PyObject* self);
+
 /// The rows as a tuple of (class, name, op, args, result, name_rule, on_expr,
-/// (keywords...), doc) tuples, strings for the tokens.
+/// (keywords...), err, doc) tuples, strings for the tokens.
 PyObject* rows_as_tuple();
 
 template <std::size_t Id>
 PyObject* entry_noargs(PyObject* self, PyObject*) {
-    return run_op_noargs(Id, self);
+    if constexpr (is_value(ROWS[Id].result))
+        return run_value_noargs(Id, self);
+    else
+        return run_op_noargs(Id, self);
 }
 
 template <std::size_t Id>

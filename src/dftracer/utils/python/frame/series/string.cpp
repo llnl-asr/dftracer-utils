@@ -89,18 +89,6 @@ PyObject* Series_str_like(PyObject* self, PyObject* arg) {
     if (!as_str_view(arg, &pattern)) return nullptr;
     return make_series(kernel(*a, [&] { return a->str_like(pattern); }));
 }
-PyObject* Series_str_len_bytes(PyObject* self, PyObject*) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    return make_series(kernel(*a, [&] { return a->str_len_bytes(); }));
-}
-PyObject* Series_str_len_chars(PyObject* self, PyObject*) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    return make_series(kernel(*a, [&] { return a->str_len_chars(); }));
-}
 PyObject* Series_str_find(PyObject* self, PyObject* arg) {
     Held held_a(self);
     Series* a = held_a.get();
@@ -108,54 +96,6 @@ PyObject* Series_str_find(PyObject* self, PyObject* arg) {
     dstd::StringView needle;
     if (!as_str_view(arg, &needle)) return nullptr;
     return make_series(kernel(*a, [&] { return a->str_find(needle); }));
-}
-PyObject* Series_fnv1a(PyObject* self, PyObject*) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    return make_series(kernel(*a, [&] { return a->fnv1a(); }));
-}
-PyObject* Series_hex64_parse(PyObject* self, PyObject*) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    return make_series(kernel(*a, [&] { return a->hex64_parse(); }));
-}
-PyObject* Series_hex64_format(PyObject* self, PyObject*) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    return make_series(kernel(*a, [&] { return a->hex64_format(); }));
-}
-PyObject* Series_to_lowercase(PyObject* self, PyObject*) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    return make_series(kernel(*a, [&] { return a->to_lowercase(); }));
-}
-PyObject* Series_to_uppercase(PyObject* self, PyObject*) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    return make_series(kernel(*a, [&] { return a->to_uppercase(); }));
-}
-PyObject* Series_str_strip(PyObject* self, PyObject*) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    return make_series(kernel(*a, [&] { return a->str_strip(); }));
-}
-PyObject* Series_str_lstrip(PyObject* self, PyObject*) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    return make_series(kernel(*a, [&] { return a->str_lstrip(); }));
-}
-PyObject* Series_str_rstrip(PyObject* self, PyObject*) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    return make_series(kernel(*a, [&] { return a->str_rstrip(); }));
 }
 PyObject* Series_str_replace(PyObject* self, PyObject* args) {
     Held held_a(self);
@@ -273,17 +213,6 @@ PyObject* Series_str_regex_replace(PyObject* self, PyObject* args) {
         PyErr_SetString(
             PyExc_ValueError,
             "str_regex_replace: the pattern or the replacement is invalid");
-        return nullptr;
-    }
-    return make_series(std::move(out));
-}
-PyObject* Series_list_len(PyObject* self, PyObject*) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    Series out = kernel(*a, [&] { return a->list_size(); });
-    if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError, "list_len: not a List column");
         return nullptr;
     }
     return make_series(std::move(out));

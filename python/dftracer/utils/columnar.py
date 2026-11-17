@@ -1195,7 +1195,8 @@ def _expr_method(name: str, op: str, doc: str) -> "Callable[[Expr], Expr]":
     def method(self: Expr) -> Expr:
         return self._op(op)
 
-    method.__name__ = method.__qualname__ = name
+    method.__name__ = name
+    method.__qualname__ = f"Expr.{name}"
     method.__doc__ = doc
     return method
 
@@ -1203,7 +1204,7 @@ def _expr_method(name: str, op: str, doc: str) -> "Callable[[Expr], Expr]":
 def _install_api_methods() -> None:
     """The Expr methods that are one registry op each: the rows of the native
     API table (api.def) with ``on_expr``, so the table is their only source."""
-    for cls, name, op, args, _result, _rule, on_expr, _keywords, doc in _ext._api_rows():
+    for cls, name, op, args, _result, _rule, on_expr, _keywords, _err, doc in _ext._api_rows():
         if on_expr:
             if cls != "Series" or args != "NONE":
                 raise RuntimeError(f"api.def row {cls}.{name}: Expr takes only no-argument rows")

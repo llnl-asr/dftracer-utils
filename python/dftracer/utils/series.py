@@ -451,13 +451,6 @@ def _require_pyarrow() -> "ModuleType":
     return pa
 
 
-# Comparison op codes, mirroring c_api.h DFTU_CMP_* (passed to native compare()).
-_CMP_GT = 0
-_CMP_GE = 1
-_CMP_LT = 2
-_CMP_LE = 3
-_CMP_EQ = 4
-_CMP_NE = 5
 _LOGICAL_AND = 0
 _LOGICAL_OR = 1
 
@@ -836,133 +829,15 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
             i = 0
         return super().item(i)
 
-    # Returns a Series, or NotImplemented for an unsupported right operand.
-    def _elementwise(
-        self: "Series[Scalar]",
-        other: _SeriesOrScalar,
-        series_op: "Callable[[Series, Series], Series]",
-        scalar_op: "Callable[[Series, Union[int, float]], Series]",
-    ) -> "Series[Scalar]":
-        if isinstance(other, Series):
-            return series_op(self, other)
-        if isinstance(other, (int, float)) and not isinstance(other, bool):
-            return scalar_op(self, other)
-        return NotImplemented
-
-    @overload
-    def __add__(self: "Series[int]", other: "Union[int, Series[int]]") -> "Series[int]": ...
-    @overload
-    def __add__(self: "Series[float]", other: "Union[float, Series[float]]") -> "Series[float]": ...
-    @overload
-    def __add__(self, other: _SeriesOrScalar) -> "Series[Scalar]": ...
-    def __add__(self, other: _SeriesOrScalar) -> "Series[Scalar]":
-        return self._elementwise(other, _ext.Series.add, _ext.Series.add_scalar)
-
-    @overload
-    def __radd__(self: "Series[int]", other: int) -> "Series[int]": ...
-    @overload
-    def __radd__(self: "Series[float]", other: float) -> "Series[float]": ...
-    @overload
-    def __radd__(self, other: _Scalar) -> "Series[Scalar]": ...
-    def __radd__(self, other: _Scalar) -> "Series[Scalar]":
-        return self._elementwise(other, _ext.Series.add, _ext.Series.add_scalar)
-
-    @overload
-    def __sub__(self: "Series[int]", other: "Union[int, Series[int]]") -> "Series[int]": ...
-    @overload
-    def __sub__(self: "Series[float]", other: "Union[float, Series[float]]") -> "Series[float]": ...
-    @overload
-    def __sub__(self, other: _SeriesOrScalar) -> "Series[Scalar]": ...
-    def __sub__(self, other: _SeriesOrScalar) -> "Series[Scalar]":
-        return self._elementwise(other, _ext.Series.sub, _ext.Series.sub_scalar)
-
-    @overload
-    def __rsub__(self: "Series[int]", other: int) -> "Series[int]": ...
-    @overload
-    def __rsub__(self: "Series[float]", other: float) -> "Series[float]": ...
-    @overload
-    def __rsub__(self, other: _Scalar) -> "Series[Scalar]": ...
-    def __rsub__(self, other: _Scalar) -> "Series[Scalar]":
-        # other - self; a Series left operand would take __sub__, so other is a scalar.
-        if isinstance(other, (int, float)) and not isinstance(other, bool):
-            return self.mul_scalar(-1).add_scalar(other)
-        return NotImplemented
-
-    @overload
-    def __mul__(self: "Series[int]", other: "Union[int, Series[int]]") -> "Series[int]": ...
-    @overload
-    def __mul__(self: "Series[float]", other: "Union[float, Series[float]]") -> "Series[float]": ...
-    @overload
-    def __mul__(self, other: _SeriesOrScalar) -> "Series[Scalar]": ...
-    def __mul__(self, other: _SeriesOrScalar) -> "Series[Scalar]":
-        return self._elementwise(other, _ext.Series.mul, _ext.Series.mul_scalar)
-
-    @overload
-    def __rmul__(self: "Series[int]", other: int) -> "Series[int]": ...
-    @overload
-    def __rmul__(self: "Series[float]", other: float) -> "Series[float]": ...
-    @overload
-    def __rmul__(self, other: _Scalar) -> "Series[Scalar]": ...
-    def __rmul__(self, other: _Scalar) -> "Series[Scalar]":
-        return self._elementwise(other, _ext.Series.mul, _ext.Series.mul_scalar)
-
-    def __truediv__(self, other: _SeriesOrScalar) -> "Series[float]":
-        # True division, as pandas / polars `/`: an integer operand is widened
-        # to Float64 first (the engine's div over two integers truncates; that
-        # form is `ops.series.div`; `//` is floordiv).
-        me: "Series[Scalar]" = self.astype(DType.FLOAT64) if self.dtype in _INTEGRAL else self
-        if isinstance(other, Series) and other.dtype in _INTEGRAL:
-            other = other.astype(DType.FLOAT64)
-        elif isinstance(other, int) and not isinstance(other, bool):
-            other = float(other)
-        if isinstance(other, Series):
-            return cast("Series[float]", _ext.Series.div(me, other))
-        if isinstance(other, float):
-            return cast("Series[float]", me.div_scalar(other))
-        return NotImplemented
-
-    def _extra(
-        self: "Series[Scalar]",
-        op: "Callable[..., Series]",
-        other: _SeriesOrScalar,
-        reverse: bool = False,
-    ) -> "Series[Scalar]":
-        if isinstance(other, Series):
-            return op(self, other)
-        if isinstance(other, (int, float)) and not isinstance(other, bool):
-            return op(self, other, reverse)
-        return NotImplemented
-
-    def __floordiv__(self, other: _SeriesOrScalar) -> "Series[Scalar]":
-        """Floor division (Python's rule; a zero divisor is null)."""
-        return self._extra(_ext.Series.floordiv, other)
-
-    def __rfloordiv__(self, other: _Scalar) -> "Series[Scalar]":
-        return self._extra(_ext.Series.floordiv, other, reverse=True)
-
-    def __mod__(self, other: _SeriesOrScalar) -> "Series[Scalar]":
-        """Remainder with the divisor's sign (Python's rule)."""
-        return self._extra(_ext.Series.mod, other)
-
-    def __rmod__(self, other: _Scalar) -> "Series[Scalar]":
-        return self._extra(_ext.Series.mod, other, reverse=True)
-
-    def __pow__(self, other: _SeriesOrScalar) -> "Series[Scalar]":
-        """Power: Int64 for two integers (a negative exponent is null), else
-        Float64."""
-        return self._extra(_ext.Series.pow, other)
-
-    def __rpow__(self, other: _Scalar) -> "Series[Scalar]":
-        return self._extra(_ext.Series.pow, other, reverse=True)
-
     def rfloordiv(self, other: _Scalar) -> "Series[Scalar]":
-        return self._extra(_ext.Series.floordiv, other, reverse=True)
+        # A Series operand keeps the order of the left operand: self // other.
+        return self // other if isinstance(other, Series) else self.__rfloordiv__(other)
 
     def rmod(self, other: _Scalar) -> "Series[Scalar]":
-        return self._extra(_ext.Series.mod, other, reverse=True)
+        return self % other if isinstance(other, Series) else self.__rmod__(other)
 
     def rpow(self, other: _Scalar) -> "Series[Scalar]":
-        return self._extra(_ext.Series.pow, other, reverse=True)
+        return self**other if isinstance(other, Series) else self.__rpow__(other)
 
     def divmod(self, other: _SeriesOrScalar) -> "Tuple[Series[Scalar], Series[Scalar]]":
         return self // other, self % other
@@ -978,47 +853,29 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
     # A string scalar compares the text of a String column.
     __hash__ = None  # type: ignore[assignment]
 
-    def __eq__(self, other: object) -> "Series[bool]":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
-        return self._cmp(_CMP_EQ, other)
-
-    def __ne__(self, other: object) -> "Series[bool]":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
-        return self._cmp(_CMP_NE, other)
-
-    def __lt__(self, other: _Scalar) -> "Series[bool]":
-        return self._cmp(_CMP_LT, other)
-
-    def __le__(self, other: _Scalar) -> "Series[bool]":
-        return self._cmp(_CMP_LE, other)
-
-    def __gt__(self, other: _Scalar) -> "Series[bool]":
-        return self._cmp(_CMP_GT, other)
-
-    def __ge__(self, other: _Scalar) -> "Series[bool]":
-        return self._cmp(_CMP_GE, other)
-
     def gt(self, value: _Scalar) -> "Series[bool]":
         """Boolean mask where the value is greater than ``value``."""
-        return self._cmp(_CMP_GT, value)
+        return self > value
 
     def ge(self, value: _Scalar) -> "Series[bool]":
         """Boolean mask where the value is greater than or equal to ``value``."""
-        return self._cmp(_CMP_GE, value)
+        return self >= value
 
     def lt(self, value: _Scalar) -> "Series[bool]":
         """Boolean mask where the value is less than ``value``."""
-        return self._cmp(_CMP_LT, value)
+        return self < value
 
     def le(self, value: _Scalar) -> "Series[bool]":
         """Boolean mask where the value is less than or equal to ``value``."""
-        return self._cmp(_CMP_LE, value)
+        return self <= value
 
     def eq(self, value: _Scalar) -> "Series[bool]":
         """Boolean mask where the value equals ``value``."""
-        return self._cmp(_CMP_EQ, value)
+        return self == value
 
     def ne(self, value: _Scalar) -> "Series[bool]":
         """Boolean mask where the value does not equal ``value``."""
-        return self._cmp(_CMP_NE, value)
+        return self != value
 
     # -- native engine ops (SIMD kernels, wrapped from the C extension) --------
 
@@ -1099,11 +956,6 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         return out
 
     cast = astype
-
-    def _cmp(self: "Series[Scalar]", op: int, scalar: object) -> "Series[bool]":
-        if isinstance(scalar, Series):
-            return self.compare_series(scalar, op)
-        return super().compare(op, cast("Union[int, float, str]", scalar))
 
     def compare_series(self, other: "Series", op: int) -> "Series[bool]":
         """Row by row against ``other`` (``op`` a ``_CMP_*`` code): a Bool

@@ -6,10 +6,27 @@ the rows the native module gives back from `_api_rows()`.
 """
 
 import ast
+import re
 from pathlib import Path
 from typing import List, NamedTuple, Tuple
 
 API_DEF = Path(__file__).resolve().parents[1] / "src/dftracer/utils/python/core/api.def"
+
+
+# The argument and result tokens the table and the allowlist may name. The ones
+# api.def uses today are implemented; the rest are the row shapes a hand-written
+# method still waits for, and tests/python/api_allowlist.txt names them in its
+# needs-token lines.
+ARG_TOKENS = frozenset(
+    {
+        "NONE", "SCALAR", "NUMBER2",
+        "SERIES", "SERIES_OR_SCALAR", "SCALAR_ARITH", "I64_ARG", "F64_ARG", "STR_ARG",
+        "REDUCE", "FLAG", "RANK", "LOGICAL", "CMP", "PRIM", "DTYPE",
+    }
+)  # fmt: skip
+RESULT_TOKENS = frozenset(
+    {"SAME", "BOOL", "INT", "FLOAT", "STR", "I64", "F64", "SCALAR", "ELEMENT", "BOOL_VALUE"}
+)
 
 
 class Row(NamedTuple):
@@ -21,6 +38,7 @@ class Row(NamedTuple):
     name_rule: str
     on_expr: bool
     keywords: Tuple[str, ...]
+    err: str
     doc: str
 
 
@@ -63,13 +81,69 @@ def _literal(text: str) -> str:
     return "".join(out)
 
 
+def _strip_comments(text: str) -> str:
+    """The text without `/* */` and `//` comments (newlines kept), leaving
+    string literals alone."""
+    out, i, quote = [], 0, False
+    while i < len(text):
+        c, two = text[i], text[i : i + 2]
+        if quote:
+            out.append(c)
+            if c == "\\":
+                out.append(text[i + 1])
+                i += 1
+            elif c == '"':
+                quote = False
+        elif c == '"':
+            quote = True
+            out.append(c)
+        elif two == "/*":
+            end = text.find("*/", i + 2)
+            end = len(text) if end < 0 else end + 2
+            out.append("".join("\n" for ch in text[i:end] if ch == "\n"))
+            i = end - 1
+        elif two == "//":
+            end = text.find("\n", i)
+            i = (len(text) if end < 0 else end) - 1
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _strip_directives(text: str) -> str:
+    """The text without preprocessor lines (with their backslash
+    continuations) and without the inactive part of an `#if 0` block."""
+    out, skip_depth, continued = [], 0, False
+    for line in text.split("\n"):
+        stripped = line.strip()
+        directive = continued or stripped.startswith("#")
+        continued = directive and stripped.endswith("\\")
+        if stripped.startswith("#"):
+            word = stripped[1:].split()[0] if stripped[1:].split() else ""
+            if skip_depth:
+                if word in ("if", "ifdef", "ifndef"):
+                    skip_depth += 1
+                elif word == "endif":
+                    skip_depth -= 1
+                elif word in ("else", "elif") and skip_depth == 1:
+                    skip_depth = 0
+            elif word == "if" and stripped[1:].split()[1:2] == ["0"]:
+                skip_depth = 1
+        if directive or skip_depth:
+            out.append("")
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
 def rows(path: Path = API_DEF) -> List[Row]:
-    text = path.read_text(encoding="utf-8")
+    text = _strip_directives(_strip_comments(path.read_text(encoding="utf-8")))
     out = []
-    marker = "\nPY_METHOD("
-    pos = text.find(marker)
-    while pos >= 0:
-        start = pos + len(marker)
+    marker = re.compile(r"^[ \t]*PY_METHOD\(", re.M)
+    found = marker.search(text)
+    while found:
+        start = found.end()
         end, depth, quote, i = None, 1, False, start
         while end is None:
             c = text[i]
@@ -88,6 +162,10 @@ def rows(path: Path = API_DEF) -> List[Row]:
                     end = i
             i += 1
         f = _split(text[start:end])
+        if len(f) != 11:
+            raise ValueError(f"{path}: PY_METHOD row of {len(f)} fields: {text[start:end][:60]!r}")
+        if f[3] not in ARG_TOKENS or f[4] not in RESULT_TOKENS:
+            raise ValueError(f"{path}: unknown token in row {f[1]}: {f[3]}, {f[4]}")
         keywords = tuple(k for k in (_literal(f[7]), _literal(f[8])) if k)
         out.append(
             Row(
@@ -100,7 +178,8 @@ def rows(path: Path = API_DEF) -> List[Row]:
                 f[6] == "YES",
                 keywords,
                 _literal(f[9]),
+                _literal(f[10]),
             )
         )
-        pos = text.find(marker, end)
+        found = marker.search(text, end)
     return out

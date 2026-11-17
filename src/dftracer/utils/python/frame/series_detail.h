@@ -134,15 +134,6 @@ PyObject* series_reduce_f64(PyObject* self, PyObject*) {
     }
     return PyFloat_FromDouble(*out);
 }
-template <auto Method>
-PyObject* series_reduce_i64(PyObject* self, PyObject*) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    return PyLong_FromLongLong(
-        without_gil(a->length(), [&] { return (a->*Method)(); }));
-}
-
 // series/arith.cpp
 PyObject* Series_add(PyObject* self, PyObject* other);
 PyObject* Series_sub(PyObject* self, PyObject* other);
@@ -155,11 +146,18 @@ PyObject* Series_div_scalar(PyObject* self, PyObject* v);
 PyObject* Series_floordiv(PyObject* self, PyObject* args);
 PyObject* Series_mod(PyObject* self, PyObject* args);
 PyObject* Series_pow(PyObject* self, PyObject* args);
+PyObject* Series_nb_add(PyObject* a, PyObject* b);
+PyObject* Series_nb_sub(PyObject* a, PyObject* b);
+PyObject* Series_nb_mul(PyObject* a, PyObject* b);
+PyObject* Series_nb_true_divide(PyObject* a, PyObject* b);
+PyObject* Series_nb_floor_divide(PyObject* a, PyObject* b);
+PyObject* Series_nb_remainder(PyObject* a, PyObject* b);
+PyObject* Series_nb_power(PyObject* a, PyObject* b, PyObject* modulus);
+PyObject* Series_richcompare(PyObject* self, PyObject* other, int op);
 PyObject* Series_cast(PyObject* self, PyObject* target);
 PyObject* Series_prim(PyObject* self, PyObject* code);
 PyObject* Series_compare(PyObject* self, PyObject* args);
 PyObject* Series_logical(PyObject* self, PyObject* args);
-PyObject* Series_logical_not(PyObject* self, PyObject*);
 
 // series/math.cpp
 
@@ -179,9 +177,6 @@ PyObject* Series_quantile(PyObject* self, PyObject* arg);
 PyObject* Series_median(PyObject* self, PyObject*);
 PyObject* Series_variance(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* Series_stddev(PyObject* self, PyObject* args, PyObject* kwds);
-PyObject* Series_skewness(PyObject* self, PyObject*);
-PyObject* Series_kurtosis(PyObject* self, PyObject*);
-PyObject* Series_nunique(PyObject* self, PyObject*);
 PyObject* Series_value_counts(PyObject* self, PyObject*);
 PyObject* Series_is_sorted(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* Series_is_in(PyObject* self, PyObject* other);
@@ -219,17 +214,7 @@ PyObject* Series_str_ends_with(PyObject* self, PyObject* arg);
 PyObject* Series_str_matches(PyObject* self, PyObject* arg);
 PyObject* Series_str_search(PyObject* self, PyObject* arg);
 PyObject* Series_str_like(PyObject* self, PyObject* arg);
-PyObject* Series_str_len_bytes(PyObject* self, PyObject*);
-PyObject* Series_str_len_chars(PyObject* self, PyObject*);
 PyObject* Series_str_find(PyObject* self, PyObject* arg);
-PyObject* Series_fnv1a(PyObject* self, PyObject*);
-PyObject* Series_hex64_parse(PyObject* self, PyObject*);
-PyObject* Series_hex64_format(PyObject* self, PyObject*);
-PyObject* Series_to_lowercase(PyObject* self, PyObject*);
-PyObject* Series_to_uppercase(PyObject* self, PyObject*);
-PyObject* Series_str_strip(PyObject* self, PyObject*);
-PyObject* Series_str_lstrip(PyObject* self, PyObject*);
-PyObject* Series_str_rstrip(PyObject* self, PyObject*);
 PyObject* Series_str_replace(PyObject* self, PyObject* args);
 PyObject* Series_str_replace_all(PyObject* self, PyObject* args);
 PyObject* Series_str_slice(PyObject* self, PyObject* args);
@@ -239,7 +224,6 @@ PyObject* Series_str_zfill(PyObject* self, PyObject* arg);
 PyObject* Series_str_split(PyObject* self, PyObject* arg);
 PyObject* Series_str_extract(PyObject* self, PyObject* args);
 PyObject* Series_str_regex_replace(PyObject* self, PyObject* args);
-PyObject* Series_list_len(PyObject* self, PyObject*);
 PyObject* Series_list_get(PyObject* self, PyObject* arg);
 PyObject* Series_list_join(PyObject* self, PyObject* arg);
 PyObject* Series_str_case(PyObject* self, PyObject* arg);

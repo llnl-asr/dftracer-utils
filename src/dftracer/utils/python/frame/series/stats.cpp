@@ -46,27 +46,6 @@ PyObject* Series_stddev(PyObject* self, PyObject* args, PyObject* kwds) {
     return PyFloat_FromDouble(without_gil(
         a->length(), [&] { return dftu_series_stddev(a->handle(), sample); }));
 }
-PyObject* Series_skewness(PyObject* self, PyObject*) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    return PyFloat_FromDouble(without_gil(
-        a->length(), [&] { return dftu_series_skewness(a->handle()); }));
-}
-PyObject* Series_kurtosis(PyObject* self, PyObject*) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    return PyFloat_FromDouble(without_gil(
-        a->length(), [&] { return dftu_series_kurtosis(a->handle()); }));
-}
-PyObject* Series_nunique(PyObject* self, PyObject*) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    return PyLong_FromLongLong(without_gil(
-        a->length(), [&] { return dftu_series_nunique(a->handle()); }));
-}
 PyObject* Series_value_counts(PyObject* self, PyObject*) {
     Held held_a(self);
     Series* a = held_a.get();

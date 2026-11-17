@@ -1231,8 +1231,9 @@ PyMethodDef tv_methods[] = {
     {"materialize_dir", tv_materialize_dir, METH_NOARGS,
      "Create and return the shared materialized-view directory."},
     {"register_materialized",
-     DFTU_PYCFUNCTION((dftracer::utils::python::core::kw_one<
-                       "dir", tv_register_materialized>)),
+     DFTU_PYCFUNCTION(
+         (dftracer::utils::python::core::kw_one<"register_materialized", "dir",
+                                                tv_register_materialized>)),
      METH_VARARGS | METH_KEYWORDS,
      "Write the materialized-view manifest at `dir`."},
     {"compare", tv_compare, METH_O,

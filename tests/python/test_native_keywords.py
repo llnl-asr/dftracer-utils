@@ -8,6 +8,7 @@ not computed from the running class.
 
 import pytest
 
+from dftracer.utils import DataFrame
 from dftracer.utils import dftracer_utils_ext as _ext
 from dftracer.utils.series import Series
 
@@ -167,3 +168,26 @@ def test_an_unknown_keyword_is_named_like_python_does():
         TypeError, match=r"memory_budget_advice\(\) got an unexpected keyword argument 'nope'"
     ):
         _ext.memory_budget_advice(required_bytes=1, nope=2)
+
+
+def test_a_table_method_names_itself_in_an_unknown_keyword_error():
+    s = Series(["a"])
+    with pytest.raises(
+        TypeError, match=r"^str_contains\(\) got an unexpected keyword argument 'x'"
+    ):
+        s.str_contains(x="a")
+    with pytest.raises(
+        TypeError, match=r"^str_regex_replace\(\) got an unexpected keyword argument 'x'"
+    ):
+        s.str_regex_replace(pattern="a", to="b", x=1)
+    with pytest.raises(TypeError, match=r"^dt_format\(\) got an unexpected keyword argument 'x'"):
+        s.dt_format(fmt="%Y", x=1)
+    frame = DataFrame({"a": [1]})
+    with pytest.raises(
+        TypeError, match=r"^column_index\(\) got an unexpected keyword argument 'nope'"
+    ):
+        frame.column_index("a", nope=1)
+    with pytest.raises(
+        TypeError, match=r"^partition_id\(\) got an unexpected keyword argument 'extra'"
+    ):
+        frame.partition_id(keys="a", n_parts=2, extra=1)

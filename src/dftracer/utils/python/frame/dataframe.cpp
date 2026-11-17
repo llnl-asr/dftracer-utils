@@ -1511,7 +1511,7 @@ PyMethodDef DataFrame_methods[] = {
      "take(indices) -> DataFrame gathered at the given row indices."},
     {"column_index",
      DFTU_PYCFUNCTION((dftracer::utils::python::core::kw_one<
-                       "name", DataFrame_column_index>)),
+                       "column_index", "name", DataFrame_column_index>)),
      METH_VARARGS | METH_KEYWORDS,
      "column_index(name) -> int index of a column, or -1 if absent."},
     {"head", DataFrame_head, METH_O,
@@ -1632,8 +1632,9 @@ PyMethodDef DataFrame_methods[] = {
      "results on the first n_key group-key columns and append delta_/pct_ per "
      "numeric metric (the CompareView result)."},
     {"partition_id",
-     DFTU_PYCFUNCTION((dftracer::utils::python::core::kw_pair<
-                       DataFrame_partition_id, "keys", "n_parts">)),
+     DFTU_PYCFUNCTION(
+         (dftracer::utils::python::core::kw_pair<
+             "partition_id", DataFrame_partition_id, "keys", "n_parts">)),
      METH_VARARGS | METH_KEYWORDS,
      "partition_id(keys, n_parts) -> Int32 Series: the part in [0, n_parts) "
      "each row lands in under a stable hash of the key columns."},

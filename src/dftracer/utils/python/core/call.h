@@ -141,25 +141,27 @@ bool parse_kw(PyObject *args, PyObject *kw, const char *const (&names)[N],
     return parse_kw_for<Fmt>(detail::format_name(Fmt), args, kw, names, out...);
 }
 
-/// A method whose body takes its one argument as a METH_O does, called with
-/// the argument by position or by the keyword @p Name.
-template <detail::FormatString Name, PyObject *(*Impl)(PyObject *, PyObject *)>
+/// A method @p Func whose body takes its one argument as a METH_O does, called
+/// with the argument by position or by the keyword @p Name.
+template <detail::FormatString Func, detail::FormatString Name,
+          PyObject *(*Impl)(PyObject *, PyObject *)>
 PyObject *kw_one(PyObject *self, PyObject *args, PyObject *kwds) {
     PyObject *arg = nullptr;
     const char *const names[1] = {Name.text};
-    if (!parse_kw<"O">(args, kwds, names, &arg)) return nullptr;
+    if (!parse_kw_for<"O">(Func.text, args, kwds, names, &arg)) return nullptr;
     return Impl(self, arg);
 }
 
-/// A method whose body takes a METH_VARARGS tuple of one required and one
-/// optional argument, called by position or by the keywords @p First and
+/// A method @p Func whose body takes a METH_VARARGS tuple of one required and
+/// one optional argument, called by position or by the keywords @p First and
 /// @p Second. The body sees the tuple it always saw.
-template <PyObject *(*Impl)(PyObject *, PyObject *), detail::FormatString First,
-          detail::FormatString Second>
+template <detail::FormatString Func, PyObject *(*Impl)(PyObject *, PyObject *),
+          detail::FormatString First, detail::FormatString Second>
 PyObject *kw_pair(PyObject *self, PyObject *args, PyObject *kwds) {
     PyObject *given[2] = {nullptr, nullptr};
     const char *const names[2] = {First.text, Second.text};
-    if (!parse_kw<"O|O">(args, kwds, names, &given[0], &given[1]))
+    if (!parse_kw_for<"O|O">(Func.text, args, kwds, names, &given[0],
+                             &given[1]))
         return nullptr;
     PyObject *tuple = given[1] ? PyTuple_Pack(2, given[0], given[1])
                                : PyTuple_Pack(1, given[0]);

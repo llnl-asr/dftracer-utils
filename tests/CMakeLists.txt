@@ -1240,6 +1240,22 @@ if(DFTRACER_UTILS_ENABLE_MPI AND DFTRACER_UTILS_BUILD_SHARED
 endif()
 
 # +++++++++++++++++++++++++++++++++++++++++
+# Comm examples: the programs that the Communicator guide quotes, run as they
+# are, so a snippet in the guide builds and passes.
+# +++++++++++++++++++++++++++++++++++++++++
+foreach(example comm_basics comm_fault)
+  if(TARGET ${example})
+    add_test(NAME examples/comm/${example} COMMAND $<TARGET_FILE:${example}>)
+    set_tests_properties(examples/comm/${example} PROPERTIES TIMEOUT 120)
+  endif()
+endforeach()
+if(TARGET comm_rank_report)
+  add_test(NAME examples/comm/comm_rank_report
+           COMMAND $<TARGET_FILE:comm_rank_report> local)
+  set_tests_properties(examples/comm/comm_rank_report PROPERTIES TIMEOUT 120)
+endif()
+
+# +++++++++++++++++++++++++++++++++++++++++
 # Example plugins: `dftracer_plugin check` on each one examples/plugins/
 # builds, so every kind the SDK offers - fold, udf, aggregate, format, sink,
 # node, provider - is built and run by the default `tests` preset. A plugin

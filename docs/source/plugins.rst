@@ -859,19 +859,48 @@ still drains the queue and then gives ``DFTU_PORT_CLOSED``. The host closes
 every channel when the scan ends, for a scan that ``Plugins::run`` drives and
 for one that ``Plugins::attach`` joins to a session.
 
+*Call contract.* Every call except ``port_key``, ``publish`` and ``consume``
+takes a ``dftu_ctx*`` and returns a status. A negative status sets its message
+on ``ctx``; the plan refusals above reach the plugin this way, from
+``channel_open``, ``phase_declare`` and ``phase_seed``. A port status
+(``DFTU_PORT_*``) is not an error: the call returns ``DFTU_OK`` and the status
+is in ``*out_status``. A NULL ``out_status``, ``out_len``, ``out_generation`` or
+``out_task``, a NULL ``data`` or ``buf`` with a length above 0, a NULL name and
+a descriptor whose ``struct_size`` is wrong give ``DFTU_E_INVALID``; a NULL
+``data`` with length 0 is an empty message. The host copies the bytes of
+``channel_try_send``, ``latest_set`` and ``phase_contribute`` before the call
+returns, so the plugin keeps its buffer. A call that starts a task needs more.
+The ``data`` of ``channel_send``, and the ``buf``, ``*out_len`` and
+``*out_status`` of ``channel_send``, ``channel_recv`` and ``channel_recv_exact``,
+must stay valid until the task completes, and the task belongs to the caller,
+who hands it back through a ``pending`` or ``wait`` slot, waits with
+``dftu_svc_task::run`` or gives it up with ``discard``. ``channel_open`` as a declaration,
+``phase_declare`` and ``phase_seed`` run only in the plugin factory. Every other
+call runs after the plan, from a task or a callback, on any thread; a call
+locks the one port it names, so two plugins that use different ports never wait
+for each other.
+
 *Latest ports* are hints. ``latest_set`` stores the last value under a name and
 gives its generation, a 64-bit count of sets from 1 that the host assigns.
-``latest_get`` never waits: ``DFTU_PORT_NOT_READY`` before the first set.
+``latest_get`` never waits: ``DFTU_PORT_NOT_READY`` before the first set, and
+``DFTU_PORT_TOO_BIG`` with the needed size in ``*out_len`` for a short buffer.
+It gives the generation it read, so a reader tells a new value from one it has
+seen.
 
 *Phase results* merge the values of many slices by a named op: ``DFTU_MERGE_SUM``,
 ``MIN`` and ``MAX`` over ``DFTU_T_I64``, ``DFTU_T_U64`` or ``DFTU_T_F64``,
 ``DFTU_MERGE_UNION`` over a set of ``DFTU_T_U64`` and ``DFTU_MERGE_CONCAT`` over
 ``DFTU_T_BYTES``, appended in the order the host received them. A factory calls
-``phase_declare`` once for each generation; the host assigns generations in
-order from 1, and a request that skips one fails the load.
-``phase_contribute`` merges into an open generation, ``phase_seal`` closes
-generations in order, and ``phase_result`` gives the merged value of a sealed
-one (``DFTU_PORT_NOT_READY`` while it is open).
+``phase_declare`` once for each generation, with generation 0 to take the
+next; the host assigns generations in order from 1, and a request that skips
+one fails the load. ``phase_contribute`` merges into an open generation and
+gives ``DFTU_PORT_TOO_BIG`` for a payload the op refuses and
+``DFTU_PORT_CLOSED`` once the generation is sealed. ``phase_seal`` closes
+generations in order, and sealing one whose predecessor is open is
+``DFTU_E_INVALID``. ``phase_result`` gives the merged value of a sealed one
+(``DFTU_PORT_NOT_READY`` while it is open, ``DFTU_PORT_TOO_BIG`` with the needed
+size for a short buffer); a generation with no contribution gives an empty
+result.
 
 *Phase seeds.* A plugin that needs a number about the whole input before its
 first batch, such as the start time of the trace, asks the host for it.
@@ -1016,8 +1045,21 @@ cancelled task reports ``DFTU_E_CANCELLED``.
 ``dftu_svc_task::test`` tells without waiting whether a task has finished (1 or
 0). ``dftu_svc_task::cancel`` asks a task to stop and returns at once; the task
 still completes exactly once, with ``DFTU_OK``, ``DFTU_E_CANCELLED`` or another
-error, and its owner still awaits and frees it. Both are safe from any thread,
-and a cancel of a finished task does nothing.
+error, and its owner still awaits and frees it. A cancel of a finished task
+does nothing. Both calls use no state of the host handle, and ``test`` gives
+``DFTU_E_INVALID`` for a NULL task.
+
+A task is reference counted so that another thread can cancel it. It starts with
+one reference, the owner's. A thread that holds a reference calls
+``dftu_svc_task::retain`` and then hands the task to another thread, which may
+call ``test`` and ``cancel`` on it and calls ``dftu_svc_task::release`` when it
+is done. Call ``retain`` before the handoff and never from the receiving thread.
+The reference rule: ``test``, ``cancel`` and ``retain`` are valid only while the
+caller holds a reference, and no thread uses the task after its own ``release``.
+A cancel may complete the task on another thread, but the task stays valid until
+the last reference goes, so the cancel never touches freed memory. ``run``
+drops the owner's reference in every case, so it frees the task unless another
+thread still holds one; the last ``release`` frees it.
 
 .. tab-set::
 

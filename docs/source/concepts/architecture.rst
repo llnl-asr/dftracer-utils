@@ -23,6 +23,16 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   runtime and no MPI. The MPI backend is ``dftracer_utils_comm_mpi``, built
   with ``-DDFTRACER_UTILS_ENABLE_MPI=ON`` and loaded at run time, so it is the
   only library that links MPI.
+  A communicator is built from four providers behind small interfaces:
+  bootstrap (rank discovery and timers), messaging (ordered point to point),
+  collectives (the native ones of a backend, or linear ones over messaging)
+  and bulk (expose, pull and push, built on messaging when the backend has no
+  bulk of its own). The rules above them are the same for every backend:
+  every call is an ``Op``, a group aborts on a failed collective, a
+  continuation is posted to the executor and never runs on a progress thread,
+  and a call ends exactly once. ``Communicator::start`` takes ``local``,
+  ``mpi`` or ``auto``, so the tools have one code path: a run with no launcher
+  is a group of one rank. :doc:`../guides/runtime/communicator` shows the calls.
   The MPI backend runs the collectives of a group on the nonblocking
   collectives of MPI, each group on a communicator of its own: a barrier, a
   reduction whose result is the same bit for bit as the fold in rank order
@@ -141,7 +151,7 @@ active.
 
    graph TB
        Runtime["dftracer_utils_runtime<br/>runtime, coro, io, pipeline"]
-       Comm["dftracer_utils_comm<br/>transports, MPI"]
+       Comm["dftracer_utils_comm<br/>communicator, groups"]
        Store["dftracer_utils_store<br/>key-value store engine"]
        Io["dftracer_utils_fileio<br/>gzip, line streams, writers"]
        Json["dftracer_utils_json<br/>simdjson-backed parsing"]

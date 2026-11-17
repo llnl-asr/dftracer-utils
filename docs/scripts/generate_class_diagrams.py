@@ -352,7 +352,7 @@ ARCHITECTURE_MMD = """graph BT
     yaml["dftracer_utils_yaml<br/><i>line-index reader, YAML writer</i>"]
     store["dftracer_utils_store<br/><i>key-value store engine</i>"]
     runtime["dftracer_utils_runtime<br/><i>coroutines, tasks, task graph, io backend,<br/>pipelines, primitives</i>"]
-    comm["dftracer_utils_comm<br/><i>transports, MPI helpers</i>"]
+    comm["dftracer_utils_comm<br/><i>communicator, groups, channels</i>"]
 
     runtime --> io
     runtime --> comm

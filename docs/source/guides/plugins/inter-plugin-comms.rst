@@ -310,6 +310,11 @@ a phase result: declare each generation in the factory, ``phase_contribute``
 from the slices, ``phase_seal`` the generation, and read it with
 ``phase_result``. See :doc:`../../plugins` for the full list of rules.
 
+A receive that waits is a task, and another thread may stop it: ``retain`` the
+task before you hand it over, then call ``test`` or ``cancel`` there and
+``release`` it when you are done. The task still completes once, with
+``DFTU_E_CANCELLED`` when the cancel won. The reference rule is in section 9 of :doc:`../../plugins`.
+
 Two phases in one plan
 ----------------------
 

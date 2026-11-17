@@ -66,6 +66,11 @@ Runtime and scheduler
        communicator in the process, a DFTracer event file with one event for
        each communicator call that ended. It is read once, when a communicator
        starts, and the files are written when the communicator ends.
+   * - ``DFTRACER_UTILS_COMM_MPI_CHUNK_BYTES``
+     - ``1073741824`` (1 GiB)
+     - The most bytes one MPI message of the MPI backend carries. A longer
+       payload goes in several messages. A value above 1 GiB is lowered to it, and
+       one below 1 is raised to 1. Meant for tests.
    * - ``DFTRACER_UTILS_HW_CONCURRENCY``
      - ``std::thread::hardware_concurrency()`` (or ``1`` if that is ``0``)
      - Overrides the detected core count used to size thread pools when the

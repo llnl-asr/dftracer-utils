@@ -2963,7 +2963,10 @@ option(DFTRACER_UTILS_BUILD_EXAMPLES "Build API examples" ON)
 
 if(DFTRACER_UTILS_BUILD_EXAMPLES)
   set(DFTRACER_UTILS_EXAMPLES
-      ${CMAKE_CURRENT_SOURCE_DIR}/../examples/view_containment_example.cpp)
+      ${CMAKE_CURRENT_SOURCE_DIR}/../examples/view_containment_example.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../examples/comm/comm_basics.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../examples/comm/comm_fault.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../examples/comm/comm_rank_report.cpp)
 
   foreach(example ${DFTRACER_UTILS_EXAMPLES})
     get_filename_component(example_name ${example} NAME_WE)

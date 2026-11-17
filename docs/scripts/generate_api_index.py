@@ -67,6 +67,8 @@ TITLE_OVERRIDES: dict[str, str] = {
     "json": "JSON",
     "hash": "Hashing",
     "coro": "Coroutine Primitives",
+    "comm": "Communicator",
+    "comm.backend": "Backend providers",
     "runtime.io": "Async I/O",
     "server": "HTTP Server",
     "mpi": "MPI Utilities",

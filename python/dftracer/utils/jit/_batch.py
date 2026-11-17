@@ -213,7 +213,8 @@ class _Lowering:
         prologue: List[str] = []
         c_n = max(len(self.columns), 1)
         prologue.append(f"dftu_series* _C[{c_n}] = {{0}};")
-        prologue.append(f"dftu_series* _L[{max(self.leaf_count, 1)}] = {{0}};")
+        if self.leaf_count > 0:
+            prologue.append(f"dftu_series* _L[{self.leaf_count}] = {{0}};")
         prologue.append(f"dftu_series* _T[{max(self.temp_count, 1)}] = {{0}};")
         prologue.append(f"dftu_expr* _X[{max(self.expr_count, 1)}] = {{0}};")
         for i, name in enumerate(self.columns):

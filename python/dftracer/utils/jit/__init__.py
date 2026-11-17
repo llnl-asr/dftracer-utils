@@ -5976,6 +5976,7 @@ def _emit(
                 "    }",
                 "    for (int64_t _j = 0; _j < _ns; ++_j) {",
                 "        const int64_t i = (int64_t)_sel[_j];",
+                "        (void)i;",
             ]
         else:
             inner.append("    for (int64_t i = 0; i < n; ++i) {")

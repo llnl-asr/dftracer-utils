@@ -12,8 +12,8 @@
 // the Python side reads, and the PyMethodDef entries of a class. A class file
 // puts its entries in its method table with
 //
-//   #define PY_METHOD(cls, name, op, args, result, name_rule, on_expr, kw0, \
-//                     kw1, err, doc)                                         \
+//   #define PY_METHOD(cls, name, op, args, result, name_rule, on_expr, kw0,
+//                     kw1, err, doc)
 //       API_PICK_##cls(core::api::row_id(#cls, #name), #name, args, doc)
 //   #include <dftracer/utils/python/core/api.def>
 //

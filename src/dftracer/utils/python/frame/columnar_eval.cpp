@@ -517,7 +517,7 @@ static PyObject* udaf_names(PyObject* /*self*/, PyObject* /*unused*/) {
 // which must outlive their use; `msg` is the TypeError for an item that is not
 // a Series. The caller evaluates with the GIL released, and `s.name = x` swaps
 // the name of a Series object's own handle, so the evaluation reads the shares.
-bool columns_from_seq(
+static bool columns_from_seq(
     PyObject* obj, const char* msg,
     dftracer::utils::python::core::FastSeq& held,
     dftracer::utils::dstd::Vector<dataframe::Series>& copies,

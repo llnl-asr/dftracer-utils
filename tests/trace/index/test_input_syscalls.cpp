@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/map.h>
@@ -57,10 +57,10 @@ dstd::String make_trace(int pid, int events) {
     dstd::String os;
     os += "[\n";
     for (int i = 0; i < events; ++i) {
-        os += common::str_cat(
-            R"({"id":)", i, R"(,"name":"read","cat":"POSIX","pid":)", pid,
-            R"(,"tid":)", pid, R"(,"ts":)", (1000 + i * 10),
-            R"(,"dur":5,"ph":"X","args":{"hhash":"abc","ret":1024}})", "\n");
+        dstd::fmt_append<
+            "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":"
+            "{},\"ts\":{},\"dur\":5,\"ph\":\"X\",\"args\":{\"hhash\":\"abc\","
+            "\"ret\":1024}}\n">(os, i, pid, pid, (1000 + i * 10));
     }
     return os;
 }
@@ -334,8 +334,9 @@ Text hex_lines(std::size_t size, std::uint32_t seed) {
     Text t;
     t.bytes.reserve(size + 160);
     while (t.bytes.size() < size) {
-        t.bytes += common::str_cat(R"({"id":)", t.lines, R"(,"name":"read",)",
-                                   R"("cat":"POSIX","args":{"fh":")");
+        dstd::fmt_append<
+            "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"args\":{\"fh\":"
+            "\"">(t.bytes, t.lines);
         for (int k = 0; k < 32; ++k) t.bytes += HEX[rng() & 15];
         t.bytes += "\"}}\n";
         ++t.lines;
@@ -692,7 +693,7 @@ TEST_CASE("member ranges cut by bytes index like a pass over scanned members") {
     std::size_t n = 0;
     for (const Shape& s : shapes) {
         const dstd::String path =
-            dir.file(common::str_cat(n++, "_", s.name, ".pfw.gz"));
+            dir.file(dstd::fmt<"{}_{}.pfw.gz">(n++, s.name));
         write_bytes(path, s.bytes);
         INFO(path);
         const Built scanned = build_artifacts(path, CKPT, 4, true);
@@ -752,7 +753,7 @@ TEST_CASE("unreadable bytes between or inside members lose only those bytes") {
     std::size_t n = 0;
     for (const Shape& s : shapes) {
         const dstd::String path =
-            dir.file(common::str_cat(n++, "_", s.name, ".pfw.gz"));
+            dir.file(dstd::fmt<"{}_{}.pfw.gz">(n++, s.name));
         write_bytes(path, s.bytes);
         INFO(path);
         std::uint64_t lines = 0;

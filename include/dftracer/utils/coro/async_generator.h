@@ -153,11 +153,13 @@ class AsyncGenerator {
             p.handoff.store(false, std::memory_order_relaxed);
             // Set on every read: a reader before this one may be gone.
             p.set_root_promise(nullptr);
+            p.cancel_link = nullptr;
             p.parent_end =
                 settled_ ? nullptr : detail::cancel_end_for<Promise>();
             Executor* awaiter_executor = nullptr;
             if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
                 p.set_root_promise(awaiting.promise().get_root_promise());
+                p.cancel_link = awaiting.promise().cancel_link;
                 awaiter_executor = awaiting.promise().get_executor();
             }
             if (awaiter_executor == nullptr) {

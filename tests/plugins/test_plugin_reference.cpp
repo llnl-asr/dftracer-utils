@@ -5,7 +5,7 @@
 // service checks race-free writes into the plugin's own status table.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -37,9 +37,10 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
     const dstd::String pfw = dir + "/trace.pfw";
     dstd::String ofs;
     for (int i = 0; i < EVENTS; ++i)
-        ofs += common::str_cat(
-            R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
-            (1000 + i * 100), R"(,"dur":)", (10 + i), R"(,"args":{}})", "\n");
+        dstd::fmt_append<
+            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "\"tid\":1,\"ts\":{},\"dur\":{}{}\n">(ofs, (1000 + i * 100),
+                                                  (10 + i), R"(,"args":{}})");
     dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();
     const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);

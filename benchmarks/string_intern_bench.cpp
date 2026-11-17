@@ -28,6 +28,7 @@
 //                                              and every result must be
 //                                              positive and correct)
 
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/string.h>
@@ -100,12 +101,12 @@ Result get_or_insert_known(std::size_t n) {
     StringIntern table;
     for (const auto& s : strings) table.get_or_insert(s);
     std::uint64_t acc = 0;
-    auto start = Clock::now();
+    auto start = dftracer::utils::dstd::steady_now();
     for (std::size_t i = 0; i < n; ++i) {
         acc += table.get_or_insert(strings[i & (KNOWN_STRINGS - 1)]);
     }
     Result r;
-    r.total_ns = elapsed_ns(start, Clock::now());
+    r.total_ns = elapsed_ns(start, dftracer::utils::dstd::steady_now());
     r.correct = table.size() == KNOWN_STRINGS;
     sink.fetch_add(acc, std::memory_order_relaxed);
     return r;
@@ -115,10 +116,10 @@ Result get_or_insert_new(std::size_t n) {
     auto strings = make_strings(n);
     StringIntern table;
     std::uint64_t acc = 0;
-    auto start = Clock::now();
+    auto start = dftracer::utils::dstd::steady_now();
     for (std::size_t i = 0; i < n; ++i) acc += table.get_or_insert(strings[i]);
     Result r;
-    r.total_ns = elapsed_ns(start, Clock::now());
+    r.total_ns = elapsed_ns(start, dftracer::utils::dstd::steady_now());
     r.correct = table.size() == n;
     sink.fetch_add(acc, std::memory_order_relaxed);
     return r;
@@ -130,12 +131,12 @@ Result resolve(std::size_t n) {
     dftracer::utils::dstd::Vector<std::uint32_t> ids;
     for (const auto& s : strings) ids.push_back(table.get_or_insert(s));
     std::size_t bytes = 0;
-    auto start = Clock::now();
+    auto start = dftracer::utils::dstd::steady_now();
     for (std::size_t i = 0; i < n; ++i) {
         bytes += table.resolve(ids[i & (KNOWN_STRINGS - 1)]).size();
     }
     Result r;
-    r.total_ns = elapsed_ns(start, Clock::now());
+    r.total_ns = elapsed_ns(start, dftracer::utils::dstd::steady_now());
     std::size_t expected = 0;
     for (std::size_t i = 0; i < n; ++i) {
         expected += strings[i & (KNOWN_STRINGS - 1)].size();
@@ -167,11 +168,11 @@ Result get_or_insert_mt8(std::size_t n) {
     }
     while (ready.load() < THREADS) {
     }
-    auto start = Clock::now();
+    auto start = dftracer::utils::dstd::steady_now();
     go.store(true, std::memory_order_release);
     for (auto& th : threads) th.join();
     Result r;
-    r.total_ns = elapsed_ns(start, Clock::now());
+    r.total_ns = elapsed_ns(start, dftracer::utils::dstd::steady_now());
     r.correct = table.size() == KNOWN_STRINGS;
     sink.fetch_add(total.load(), std::memory_order_relaxed);
     return r;

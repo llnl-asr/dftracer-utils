@@ -20,10 +20,25 @@ namespace dftracer::utils::plugins::host {
 
 class ConfigTree;
 
+/// Where the seeded phase results of one run came from.
+enum class SeedSource : std::uint8_t {
+    /// The plan has no seeded phase.
+    None,
+    /// The statistics in the indexes of the input files.
+    Index,
+    /// The host's cache of an earlier pass, keyed by the files' stat and
+    /// sample hash.
+    Cache,
+    /// A pass of the host over the files, with no plugin code, run now.
+    Pass
+};
+
 /// One run's output: the scan counters and the named results the plugins
 /// emitted. Owned by the value, so one plugin set can back many runs.
 struct PluginRun {
     trace::views::ExportStats stats;
+    /// Where the values of the seeded phases came from; see @ref SeedSource.
+    SeedSource seed_source = SeedSource::None;
     ::dftracer::utils::plugins::NamedResultRegistry results;
 };
 

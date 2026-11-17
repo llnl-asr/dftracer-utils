@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: MIT
+Task<int> run() {
+    co_await f([&]() -> Task<int> {
+        co_await g(Person{"x", 1});
+        co_return 0;
+    });
+    co_return 0;
+}

@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -421,9 +422,7 @@ TEST_SUITE("View duql pipeline") {
     TEST_CASE("now is read once per query") {
         TestEnvironment env(10);
         const auto micros = [] {
-            return std::chrono::duration_cast<std::chrono::microseconds>(
-                       std::chrono::system_clock::now().time_since_epoch())
-                .count();
+            return static_cast<std::int64_t>(dstd::system_now_ns() / 1000ULL);
         };
         const std::int64_t stamp = micros();
         const auto at = [](std::int64_t ts) {

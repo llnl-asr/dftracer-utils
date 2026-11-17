@@ -5,8 +5,8 @@
 // provider, cycle) fail at build instead of after a wasted scan.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -145,9 +145,10 @@ dstd::String make_trace(dftu_utils_test::TestEnvironment& env,
     dstd::String pfw = dir + "/trace.pfw";
     dstd::String ofs;
     for (int i = 0; i < n; ++i)
-        ofs += common::str_cat(
-            R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
-            (1000 + i * 100), R"(,"dur":)", (10 + i), R"(,"args":{}})", "\n");
+        dstd::fmt_append<
+            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "\"tid\":1,\"ts\":{},\"dur\":{}{}\n">(ofs, (1000 + i * 100),
+                                                  (10 + i), R"(,"args":{}})");
     dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
@@ -253,6 +254,10 @@ TEST_SUITE("PluginFoldOrder") {
         auto set = plugins::host::build_injected_plugins({&pa, &pb});
         REQUIRE_FALSE(set.has_value());
         CHECK(set.error().message().find("cycle") != dstd::String::npos);
+        // The message names each plugin and the name that links it to the next.
+        CHECK(set.error().message().find("plugin 1 -[com.example.b]-> plugin "
+                                         "0 -[com.example.a]-> plugin 1") !=
+              dstd::String::npos);
     }
 
     TEST_CASE("a dftu.-prefixed provided name fails the build") {

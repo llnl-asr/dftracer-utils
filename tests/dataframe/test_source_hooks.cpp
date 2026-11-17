@@ -843,8 +843,11 @@ TEST_SUITE("source that fails") {
         auto stream_error =
             [](LazyFrame lf) -> coro::CoroTask<dstd::Result<void>> {
             auto g = lf.stream();
-            while (auto df = co_await g.next())
+            while (true) {
+                auto df = co_await g.next();
+                if (!df) break;
                 if (!*df) co_return df->error();
+            }
             co_return dstd::Result<void>();
         };
         const auto result = dftracer::utils::default_runtime()

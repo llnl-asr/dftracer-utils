@@ -21,6 +21,7 @@
 
 #include <bench_counters.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/string.h>
@@ -244,7 +245,7 @@ std::uint64_t checksum(const dataframe::DataFrame& f,
 
 double now_ms() {
     return std::chrono::duration<double, std::milli>(
-               std::chrono::steady_clock::now().time_since_epoch())
+               dstd::steady_now().time_since_epoch())
         .count();
 }
 

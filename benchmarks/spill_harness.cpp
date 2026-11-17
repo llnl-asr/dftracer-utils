@@ -52,6 +52,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
@@ -450,7 +451,9 @@ dftracer::utils::dstd::Vector<Case> make_cases() {
 coro::CoroTask<std::int64_t> drain(LazyFrame plan) {
     auto gen = plan.stream(BATCH_SIZE);
     std::int64_t rows = 0;
-    while (auto part = co_await gen.next()) {
+    while (true) {
+        auto part = co_await gen.next();
+        if (!part) break;
         if (!*part) co_return -1;
         rows += (*part)->num_rows();
     }
@@ -543,10 +546,10 @@ int run_one(dftracer::utils::dstd::StringView name, std::uint64_t budget) {
     LazyFrame plan = c->plan(in);
     const std::uint64_t base = current_rss();
     const std::uint64_t written = bytes_written();
-    auto start = Clock::now();
+    auto start = dstd::steady_now();
     const std::int64_t out =
         dftu::bench::ok(runtime.submit(drain(std::move(plan))).get());
-    auto end = Clock::now();
+    auto end = dstd::steady_now();
     const std::uint64_t spilled = bytes_written() - written;
     const std::uint64_t peak = peak_rss();
     check(c->rows_ok(out, in), "unexpected output row count");

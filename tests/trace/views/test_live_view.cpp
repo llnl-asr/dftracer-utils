@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
@@ -43,10 +43,9 @@ dstd::String gzip_member(dstd::String text) {
 dstd::String member(int first) {
     dstd::String text;
     for (int i = first; i < first + ROWS; ++i) {
-        text += common::str_cat(
-            R"({"id":)", i,
-            R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
-            1000 + i * 10, R"(,"dur":5,"ph":"X"})", "\n");
+        dstd::fmt_append<
+            "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":"
+            "1,\"ts\":{},\"dur\":5,\"ph\":\"X\"}\n">(text, i, 1000 + i * 10);
     }
     return gzip_member(std::move(text));
 }
@@ -354,10 +353,10 @@ TEST_SUITE("LiveView") {
         const dstd::String m0 = member(0);
         dstd::String late;
         for (int i = 0; i < ROWS; ++i) {
-            late += common::str_cat(
-                R"({"id":)", 100 + i,
-                R"(,"name":"late","cat":"POSIX","pid":1,"tid":1,"ts":)",
-                5000 + i * 10, R"(,"dur":5,"ph":"X"})", "\n");
+            dstd::fmt_append<
+                "{\"id\":{},\"name\":\"late\",\"cat\":\"POSIX\",\"pid\":1,"
+                "\"tid\":1,\"ts\":{},\"dur\":5,\"ph\":\"X\"}\n">(late, 100 + i,
+                                                                 5000 + i * 10);
         }
         const char* query = "where name in (from data | select name)";
         put(gz, m0);
@@ -380,10 +379,10 @@ TEST_SUITE("LiveView") {
         const dstd::String m0 = member(0);
         dstd::String late;
         for (int i = 0; i < ROWS; ++i) {
-            late += common::str_cat(
-                R"({"id":)", 100 + i,
-                R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
-                5000 + i * 10, R"(,"dur":5,"ph":"X","args":{"late":1}})", "\n");
+            dstd::fmt_append<
+                "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+                "\"tid\":1,\"ts\":{},\"dur\":5,\"ph\":\"X\",\"args\":{\"late\":"
+                "1}}\n">(late, 100 + i, 5000 + i * 10);
         }
         put(gz, m0);
         LiveView live({gz});
@@ -414,8 +413,8 @@ fields:
         const auto records = [](int start) {
             dstd::String text;
             for (int i = 0; i < ROWS; ++i)
-                text += common::str_cat(R"({"start":)", start + i * 10,
-                                        R"(,"took":5,"op":"read"})", "\n");
+                dstd::fmt_append<"{\"start\":{},\"took\":5,\"op\":\"read\"}\n">(
+                    text, start + i * 10);
             return gzip_member(std::move(text));
         };
         const dstd::String m0 = records(1000);

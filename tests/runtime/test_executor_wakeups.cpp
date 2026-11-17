@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -112,9 +113,8 @@ TEST_SUITE("ExecutorWakeups") {
         };
         auto outer = [&]() -> coro::CoroTask<void> {
             dftu_utils_test::ok(inner().get());
-            finished_ns.store(
-                std::chrono::steady_clock::now().time_since_epoch().count(),
-                std::memory_order_release);
+            finished_ns.store(dstd::steady_now().time_since_epoch().count(),
+                              std::memory_order_release);
             co_return;
         };
 
@@ -126,7 +126,7 @@ TEST_SUITE("ExecutorWakeups") {
         for (int round = 0; round < ROUNDS; ++round) {
             TaskHandle handle = rt.submit(outer(), "Outer");
             std::this_thread::sleep_for(WAIT);
-            const auto released = std::chrono::steady_clock::now();
+            const auto released = dstd::steady_now();
             gate.release(1);
             dftu_utils_test::ok(handle.wait());
             latencies.push_back(std::chrono::nanoseconds(finished_ns.load()) -
@@ -175,9 +175,9 @@ TEST_SUITE("ExecutorWakeups") {
                     co_await runtime::io::pwrite(fd, &BYTE, 1, 0);
                 });
                 co_await coro::yield();
-                const auto until = std::chrono::steady_clock::now() + DEADLINE;
+                const auto until = dstd::steady_now() + DEADLINE;
                 struct stat st{};
-                while (std::chrono::steady_clock::now() < until) {
+                while (dstd::steady_now() < until) {
                     if (::stat(path.c_str(), &st) == 0 && st.st_size == 1) {
                         landed = true;
                         break;

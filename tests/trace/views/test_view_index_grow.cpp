@@ -140,8 +140,9 @@ coro::CoroTask<trace::index::build::ResolverResult> resolve_entries(
     trace::index::build::ResolverInput in) {
     trace::index::build::ResolverResult result;
     co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        result = dftu_utils_test::ok(
-            co_await trace::index::build::Resolver{}(scope, in));
+        trace::index::build::Resolver resolver;
+        auto op = resolver(scope, in);
+        result = dftu_utils_test::ok(co_await op);
     });
     co_return result;
 }
@@ -178,7 +179,11 @@ std::int64_t count_of(const dstd::String& dir, const dstd::String& cat) {
 coro::CoroTask<std::size_t> count_json(
     coro::AsyncGenerator<trace::reader::JsonLine> gen) {
     std::size_t n = 0;
-    while (auto line = co_await gen.next()) ++n;
+    while (true) {
+        auto line = co_await gen.next();
+        if (!line) break;
+        ++n;
+    }
     co_return n;
 }
 

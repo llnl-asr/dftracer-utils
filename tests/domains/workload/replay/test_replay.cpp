@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/domains/workload/replay/replay.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -100,9 +101,9 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
 
         ReplayEngine engine(std::move(config));
 
-        auto start_time = std::chrono::steady_clock::now();
+        auto start_time = dstd::steady_now();
         ReplayResult result = engine.replay(trace_file);
-        auto end_time = std::chrono::steady_clock::now();
+        auto end_time = dstd::steady_now();
 
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
             end_time - start_time);
@@ -356,9 +357,9 @@ TEST_CASE("DFTracer Replay - Real trace files") {
 
         ReplayEngine engine(std::move(config));
 
-        auto start_time = std::chrono::steady_clock::now();
+        auto start_time = dstd::steady_now();
         ReplayResult result = engine.replay(trace_dir);
-        auto end_time = std::chrono::steady_clock::now();
+        auto end_time = dstd::steady_now();
 
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
             end_time - start_time);
@@ -407,9 +408,9 @@ TEST_CASE("DFTracer Replay - Call tree integration") {
 
         ReplayEngine engine(std::move(config));
 
-        auto start_time = std::chrono::steady_clock::now();
+        auto start_time = dstd::steady_now();
         ReplayResult result = engine.replay_with_call_tree(trace_dir);
-        auto end_time = std::chrono::steady_clock::now();
+        auto end_time = dstd::steady_now();
 
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
             end_time - start_time);

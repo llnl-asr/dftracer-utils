@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/calendar.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
@@ -1552,7 +1553,7 @@ class Lowering {
                     out.name = n.name;
                     out.options = n.options;
                     out.text = text_of(s.span);
-                    return std::move(out);
+                    return out;
                 } else if constexpr (std::is_same_v<T, Use>) {
                     return fail(
                         s.span,
@@ -2745,11 +2746,9 @@ class Lowering {
             return fail(span, arity(c.name, want, want, c.args.size()));
         if (c.name == "now") {
             if (!now_) {
-                const auto ns =
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        std::chrono::system_clock::now().time_since_epoch())
-                        .count();
-                now_ = static_cast<std::int64_t>(ns) / roles_->time_ns_per_unit;
+                const std::int64_t ns =
+                    static_cast<std::int64_t>(dstd::system_now_ns());
+                now_ = ns / roles_->time_ns_per_unit;
             }
             return dstd::Optional<duql::TermPtr>(
                 make_term(duql::TConst{*now_}));

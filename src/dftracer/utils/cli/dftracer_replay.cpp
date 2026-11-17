@@ -11,27 +11,23 @@
 //           set, the legacy replay_with_call_tree path that builds a
 //           hierarchical tree first
 
+#include <dftracer/utils/cli/comm_args.h>
+#include <dftracer/utils/cli/common_cli.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/domains/workload/replay/replay.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/runtime/mpi/mpi_utils.h>
-
-#ifdef DFTRACER_UTILS_MPI_ENABLED
-#include <mpi.h>
-#endif
-
-#include <dftracer/utils/cli/common_cli.h>
-#include <dftracer/utils/dstd/pair.h>
 
 #include <chrono>
 #include <cinttypes>
@@ -63,6 +59,7 @@ dstd::Result<dstd::HashSet<std::uint32_t>> parse_csv_uint32(
 class ReplayArgParse : public cli::ArgParse {
    public:
     cli::RuntimeArgs runtime_args;
+    cli::CommArgs comm_args;
 
     dstd::Vector<dstd::StringView> inputs;
     bool no_timing = false;
@@ -94,7 +91,7 @@ class ReplayArgParse : public cli::ArgParse {
     std::size_t channel_capacity = 4096;
 
     explicit ReplayArgParse(cli::ArgParser& p) : ArgParse(p) {
-        schema(runtime_args);
+        schema(runtime_args, comm_args);
     }
 
    protected:
@@ -251,7 +248,7 @@ struct RunCtx {
 };
 
 coro::CoroTask<void> task_scan(RunCtx* ctx, coro::Scope& scope) {
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto t0 = dstd::steady_now();
 
     auto collected = co_await cli::collect_input_trace_files(
         scope, ctx->cli->inputs, /*recursive=*/true, [](dstd::StringView in) {
@@ -266,9 +263,9 @@ coro::CoroTask<void> task_scan(RunCtx* ctx, coro::Scope& scope) {
     }
     for (const auto& file : *collected) ctx->trace_files.emplace_back(file);
 
-    ctx->scan_ms = std::chrono::duration<double, std::milli>(
-                       std::chrono::steady_clock::now() - t0)
-                       .count();
+    ctx->scan_ms =
+        std::chrono::duration<double, std::milli>(dstd::steady_now() - t0)
+            .count();
 
     if (ctx->trace_files.empty()) {
         if (ctx->is_root) {
@@ -367,7 +364,7 @@ void print_filters(const RunCtx& ctx) {
 coro::CoroTask<void> task_execute(RunCtx* ctx, coro::Scope* scope) {
     if (ctx->failed) co_return;
 
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto t0 = dstd::steady_now();
 
     if (ctx->is_root) {
         print_configuration(*ctx);
@@ -423,9 +420,9 @@ coro::CoroTask<void> task_execute(RunCtx* ctx, coro::Scope* scope) {
         }
     }
 
-    ctx->execute_ms = std::chrono::duration<double, std::milli>(
-                          std::chrono::steady_clock::now() - t0)
-                          .count();
+    ctx->execute_ms =
+        std::chrono::duration<double, std::milli>(dstd::steady_now() - t0)
+            .count();
 
     if (ctx->is_root) {
         std::printf("\n=== Replay Completed ===\n");
@@ -468,11 +465,10 @@ int run(int argc, char** argv) {
     RunCtx ctx;
     ctx.cli = &cli;
 
-#ifdef DFTRACER_UTILS_MPI_ENABLED
-    ctx.mpi_rank = mpi::MPIUtils::instance().rank();
-    ctx.mpi_size = mpi::MPIUtils::instance().world_size();
-    ctx.is_root = mpi::MPIUtils::instance().is_root();
-#endif
+    const comm::Group world = cli.comm_args.world();
+    ctx.mpi_rank = static_cast<int>(world.rank());
+    ctx.mpi_size = static_cast<int>(world.size());
+    ctx.is_root = world.rank() == 0;
 
     // Mirror the parsed options into ReplayConfig.
     auto& c = ctx.config;
@@ -539,17 +535,4 @@ int run(int argc, char** argv) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-#ifdef DFTRACER_UTILS_MPI_ENABLED
-    MPI_Init(&argc, &argv);
-    mpi::MPIUtils::instance().initialize();
-#endif
-
-    int rc = run(argc, argv);
-
-#ifdef DFTRACER_UTILS_MPI_ENABLED
-    mpi::MPIUtils::instance().finalize();
-    MPI_Finalize();
-#endif
-    return rc;
-}
+int main(int argc, char** argv) { return run(argc, argv); }

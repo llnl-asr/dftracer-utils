@@ -11,6 +11,7 @@
 #include <dftracer/utils/domains/analysis/statistics/detailed_statistics.h>
 #include <dftracer/utils/domains/analysis/statistics/statistics_query_utility.h>
 #include <dftracer/utils/domains/analysis/statistics/stats_view.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
@@ -1089,7 +1090,7 @@ static coro::CoroTask<dstd::Result<void>> auto_index_files(
 static coro::CoroTask<int> run_detailed_stats(
     const StatsConfig* config_ptr,
     const dstd::Vector<dstd::String>* files_ptr) {
-    auto start_time = std::chrono::high_resolution_clock::now();
+    auto start_time = dstd::steady_now();
 
     bool needs_hash_resolution = false;
     for (const auto& dim : config_ptr->group_by) {
@@ -1142,7 +1143,7 @@ static coro::CoroTask<int> run_detailed_stats(
         co_return 1;
     }
 
-    auto end_time = std::chrono::high_resolution_clock::now();
+    auto end_time = dstd::steady_now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
     if (config_ptr->json_output) {

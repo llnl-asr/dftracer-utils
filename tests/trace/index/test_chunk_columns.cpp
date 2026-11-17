@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/map.h>
@@ -317,44 +317,44 @@ dstd::String make_trace(int n) {
         const int tid = 10 + i % 2;
         const std::uint64_t ts = 1000000 + static_cast<std::uint64_t>(i) * 997;
         if (i % 20 == 19) {
-            text += common::str_cat(R"({"id":)", i,
-                                    R"(,"name":"meta","cat":"dftracer")",
-                                    R"(,"ph":"M","ts":)", ts,
-                                    R"(,"args":{"version":"1.0"}})", "\n");
+            dstd::fmt_append<
+                "{\"id\":{},\"name\":\"meta\",\"cat\":\"dftracer\",\"ph\":"
+                "\"M\",\"ts\":{},\"args\":{\"version\":\"1.0\"}}\n">(text, i,
+                                                                     ts);
             continue;
         }
         switch (i % 5) {
             case 0:
             case 1:
-                text += common::str_cat(
-                    R"({"id":)", i, R"(,"name":"read","cat":"POSIX")",
-                    R"(,"pid":)", pid, R"(,"tid":)", tid, R"(,"ph":"X","ts":)",
-                    ts, R"(,"dur":)", i * 3 % 71, R"(,"args":{"ret":)",
-                    (i * 13) % 4096, R"(,"offset":)", i * 512,
-                    R"(,"hhash":"a1b2c3d4e5f60718")",
-                    R"(,"fhash":"0123456789abcdef"}})", "\n");
+                dstd::fmt_append<
+                    "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":{},"
+                    "\"tid\":{},\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{"
+                    "\"ret\":{},\"offset\":{},\"hhash\":\"a1b2c3d4e5f60718\","
+                    "\"fhash\":\"0123456789abcdef\"}}\n">(
+                    text, i, pid, tid, ts, i * 3 % 71, (i * 13) % 4096,
+                    i * 512);
                 break;
             case 2:
-                text += common::str_cat(
-                    R"({"id":)", i, R"(,"name":"app","cat":"App")",
-                    R"(,"pid":)", pid, R"(,"tid":)", tid, R"(,"ph":"C","ts":)",
-                    ts, R"(,"args":{"dur":0.25,"user_pct":41.25,"n":)", i % 7,
-                    R"(,"state":"r"}})", "\n");
+                dstd::fmt_append<
+                    "{\"id\":{},\"name\":\"app\",\"cat\":\"App\",\"pid\":{},"
+                    "\"tid\":{},\"ph\":\"C\",\"ts\":{},\"args\":{\"dur\":0.25,"
+                    "\"user_pct\":41.25,\"n\":{},\"state\":\"r\"}}\n">(
+                    text, i, pid, tid, ts, i % 7);
                 break;
             case 3:
-                text += common::str_cat(
-                    R"({"id":)", i, R"(,"name":"cpu","cat":"sys")",
-                    R"(,"pid":)", pid, R"(,"tid":)", tid, R"(,"ph":"C","ts":)",
-                    ts, R"(,"args":{"user_pct":41.25,"sys_pct":8.5)",
-                    R"(,"mem":123456789,"level":)", i % 4, "}}\n");
+                dstd::fmt_append<
+                    "{\"id\":{},\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":{},"
+                    "\"tid\":{},\"ph\":\"C\",\"ts\":{},\"args\":{\"user_pct\":"
+                    "41.25,\"sys_pct\":8.5,\"mem\":123456789,\"level\":{}}}\n">(
+                    text, i, pid, tid, ts, i % 4);
                 break;
             default:
-                text += common::str_cat(
-                    R"({"id":)", i, R"(,"name":"step","cat":"App")",
-                    R"(,"pid":)", pid, R"(,"tid":)", tid, R"(,"ph":"A","ts":)",
-                    ts, R"(,"dur":)", i % 11, R"(,"args":{"offset":)",
-                    18446744073709551615ULL, R"(,"delta":-)", i % 9,
-                    R"(,"count":)", i * 0.5, "}}\n");
+                dstd::fmt_append<
+                    "{\"id\":{},\"name\":\"step\",\"cat\":\"App\",\"pid\":{},"
+                    "\"tid\":{},\"ph\":\"A\",\"ts\":{},\"dur\":{},\"args\":{"
+                    "\"offset\":{},\"delta\":-{},\"count\":{}}}\n">(
+                    text, i, pid, tid, ts, i % 11, 18446744073709551615ULL,
+                    i % 9, i * 0.5);
                 break;
         }
     }
@@ -550,16 +550,15 @@ struct ColumnShape {
 dstd::String repeated_key_trace() {
     dstd::String text;
     text += "[\n";
-    text += common::str_cat(
-        R"({"id":0,"name":"meta","cat":"dftracer","ph":"M","ts":1)",
-        R"(,"args":{"version":"1.0"}})", "\n");
+    text +=
+        "{\"id\":0,\"name\":\"meta\",\"cat\":\"dftracer\",\"ph\":\"M\",\"ts\":"
+        "1,\"args\":{\"version\":\"1.0\"}}\n";
     for (int i = 0; i < RECORDS; ++i) {
-        text +=
-            common::str_cat(R"({"id":)", i + 1, R"(,"name":"cpu","cat":"sys")",
-                            R"(,"pid":1,"tid":1,"ph":"C","ts":)", 5000 + i * 7,
-                            R"(,"args":{"hhash":"h1","used":)", 10 + i,
-                            R"(,"used":)", 90 + i, R"(,"nested":{"CPP_APP":)",
-                            100 + i, R"(,"CPP_APP":)", 200 + i, "}}}\n");
+        dstd::fmt_append<
+            "{\"id\":{},\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,\"tid\":1,"
+            "\"ph\":\"C\",\"ts\":{},\"args\":{\"hhash\":\"h1\",\"used\":{},"
+            "\"used\":{},\"nested\":{\"CPP_APP\":{},\"CPP_APP\":{}}}}\n">(
+            text, i + 1, 5000 + i * 7, 10 + i, 90 + i, 100 + i, 200 + i);
     }
     text += "]\n";
     return text;
@@ -886,10 +885,10 @@ TEST_SUITE("ChunkColumns") {
         dstd::String text;
         text += "[\n";
         for (int i = 0; i < RECORDS; ++i) {
-            text +=
-                common::str_cat(R"({"id":)", i, R"(,"name":"cpu","cat":"sys")",
-                                R"(,"pid":1,"tid":1,"ph":"C","ts":)",
-                                1000 + i * 7, R"(,"args":{"ret":)", i);
+            dstd::fmt_append<
+                "{\"id\":{},\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,\"tid\":"
+                "1,\"ph\":\"C\",\"ts\":{},\"args\":{\"ret\":{}">(
+                text, i, 1000 + i * 7, i);
             if (i % 3 != 0) text += R"(,"fhash":"0123456789abcdef")";
             text += "}}\n";
         }

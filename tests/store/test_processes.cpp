@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
@@ -570,7 +571,7 @@ void reap_children(const dstd::Vector<pid_t>& pids) {
     exits.reserve(pids.size());
     for (const pid_t pid : pids) exits.push_back({pid, false, 0});
 
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = dstd::steady_now();
     std::size_t remaining = exits.size();
     while (remaining > 0) {
         for (ChildExit& child : exits) {
@@ -584,7 +585,7 @@ void reap_children(const dstd::Vector<pid_t>& pids) {
             }
         }
         if (remaining == 0) break;
-        if (std::chrono::steady_clock::now() - start > REAP_LIMIT) {
+        if (dstd::steady_now() - start > REAP_LIMIT) {
             for (ChildExit& child : exits) {
                 if (!child.done) ::kill(child.pid, SIGKILL);
             }

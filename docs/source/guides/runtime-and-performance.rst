@@ -26,6 +26,12 @@ Tune threads and memory, and build your own concurrent workflows on the coroutin
 
       Fan-out, fan-in, racing tasks and streaming channels.
 
+   .. grid-item-card:: Coordinate ranks
+      :link: runtime/communicator
+      :link-type: doc
+
+      Groups, collectives, channels and bulk transfers, in one process or under MPI.
+
    .. grid-item-card:: Add your own I/O backend or file system
       :link: runtime/custom-io
       :link-type: doc
@@ -44,5 +50,6 @@ Tune threads and memory, and build your own concurrent workflows on the coroutin
    runtime/performance
    runtime/memory-budget
    pipelines/patterns
+   runtime/communicator
    runtime/custom-io
    runtime/key-value-store

@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/containment.h>
 #include <dftracer/utils/domains/workload/replay/replay.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
@@ -244,7 +245,7 @@ ReplayResult ReplayEngine::replay_file_sync(dstd::StringView trace_file,
 
     DFTRACER_UTILS_LOG_DEBUG("Starting replay of file: {}", trace_file);
 
-    auto start_time = std::chrono::steady_clock::now();
+    auto start_time = dstd::steady_now();
 
     auto read =
         read_file_events(dstd::String(trace_file), dstd::String(index_file),
@@ -260,7 +261,7 @@ ReplayResult ReplayEngine::replay_file_sync(dstd::StringView trace_file,
     }
     ReplayResult result = std::move(lane.result);
 
-    auto end_time = std::chrono::steady_clock::now();
+    auto end_time = dstd::steady_now();
     result.total_duration =
         std::chrono::duration_cast<std::chrono::microseconds>(end_time -
                                                               start_time);
@@ -345,16 +346,16 @@ void ReplayEngine::execute(const Trace& trace, Lane& lane) {
     // wall-clock time at which each event is about to be dispatched and
     // compare it against the trace timeline. No production paths set this.
     if (config_.on_dispatch) {
-        config_.on_dispatch(trace, std::chrono::steady_clock::now());
+        config_.on_dispatch(trace, dstd::steady_now());
     }
 
     TraceExecutor* executor = lane.executor && lane.executor->can_handle(trace)
                                   ? lane.executor.get()
                                   : nullptr;
     if (executor) {
-        auto exec_start = std::chrono::steady_clock::now();
+        auto exec_start = dstd::steady_now();
         bool success = executor->execute(trace, config_);
-        auto exec_end = std::chrono::steady_clock::now();
+        auto exec_end = dstd::steady_now();
 
         result.execution_duration +=
             std::chrono::duration_cast<std::chrono::microseconds>(exec_end -
@@ -444,7 +445,7 @@ std::chrono::microseconds ReplayEngine::timing_wait(const Trace& trace,
         // anchor is set on first event regardless, so co-locating the
         // wall-clock reset here keeps the two in lockstep.
         lane.first_timestamp = trace.time_start;
-        lane.start = std::chrono::steady_clock::now();
+        lane.start = dstd::steady_now();
         lane.anchored = true;
         return std::chrono::microseconds{0};
     }
@@ -460,7 +461,7 @@ std::chrono::microseconds ReplayEngine::timing_wait(const Trace& trace,
 
     // Calculate how long we should sleep
     auto replay_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::steady_clock::now() - lane.start);
+        dstd::steady_now() - lane.start);
 
     if (scaled_elapsed_us >
         static_cast<std::uint64_t>(replay_elapsed.count())) {
@@ -636,7 +637,7 @@ ReplayResult ReplayEngine::replay_with_call_tree(
     admitted_.store(0, std::memory_order_relaxed);
     Lane lane = make_lane();
     ReplayResult& result = lane.result;
-    auto start_time = std::chrono::steady_clock::now();
+    auto start_time = dstd::steady_now();
     // The block ends the locals (events, files) before end_time is read.
     {
         auto globbed = glob_trace_files(trace_directory, pattern);
@@ -771,7 +772,7 @@ ReplayResult ReplayEngine::replay_with_call_tree(
                 replay_one_trace(events[static_cast<std::size_t>(i)], lane);
         }
     }
-    auto end_time = std::chrono::steady_clock::now();
+    auto end_time = dstd::steady_now();
     result.total_duration =
         std::chrono::duration_cast<std::chrono::microseconds>(end_time -
                                                               start_time);

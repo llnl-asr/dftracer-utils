@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -510,10 +511,10 @@ TEST_SUITE("DFTracerReplay") {
             dstd::String((temp_dir / "perf_trace.pfw.gz").str());
         create_sample_trace(trace_file, 50);
 
-        auto start = std::chrono::steady_clock::now();
+        auto start = dstd::steady_now();
         int rc = run_replay(binary, {"--dftracer-mode", "--no-sleep",
                                      "--no-timing", trace_file});
-        auto end = std::chrono::steady_clock::now();
+        auto end = dstd::steady_now();
 
         CHECK(rc == 0);
 
@@ -856,9 +857,9 @@ TEST_SUITE("DFTracerReplay") {
             dstd::String((temp_dir / "large_trace.pfw.gz").str());
         create_sample_trace(large_trace, 1000);
 
-        auto start = std::chrono::steady_clock::now();
+        auto start = dstd::steady_now();
         int rc = run_replay(binary, {"--dry-run", large_trace});
-        auto end = std::chrono::steady_clock::now();
+        auto end = dstd::steady_now();
 
         CHECK(rc == 0);
 

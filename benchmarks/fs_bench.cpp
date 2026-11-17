@@ -7,6 +7,7 @@
 //                       a serial walk find different files or sizes)
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
@@ -140,10 +141,10 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--reps") == 0) reps = std::atoi(argv[i + 1]);
     }
     for (int rep = 0; rep < reps; ++rep) {
-        const auto start = std::chrono::steady_clock::now();
+        const auto start = dstd::steady_now();
         Row row = scan_with_find_all(root, threads, io_threads);
         const double ms = std::chrono::duration<double, std::milli>(
-                              std::chrono::steady_clock::now() - start)
+                              dstd::steady_now() - start)
                               .count();
         const std::size_t count = row.paths.size();
         std::printf(

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
@@ -48,18 +48,18 @@ dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
     for (int i = 0; i < events; ++i) {
         ts += 7 + static_cast<std::uint64_t>(i % 13);
         if (i == events / 2) ts += 500000;
-        out += common::str_cat(R"({"id":)", i, R"(,"name":"op)", (i / 50) % 7,
-                               R"(","cat":"C)", i % 3, R"(","pid":)", 1 + i % 4,
-                               R"(,"tid":)", 10 + i % 4, R"(,"ph":"X","ts":)",
-                               ts, R"(,"dur":)", 5 + i % 97, R"(,"args":{)");
+        dstd::fmt_append<
+            "{\"id\":{},\"name\":\"op{}\",\"cat\":\"C{}\",\"pid\":{},\"tid\":{}"
+            ",\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{">(
+            out, i, (i / 50) % 7, i % 3, 1 + i % 4, 10 + i % 4, ts, 5 + i % 97);
         for (int k = 0; k < 3; ++k) {
             const int p = (i * 7 + k * 131) % paths;
             if (k) out += ",";
-            out += common::str_cat("\"k", p, "\":");
+            dstd::fmt_append<"\"k{}\":">(out, p);
             if (p % 2)
-                out += common::str_cat(i % 50);
+                dstd::fmt_append<"{}">(out, i % 50);
             else
-                out += common::str_cat("\"v", i % 11, "\"");
+                dstd::fmt_append<"\"v{}\"">(out, i % 11);
         }
         out += "}}\n";
     }

@@ -106,6 +106,26 @@ inline std::size_t hardware_concurrency() {
     return n == 0 ? 1u : static_cast<std::size_t>(n);
 }
 
+/// Threads for one of `local_ranks` processes on a node. When `allowed` (the
+/// CPUs of this process's affinity mask) is below `online` (the CPUs of the
+/// node), a launcher bound the process and the mask is already its share;
+/// otherwise every rank sees the whole node, so `online` is split. Never 0.
+constexpr std::size_t threads_per_local_rank(std::size_t allowed,
+                                             std::size_t online,
+                                             std::size_t local_ranks) {
+    const std::size_t share =
+        allowed < online || local_ranks == 0 ? allowed : online / local_ranks;
+    return share == 0 ? 1 : share;
+}
+
+/// @ref threads_per_local_rank for this process and the CPUs online.
+inline std::size_t threads_per_local_rank(std::size_t local_ranks) {
+    return threads_per_local_rank(
+        hardware_concurrency(),
+        static_cast<std::size_t>(dstd::Thread::hardware_concurrency()),
+        local_ranks);
+}
+
 /// Worker threads available to the calling thread, 1 when it is not running
 /// on an executor. This is what the runtime was configured with, not what
 /// the machine has; size a fan-out with this.

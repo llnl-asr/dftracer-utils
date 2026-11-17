@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/little_endian.h>
@@ -771,10 +772,9 @@ TEST_CASE("group commit by time writes a record without flush") {
     REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
 
     const dstd::String source = dstd::String(writer->path());
-    const auto started = std::chrono::steady_clock::now();
+    const auto started = dstd::steady_now();
     bool appeared = false;
-    while (std::chrono::steady_clock::now() - started <
-           std::chrono::seconds(1)) {
+    while (dstd::steady_now() - started < std::chrono::seconds(1)) {
         if (record_count(source) >= 1) {
             appeared = true;
             break;

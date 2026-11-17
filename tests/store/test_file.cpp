@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
@@ -171,8 +172,7 @@ struct TempDir {
     dstd::Path path;
 
     TempDir() {
-        const auto now =
-            std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto now = dstd::steady_now().time_since_epoch().count();
         path = dstd::fs::temp_directory() /
                (dstd::fmt<"dftu_store_file_{}_{}">(::getpid(), now));
         REQUIRE(dstd::fs::create_directories(path).has_value());

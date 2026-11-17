@@ -53,7 +53,11 @@ std::int64_t read_line_count(const dstd::String& gz, const dstd::String& idx) {
             dstd::String(gz), dstd::String(idx)});
         auto gen = dftu_utils_test::ok_items(
             reader.read_lines(trace::reader::ReadConfig{}));
-        while (co_await gen.next()) ++count;
+        while (true) {
+            auto has_next = co_await gen.next();
+            if (!has_next) break;
+            ++count;
+        }
         co_return;
     });
     return count;
@@ -118,7 +122,11 @@ TEST_SUITE("member_cache_integration") {
                         auto gen = dftu_utils_test::ok_items(
                             reader.read_lines(trace::reader::ReadConfig{}));
                         std::int64_t c = 0;
-                        while (co_await gen.next()) ++c;
+                        while (true) {
+                            auto has_next = co_await gen.next();
+                            if (!has_next) break;
+                            ++c;
+                        }
                         co_return c;
                     }(gz, index_dir));
             }

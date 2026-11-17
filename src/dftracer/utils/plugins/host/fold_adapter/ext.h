@@ -58,6 +58,8 @@ const void* file_formats_ext_vtable();
 const void* nodes_ext_vtable();
 const void* index_ext_vtable();
 const void* task_ext_vtable();
+/// The dftu.svc.ports table of a fold's host.
+const void* ports_ext_vtable();
 const void* fs_ext_vtable();
 const void* fileio_ext_vtable();
 const void* json_ext_vtable();
@@ -102,6 +104,13 @@ dftu_status register_plugin_udaf(::dftu_ctx* ctx, const ::dftu_udaf_desc* desc,
 /// dftu_svc_task::run, which uses no host state, so the build-phase host
 /// serves it too.
 dftu_status task_run(::dftu_ctx* ctx, void* h, ::dftu_task* t);
+
+/// dftu_svc_task::test, cancel, retain and release; they use no host state
+/// either.
+dftu_status task_test(void* h, const ::dftu_task* t);
+void task_cancel(void* h, ::dftu_task* t);
+void task_retain(void* h, ::dftu_task* t);
+void task_release(void* h, ::dftu_task* t);
 
 /// dftu_svc_providers::register_provider behind the plugin-namespace gate
 /// (name_in_plugin_namespace), forwarding into the process-lifetime

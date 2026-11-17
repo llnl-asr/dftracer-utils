@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/symbolize.h>
 #include <dftracer/utils/coro/hooks.h>
 #include <dftracer/utils/coro/monitor.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -199,7 +200,7 @@ void render_tree(const dstd::Vector<Done>& recs) {
 
 void at_exit_render() noexcept {
     Registry& r = registry();
-    const auto now = Clock::now();
+    const auto now = dstd::steady_now();
     dstd::Vector<Done> all;
     // Drain finished records plus any coroutines still live at exit (e.g. the
     // top-level task, completed outside the worker loop) so parents appear and
@@ -257,8 +258,9 @@ long long monitor_enqueue(const void* handle, CoroutineOrigin kind) {
         // fn.
         const void* resume_fn = *reinterpret_cast<const void* const*>(handle);
         id = r.next_id.fetch_add(1, std::memory_order_relaxed);
-        s.live->emplace(handle, Live{id, t_current, resume_fn, Clock::now(),
-                                     kind, current_worker_index()});
+        s.live->emplace(handle,
+                        Live{id, t_current, resume_fn, dstd::steady_now(), kind,
+                             current_worker_index()});
     });
     return id;
 }
@@ -274,7 +276,7 @@ long long record_and_erase(Registry& r, ShardData& s, It it, int finish_tid) {
     const Live& l = it->second;
     const long long parent = l.parent;
     const long long us = std::chrono::duration_cast<std::chrono::microseconds>(
-                             Clock::now() - l.start)
+                             dstd::steady_now() - l.start)
                              .count();
     if (r.mode == Mode::Trace) {
         std::fprintf(stderr, "[monitor] %s [%.3f ms]\n",

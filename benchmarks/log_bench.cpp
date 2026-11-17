@@ -7,6 +7,7 @@
 //   log_bench --smoke    (few iterations)
 
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/clock.h>
 
 #include <algorithm>
 #include <chrono>
@@ -27,9 +28,9 @@ template <class F>
 double median_ns(std::size_t iterations, std::size_t rounds, F&& fn) {
     double samples[15];
     for (std::size_t r = 0; r < rounds; ++r) {
-        const auto t0 = Clock::now();
+        const auto t0 = dstd::steady_now();
         for (std::size_t i = 0; i < iterations; ++i) fn(i);
-        const auto t1 = Clock::now();
+        const auto t1 = dstd::steady_now();
         samples[r] = std::chrono::duration<double, std::nano>(t1 - t0).count() /
                      static_cast<double>(iterations);
     }

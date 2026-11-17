@@ -327,7 +327,11 @@ TEST_SUITE("View - metadata under pruning") {
                 cfg.skip_pruning = skip;
                 auto gen = dftu_utils_test::ok_items(reader.read_json(cfg));
                 std::size_t n = 0;
-                while (auto line = co_await gen.next()) ++n;
+                while (true) {
+                    auto line = co_await gen.next();
+                    if (!line) break;
+                    ++n;
+                }
                 co_return n;
             };
             return run().get();

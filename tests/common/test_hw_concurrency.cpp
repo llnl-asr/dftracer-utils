@@ -18,6 +18,21 @@ TEST_CASE("the default worker count is never 0") {
     CHECK(dftracer::utils::common::hardware_concurrency() >= 1);
 }
 
+TEST_CASE(
+    "a rank's thread budget divides the node only when the launcher did not") {
+    using dftracer::utils::common::threads_per_local_rank;
+    // Bound by the launcher: the mask is already this rank's share.
+    CHECK(threads_per_local_rank(1, 48, 8) == 1);
+    CHECK(threads_per_local_rank(4, 48, 8) == 4);
+    CHECK(threads_per_local_rank(6, 48, 8) == 6);
+    // Not bound: every rank sees the whole node, so the node is split.
+    CHECK(threads_per_local_rank(48, 48, 8) == 6);
+    CHECK(threads_per_local_rank(48, 48, 1) == 48);
+    // Never 0, also with more ranks than cores or no rank count.
+    CHECK(threads_per_local_rank(4, 4, 8) == 1);
+    CHECK(threads_per_local_rank(4, 4, 0) == 4);
+}
+
 #if defined(__linux__)
 TEST_CASE("the default worker count follows the CPU affinity") {
     // The override wins over the affinity, and the Valgrind runner sets it.

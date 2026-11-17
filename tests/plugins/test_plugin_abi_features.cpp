@@ -4,11 +4,11 @@
 // and the coroutine control ops (drive path).
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -520,9 +520,9 @@ TEST_CASE("plugin ABI: config tree reads scalars, nested, array, and default") {
     {
         dstd::fs::write_file(
             dstd::PathView(path),
-            common::str_cat(
-                R"({"threshold":42,"ratio":2.5,"label":"posix","enabled":true,)",
-                R"("nested":{"inner":7},"buckets":[10,20,30]})"))
+            dstd::String("{\"threshold\":42,\"ratio\":2.5,\"label\":\"posix\","
+                         "\"enabled\":true,\"nested\":{\"inner\":7},"
+                         "\"buckets\":[10,20,30]}"))
             .discard();
     }
 

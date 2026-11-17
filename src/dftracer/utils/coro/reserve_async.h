@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/timer_service.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/memory/allocator.h>
@@ -110,7 +111,7 @@ class ReserveAsync {
         if (reserved_) return true;
         Executor* exec = Executor::current();
         return exec == nullptr || !exec->runs_remote_wakeups() ||
-               Clock::now() >= deadline_;
+               dstd::steady_now() >= deadline_;
     }
 
     bool await_suspend(std::coroutine_handle<> h) {
@@ -143,7 +144,7 @@ class ReserveAsync {
         timers.start();
         dstd::WeakPtr<detail::ReserveWaitState> weak = state;
         TimerService::TimerId id =
-            timers.register_timeout(deadline - Clock::now(), [weak] {
+            timers.register_timeout(deadline - dstd::steady_now(), [weak] {
                 if (auto s = weak.lock()) s->on_timeout();
             });
         state->timer.store(id, std::memory_order_release);

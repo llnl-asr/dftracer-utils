@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
@@ -97,12 +98,7 @@ dstd::String usage_value(std::uint64_t bytes, std::uint64_t last_used) {
     return v;
 }
 
-std::uint64_t now_micros() {
-    return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-            .count());
-}
+std::uint64_t now_micros() { return dstd::system_now_ns() / 1000ULL; }
 
 dstd::Expected<void, dstd::Error> wait(
     coro::CoroTask<dstd::Expected<void, dstd::Error>> task) {

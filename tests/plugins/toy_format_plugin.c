@@ -433,6 +433,9 @@ static dftu_status merge(dftu_ctx* unused_ctx, void* unused_a, void* unused_b) {
 static void destroy_slice(void* unused_self) { (void)unused_self; }
 static void destroy(void* unused_self) { (void)unused_self; }
 
+DFTU_PLUGIN_EXPORT int toy_format_gate_ok(void);
+DFTU_PLUGIN_EXPORT void toy_format_stats(int64_t* out);
+
 DFTU_PLUGIN_EXPORT int toy_format_gate_ok(void) { return gate_ok; }
 
 /* {made, killed, opened, closed, destroyed}: what the test counts to see that

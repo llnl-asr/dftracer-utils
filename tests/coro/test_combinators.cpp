@@ -11,6 +11,7 @@
 #include <dftracer/utils/coro/stop_token.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/time.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -127,9 +128,9 @@ bool timed_out(const R& result) {
 
 TEST_CASE("sleep waits at least its duration and does not raise") {
     Runtime runtime(2);
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = dstd::steady_now();
     dftu_utils_test::ok(runtime.block_on(nothing_after(20ms)));
-    CHECK(std::chrono::steady_clock::now() - start >= 20ms);
+    CHECK(dstd::steady_now() - start >= 20ms);
 }
 
 TEST_CASE("with_timeout gives the value of a task that ends in time") {
@@ -141,20 +142,20 @@ TEST_CASE("with_timeout gives the value of a task that ends in time") {
 
 TEST_CASE("with_timeout gives a timeout error and cancels a slow task") {
     Runtime runtime(2);
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = dstd::steady_now();
     auto result = runtime.block_on(with_timeout(value_after(7, 30s), 10ms));
     REQUIRE_FALSE(result);
     CHECK(result.error().condition() == dstd::Condition::Timeout);
-    CHECK(std::chrono::steady_clock::now() - start < 10s);
+    CHECK(dstd::steady_now() - start < 10s);
 }
 
 TEST_CASE("with_timeout wakes a parked wait in a nested task") {
     Runtime runtime(2);
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = dstd::steady_now();
     auto result = runtime.block_on(with_timeout(value_nested(7, 30s), 10ms));
     REQUIRE_FALSE(result);
     CHECK(result.error().condition() == dstd::Condition::Timeout);
-    CHECK(std::chrono::steady_clock::now() - start < 10s);
+    CHECK(dstd::steady_now() - start < 10s);
 }
 
 TEST_CASE("with_timeout wakes a task parked on a channel, event or semaphore") {
@@ -171,11 +172,11 @@ TEST_CASE("with_timeout wakes a task parked on a channel, event or semaphore") {
     auto on_semaphore = [&]() -> CoroTask<void> {
         co_await semaphore.acquire(1);
     };
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = dstd::steady_now();
     CHECK(timed_out(runtime.block_on(with_timeout(on_channel(), 5ms))));
     CHECK(timed_out(runtime.block_on(with_timeout(on_event(), 5ms))));
     CHECK(timed_out(runtime.block_on(with_timeout(on_semaphore(), 5ms))));
-    CHECK(std::chrono::steady_clock::now() - start < 10s);
+    CHECK(dstd::steady_now() - start < 10s);
     semaphore.release(1);
 }
 
@@ -221,8 +222,8 @@ TEST_CASE("a cancelled timeout leaves no wait that names its freed frame") {
 
 TEST_CASE("with_deadline in the past times out a waiting task") {
     Runtime runtime(2);
-    auto result = runtime.block_on(with_deadline(
-        value_after(1, 30s), std::chrono::steady_clock::now() - 1s));
+    auto result = runtime.block_on(
+        with_deadline(value_after(1, 30s), dstd::steady_now() - 1s));
     REQUIRE_FALSE(result);
     CHECK(result.error().condition() == dstd::Condition::Timeout);
 }
@@ -337,10 +338,10 @@ TEST_CASE("first_success skips failures and cancels the slow loser") {
     tasks.push_back(fails_after(1ms));
     tasks.push_back(value_after(9, 5ms));
     tasks.push_back(value_after(1, 30s));
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = dstd::steady_now();
     CHECK(dftu_utils_test::ok(
               runtime.block_on(first_success(std::move(tasks)))) == 9);
-    CHECK(std::chrono::steady_clock::now() - start < 10s);
+    CHECK(dstd::steady_now() - start < 10s);
 }
 
 TEST_CASE("first_success ends with the last error when all fail") {
@@ -358,12 +359,12 @@ TEST_CASE("first_success cancelled mid-wait cancels its tasks and joins") {
     dstd::Vector<CoroTask<int>> tasks;
     tasks.push_back(value_after(1, 30s));
     tasks.push_back(value_after(2, 30s));
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = dstd::steady_now();
     auto result =
         runtime.block_on(with_timeout(first_success(std::move(tasks)), 10ms));
     REQUIRE_FALSE(result);
     CHECK(result.error().condition() == dstd::Condition::Timeout);
-    CHECK(std::chrono::steady_clock::now() - start < 10s);
+    CHECK(dstd::steady_now() - start < 10s);
 }
 
 TEST_CASE("when_all_settled cancelled mid-wait cancels its tasks and joins") {
@@ -371,12 +372,12 @@ TEST_CASE("when_all_settled cancelled mid-wait cancels its tasks and joins") {
     dstd::Vector<CoroTask<int>> tasks;
     tasks.push_back(value_after(1, 30s));
     tasks.push_back(value_after(2, 30s));
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = dstd::steady_now();
     auto result = runtime.block_on(
         with_timeout(when_all_settled(std::move(tasks)), 10ms));
     REQUIRE_FALSE(result);
     CHECK(result.error().condition() == dstd::Condition::Timeout);
-    CHECK(std::chrono::steady_clock::now() - start < 10s);
+    CHECK(dstd::steady_now() - start < 10s);
 }
 
 TEST_CASE("parallel_map keeps item order and the in-flight limit") {
@@ -487,7 +488,7 @@ TEST_CASE("parallel_map_unordered ends the reader with a job error") {
 
 TEST_CASE("a child error wakes a parked sibling and join gives that error") {
     Runtime runtime(2);
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = dstd::steady_now();
     const auto result =
         runtime.block_on(with_scope([](Scope& scope) -> CoroTask<void> {
             scope.spawn(nothing_after(30s));
@@ -497,7 +498,7 @@ TEST_CASE("a child error wakes a parked sibling and join gives that error") {
         }));
     REQUIRE_FALSE(result.has_value());
     CHECK(dstd::String(result.error().message()) == "planned failure");
-    CHECK(std::chrono::steady_clock::now() - start < 10s);
+    CHECK(dstd::steady_now() - start < 10s);
 }
 
 TEST_CASE("a child that only stopped does not stop its siblings") {
@@ -534,21 +535,21 @@ TEST_CASE("a supervisor scope lets siblings finish and gives the first error") {
 
 TEST_CASE("request_stop ends parked children and join gives no error") {
     Runtime runtime(2);
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = dstd::steady_now();
     dftu_utils_test::ok(
         runtime.block_on(with_scope([](Scope& scope) -> CoroTask<void> {
             scope.spawn(nothing_after(30s));
             co_await sleep(1ms);
             scope.request_stop();
         })));
-    CHECK(std::chrono::steady_clock::now() - start < 10s);
+    CHECK(dstd::steady_now() - start < 10s);
 }
 
 TEST_CASE("cancelling a task reaches the scopes nested under it") {
     Runtime runtime(2);
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = dstd::steady_now();
     CHECK(timed_out(runtime.block_on(with_timeout(nested_scopes(), 10ms))));
-    CHECK(std::chrono::steady_clock::now() - start < 10s);
+    CHECK(dstd::steady_now() - start < 10s);
 }
 
 TEST_CASE("cancelling parallel_map wakes its running jobs") {
@@ -556,10 +557,10 @@ TEST_CASE("cancelling parallel_map wakes its running jobs") {
     dstd::Vector<int> items;
     for (int i = 0; i < 8; ++i) items.push_back(i);
     auto job = [](int) -> CoroTask<void> { co_await sleep(30s); };
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = dstd::steady_now();
     CHECK(timed_out(runtime.block_on(
         with_timeout(parallel_map(std::move(items), job), 10ms))));
-    CHECK(std::chrono::steady_clock::now() - start < 10s);
+    CHECK(dstd::steady_now() - start < 10s);
 }
 
 TEST_CASE("a cancelled parallel_map with no results still reports the cancel") {

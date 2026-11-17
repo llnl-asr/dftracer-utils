@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <mpi_launcher.h>
 #include <testing_utilities.h>
 #include <zlib.h>
 

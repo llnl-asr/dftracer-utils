@@ -4,7 +4,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/path.h>
@@ -56,28 +56,28 @@ dstd::String write_trace(const dstd::String& dir) {
             const dstd::String host = (i % 2 == 0) ? "h1" : "h2";
             const std::uint64_t ts =
                 BASE_TS + static_cast<std::uint64_t>(i) * 130'000;
-            out += common::str_cat(
-                R"({"ph":"C","name":"cpu","cat":"sys","pid":1,"tid":1,)",
-                R"("ts":)", ts, R"(,"args":{"hhash":")", host, R"(","util":)",
-                (i + 0.5), R"(,"num":)", (10 + i), "}}\n");
+            dstd::fmt_append<
+                "{\"ph\":\"C\",\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,"
+                "\"tid\":1,\"ts\":{},\"args\":{\"hhash\":\"{}\",\"util\":{},"
+                "\"num\":{}}}\n">(out, ts, host, (i + 0.5), (10 + i));
             if (i % 6 == 0)
-                out += common::str_cat(
-                    R"({"ph":"C","name":"mem","cat":"sys","pid":1,)",
-                    R"("tid":1,"ts":)", ts + 7'000, R"(,"args":{"hhash":")",
-                    host, R"(","used":)", (1000 + i), "}}\n");
+                dstd::fmt_append<
+                    "{\"ph\":\"C\",\"name\":\"mem\",\"cat\":\"sys\",\"pid\":1,"
+                    "\"tid\":1,\"ts\":{},\"args\":{\"hhash\":\"{}\",\"used\":{}"
+                    "}}\n">(out, ts + 7'000, host, (1000 + i));
             if (i % 3 == 0)
-                out += common::str_cat(
-                    R"({"ph":"C","name":"cpu","cat":"sys","pid":1,)",
-                    R"("tid":1,"ts":)", ts + 11'000, R"(,"args":{"hhash":")",
-                    host, R"(","count":5,"util":99.0}})", "\n");
-            out += common::str_cat(
-                R"({"ph":"C","name":"faults","cat":"app","pid":1,)",
-                R"("tid":1,"ts":)", ts + 3'000, R"(,"args":{"count":2}})",
-                "\n");
-            out += common::str_cat(
-                R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)",
-                R"("tid":1,"ts":)", ts + 5'000,
-                R"(,"dur":10,"args":{"size":4096}})", "\n");
+                dstd::fmt_append<
+                    "{\"ph\":\"C\",\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,"
+                    "\"tid\":1,\"ts\":{},\"args\":{\"hhash\":\"{}\",\"count\":"
+                    "5,\"util\":99.0}}\n">(out, ts + 11'000, host);
+            dstd::fmt_append<
+                "{\"ph\":\"C\",\"name\":\"faults\",\"cat\":\"app\",\"pid\":1,"
+                "\"tid\":1,\"ts\":{},\"args\":{\"count\":2}}\n">(out,
+                                                                 ts + 3'000);
+            dstd::fmt_append<
+                "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+                "\"tid\":1,\"ts\":{},\"dur\":10,\"args\":{\"size\":4096}}\n">(
+                out, ts + 5'000);
         }
         dstd::fs::write_file(dstd::PathView(pfw), out).discard();
     }

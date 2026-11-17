@@ -10,7 +10,7 @@ set(MEMORY_TEST_SOURCES test_system_backend.cpp test_heap.cpp
                         test_pressure.cpp test_debug.cpp test_allocator.cpp
                         test_arena.cpp test_block.cpp test_block_threads.cpp
                         test_reserve_wait.cpp test_global_new.cpp
-                        test_heap_interposed.cpp)
+                        test_heap_interposed.cpp test_exit_hook_order.cpp)
 
 find_package(Threads REQUIRED)
 
@@ -44,6 +44,17 @@ foreach(test_file ${MEMORY_TEST_SOURCES})
     memory/${bin_exec} PROPERTIES ENVIRONMENT
                                   "DFTRACER_UTILS_MEMORY_BACKEND=system")
 endforeach()
+
+# The shutdown hooks are dstd's, so this test links that library. It keeps the C
+# library's operator new, like a benchmark and any other program that does not
+# link the replacement, so the pool and the exit check start in main.
+if(TARGET dftracer_utils_dstd::shared)
+  target_link_libraries(memory_test_exit_hook_order
+                        PRIVATE dftracer_utils_dstd::shared)
+else()
+  target_link_libraries(memory_test_exit_hook_order
+                        PRIVATE dftracer_utils_dstd::static)
+endif()
 
 # The global operator new of the executable is our heap; the debug mode counts
 # its allocations. It runs on both backends.

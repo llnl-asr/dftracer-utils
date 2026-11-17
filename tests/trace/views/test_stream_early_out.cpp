@@ -84,8 +84,11 @@ TEST_SUITE("View - streaming early-out") {
                 .submit([](View vv) -> coro::CoroTask<std::int64_t> {
                     std::int64_t n = 0;
                     auto gen = vv.stream(64);
-                    while (auto chunk = co_await gen.next())
+                    while (true) {
+                        auto chunk = co_await gen.next();
+                        if (!chunk) break;
                         n += dftu_utils_test::ok(std::move(*chunk)).num_rows();
+                    }
                     co_return n;
                 }(v))
                 .get());

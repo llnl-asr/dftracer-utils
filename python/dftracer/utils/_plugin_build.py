@@ -10,6 +10,7 @@ walk (dev checkout).
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
 import shutil
@@ -41,6 +42,18 @@ def include_dir() -> str:
 
 def compiler() -> str:
     return os.environ.get("CXX") or shutil.which("c++") or shutil.which("clang++") or "c++"
+
+
+@functools.lru_cache(maxsize=None)
+def _is_gcc(cxx: str) -> bool:
+    # GCC binds the statics of inline functions and templates as GNU unique
+    # symbols, which keep a dlopen-ed plugin mapped after dlclose.
+    try:
+        proc = subprocess.run([cxx, "--version"], capture_output=True, text=True)
+    except OSError:
+        return False
+    text = proc.stdout.lower()
+    return "clang" not in text and ("free software foundation" in text or "gcc" in text)
 
 
 def _plugin_abi_headers(base: Path) -> List[Path]:
@@ -91,6 +104,8 @@ def cflags() -> List[str]:
     """Compile flags a plugin needs: C++20, position-independent, shared."""
     inc = include_dir()
     flags = ["-std=c++20", "-fPIC", "-shared", f"-I{inc}"]
+    if _is_gcc(compiler()):
+        flags.append("-fno-gnu-unique")
     overlay = _ensure_abi_version_header(inc)
     if overlay:
         flags.append(f"-I{overlay}")
@@ -129,6 +144,7 @@ def source_digest(source: str, include: str, cxx: str) -> str:
         source,
         include,
         cxx,
+        "no-gnu-unique" if _is_gcc(cxx) else "",
         sys.platform,
         _abi_fingerprint(include),
         str(_host_abi_version()),

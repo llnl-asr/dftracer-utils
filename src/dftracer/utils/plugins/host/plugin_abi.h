@@ -26,6 +26,7 @@ enum class PluginStruct : std::uint8_t {
     JobDesc,
     UdfDesc,
     UdafDesc,
+    ChannelDesc,
 };
 
 bool plugin_struct_size_ok(PluginStruct id, std::uint32_t src_size,

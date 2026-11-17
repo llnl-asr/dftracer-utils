@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -446,9 +447,9 @@ TEST_CASE("arrow stream: releasing a lazy stream early stops the query") {
     REQUIRE(first.release != nullptr);
     first.release(&first);
 
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = dstd::steady_now();
     stream->release(stream);
-    const auto took = std::chrono::steady_clock::now() - start;
+    const auto took = dstd::steady_now() - start;
     delete stream;
     CHECK(std::chrono::duration_cast<std::chrono::seconds>(took).count() < 5);
 }

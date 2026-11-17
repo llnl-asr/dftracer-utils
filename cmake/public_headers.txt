@@ -1,3 +1,21 @@
+dftracer/utils/comm/backend/bootstrap.h
+dftracer/utils/comm/backend/bulk.h
+dftracer/utils/comm/backend/collectives.h
+dftracer/utils/comm/backend/fault_messaging.h
+dftracer/utils/comm/backend/linear_collectives.h
+dftracer/utils/comm/backend/loader.h
+dftracer/utils/comm/backend/local.h
+dftracer/utils/comm/backend/messaging.h
+dftracer/utils/comm/bulk.h
+dftracer/utils/comm/channel.h
+dftracer/utils/comm/codec.h
+dftracer/utils/comm/collective.h
+dftracer/utils/comm/detail/channel_state.h
+dftracer/utils/comm/detail/observe.h
+dftracer/utils/comm/error.h
+dftracer/utils/comm/group.h
+dftracer/utils/comm/op.h
+dftracer/utils/comm/stats.h
 dftracer/utils/common/c_api.h
 dftracer/utils/common/constants.h
 dftracer/utils/common/env.h
@@ -83,6 +101,7 @@ dftracer/utils/dstd/big_endian.h
 dftracer/utils/dstd/bits.h
 dftracer/utils/dstd/byte_view.h
 dftracer/utils/dstd/cache/eviction_policy.h
+dftracer/utils/dstd/clock.h
 dftracer/utils/dstd/concurrent_queue.h
 dftracer/utils/dstd/const_string.h
 dftracer/utils/dstd/coroutine_traits.h
@@ -196,6 +215,7 @@ dftracer/utils/plugins/plugin/job.h
 dftracer/utils/plugins/plugin/map.h
 dftracer/utils/plugins/plugin/memory.h
 dftracer/utils/plugins/plugin/node.h
+dftracer/utils/plugins/plugin/ports.h
 dftracer/utils/plugins/plugin/register.h
 dftracer/utils/plugins/plugin/source.h
 dftracer/utils/plugins/plugin/store.h

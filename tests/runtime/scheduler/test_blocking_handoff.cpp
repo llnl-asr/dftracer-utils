@@ -6,6 +6,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
@@ -25,8 +26,8 @@ namespace {
 // a permit to re-check for work, so a bare available_permits() read races that
 // cycle; a real leak never lets it observe cap, so it still returns false.
 bool settle(ThreadPoolExecutor* exec, std::size_t cap) {
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (std::chrono::steady_clock::now() < deadline) {
+    auto deadline = dstd::steady_now() + std::chrono::seconds(5);
+    while (dstd::steady_now() < deadline) {
         if (exec->available_permits() == static_cast<std::ptrdiff_t>(cap) &&
             exec->blocked_workers() == 0) {
             return true;

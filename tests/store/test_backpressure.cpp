@@ -353,7 +353,7 @@ TEST_CASE("back pressure: 64 coroutines commit over a two extent quota") {
                         const auto key_of = [t, r](std::size_t k) {
                             return raw_key(t, r, k);
                         };
-                        auto a = co_await commit_retrying(
+                        auto op_a = commit_retrying(
                             *writer,
                             raw_batch(*writer, raw_a, scope_key, RAW_KEYS,
                                       RAW_VALUE_BYTES, key_of,
@@ -361,8 +361,9 @@ TEST_CASE("back pressure: 64 coroutines commit over a two extent quota") {
                                           return raw_value("a", t, r, k);
                                       }),
                             RETRY_ATTEMPTS);
+                        auto a = co_await op_a;
                         if (!a.has_value()) errors.fetch_add(1);
-                        auto b = co_await commit_retrying(
+                        auto op_b = commit_retrying(
                             *writer,
                             raw_batch(*writer, raw_b, scope_key, RAW_KEYS,
                                       RAW_VALUE_BYTES, key_of,
@@ -370,6 +371,7 @@ TEST_CASE("back pressure: 64 coroutines commit over a two extent quota") {
                                           return raw_value("b", t, r, k);
                                       }),
                             RETRY_ATTEMPTS);
+                        auto b = co_await op_b;
                         if (!b.has_value()) errors.fetch_add(1);
                         auto sum = co_await commit_retrying(
                             *writer,
@@ -452,13 +454,14 @@ TEST_CASE("back pressure: a one extent quota holds one extent at a time") {
                              -> coro::CoroTask<void> {
             scope_runner.spawn([&]() -> coro::CoroTask<void> {
                 for (int b = 0; b < BATCHES; ++b) {
-                    auto done = co_await commit_retrying(
+                    auto op = commit_retrying(
                         *writer,
                         raw_batch(
                             *writer, space, scope, RAW_KEYS, RAW_VALUE_BYTES,
                             [&, b](std::size_t k) { return key_of(b, k); },
                             [&, b](std::size_t k) { return value_of(b, k); }),
                         RETRY_ATTEMPTS);
+                    auto done = co_await op;
                     if (!done.has_value()) errors.fetch_add(1);
                 }
             });
@@ -690,7 +693,7 @@ TEST_CASE("back pressure: the held extent bytes are reserved in the pool") {
                 for (int t = 0; t < COROS; ++t) {
                     scope_runner.spawn([&, t]() -> coro::CoroTask<void> {
                         for (int b = 0; b < BATCHES; ++b) {
-                            auto done = co_await commit_retrying(
+                            auto op = commit_retrying(
                                 *writer,
                                 raw_batch(
                                     *writer, space, file_scope(scope_of(t)),
@@ -702,6 +705,7 @@ TEST_CASE("back pressure: the held extent bytes are reserved in the pool") {
                                         return value_of(t, b, k);
                                     }),
                                 RETRY_ATTEMPTS);
+                            auto done = co_await op;
                             if (!done.has_value()) errors.fetch_add(1);
                             const engine::WriterExtentsCounters counters =
                                 engine::WriterTestHook::extents(*writer);
@@ -788,13 +792,14 @@ TEST_CASE("back pressure: a pool that refuses every charge still completes") {
                              -> coro::CoroTask<void> {
             scope_runner.spawn([&]() -> coro::CoroTask<void> {
                 for (int b = 0; b < BATCHES; ++b) {
-                    auto done = co_await commit_retrying(
+                    auto op = commit_retrying(
                         *writer,
                         raw_batch(
                             *writer, space, scope, RAW_KEYS, RAW_VALUE_BYTES,
                             [&, b](std::size_t k) { return key_of(b, k); },
                             [&, b](std::size_t k) { return value_of(b, k); }),
                         RETRY_ATTEMPTS);
+                    auto done = co_await op;
                     if (!done.has_value()) errors.fetch_add(1);
                 }
             });

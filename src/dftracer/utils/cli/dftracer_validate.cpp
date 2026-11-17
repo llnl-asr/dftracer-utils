@@ -7,6 +7,7 @@
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -126,7 +127,7 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
     dstd::Vector<FileValResult> results;
     const auto executor_threads = cli->runtime_args.executor_threads;
 
-    auto start_time = std::chrono::high_resolution_clock::now();
+    auto start_time = dstd::steady_now();
     auto ran = cli::run_on_pool(
         "DFTracer Validate", cli->runtime_args,
         [cli, files, &results, executor_threads](
@@ -147,7 +148,7 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
             co_return dstd::Result<void>{};
         });
     if (!ran) co_return cli::report_error(ran.error());
-    auto end_time = std::chrono::high_resolution_clock::now();
+    auto end_time = dstd::steady_now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
     if (results.empty()) {

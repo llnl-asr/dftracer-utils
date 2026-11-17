@@ -583,7 +583,9 @@ coro::CoroTask<Held> held_while_streaming(LazyFrame lf, dstd::String tail) {
     Held held;
     auto g = lf.stream(4096);
     bool first = true;
-    while (auto df = co_await g.next()) {
+    while (true) {
+        auto df = co_await g.next();
+        if (!df) break;
         if (!first) continue;
         first = false;
         for (const memory::detail::PoolStats& p : pools_named(tail)) {

@@ -7,6 +7,7 @@
 #include <dftracer/utils/coro/async_event.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -45,9 +46,9 @@ std::size_t peak_under_backlog(Runtime& rt, ThreadPoolExecutor* exec,
                                std::atomic<int>* done, int n) {
     std::atomic<bool> go{false};
     for (int i = 0; i < n; ++i) rt.submit(gated(&go, done));
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    auto deadline = dstd::steady_now() + std::chrono::seconds(10);
     std::size_t peak = exec->live_workers();
-    while (peak <= 1 && std::chrono::steady_clock::now() < deadline) {
+    while (peak <= 1 && dstd::steady_now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         peak = std::max(peak, exec->live_workers());
     }
@@ -153,10 +154,9 @@ TEST_SUITE("DynamicWorkers") {
         std::atomic<int> arrived{0};
         auto meet = [](std::atomic<int>& count) -> coro::CoroTask<bool> {
             count.fetch_add(1, std::memory_order_acq_rel);
-            const auto limit =
-                std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            const auto limit = dstd::steady_now() + std::chrono::seconds(10);
             while (count.load(std::memory_order_acquire) < 2 &&
-                   std::chrono::steady_clock::now() < limit) {
+                   dstd::steady_now() < limit) {
                 std::this_thread::yield();
             }
             co_return count.load(std::memory_order_acquire) >= 2;
@@ -190,10 +190,8 @@ TEST_SUITE("DynamicWorkers") {
         CHECK(done.load() == N);
 
         // Idle now: the monitor idle-retires back down to the floor.
-        auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(3);
-        while (exec->live_workers() > 1 &&
-               std::chrono::steady_clock::now() < deadline) {
+        auto deadline = dstd::steady_now() + std::chrono::seconds(3);
+        while (exec->live_workers() > 1 && dstd::steady_now() < deadline) {
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
         CHECK(exec->live_workers() == 1);  // shrank back to the floor
@@ -221,9 +219,8 @@ TEST_SUITE("DynamicWorkers") {
         coro::AsyncEvent event;
         TaskHandle waiter;
         auto setter = rt.submit(block_then_set(&rt, &event, &waiter));
-        const auto limit =
-            std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        while (!setter.done() && std::chrono::steady_clock::now() < limit)
+        const auto limit = dstd::steady_now() + std::chrono::seconds(10);
+        while (!setter.done() && dstd::steady_now() < limit)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         REQUIRE(setter.done());
         dftu_utils_test::ok(waiter.wait());

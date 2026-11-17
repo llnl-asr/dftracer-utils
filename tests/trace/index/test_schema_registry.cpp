@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -42,10 +42,10 @@ bool mentions(const dstd::String& text, const dstd::String& part) {
 dstd::String write_nginx(const dstd::String& dir, int records) {
     dstd::String out;
     for (int i = 0; i < records; ++i)
-        out += common::str_cat(
-            R"({"remote_addr":"10.0.0.)", i % 7, R"(","status":)",
-            (i % 11 == 0 ? 404 : 200), R"(,"request_time":)", i % 13,
-            R"(.25,"upstream":"u)", i / 300, R"(","path":"/p)", i % 5, "\"}\n");
+        dstd::fmt_append<
+            "{\"remote_addr\":\"10.0.0.{}\",\"status\":{},\"request_time\":{}."
+            "25,\"upstream\":\"u{}\",\"path\":\"/p{}\"}\n">(
+            out, i % 7, (i % 11 == 0 ? 404 : 200), i % 13, i / 300, i % 5);
     const auto plain = dir + "/access.ndjson";
     {
         dstd::fs::write_file(dstd::PathView(plain), out).discard();
@@ -68,7 +68,11 @@ std::size_t count_rows(dstd::StringView trace, dstd::StringView index_dir,
         cfg.skip_pruning = skip_pruning;
         auto gen = dftu_utils_test::ok_items(reader.read_json(cfg));
         std::size_t n = 0;
-        while (auto line = co_await gen.next()) ++n;
+        while (true) {
+            auto line = co_await gen.next();
+            if (!line) break;
+            ++n;
+        }
         co_return n;
     };
     return dftu_utils_test::ok(run().get());
@@ -504,15 +508,11 @@ TEST_SUITE("SchemaRegistry") {
         // path_budget 1: the always-indexed field and the first other path.
         dstd::fs::write_file(
             dstd::PathView(index_dir + "/schemas/nginx.yaml"),
-            common::str_cat(
-                "id: idx_nginx\n"
-                "fields:\n"
-                "  remote_addr: {type: string}\n"
-                "  status: {type: int}\n"
-                "  request_time: {type: float}\n"
-                "  upstream: {type: string, optional: true, always_index: "
-                "true}\n"
-                "index: {path_budget: 1}\n"))
+            dstd::String(
+                "id: idx_nginx\nfields:\n  remote_addr: {type: string}\n  "
+                "status: {type: int}\n  request_time: {type: float}\n  "
+                "upstream: {type: string, optional: true, always_index: "
+                "true}\nindex: {path_budget: 1}\n"))
             .discard();
         trace::index::IndexerOptions o;
         o.index_dir = index_dir;
@@ -838,14 +838,12 @@ TEST_SUITE("SchemaDetection") {
     TEST_CASE("file detection is cached until the file changes") {
         dftu_utils_test::TestEnvironment env(1);
         const auto path = env.dir() + "/c.ndjson";
-        dstd::fs::write_file(dstd::PathView(path),
-                             common::str_cat(R"({"k":1})", "\n"))
+        dstd::fs::write_file(dstd::PathView(path), dstd::String("{\"k\":1}\n"))
             .discard();
         CHECK(dftu_utils_test::ok_ref(trace::index::detect_file_schema(path))
                   .id == "generic");
-        dstd::fs::write_file(
-            dstd::PathView(path),
-            common::str_cat(dft_event(1), "\n", dft_event(2), "\n"))
+        dstd::fs::write_file(dstd::PathView(path),
+                             dstd::fmt<"{}\n{}\n">(dft_event(1), dft_event(2)))
             .discard();
         CHECK(dftu_utils_test::ok_ref(trace::index::detect_file_schema(path))
                   .id == "dftracer");

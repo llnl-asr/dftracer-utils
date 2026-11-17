@@ -2,7 +2,10 @@
 #ifndef DFTRACER_UTILS_PLUGINS_HOST_PLUGINS_INTERNAL_H
 #define DFTRACER_UTILS_PLUGINS_HOST_PLUGINS_INTERNAL_H
 
+#include <dftracer/utils/common/c_api.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/plugins/host/plugins.h>
@@ -10,6 +13,7 @@
 #include <cstddef>
 
 struct dftu_plugin;
+struct dftu_plugin_host;
 
 // The parts of the plugin set that speak the C ABI: kept out of the public
 // header so plugins.h stays ABI-free.
@@ -34,6 +38,25 @@ dstd::Optional<duql::Query> plugin_union_prune_query(
 /// runs for it) and must outlive the set.
 dstd::Result<Plugins> build_injected_plugins(
     dstd::Vector<dftu_plugin*> plugins);
+
+/// A test plugin for build_injected_plugins_declaring: `declare` runs against
+/// the factory host of a plugin called `name`, as the plugin's factory does,
+/// so the ports it declares go through the plan-time rules.
+struct InjectedPlugin {
+    dftu_plugin* plugin = nullptr;
+    dstd::String name;
+    dftu_status (*declare)(dftu_ctx* ctx,
+                           const dftu_plugin_host* host) = nullptr;
+};
+
+dstd::Result<Plugins> build_injected_plugins_declaring(
+    dstd::Vector<InjectedPlugin> plugins);
+
+class PortHub;
+
+/// A new hub for the channels and phase results the set's plan declared, as a
+/// scan builds one.
+dstd::UniquePtr<PortHub> make_port_hub(const Plugins& set);
 
 /// The fold order build() computed: a permutation of plugin indices with every
 /// name's provider before the plugins that consume it. Independent plugins keep

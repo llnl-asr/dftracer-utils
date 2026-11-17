@@ -33,12 +33,13 @@
 // allocated bytes and that both equal the bytes the size tables imply.
 
 #define DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/domains/workload/genesis/genesis.h>
+#include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
@@ -171,10 +172,9 @@ dstd::String prepare_genesis(const dstd::String& dir, const Sizes& s) {
     require_ok(
         dstd::fs::write_file(
             run + "/summary.json",
-            common::str_cat(
-                R"({"ok":true,"app":"app1","system":"sys1","input":"in1",)"
-                R"("nodes":1,"ppn":)",
-                RANKS, R"(,"sets":["set1"]})")),
+            dstd::fmt<
+                "{\"ok\":true,\"app\":\"app1\",\"system\":\"sys1\",\"input\":"
+                "\"in1\",\"nodes\":1,\"ppn\":{},\"sets\":[\"set1\"]}">(RANKS)),
         "write summary.json");
     write_gz(run + "/compacted/set1.pfw.gz", genesis_text(s.genesis_calls));
     return dir + "/genesis";
@@ -386,7 +386,7 @@ void remote_worker(RemoteShared& sh, std::size_t t, std::size_t threads,
             st.allocated += n;
         }
         sh.barrier.arrive_and_wait();
-        const auto push_begin = std::chrono::steady_clock::now();
+        const auto push_begin = dstd::steady_now();
         for (std::size_t g = 0; g < groups; ++g) {
             const std::size_t owner = (t + threads - g) % threads;
             Node** blocks = sh.outbox[owner].data() + g * SLICE;
@@ -407,7 +407,7 @@ void remote_worker(RemoteShared& sh, std::size_t t, std::size_t threads,
         }
         st.push_ns += static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - push_begin)
+                dstd::steady_now() - push_begin)
                 .count());
         sh.barrier.arrive_and_wait();
         Node* p =
@@ -440,9 +440,9 @@ double time_threads(std::size_t threads, Body body) {
             body(t);
         });
     gate.arrive_and_wait();
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto t0 = dstd::steady_now();
     for (dstd::Thread& th : pool) th.join();
-    const auto t1 = std::chrono::steady_clock::now();
+    const auto t1 = dstd::steady_now();
     return std::chrono::duration<double, std::nano>(t1 - t0).count();
 }
 

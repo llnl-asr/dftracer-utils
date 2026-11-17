@@ -32,6 +32,13 @@ namespace plugins {
 /// validate every frame and column a plugin hands back, and fail the run
 /// naming the plugin, the callback and the broken rule.
 inline constexpr const char* CHECK_ENV = "DFTRACER_UTILS_PLUGIN_CHECK";
+/// What a channel declaration that leaves a field out gets.
+inline constexpr std::uint32_t CHANNEL_DEFAULT_CREDITS = 16;
+inline constexpr std::uint32_t CHANNEL_DEFAULT_MAX_MSG_BYTES = 65536;
+/// The most bytes the batch-scoped ports of one scan worker hold at once.
+inline constexpr std::size_t PORT_BATCH_BYTES = std::size_t{16} << 20;
+/// The longest value of a latest port or a phase contribution.
+inline constexpr std::uint32_t PORT_VALUE_MAX_BYTES = std::uint32_t{1} << 20;
 }  // namespace plugins
 
 /// Repeated in memory/detail/constants.h. A test keeps the two equal. The
@@ -81,6 +88,42 @@ inline constexpr const char* SQPOLL_IDLE_ENV =
     "DFTRACER_UTILS_IO_URING_SQPOLL_IDLE_MS";
 inline constexpr std::uint64_t DEFAULT_SQPOLL_IDLE_MS = 0;
 }  // namespace io_settings
+
+namespace comm_settings {
+/// local, mpi or auto: the backend a tool starts its communicator on. The
+/// option --comm overrides it.
+inline constexpr const char* COMM_ENV = "DFTRACER_UTILS_COMM";
+/// A directory that holds the MPI backend library. When set, it is the only
+/// place searched.
+inline constexpr const char* COMM_PATH_ENV = "DFTRACER_UTILS_COMM_PATH";
+/// A directory: when set, each rank writes one DFTracer event file there with
+/// one event per communicator call. Read once at communicator start; off when
+/// unset or empty.
+inline constexpr const char* COMM_TRACE_ENV = "DFTRACER_UTILS_COMM_TRACE";
+/// The size at which a rank's trace buffer is appended to its file.
+inline constexpr std::size_t COMM_TRACE_FLUSH_BYTES = std::size_t{1} << 20;
+/// The most bytes one MPI message of the MPI backend carries; a longer payload
+/// goes in several. The default is the largest size that fits an int count.
+inline constexpr const char* MPI_CHUNK_BYTES_ENV =
+    "DFTRACER_UTILS_COMM_MPI_CHUNK_BYTES";
+inline constexpr std::uint64_t MPI_CHUNK_BYTES = std::uint64_t{1} << 30;
+/// How long a stopping MPI context waits for native requests that no peer
+/// matched before it ends the job.
+inline constexpr std::uint64_t MPI_NATIVE_DRAIN_MS = 1000;
+/// How long a deadline waits for the members to say whether they reached the
+/// call that timed out.
+inline constexpr std::uint64_t MPI_ARRIVAL_PROBE_MS = 200;
+/// A pull or push of at most this many bytes between processes moves in one
+/// message with no credit; a larger one is driven by its receiver in ranges.
+inline constexpr std::uint64_t BULK_EAGER_BYTES = std::uint64_t{64} << 10;
+/// The most bytes one range of a bulk transfer between processes asks for.
+inline constexpr std::uint64_t BULK_RANGE_BYTES = std::uint64_t{8} << 20;
+/// The bytes a process lets one peer have in flight toward it, as a share of
+/// the memory budget divided by the peers, kept between the two bounds.
+inline constexpr std::uint64_t BULK_CREDIT_BUDGET_PERCENT = 5;
+inline constexpr std::uint64_t BULK_MIN_CREDIT_BYTES = std::uint64_t{16} << 20;
+inline constexpr std::uint64_t BULK_MAX_CREDIT_BYTES = std::uint64_t{512} << 20;
+}  // namespace comm_settings
 
 namespace executor_settings {
 /// Seconds without progress before the executor reports a stall, for a tool

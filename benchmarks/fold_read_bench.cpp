@@ -49,6 +49,7 @@
 //   fold_read_bench FILE [rounds] [max_lines] [row_mask]
 //   fold_read_bench --smoke
 
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/intern_cache.h>
@@ -589,9 +590,9 @@ double median(dstd::Vector<double> v) {
 
 template <class Row>
 double timed(Row& row, Acc& acc, std::size_t lines) {
-    const auto start = Clock::now();
+    const auto start = dstd::steady_now();
     row.template run<false>(acc);
-    const auto stop = Clock::now();
+    const auto stop = dstd::steady_now();
     return std::chrono::duration<double, std::nano>(stop - start).count() /
            static_cast<double>(lines);
 }

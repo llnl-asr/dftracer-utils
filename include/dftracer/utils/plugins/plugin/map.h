@@ -363,6 +363,10 @@ class Host {
     /// reclaimers; see plugin/memory.h.
     class Memory memory() const;
 
+    /// Channels between plugins, latest values and phase results; see
+    /// plugin/ports.h.
+    class Ports ports() const;
+
     /// Get a host-owned parallel Writer for `path` with `worker_count` lanes
     /// (`gzip` != 0 compresses). The Writer is host-owned and scan-lifetime;
     /// open it, write chunks per worker, then close it - all co_await forms.

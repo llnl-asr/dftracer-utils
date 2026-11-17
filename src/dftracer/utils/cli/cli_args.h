@@ -38,9 +38,9 @@ class ArgSpec {
 
     Kind kind_ = Kind::Value;
     dstd::Vector<dstd::StringView> names_;
-    dstd::StringView help_;
+    dstd::String help_;
     dstd::String default_repr_;
-    dstd::StringView default_view_;
+    dstd::String default_view_;
     bool quote_default_ = false;
     Setter set_;
     std::size_t group_ = 0;

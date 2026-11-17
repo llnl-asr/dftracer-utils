@@ -9,6 +9,7 @@
 //   prefilter_bench [lines] [rounds]
 
 #include <bench_ok.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -73,12 +74,12 @@ void run(
     std::size_t passed = 0;
     for (int r = 0; r < rounds; ++r) {
         passed = 0;
-        const auto t0 = std::chrono::steady_clock::now();
+        const auto t0 = dstd::steady_now();
         for (const auto& l : lines)
             passed += (per_needle ? p.may_match_per_needle(l) : p.may_match(l))
                           ? 1
                           : 0;
-        const auto t1 = std::chrono::steady_clock::now();
+        const auto t1 = dstd::steady_now();
         ns.push_back(std::chrono::duration<double, std::nano>(t1 - t0).count() /
                      static_cast<double>(lines.size()));
     }

@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/runtime/io/io_uring_backend.h>
 #include <fcntl.h>
@@ -1268,7 +1269,7 @@ void IoUringBackend::park(void* token, std::int64_t timeout_ms) {
     }
     const std::int64_t now_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
+            dstd::steady_now().time_since_epoch())
             .count();
     // One armed by an earlier park that ends sooner only ends this wait early,
     // which those checks allow. One that ends later must not hold this wait, so

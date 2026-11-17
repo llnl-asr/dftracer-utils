@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/memory/asan.h>
 #include <dftracer/utils/memory/attrib.h>
 #include <dftracer/utils/memory/heap_page.h>
@@ -9,7 +10,6 @@
 #include <dftracer/utils/memory/vg.h>
 #include <pthread.h>
 #include <sys/mman.h>
-#include <time.h>
 
 #include <algorithm>
 #include <array>
@@ -655,18 +655,7 @@ std::uint64_t run_bits(std::size_t index, std::size_t n) noexcept {
     return ones << index;
 }
 
-std::uint64_t now_ms() noexcept {
-    timespec ts{};
-#if defined(__APPLE__)
-    ::clock_gettime(CLOCK_MONOTONIC_RAW_APPROX, &ts);
-#elif defined(CLOCK_MONOTONIC_COARSE)
-    ::clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
-#else
-    ::clock_gettime(CLOCK_MONOTONIC, &ts);
-#endif
-    return static_cast<std::uint64_t>(ts.tv_sec) * 1000 +
-           static_cast<std::uint64_t>(ts.tv_nsec) / 1000000;
-}
+std::uint64_t now_ms() noexcept { return dstd::coarse_now_ns() / 1000000ULL; }
 
 bool purge_range(void* p, std::size_t n) noexcept {
 #if defined(__APPLE__)

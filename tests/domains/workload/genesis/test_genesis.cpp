@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/domains/workload/genesis/genesis.h>
 #include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -31,10 +31,10 @@ dstd::String call(std::int64_t pid, std::int64_t tid, const dstd::String& name,
                   std::int64_t ts, std::int64_t dur,
                   const dstd::String& cat = "CPP_APP",
                   const dstd::String& extra = "") {
-    return common::str_cat(R"({"name":")", name, R"(","cat":")", cat,
-                           R"(","pid":)", pid, R"(,"tid":)", tid, R"(,"ts":)",
-                           ts, R"(,"dur":)", dur,
-                           R"(,"ph":1,"args":{"hhash":"h1")", extra, "}}\n");
+    return dstd::fmt<
+        "{\"name\":\"{}\",\"cat\":\"{}\",\"pid\":{},\"tid\":{},\"ts\":{},"
+        "\"dur\":{},\"ph\":1,\"args\":{\"hhash\":\"h1\"{}}}\n">(
+        name, cat, pid, tid, ts, dur, extra);
 }
 
 dstd::String marker(std::int64_t pid, const dstd::String& name,
@@ -44,17 +44,17 @@ dstd::String marker(std::int64_t pid, const dstd::String& name,
 
 dstd::String papi(std::int64_t pid, std::int64_t ts,
                   const dstd::String& counter, double delta) {
-    return common::str_cat(
-        R"({"name":"PAPI","cat":"papi","pid":)", pid, R"(,"tid":)", pid,
-        R"(,"ts":)", ts, R"(,"ph":2,"args":{"hhash":"h1","multiplex":0,")",
-        counter, R"(":1,")", counter, R"(_delta":)", delta, "}}\n");
+    return dstd::fmt<
+        "{\"name\":\"PAPI\",\"cat\":\"papi\",\"pid\":{},\"tid\":{},\"ts\":{},"
+        "\"ph\":2,\"args\":{\"hhash\":\"h1\",\"multiplex\":0,\"{}\":1,\"{}_"
+        "delta\":{}}}\n">(pid, pid, ts, counter, counter, delta);
 }
 
 dstd::String host(const dstd::String& cat, const dstd::String& name,
                   std::int64_t ts, const dstd::String& fields) {
-    return common::str_cat(R"({"name":")", name, R"(","cat":")", cat,
-                           R"(","pid":0,"tid":0,"ts":)", ts,
-                           R"(,"ph":2,"args":{"hhash":"h1",)", fields, "}}\n");
+    return dstd::fmt<
+        "{\"name\":\"{}\",\"cat\":\"{}\",\"pid\":0,\"tid\":0,\"ts\":{},\"ph\":"
+        "2,\"args\":{\"hhash\":\"h1\",{}}}\n">(name, cat, ts, fields);
 }
 
 dstd::String rank(std::int64_t pid, std::int64_t start, std::int64_t end) {

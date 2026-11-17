@@ -124,8 +124,8 @@ void run_wrappers(dstd::StringIntern& intern,
     Runtime rt(1);
     dftu_utils_test::ok(
         rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      auto finalized = co_await master.finalize(
-                          trace::views::detail::CoverageSet{});
+                      const trace::views::detail::CoverageSet covered{};
+                      auto finalized = co_await master.finalize(covered);
                       CHECK(finalized.has_value());
                   }),
                   "fin")

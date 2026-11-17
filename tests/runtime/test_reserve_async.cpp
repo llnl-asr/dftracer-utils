@@ -3,6 +3,7 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/reserve_async.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/detail/heap.h>
@@ -74,9 +75,9 @@ CoroTask<void> wait_for(memory::Pool* pool, std::size_t bytes,
     if (about_to_wait != nullptr) {
         about_to_wait->store(true, std::memory_order_release);
     }
-    const Clock::time_point start = Clock::now();
+    const Clock::time_point start = dstd::steady_now();
     ReserveAsync::Result r = co_await reserve_async(*pool, bytes, deadline);
-    out->waited = Clock::now() - start;
+    out->waited = dstd::steady_now() - start;
     out->resumed_on = coro::Executor::current();
     out->thread = dstd::Thread::current_id();
     if (r) {
@@ -144,9 +145,10 @@ TEST_CASE("a waiter with room gets its bytes without waiting") {
     Budget budget(64 * MIB);
     memory::PoolHandle pool = open_pool("task");
     Outcome out;
-    dftu_utils_test::ok(rt.submit(wait_for(pool.get(), 8 * MIB,
-                                           Clock::now() + 10s, &out, nullptr))
-                            .get());
+    dftu_utils_test::ok(
+        rt.submit(wait_for(pool.get(), 8 * MIB, dstd::steady_now() + 10s, &out,
+                           nullptr))
+            .get());
     CHECK(out.status == memory::Status::Ok);
     CHECK(out.bytes == 8 * MIB);
     CHECK(root().reserved() == 0);
@@ -158,12 +160,13 @@ TEST_CASE("a request that can never fit fails at once") {
     Budget budget(64 * MIB);
     memory::PoolHandle pool = open_pool("task");
     Outcome out;
-    auto start = Clock::now();
-    dftu_utils_test::ok(rt.submit(wait_for(pool.get(), 128 * MIB,
-                                           Clock::now() + 10s, &out, nullptr))
-                            .get());
+    auto start = dstd::steady_now();
+    dftu_utils_test::ok(
+        rt.submit(wait_for(pool.get(), 128 * MIB, dstd::steady_now() + 10s,
+                           &out, nullptr))
+            .get());
     CHECK(out.status == memory::Status::OverBudget);
-    CHECK(Clock::now() - start < 5s);
+    CHECK(dstd::steady_now() - start < 5s);
 }
 
 TEST_CASE("a waiter resumes on its executor when another task releases") {
@@ -208,8 +211,8 @@ TEST_CASE("a release from a plain thread does not resume the waiter inline") {
 
     Outcome out;
     std::atomic<bool> about_to_wait{false};
-    TaskHandle w = rt.submit(wait_for(pool.get(), 16 * MIB, Clock::now() + 30s,
-                                      &out, &about_to_wait));
+    TaskHandle w = rt.submit(wait_for(
+        pool.get(), 16 * MIB, dstd::steady_now() + 30s, &out, &about_to_wait));
     dstd::Thread::Id releaser;
     dstd::Thread t([&] {
         releaser = dstd::Thread::current_id();
@@ -239,12 +242,13 @@ TEST_CASE("a waiter times out and the later release skips it") {
     REQUIRE(held);
 
     Outcome out;
-    auto start = Clock::now();
-    dftu_utils_test::ok(rt.submit(wait_for(pool.get(), 32 * MIB,
-                                           Clock::now() + 50ms, &out, nullptr))
-                            .get());
+    auto start = dstd::steady_now();
+    dftu_utils_test::ok(
+        rt.submit(wait_for(pool.get(), 32 * MIB, dstd::steady_now() + 50ms,
+                           &out, nullptr))
+            .get());
     CHECK(out.status == memory::Status::OverBudget);
-    CHECK(Clock::now() - start >= 50ms);
+    CHECK(dstd::steady_now() - start >= 50ms);
     CHECK(out.resumed_on == rt.executor());
 
     held.release();
@@ -262,7 +266,7 @@ TEST_CASE("a blocking get() on its own run loop does not wait") {
 
     Outcome out;
     CoroTask<void> task =
-        wait_for(pool.get(), 32 * MIB, Clock::now() + 10s, &out, nullptr);
+        wait_for(pool.get(), 32 * MIB, dstd::steady_now() + 10s, &out, nullptr);
     CHECK_NOTHROW(dftu_utils_test::run_here(std::move(task)));
     CHECK(out.status != memory::Status::Ok);
     CHECK(out.waited < 5s);
@@ -284,22 +288,24 @@ TEST_CASE("a frame destroyed while it waits leaks nothing") {
     memory::Pool& general = memory::detail::Manager::get().general();
     std::atomic<bool> warm{false};
     dftu_utils_test::ok(
-        rt.submit(start_and_destroy(pool.get(), 0, Clock::now() + 50ms, &alive,
-                                    &warm, &suspended))
+        rt.submit(start_and_destroy(pool.get(), 0, dstd::steady_now() + 50ms,
+                                    &alive, &warm, &suspended))
             .get());
     REQUIRE(warm.load());
     // The warm-up task's last frees run on a worker after get() returns, so
     // the count is taken once two reads 50 ms apart agree.
     std::size_t before = general.blocks();
-    const auto steady = Clock::now() + 2s;
-    for (std::size_t next = before; Clock::now() < steady; before = next) {
+    const auto steady = dstd::steady_now() + 2s;
+    for (std::size_t next = before; dstd::steady_now() < steady;
+         before = next) {
         std::this_thread::sleep_for(50ms);
         next = general.blocks();
         if (next == before) break;
     }
     dftu_utils_test::ok(
-        rt.submit(start_and_destroy(pool.get(), 32 * MIB, Clock::now() + 50ms,
-                                    &alive, &resumed, &suspended))
+        rt.submit(start_and_destroy(pool.get(), 32 * MIB,
+                                    dstd::steady_now() + 50ms, &alive, &resumed,
+                                    &suspended))
             .get());
     CHECK(suspended);
     CHECK(alive.load() == 0);
@@ -310,9 +316,9 @@ TEST_CASE("a frame destroyed while it waits leaks nothing") {
     CHECK(root().reserved() == 0);
     // A leaked block never comes back, while one another thread frees late
     // does. The check reads the same value that ended the wait.
-    const auto settle = Clock::now() + 5s;
+    const auto settle = dstd::steady_now() + 5s;
     std::size_t after = general.blocks();
-    while (after > before && Clock::now() < settle) {
+    while (after > before && dstd::steady_now() < settle) {
         std::this_thread::sleep_for(10ms);
         after = general.blocks();
     }
@@ -336,9 +342,9 @@ TEST_CASE("many waiters on several workers end exact") {
         for (int i = 0; i < ROUNDS; ++i) {
             std::size_t size = SIZES[rng() % 4];
             Clock::time_point deadline =
-                rng() % 4 == 0
-                    ? Clock::time_point::max()
-                    : Clock::now() + std::chrono::milliseconds(1 + rng() % 5);
+                rng() % 4 == 0 ? Clock::time_point::max()
+                               : dstd::steady_now() +
+                                     std::chrono::milliseconds(1 + rng() % 5);
             ReserveAsync::Result r =
                 co_await reserve_async(*pool, size, deadline);
             if (coro::Executor::current() == nullptr) {

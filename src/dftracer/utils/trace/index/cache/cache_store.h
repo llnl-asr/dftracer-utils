@@ -65,7 +65,9 @@ class CacheStore {
         std::uint64_t sig,
         const dstd::Vector<dstd::Pair<dstd::String, dstd::String>>& entries,
         std::uint64_t bytes);
-    /// Marks `sig` used now. No-op when read-only or `sig` has no record.
+    /// Marks `sig` used now. No-op when read-only or `sig` has no record. It
+    /// does not flush, so the refresh is visible to a reader after the writer
+    /// flushes or closes.
     dstd::Result<void> touch(std::uint64_t sig);
 
     CacheStore(dftracer::utils::store::Store store,

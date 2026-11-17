@@ -1900,6 +1900,9 @@ struct ViewSessionState {
     dstd::Vector<BranchHooks> branches;
     dstd::Vector<FoldFactory> fold_factories;
     dstd::Vector<StreamBranch> stream_branches;
+    dstd::Vector<
+        dstd::Function<coro::CoroTask<dstd::Result<void>>(const ScanPlan&)>>
+        pre_scans;
     /// A narrowing an attached fold offered for the shared scan, applied by
     /// execute() only when no other branch exists. The scan feeds every
     /// branch, so narrowing it for one would starve the rest; whether that
@@ -1939,6 +1942,12 @@ void add_fold_factory(
         make,
     dstd::Function<dstd::Result<void>()> finalize) {
     state.fold_factories.push_back({std::move(make), std::move(finalize)});
+}
+
+void add_pre_scan(
+    ViewSessionState& state,
+    dstd::Function<coro::CoroTask<dstd::Result<void>>(const ScanPlan&)> pre) {
+    state.pre_scans.push_back(std::move(pre));
 }
 
 void keep_session_error(ViewSessionState& state, dstd::Error error) {
@@ -2143,6 +2152,11 @@ coro::CoroTask<dstd::Result<ExportStats>> run_session(
     dstd::SharedPtr<ViewSessionState> state) {
     if (state->error) co_return *state->error;
     const ViewPlan& plan = *state->plan;
+    for (auto& pre : state->pre_scans) {
+        auto prepared = pre(state->plan);
+        auto done = co_await prepared;
+        if (!done) co_return done.error();
+    }
 
     // Serve each match-all aggregation branch from a rollup or the aggregation
     // tier with no scan; collect the rest. A match-all agg branch that must

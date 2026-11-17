@@ -103,14 +103,16 @@ def _same(a, b):
 @pytest.mark.parametrize("method", ["skew", "kurt"])
 @pytest.mark.parametrize("budget", [None, 1])
 def test_lazy_group_and_reduce_match_pandas(method, budget):
-    if int(pd.__version__.split(".")[0]) < 3:
-        pytest.skip("pandas 2 gives 0.0 for a constant group; pandas 3 gives NaN")
+    old_pandas = tuple(int(v) for v in pd.__version__.split(".")[:2]) < (3, 1)
     plan = dft.DataFrame(GROUPS).lazy()
     if budget:
         plan = plan.memory_budget(budget)
     want = getattr(pd.DataFrame(GROUPS).groupby("k")["x"], method)()
     got = getattr(plan.group_by("k"), method)().collect().to_dict()
     for key, value in zip(got["k"], got["x"]):
+        if old_pandas and len(set(v for k, v in zip(GROUPS["k"], GROUPS["x"]) if k == key)) == 1:
+            assert math.isnan(value), (method, key)
+            continue
         assert _same(value, float(want.loc[key])), (method, key)
     whole = getattr(plan, method)().collect().to_dict()["x"][0]
     assert _same(whole, float(getattr(pd.Series(GROUPS["x"]), method)()))

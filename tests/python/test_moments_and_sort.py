@@ -36,7 +36,10 @@ def _same(a, b):
 
 @pytest.mark.parametrize("name", list(CASES))
 def test_skew_and_kurt_are_the_pandas_values(name):
-    if name.startswith("constant") and int(pd.__version__.split(".")[0]) < 3:
+    if name.startswith("constant") and tuple(int(v) for v in pd.__version__.split(".")[:2]) < (
+        3,
+        1,
+    ):
         pytest.skip("pandas 2 gives 0.0 for a constant column; pandas 3 gives NaN")
     values = CASES[name]
     ours = dft.Series(values, dtype="float64")
@@ -98,8 +101,8 @@ def test_dataframe_skew_and_kurt_are_the_pandas_values():
 
 
 def test_groupby_skew_and_kurt_are_the_pandas_values():
-    if int(pd.__version__.split(".")[0]) < 3:
-        pytest.skip("pandas 2 gives 0.0 for a constant group; pandas 3 gives NaN")
+    if tuple(int(v) for v in pd.__version__.split(".")[:2]) < (3, 1):
+        pytest.skip("pandas before 3.1 gives 0.0 for a constant group; 3.1 gives NaN")
     data = _frame_values()
     ours = dft.DataFrame(data).group_by("k")
     theirs = pd.DataFrame(data).groupby("k")

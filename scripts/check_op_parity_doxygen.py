@@ -57,6 +57,7 @@ NAME_RE = re.compile(r"<name>([^<]*)</name>")
 # frame, so its op is keyed dftu.frame.value_counts.
 FOLDS = {
     "Series": {
+        "list_size": "list_len",
         "eq": "compare",
         "ne": "compare",
         "lt": "compare",
@@ -141,6 +142,8 @@ ALLOWLIST = {
         "schema",
         "output_schema",
         "has_undeclared_columns",
+        "status",
+        "reduce_specs",
         "sink",
         "stream",
         "open_cursor",

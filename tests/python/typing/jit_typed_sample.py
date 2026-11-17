@@ -436,3 +436,72 @@ class BatchHook:
         spare: jit.Column[float] = df["args.f"].fill_null(0.0)
         flags: jit.Mask = spare.isnull() | ~(spare >= 1.5)
         self.avg[()].observe(spare[flags].mean())
+
+
+# Exceptions, tasks, files and JSON / YAML values. A raise lowers to a status,
+# a try over a call that can fail lowers to a status check, an ``async def`` task
+# is a state machine started from the finalize body, ``with jit.open`` is a file
+# that closes on every way out and ``jit.json`` is a typed value.
+
+
+@dataclass(frozen=True)
+class FlowCfg:
+    path: str = ""
+
+
+@jit.plugin
+class Flow:
+    config: FlowCfg
+    names: Set[str] = set()
+    total: int = 0
+
+    @jit.each_event
+    def step(self, e: Event) -> None:
+        if e.dur > 1_000_000:
+            raise jit.Fatal("too long")
+        if e.dur < 0:
+            raise jit.SkipRest()
+        if e.pid < 0:
+            raise jit.Cancelled()
+        try:
+            with jit.open(self.config.path) as f:
+                for line in f:
+                    doc = jit.json(line)
+                    self.total += doc.find("n").as_int()
+                    self.names.add(doc.find("s").as_str("x"))
+        except jit.NotFound:
+            self.total += 1
+        except (jit.ParseError, jit.IoError):
+            self.total += 2
+        except jit.Error:
+            self.total += 3
+
+    @jit.task
+    async def work(self, a: int, secs: float) -> int:
+        await jit.sleep(secs)
+        return a
+
+    @jit.finalize
+    async def done(self) -> None:
+        x = await self.work(1, 0.1)
+        a, b = await jit.all(self.work(1, 0.1), self.work(2, 0.1))
+        w = await jit.any(self.work(1, 0.1), self.work(2, 0.2))
+        jit.emit("x", x + a + b + w)
+        yml = jit.yaml("a: 1")
+        for key, value in yml.items():
+            jit.emit("key", key)
+            jit.emit("is_null", value.is_null())
+        for item in yml.find("list"):
+            jit.emit("float", item.as_float() + len(yml))
+            jit.emit("bool", item.as_bool())
+
+
+def typed_handles(file: jit.File, value: jit.Value) -> Tuple[str, str, int]:
+    return file.read(4), value.find("k").as_str(), len(value)
+
+
+errors: Tuple[type, ...] = (jit.Error, jit.NotFound, jit.IoError, jit.ParseError)
+fatal: Exception = jit.Fatal("stop")
+skip: Exception = jit.SkipRest()
+cancelled: BaseException = jit.Cancelled()
+located: Optional[str] = jit.Fatal("stop", file="f.py", line=1, col=1).file

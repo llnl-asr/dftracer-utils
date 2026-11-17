@@ -28,7 +28,8 @@ Overview
   key). A ``jit.map`` lowers to a host aggregation accumulator keyed by its key
   columns - the same ``DFTU_SVC_AGG`` surface a C plugin uses.
 - **Statically checked**: the structured ``each_event`` body is a deliberately
-  small subset (conditions, then map or state updates); anything outside
+  small subset (conditions, locals, exceptions, files and JSON values, then map or
+  state updates); anything outside
   it raises ``JitError`` at decoration time - never a silent miscompile - and
   ``jit.map`` infers the ``Map[tuple[K], V]`` type so a type checker validates
   your keys and values.
@@ -649,6 +650,273 @@ batch hook is within 5 percent of the hand-written expression program (it is
 0.7 to 0.9 times its net time over the scan on 4 000 000 events, median of 5).
 With all threads the compute hides under the parallel scan and is below the
 run-to-run noise.
+
+.. _jit-locals:
+
+Locals
+------
+
+A compiled body (``@jit.each_event``, ``@jit.finalize``, ``@jit.task``) can bind
+locals. A local is an ``int``, a ``float``, a ``str`` or a JSON value (see
+:ref:`jit-values`); the first assignment gives it its type and it keeps that type.
+``x = <expr>`` binds, and ``x += <expr>`` (``-=``, ``*=``, ``/=``) updates an
+``int`` or ``float`` local. The right side is built from the same numbers,
+primitives, event fields and config fields as any expression of the body, and
+unary ``-`` is allowed. A name that is not a local, ``self``, the event or
+``jit`` is a compile error that names the line and column. A local lives in the
+loop body of ``each_event`` and in the frame of a task, so it survives an
+``await``. A string is an interned id, as an event string is: ``==`` and ``!=``
+compare it with another string, and ``len(s)`` is its byte length.
+
+A string that comes from a file line, a chunk or ``v.as_str()`` is a *view*: the
+bytes that the host lends, not an interned id. ``==`` and ``!=`` against a literal,
+a config field or another string, ``len`` and ``jit.emit`` read the bytes and intern
+nothing. A view is interned only where an id is needed: a key or an element of a
+plain field or a ``jit.map``. A view is valid in these places only, and a use
+outside them is a compile error with the line and column:
+
+- ``line`` of ``for line in f`` and ``key`` of ``for key, value in v.items()`` last
+  to the end of their ``for`` loop.
+- ``x = f.read(n)`` lasts until the next ``f.read`` and the end of the ``with``.
+- ``v.as_str()`` and the values of ``for`` over ``v`` last until the document that
+  ``v`` comes from is parsed again.
+
+A view cannot be copied into a local that lives longer than its source (``keep =
+line`` where ``keep`` came before the loop). Copy it where it is needed: into a
+set, a map key or a result.
+
+.. _jit-exceptions:
+
+Exceptions
+----------
+
+A compiled body raises three exceptions, each lowered to a status of the plugin
+ABI with the message copied (``dftu_fail``). The caller of ``Plugins.run`` gets
+the matching Python exception, with ``message``, ``file``, ``line`` and ``col`` of
+the ``raise``; ``str(error)`` is ``<file>:<line>:<col>: <message>``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 28 48
+
+   * - Raise
+     - Status
+     - Effect
+   * - ``jit.Fatal("msg")``
+     - ``DFTU_E_UNKNOWN``
+     - Fails the run. The caller gets ``jit.Fatal``. A body cannot catch it.
+   * - ``jit.SkipRest()``
+     - none
+     - Stops the rest of the current batch of ``each_event`` (or the rest of a
+       task) with no error: what the batch folded so far is kept, and no
+       exception reaches the caller. It cannot stop a whole file, because
+       ``on_batch`` is not told where a file ends.
+   * - ``jit.Cancelled()``
+     - ``DFTU_E_CANCELLED``
+     - Ends the run as cancelled. The caller gets ``jit.Cancelled``, a
+       ``BaseException``, so ``except Exception`` does not swallow it. A body
+       cannot catch it.
+
+The message is one string literal (a missing one is the class name). A raise of
+any other class, a bare ``raise`` and ``raise ... from ...`` are compile errors
+that point at the line.
+
+A call that can fail raises a ``jit.Error`` of its own: a store get (the stored
+value has the other type), a file (``jit.open``, ``for line in f``) and a JSON or
+YAML parse. ``except`` catches it:
+
+.. code-block:: python
+
+   try:
+       with jit.open(self.config.path) as f:
+           for line in f:
+               d = jit.json(line)
+               self.total += d.find("n").as_int()
+   except jit.NotFound:
+       self.missing += 1
+   except (jit.ParseError, jit.IoError):
+       self.bad += 1
+
+``jit.NotFound`` is ``DFTU_E_NOT_FOUND``, ``jit.IoError`` is ``DFTU_E_IO`` and
+``jit.ParseError`` is ``DFTU_E_PARSE``; ``jit.Error`` is any failed call. A
+``jit.Fatal``, a cancel and an allocation failure always end the run, whatever
+``except`` is in the way. The handlers are tried in order, and an error that no
+handler names goes on out of the ``try``. These are compile errors: a bare
+``except``, an ``except`` of a Python class (``ValueError``) or of ``jit.Fatal``,
+``jit.SkipRest`` or ``jit.Cancelled``, ``except ... as name`` (a handler cannot
+read the error), ``else`` and ``finally``. Inside a ``try`` body a store get must
+be the whole right side of an assignment (``v = self.runs.get(k, 0)``), so a failed
+get leaves no update half done. An error that the caller sees from a failed call
+has ``message`` such as ``open /path: <host text>`` and the place of the call.
+
+``@jit.each_batch`` bodies take no ``raise`` or ``try``: they are column
+expressions.
+
+.. _jit-files:
+
+Files
+-----
+
+``with jit.open(path) as f:`` opens a file for reading through the file service
+and closes it on every way out of the block: the end, a ``raise``, ``SkipRest``,
+a caught error. ``path`` is a string literal or a ``str`` config field. One file
+is read one way:
+
+- ``for line in f`` gives the text lines without their newline, as strings. A gzip
+  file is inflated; any other file is read as it is. A file whose last gzip member
+  is cut short gives its complete lines.
+- ``x = f.read(n)`` gives the next ``n`` raw bytes of the file (``n`` is a positive
+  integer literal) and ``""`` at the end. A gzip file gives its stored, compressed
+  bytes.
+
+Reading a file in ``each_event`` runs once per event, so a plugin that reads a
+side file per batch reads it for every event. Use the ``@jit.finalize`` body for a
+file that is read once. A line and a chunk are views of the bytes that the host
+lends, so a file of any size is read with no interned string unless the body
+stores a line in a set or a map key (see :ref:`jit-locals`). A missing file raises
+``jit.NotFound`` and a failed read ``jit.IoError`` or ``jit.Error``, with the
+path. ``for`` over a file may add to a plain field or a ``jit.map`` many rows per
+event; the buffers of the batch grow as they fill. Await is not allowed inside a
+``with`` or a ``for`` body, and ``break``, ``continue`` and a loop ``else`` are
+compile errors. Any ``for`` over something that is not a file or a JSON value stays
+a compile error.
+
+.. _jit-values:
+
+JSON and YAML values
+--------------------
+
+``jit.json(text)`` and ``jit.yaml(text)`` parse a string (a line read from a file,
+a literal) into a value, bound to a local: ``d = jit.json(line)``. The value is
+valid in the body that parsed it and is freed when the body ends or when the local
+is assigned again. A new parse into the same local keeps the old document until
+the new one parsed; a failed parse leaves the local on the old document. A value
+or a string view taken from a local points into its document, so using it after
+the local is parsed again is a compile error, and so is parsing a local again in a
+loop when a value taken from it before the loop is alive. Read what you need
+first, as an ``int`` or ``float``, which stay valid.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Use
+     - Meaning
+   * - ``v.find("key")``
+     - The member of an object. The key is a string literal or a ``str`` config
+       field. A missing key, and ``find`` on a value that is not an object, give
+       a value for which ``is_null()`` is true.
+   * - ``v.as_int(default=0)``
+     - An integer. A JSON number gives its integer part (``2.5`` is ``2``) and a
+       ``bool`` gives 0 or 1. A null, a missing, a string or an object gives
+       the default.
+   * - ``v.as_float(default=0.0)``
+     - A float; an integer converts. Otherwise the default.
+   * - ``v.as_str(default="")``
+     - The text of a string value, as a string. Otherwise the default.
+   * - ``v.as_bool(default=False)``
+     - A ``bool``, or an integer other than 0. Otherwise the default.
+   * - ``v.is_null()``
+     - True for JSON ``null``, an empty YAML value, a missing key, and a value
+       that does not exist.
+   * - ``len(v)``
+     - The number of items of an array or members of an object, else 0.
+   * - ``for x in v``
+     - The items of an array, the member values of an object; nothing for any
+       other value.
+   * - ``for key, x in v.items()``
+     - The members of an object, in text order; nothing for any other value.
+
+JSON numbers are ``int`` when they fit 64 bits and ``float`` otherwise; a wider
+integer is a parse error. A YAML scalar is text, so ``as_int`` of ``7`` is the
+default: read it with ``as_str``. A parse error raises ``jit.ParseError``; its message is
+``json: <line>:<column>: <reason>`` (or ``yaml:``) with the 1-based line and byte
+column of the reader. A value is
+not a number or a string, so using one in arithmetic, as a condition or as an
+element is a compile error; read it with an accessor first. The ``find`` key and
+the text of ``jit.json`` are checked at compile time.
+
+.. _jit-tasks:
+
+Finalize and tasks: ``async`` and ``await``
+-------------------------------------------
+
+``@jit.finalize`` marks the one method that runs when the scan ends, after the
+workers' results are merged. It is ``def`` or ``async def`` and takes ``(self)``.
+Its results leave through ``jit.emit(name, value)``, which emits the named result
+of the run as bytes (an ``int`` in decimal, a ``float`` with 17 significant digits,
+a ``str`` as UTF-8); ``run.results[name]`` is that ``bytes``. A name is emitted
+once in the source, and ``emit`` inside a loop keeps the last value. A
+``finalize`` body reads no scan state: the merged state is in the results of the
+maps, not in the plugin.
+
+``@jit.task`` marks an ``async def`` method with ``int`` and ``float`` parameters
+(annotated) that returns an ``int``, a ``float`` or nothing. It lowers to a
+``dftu_step_fn`` state machine of the task service: the locals of the task, the
+parameters and the file or JSON handles it holds live in one frame that the host
+keeps across each ``await``. The awaits are a closed set:
+
+.. code-block:: python
+
+   @jit.plugin
+   class Fan:
+       n: int = 0
+
+       @jit.each_event
+       def step(self, e):
+           self.n += 1
+
+       @jit.task
+       async def fetch(self, a: int, secs: float) -> int:
+           await jit.sleep(secs)
+           return a * 10
+
+       @jit.finalize
+       async def done(self) -> None:
+           one = await self.fetch(1, 0.1)
+           x, y = await jit.all(self.fetch(2, 0.1), self.fetch(3, 0.1))
+           first = await jit.any(self.fetch(4, 5.0), self.fetch(5, 0.01))
+           jit.emit("sum", one + x + y + first)
+
+- ``await jit.sleep(seconds)`` waits, then goes on.
+- ``x, y = await jit.all(t1, t2, ...)`` runs the tasks at once and unpacks their
+  results in order. The first failure cancels the rest and is the failure of the
+  await.
+- ``x = await jit.any(t1, t2, ...)`` runs the tasks at once; the first to finish
+  is the result (or its failure) and the others are cancelled and awaited. The
+  tasks share one return type. To race a deadline, race a task that sleeps and
+  returns a value; ``jit.sleep`` itself cannot be an argument of ``all`` or ``any``.
+- ``x = await self.task(args)`` starts a task and waits for it. A task may start
+  tasks.
+- ``x = await self.<store>.get(key, default)`` in a ``finalize`` body reads the
+  store (a task cannot get or put: tasks run beside each other, so pass the value as an
+  argument).
+
+A channel receive is not in the set: channels come in a later group, and an
+``await`` of it is a compile error that says so. ``await`` is a statement of its
+own, or the whole right side of ``x = await ...`` or ``a, b = await ...``; inside a
+condition, an expression, a ``for`` body or a ``with`` body it is a compile error.
+A task call that is not awaited is one too.
+
+A task that is cancelled (by ``any``, or by the first failure of ``all``) stops at
+its ``await`` and never runs on: no code after the
+``await`` runs, and the host releases its frame exactly once. Every frame is
+released once, whether its task finished, failed or was cancelled. A ``raise`` in
+a task is the status of that task, and the awaiter gets it: ``Fatal`` and
+``Cancelled`` end the run, a ``jit.Error`` can be caught with ``except`` around
+the ``await``, and ``SkipRest`` ends the task with its result so far (0 unless it
+returned).
+
+A task is started from the ``finalize`` body, or from another task, and not from
+``each_event``: ``on_batch`` is synchronous, its row buffers die when it returns
+and the ABI gives it no slot for a pending task, so a task started there could not
+add to scan state and waiting for it would be a plain call. A plugin that has a
+task needs a ``finalize``.
+
+A plugin that uses files, JSON or tasks exports ``dftu_jit_stat(k)``, which counts
+the task frames started (0), released (1), files opened (2) and closed (3) and
+task frames completed (4); the tests read it to check that every open is closed and
+every frame released once.
 
 Compile errors
 --------------

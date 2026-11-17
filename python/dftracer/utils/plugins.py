@@ -23,6 +23,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Union, cast
 
+from ._jit_errors import translate_run_error
 from .dataframe import DataFrame
 from .dftracer_utils_ext import Plugins as _NativePlugins
 from .dftracer_utils_ext import _DataFrame
@@ -223,8 +224,19 @@ class Plugins:
           Call ``.to_arrow()`` / ``.to_pandas()`` for other shapes.
         - ``emit_lazyframe`` -> a :class:`~dftracer.utils.LazyFrame`.
         - ``emit_result`` bytes -> ``bytes``.
+
+        A compiled plugin that fails the run with ``raise jit.Fatal(...)`` or
+        ``raise jit.Cancelled()``, or whose call fails (``jit.Error`` and its
+        subclasses), surfaces here as that ``jit`` exception with the message
+        and the location of the raise or the call.
         """
-        raw_results, stats = self._native.run(traces, index_dir, auto_index)
+        try:
+            raw_results, stats = self._native.run(traces, index_dir, auto_index)
+        except Exception as exc:
+            failure = translate_run_error(exc)
+            if failure is None:
+                raise
+            raise failure from exc
         results = {name: self._shape(obj) for name, obj in raw_results.items()}
         return PluginRun(results, stats)
 

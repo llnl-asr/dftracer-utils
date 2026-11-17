@@ -25,6 +25,7 @@ _JIT_SOURCES = [
     _ROOT / "python" / "dftracer" / "utils" / "jit" / "__init__.py",
     _ROOT / "python" / "dftracer" / "utils" / "jit" / "ops.py",
     _ROOT / "python" / "dftracer" / "utils" / "jit" / "_batch.py",
+    _ROOT / "python" / "dftracer" / "utils" / "jit" / "_flow.py",
 ]
 
 pytestmark = pytest.mark.skipif(

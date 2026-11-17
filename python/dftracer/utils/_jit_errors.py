@@ -11,6 +11,7 @@ import ast
 import inspect
 import linecache
 import os
+import re
 import sys
 import textwrap
 from typing import TYPE_CHECKING, Any, List, Tuple
@@ -221,3 +222,146 @@ def _class_error(cls: type, reason: str, attr: "str | None" = None) -> JitError:
         return src.error(reason, src.find(attr))
     except (OSError, TypeError, SyntaxError):
         return JitError(reason)
+
+
+class _Located:
+    """The parts a runtime failure of a compiled plugin carries: the message
+    and the ``file:line:col`` of the ``raise`` (or the call that failed)."""
+
+    message: str
+    file: "str | None"
+    line: "int | None"
+    col: "int | None"
+
+    def _locate(
+        self, message: str, file: "str | None", line: "int | None", col: "int | None"
+    ) -> None:
+        self.message = message
+        self.file = file
+        self.line = line
+        self.col = col
+
+    def __reduce__(self) -> "Tuple[Any, ...]":
+        return (_rebuild_runtime, (type(self), self.message, self.file, self.line, self.col))
+
+
+def _runtime_text(message: str, file: "str | None", line: "int | None", col: "int | None") -> str:
+    if file is None or line is None or col is None:
+        return message
+    return f"{file}:{line}:{col}: {message}"
+
+
+class Error(_Located, Exception):
+    """A call a compiled plugin made failed with a status (a missing file, a
+    parse error, a store read). ``message`` is the text of the failure, ``file``,
+    ``line`` and ``col`` the place of the call in the plugin source. A body
+    catches it with ``except jit.Error`` or one of its subclasses."""
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        file: "str | None" = None,
+        line: "int | None" = None,
+        col: "int | None" = None,
+    ) -> None:
+        Exception.__init__(self, _runtime_text(message, file, line, col))
+        self._locate(message, file, line, col)
+
+
+class NotFound(Error):
+    """A path or key the plugin named does not exist (status ``DFTU_E_NOT_FOUND``)."""
+
+
+class IoError(Error):
+    """A read or write failed (status ``DFTU_E_IO``)."""
+
+
+class ParseError(Error):
+    """A text did not parse; ``message`` starts with ``line:column:`` for a JSON or
+    YAML text (status ``DFTU_E_PARSE``)."""
+
+
+class Fatal(_Located, Exception):
+    """``raise jit.Fatal("msg")`` in a compiled body fails the run. The scan stops
+    and the caller of the run gets this exception with the message and the
+    location of the ``raise``. A body cannot catch it."""
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        file: "str | None" = None,
+        line: "int | None" = None,
+        col: "int | None" = None,
+    ) -> None:
+        Exception.__init__(self, _runtime_text(message, file, line, col))
+        self._locate(message, file, line, col)
+
+
+class SkipRest(_Located, Exception):
+    """``raise jit.SkipRest()`` in a compiled body stops the rest of the current
+    batch (or the rest of a task) without an error: the work done so far is kept.
+    It never reaches the caller of a run."""
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        file: "str | None" = None,
+        line: "int | None" = None,
+        col: "int | None" = None,
+    ) -> None:
+        Exception.__init__(self, _runtime_text(message, file, line, col))
+        self._locate(message, file, line, col)
+
+
+class Cancelled(_Located, BaseException):
+    """``raise jit.Cancelled()`` in a compiled body ends the run with status
+    ``DFTU_E_CANCELLED``. It derives from ``BaseException``, so ``except
+    Exception`` in the caller does not swallow it; a body cannot catch it."""
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        file: "str | None" = None,
+        line: "int | None" = None,
+        col: "int | None" = None,
+    ) -> None:
+        BaseException.__init__(self, _runtime_text(message, file, line, col))
+        self._locate(message, file, line, col)
+
+
+def _rebuild_runtime(
+    kind: "type[Any]", message: str, file: "str | None", line: "int | None", col: "int | None"
+) -> Any:
+    return kind(message, file=file, line=line, col=col)
+
+
+_RUNTIME_KINDS = {
+    "Fatal": Fatal,
+    "Cancelled": Cancelled,
+    "Error": Error,
+    "NotFound": NotFound,
+    "IoError": IoError,
+    "ParseError": ParseError,
+}
+
+# A compiled plugin fails a run with "jit.<Kind> [<file>:<line>:<col>]: <message>".
+# The tag comes first so that a long message cannot cut it; the host prefixes the
+# plugin and the callback.
+_RUNTIME_TAG = re.compile(
+    r"jit\.(Fatal|Cancelled|Error|NotFound|IoError|ParseError) \[(.+?):(\d+):(\d+)\]: (.*)\Z",
+    re.S,
+)
+
+
+def translate_run_error(exc: BaseException) -> "BaseException | None":
+    """The ``jit`` exception a failed run's native error stands for, or None for
+    an error that no compiled plugin tagged."""
+    found = _RUNTIME_TAG.search(str(exc))
+    if found is None:
+        return None
+    kind, file, line, col, message = found.groups()
+    return _RUNTIME_KINDS[kind](message, file=file, line=int(line), col=int(col))

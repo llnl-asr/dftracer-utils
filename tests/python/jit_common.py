@@ -82,3 +82,58 @@ def write_pid_tid_trace(path: str, rows) -> None:
                 f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":{tid},'
                 f'"ts":{1000 + i},"dur":1,"ph":"X","args":{{}}}}\n'
             )
+
+
+def load_module(directory, name: str, source: str):
+    """Import ``source`` as module ``name`` from a file in ``directory``, so a
+    compiled body can carry a literal path chosen by the test (the compiler reads
+    the source of the class from its file)."""
+    import importlib.util
+    import textwrap
+
+    path = os.path.join(str(directory), f"{name}.py")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(textwrap.dedent(source))
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def plugin_stats(plugins_so: str):
+    """The counters a compiled plugin that uses tasks or files keeps (task frames
+    started, released, files opened, closed, task frames completed, strings interned, cancels seen at an await). The library
+    is the one the host loaded, so call it while the Plugins object is alive."""
+    import ctypes
+
+    lib = ctypes.CDLL(plugins_so)
+    lib.dftu_jit_stat.restype = ctypes.c_longlong
+    lib.dftu_jit_stat.argtypes = [ctypes.c_int]
+    names = ("started", "released", "opened", "closed", "completed", "interned", "cancelled")
+    return {n: lib.dftu_jit_stat(i) for i, n in enumerate(names)}
+
+
+def assert_located(err) -> None:
+    """A compile error names the file, the 1-based line and column and the source
+    line of the construct, and ``str(err)`` has the one stable form."""
+    assert err.file is not None and err.line is not None and err.col is not None
+    assert err.line >= 1 and err.col >= 1 and err.source is not None
+    assert str(err) == f"{err.file}:{err.line}:{err.col}: {err.reason}\n{err.source}"
+
+
+def compile_error(match=None):
+    """``pytest.raises(JitError, match=...)`` that also checks the location."""
+    import contextlib
+
+    import pytest
+
+    from dftracer.utils.jit import JitError
+
+    @contextlib.contextmanager
+    def check():
+        with pytest.raises(JitError, match=match) as info:
+            yield info
+        assert_located(info.value)
+
+    return check()

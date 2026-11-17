@@ -111,3 +111,22 @@ jit.each_batch(3)  # a method
 @jit.each_batch
 def batch_returns_int(self: object, df: jit.Frame) -> int:  # a batch hook returns None
     return 1
+
+
+# ---- exceptions, tasks, files and values ------------------------------------
+
+jit.sleep("soon")  # the seconds are a number
+jit.emit(1, 2)  # the name of a result is a string
+jit.json(3)  # a text is a string
+jit.open(4)  # a path is a string
+jit.Fatal(3)  # a message is a string
+jit.all(1, 2)  # an awaitable
+_text: int = jit.json("{}").find("k").as_str()  # as_str gives a str
+_missing = jit.json("{}").find(1)  # a key is a string
+_default = jit.json("{}").as_int("x")  # a default is an int
+jit.task(3)  # a function
+
+
+@jit.task
+def not_async(self: object) -> int:  # a task is an async def
+    return 1

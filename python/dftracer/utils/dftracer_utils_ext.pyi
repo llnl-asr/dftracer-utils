@@ -35,6 +35,8 @@ INPUT_FILE_PATTERNS: Tuple[str, ...]
 _AggSpec = Union[str, Tuple[str, str, List[str]]]
 # The plugin ABI version this extension accepts: (major << 16) | (minor << 8) | patch.
 PLUGIN_ABI_VERSION: int
+# The shard count of the aggregation key space, for callers that split it.
+NUM_SHARDS: int
 
 # A run() map result value: emitted bytes, a native frame or a lazy plan.
 _RunResultValue = Union[bytes, "_DataFrame", "_LazyFrame"]

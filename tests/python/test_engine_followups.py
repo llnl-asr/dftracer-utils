@@ -107,7 +107,7 @@ def test_lazy_group_and_reduce_match_pandas(method, budget):
     plan = dft.DataFrame(GROUPS).lazy()
     if budget:
         plan = plan.memory_budget(budget)
-    want = getattr(pd.DataFrame(GROUPS).groupby("k")["x"], method)()
+    want = pd.DataFrame(GROUPS).groupby("k")["x"].apply(lambda s: getattr(s, method)())
     got = getattr(plan.group_by("k"), method)().collect().to_dict()
     for key, value in zip(got["k"], got["x"]):
         if old_pandas and len(set(v for k, v in zip(GROUPS["k"], GROUPS["x"]) if k == key)) == 1:

@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
@@ -92,13 +93,13 @@ inline bool parse_string_seq(
 }
 
 // Append one path of the `files` argument to `paths` unless it is there
-// already. `item` is a str or an os.PathLike that gives a str; bytes and any
-// other type set a TypeError. A directory sets a ValueError when
-// `reject_directory` is set.
+// already; `known` holds the paths added so far. `item` is a str or an
+// os.PathLike that gives a str; bytes and any other type set a TypeError. A
+// directory sets a ValueError when `reject_directory` is set.
 inline bool add_trace_path(
     PyObject* item,
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& paths,
-    bool reject_directory) {
+    dftracer::utils::dstd::StringViewSet& known, bool reject_directory) {
     if (PyBytes_Check(item)) {
         PyErr_SetString(PyExc_TypeError,
                         "a path must be a str or an os.PathLike of str");
@@ -132,13 +133,10 @@ inline bool add_trace_path(
             return false;
         }
     }
-    bool seen = false;
-    for (const auto& known : paths)
-        if (known == path) {
-            seen = true;
-            break;
-        }
-    if (!seen) paths.emplace_back(path);
+    if (known.find(path) == known.end()) {
+        paths.emplace_back(path);
+        known.emplace(path);
+    }
     Py_DECREF(fs);
     return true;
 }
@@ -152,8 +150,9 @@ inline bool parse_trace_files(
     PyObject* files,
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& paths,
     dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>& dir) {
+    dftracer::utils::dstd::StringViewSet known;
     if (PyUnicode_Check(files) || PyObject_HasAttrString(files, "__fspath__")) {
-        if (!add_trace_path(files, paths, false)) return false;
+        if (!add_trace_path(files, paths, known, false)) return false;
         const auto is_dir = dftracer::utils::dstd::fs::is_directory(
             dftracer::utils::dstd::PathView(paths.back()));
         if (is_dir.has_value() && *is_dir) {
@@ -162,12 +161,17 @@ inline bool parse_trace_files(
         }
         return true;
     }
-    PyObject* seq =
-        PySequence_Fast(files, "files must be a path or a sequence of paths");
+    // A tuple copy: a user __fspath__ may change the caller's list.
+    if (!PySequence_Check(files)) {
+        PyErr_SetString(PyExc_TypeError,
+                        "files must be a path or a sequence of paths");
+        return false;
+    }
+    PyObject* seq = PySequence_Tuple(files);
     if (!seq) return false;
-    const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+    const Py_ssize_t n = PyTuple_GET_SIZE(seq);
     for (Py_ssize_t i = 0; i < n; ++i) {
-        if (!add_trace_path(PySequence_Fast_GET_ITEM(seq, i), paths, true)) {
+        if (!add_trace_path(PyTuple_GET_ITEM(seq, i), paths, known, true)) {
             Py_DECREF(seq);
             return false;
         }

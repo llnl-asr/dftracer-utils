@@ -3,8 +3,10 @@
 """One input rule for TraceViewer and Indexer, and a forced build next to a
 trace folder that shares its index_dir."""
 
+import gzip
 import os
 import pathlib
+import time
 
 import pytest
 
@@ -127,7 +129,64 @@ class TestOneInputRule:
                 indexer.ensure()
 
 
+class TestPathParsing:
+    def test_a_hundred_thousand_distinct_paths_construct_quickly(self):
+        with Environment() as env:
+            paths = [f"{env.temp_dir}/some/long/dir/trace-{i:08d}.pfw.gz" for i in range(100_000)]
+            start = time.monotonic()
+            _indexer(paths, os.path.join(env.temp_dir, "idx"))
+            assert time.monotonic() - start < 2.0
+
+    def test_a_fspath_that_shrinks_the_list_is_safe(self):
+        with Environment() as env:
+            trace = env.create_test_gzip_file()
+            items = []
+
+            class Shrinks:
+                def __fspath__(self):
+                    items.clear()
+                    return trace
+
+            items.extend([Shrinks(), trace, trace, trace])
+            status = _indexer(items, os.path.join(env.temp_dir, "idx")).status()
+            assert status.needs_work == [trace]
+
+
+def _write_named(path, name, count=20):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with gzip.open(path, "wt") as f:
+        for i in range(count):
+            f.write(
+                f'{{"name":"{name}","cat":"POSIX","pid":1,"tid":1,"ts":{1000000 + i * 1000},'
+                f'"dur":100,"ph":"X","args":{{}}}}\n'
+            )
+
+
+def _counts(files, index_dir):
+    df = _viewer(files, index_dir).group_by("name").agg("count").collect().to_dict()
+    return dict(zip(df["name"], df[next(k for k in df if k != "name")]))
+
+
 class TestForcedBuildKeepsOtherFolders:
+    def test_the_forced_folder_drops_its_old_names_and_matches_a_fresh_index(self):
+        with Environment() as env:
+            a = os.path.join(env.temp_dir, "A", "a.pfw.gz")
+            b = os.path.join(env.temp_dir, "B", "b.pfw.gz")
+            _write_named(a, "old_a")
+            _write_named(b, "name_b")
+            shared = os.path.join(env.temp_dir, "shared_index")
+            ia = _indexer(a, shared)
+            ib = _indexer(b, shared)
+            ia.ensure()
+            ib.ensure()
+            _write_named(a, "new_a", 7)
+            assert ia.build(force=True).needs_work == []
+            assert ib.status().needs_work == []
+            both = _counts([a, b], shared)
+            assert set(both) == {"new_a", "name_b"}
+            assert both == _counts([a, b], os.path.join(env.temp_dir, "fresh_index"))
+            assert both["new_a"] == 7
+
     def test_a_forced_build_of_one_folder_leaves_the_other_clean(self):
         with Environment() as env:
             a = env.create_dft_trace_file_with_pid("A/a.pfw.gz", 1)

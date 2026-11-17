@@ -22,6 +22,8 @@ _TYPES = (
     "StrAccessor",
     "DtAccessor",
     "ListAccessor",
+    "Rolling",
+    "Ewm",
 )
 
 

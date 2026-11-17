@@ -4,17 +4,11 @@
 
 #include <dftracer/utils/arrow/batch.h>
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/python/core/memoryview_batch.h>
-#include <dftracer/utils/python/trace/trace_reader_iterator.h>
+#include <dftracer/utils/python/core/arrow_batch_capsule.h>
 
 #include <cstddef>
 
 namespace dftracer::utils::python::core {
-
-inline std::size_t byte_size(const MemoryViewBatchData &b) {
-    return b.buffer.capacity() + b.offsets.capacity() * sizeof(Py_ssize_t) +
-           b.lengths.capacity() * sizeof(Py_ssize_t);
-}
 
 inline std::size_t arrow_array_byte_size(const ArrowArray *arr) {
     if (!arr || !arr->release) return 0;

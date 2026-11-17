@@ -1,11 +1,12 @@
-# Public methods of Series, Expr and the accessors Str, Dt and List that api.def does not generate, one line each:
+# Public methods of Series, Expr, the accessors Str, Dt and List, DataFrame, LazyFrame, GroupBy and LazyGroupBy that api.def does not generate, one line each:
 #   Class.name | kind | detail
 # Kinds (tests/python/test_api_table.py checks each):
 #   alias-of:<name>           the class attribute is the attribute <name>
 #   needs-token:<token>       a registry op needs a row shape api.def does not have yet; the token is in no row
 #   python-semantics:<how>    differs from one op, in the way the detail says
 #   expr-node:<type>          builds an expression node, not a column op row
-#   construction:<what>, conversion:<what>, display:<what>
+#   construction:<what>      a class or static method that builds the object
+#   conversion:<what>, display:<what>
 Series.add | needs-token:SERIES | -
 Series.add_scalar | needs-token:SCALAR_ARITH | -
 Series.agg | python-semantics | pandas container API on the Series, not an op
@@ -59,7 +60,7 @@ Series.empty | python-semantics | accessor or shape property of the column, not 
 Series.encoding | python-semantics | metadata property read from the column, not an op
 Series.eq | python-semantics | Python logic around native calls
 Series.equals | python-semantics | pandas or polars semantics written over several native calls
-Series.ewm | python-semantics | pandas or polars semantics written over several native calls
+Series.ewm | python-semantics | builds a native window object over the column, not a column
 Series.ewm_mean | needs-token:F64_ARG | -
 Series.ewm_std | needs-token:F64_ARG | -
 Series.expanding | python-semantics | pandas or polars semantics written over several native calls
@@ -153,15 +154,12 @@ Series.reset_index | python-semantics | pandas container API on the Series, not 
 Series.rfloordiv | python-semantics | Python logic around native calls
 Series.rmod | python-semantics | Python logic around native calls
 Series.rmul | python-semantics | pandas spelling written in Python; an alias with an adapter in Phase 2
-Series.rolling | needs-token:FLAG | -
-Series.rolling_max | python-semantics | pandas or polars semantics written over several native calls
-Series.rolling_mean | python-semantics | pandas or polars semantics written over several native calls
-Series.rolling_median | needs-token:I64_ARG | -
-Series.rolling_min | python-semantics | pandas or polars semantics written over several native calls
+Series.rolling | python-semantics | builds a native window object over the column, or with op the reduced column
+Series.rolling_max | python-semantics | dftu.series.rolling with the reduction fixed, which a row cannot fix
+Series.rolling_mean | python-semantics | dftu.series.rolling with the reduction fixed, which a row cannot fix
+Series.rolling_min | python-semantics | dftu.series.rolling with the reduction fixed, which a row cannot fix
 Series.rolling_quantile | needs-token:F64_ARG | -
-Series.rolling_std | needs-token:I64_ARG | -
-Series.rolling_sum | python-semantics | pandas or polars semantics written over several native calls
-Series.rolling_var | needs-token:I64_ARG | -
+Series.rolling_sum | python-semantics | dftu.series.rolling with the reduction fixed, which a row cannot fix
 Series.rpow | python-semantics | Python logic around native calls
 Series.rsub | python-semantics | pandas spelling written in Python; an alias with an adapter in Phase 2
 Series.rtruediv | alias-of:rdiv | -
@@ -485,3 +483,453 @@ Dt.weekday | python-semantics | property of the accessor's unit, not a method of
 Dt.year | python-semantics | property of the accessor's unit, not a method of one op
 List.first | python-semantics | get with a fixed index; a row cannot hold a constant argument yet
 List.last | python-semantics | get with a fixed index; a row cannot hold a constant argument yet
+
+# The frames and their group-wise views. api.def has no frame class yet, so each public method is listed.
+# DataFrame
+DataFrame.T | python-semantics | accessor or shape property of the frame, not an op
+DataFrame.abs | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.add | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.add_prefix | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.add_suffix | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.agg | python-semantics | frame method written in Python over native calls
+DataFrame.aggregate | alias-of:agg | -
+DataFrame.all | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.any | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.apply | python-semantics | frame method written in Python over native calls
+DataFrame.applymap | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.asfreq | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.asof | python-semantics | frame method written in Python over native calls
+DataFrame.assign | python-semantics | frame method written in Python over native calls
+DataFrame.astype | python-semantics | frame method written in Python over native calls
+DataFrame.at | python-semantics | accessor or shape property of the frame, not an op
+DataFrame.at_time | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.axes | python-semantics | accessor or shape property of the frame, not an op
+DataFrame.backfill | alias-of:bfill | -
+DataFrame.between_time | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.bfill | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.cast | python-semantics | frame method written in Python over native calls
+DataFrame.clip | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.column_index | python-semantics | native method of the binding, not one registry op
+DataFrame.column_names | python-semantics | native method of the binding, not one registry op
+DataFrame.columns | python-semantics | accessor or shape property of the frame, not an op
+DataFrame.combine | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.combine_first | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.compare | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.compare_agg | python-semantics | frame method written in Python over native calls
+DataFrame.concat | python-semantics | frame method written in Python over native calls
+DataFrame.copy | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.corr | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.corrwith | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.count | python-semantics | frame method written in Python over native calls
+DataFrame.cov | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.cummax | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.cummin | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.cumprod | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.cumsum | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.describe | python-semantics | frame method written in Python over native calls
+DataFrame.diff | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.distinct | python-semantics | frame method written in Python over native calls
+DataFrame.div | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.divide | alias-of:div | -
+DataFrame.dot | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.drop | python-semantics | frame method written in Python over native calls
+DataFrame.drop_duplicates | python-semantics | frame method written in Python over native calls
+DataFrame.drop_nans | python-semantics | polars spelling written over native calls
+DataFrame.drop_nulls | python-semantics | frame method written in Python over native calls
+DataFrame.dropna | python-semantics | frame method written in Python over native calls
+DataFrame.dtypes | python-semantics | accessor or shape property of the frame, not an op
+DataFrame.duplicated | python-semantics | frame method written in Python over native calls
+DataFrame.empty | python-semantics | accessor or shape property of the frame, not an op
+DataFrame.eq | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.equals | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.eval | python-semantics | frame method written in Python over native calls
+DataFrame.ewm | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.expanding | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.explode | python-semantics | frame method written in Python over native calls
+DataFrame.ffill | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.fill_nan | python-semantics | polars spelling written over native calls
+DataFrame.fill_null | python-semantics | frame method written in Python over native calls
+DataFrame.fillna | python-semantics | frame method written in Python over native calls
+DataFrame.filter | python-semantics | frame method written in Python over native calls
+DataFrame.first | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.first_valid_index | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.floordiv | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.from_arrow | construction | from_arrow builds a frame from arrow data
+DataFrame.from_dict | construction | from_dict builds a frame from dict data
+DataFrame.from_numpy | construction | from_numpy builds a frame from numpy data
+DataFrame.from_pandas | construction | from_pandas builds a frame from pandas data
+DataFrame.from_parquet | construction | from_parquet builds a frame from parquet data
+DataFrame.from_polars | construction | from_polars builds a frame from polars data
+DataFrame.from_records | construction | from_records builds a frame from records data
+DataFrame.gap_fill | python-semantics | frame method written in Python over native calls
+DataFrame.gather | python-semantics | frame method written in Python over native calls
+DataFrame.gather_every | python-semantics | polars spelling written over native calls
+DataFrame.ge | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.get | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.get_column | python-semantics | polars spelling written over native calls
+DataFrame.get_column_index | python-semantics | polars spelling written over native calls
+DataFrame.get_columns | python-semantics | polars spelling written over native calls
+DataFrame.group_by | python-semantics | frame method written in Python over native calls
+DataFrame.group_by_dynamic | python-semantics | frame method written in Python over native calls
+DataFrame.groupby | python-semantics | frame method written in Python over native calls
+DataFrame.gt | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.hash_partition | python-semantics | frame method written in Python over native calls
+DataFrame.head | python-semantics | frame method written in Python over native calls
+DataFrame.height | python-semantics | accessor or shape property of the frame, not an op
+DataFrame.hstack | python-semantics | polars spelling written over native calls
+DataFrame.iat | python-semantics | accessor or shape property of the frame, not an op
+DataFrame.idxmax | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.idxmin | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.iloc | python-semantics | accessor or shape property of the frame, not an op
+DataFrame.index | python-semantics | accessor or shape property of the frame, not an op
+DataFrame.index_levels | python-semantics | frame method written in Python over native calls
+DataFrame.info | display | info describes the frame as text
+DataFrame.insert | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.interpolate | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.interval | python-semantics | frame method written in Python over native calls
+DataFrame.is_duplicated | python-semantics | frame method written in Python over native calls
+DataFrame.is_empty | python-semantics | polars spelling written over native calls
+DataFrame.is_unique | python-semantics | frame method written in Python over native calls
+DataFrame.isin | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.isna | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.isnull | alias-of:isna | -
+DataFrame.item | python-semantics | polars spelling written over native calls
+DataFrame.items | conversion | items gives the data in another form
+DataFrame.iter_rows | conversion | iter_rows gives the data in another form
+DataFrame.iterrows | conversion | iterrows gives the data in another form
+DataFrame.itertuples | conversion | itertuples gives the data in another form
+DataFrame.join | python-semantics | frame method written in Python over native calls
+DataFrame.join_asof | python-semantics | polars spelling written over native calls
+DataFrame.keys | python-semantics | native method of the binding, not one registry op
+DataFrame.kurt | python-semantics | frame method written in Python over native calls
+DataFrame.kurtosis | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.last | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.last_valid_index | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.lazy | conversion | lazy gives the data in another form
+DataFrame.le | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.limit | python-semantics | frame method written in Python over native calls
+DataFrame.loc | python-semantics | accessor or shape property of the frame, not an op
+DataFrame.lt | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.map | alias-of:applymap | -
+DataFrame.mask | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.max | python-semantics | frame method written in Python over native calls
+DataFrame.max_horizontal | python-semantics | polars spelling written over native calls
+DataFrame.mean | python-semantics | frame method written in Python over native calls
+DataFrame.mean_horizontal | python-semantics | polars spelling written over native calls
+DataFrame.median | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.melt | python-semantics | frame method written in Python over native calls
+DataFrame.memory_usage | display | memory_usage describes the frame as text
+DataFrame.merge | python-semantics | frame method written in Python over native calls
+DataFrame.min | python-semantics | frame method written in Python over native calls
+DataFrame.min_horizontal | python-semantics | polars spelling written over native calls
+DataFrame.mod | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.mode | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.mul | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.multiply | alias-of:mul | -
+DataFrame.n_unique | python-semantics | polars spelling written over native calls
+DataFrame.ndim | python-semantics | accessor or shape property of the frame, not an op
+DataFrame.ne | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.nlargest | python-semantics | frame method written in Python over native calls
+DataFrame.notna | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.notnull | alias-of:notna | -
+DataFrame.nsmallest | python-semantics | frame method written in Python over native calls
+DataFrame.null_count | python-semantics | frame method written in Python over native calls
+DataFrame.num_columns | python-semantics | native method of the binding, not one registry op
+DataFrame.num_rows | python-semantics | native method of the binding, not one registry op
+DataFrame.nunique | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.pad | alias-of:ffill | -
+DataFrame.partition_by | python-semantics | polars spelling written over native calls
+DataFrame.partition_id | python-semantics | native method of the binding, not one registry op
+DataFrame.pct_change | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.pipe | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.pivot | python-semantics | frame method written in Python over native calls
+DataFrame.pivot_table | python-semantics | frame method written in Python over native calls
+DataFrame.pop | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.pow | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.prod | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.product | alias-of:prod | -
+DataFrame.quantile | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.query | python-semantics | native method of the binding, not one registry op
+DataFrame.radd | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.rank | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.rdiv | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.reduce | python-semantics | frame method written in Python over native calls
+DataFrame.rename | python-semantics | frame method written in Python over native calls
+DataFrame.rename_axis | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.replace | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.resample | python-semantics | frame method written in Python over native calls
+DataFrame.reset_index | python-semantics | frame method written in Python over native calls
+DataFrame.reverse | python-semantics | frame method written in Python over native calls
+DataFrame.rfloordiv | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.rmod | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.rmul | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.rolling | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.round | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.row | conversion | row gives the data in another form
+DataFrame.rows | conversion | rows gives the data in another form
+DataFrame.rpow | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.rsub | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.rtruediv | alias-of:rdiv | -
+DataFrame.sample | python-semantics | frame method written in Python over native calls
+DataFrame.schema | python-semantics | accessor or shape property of the frame, not an op
+DataFrame.select | python-semantics | frame method written in Python over native calls
+DataFrame.select_dtypes | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.sem | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.set_axis | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.set_index | python-semantics | frame method written in Python over native calls
+DataFrame.shape | python-semantics | accessor or shape property of the frame, not an op
+DataFrame.share | python-semantics | native method of the binding, not one registry op
+DataFrame.shift | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.size | python-semantics | accessor or shape property of the frame, not an op
+DataFrame.skew | python-semantics | frame method written in Python over native calls
+DataFrame.slice | python-semantics | frame method written in Python over native calls
+DataFrame.sort | python-semantics | frame method written in Python over native calls
+DataFrame.sort_by | python-semantics | frame method written in Python over native calls
+DataFrame.sort_by_multi | python-semantics | frame method written in Python over native calls
+DataFrame.sort_index | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.sort_values | python-semantics | frame method written in Python over native calls
+DataFrame.squeeze | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.std | python-semantics | frame method written in Python over native calls
+DataFrame.sub | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.subtract | alias-of:sub | -
+DataFrame.sum | python-semantics | frame method written in Python over native calls
+DataFrame.sum_horizontal | python-semantics | polars spelling written over native calls
+DataFrame.swapaxes | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.tail | python-semantics | frame method written in Python over native calls
+DataFrame.take | python-semantics | frame method written in Python over native calls
+DataFrame.to_arrow | conversion | to_arrow gives the data in another form
+DataFrame.to_bytes | conversion | to_bytes gives the data in another form
+DataFrame.to_csv | conversion | to_csv gives the data in another form
+DataFrame.to_dict | conversion | to_dict gives the data in another form
+DataFrame.to_dicts | conversion | to_dicts gives the data in another form
+DataFrame.to_dummies | python-semantics | frame method written in Python over native calls
+DataFrame.to_feather | conversion | to_feather gives the data in another form
+DataFrame.to_html | display | to_html describes the frame as text
+DataFrame.to_ipc | conversion | to_ipc gives the data in another form
+DataFrame.to_json | conversion | to_json gives the data in another form
+DataFrame.to_markdown | display | to_markdown describes the frame as text
+DataFrame.to_numpy | conversion | to_numpy gives the data in another form
+DataFrame.to_pandas | conversion | to_pandas gives the data in another form
+DataFrame.to_parquet | conversion | to_parquet gives the data in another form
+DataFrame.to_polars | conversion | to_polars gives the data in another form
+DataFrame.to_records | conversion | to_records gives the data in another form
+DataFrame.to_series | conversion | to_series gives the data in another form
+DataFrame.to_string | display | to_string describes the frame as text
+DataFrame.top_k | python-semantics | frame method written in Python over native calls
+DataFrame.topk | python-semantics | frame method written in Python over native calls
+DataFrame.transform | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.transpose | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.truediv | alias-of:div | -
+DataFrame.truncate | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.tz_convert | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.tz_localize | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.union | python-semantics | frame method written in Python over native calls
+DataFrame.unique | python-semantics | frame method written in Python over native calls
+DataFrame.unnest | python-semantics | frame method written in Python over native calls
+DataFrame.unpivot | python-semantics | frame method written in Python over native calls
+DataFrame.update | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.value_counts | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.values | conversion | values gives the data in another form
+DataFrame.var | python-semantics | frame method written in Python over native calls
+DataFrame.vstack | python-semantics | polars spelling written over native calls
+DataFrame.where | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.width | python-semantics | accessor or shape property of the frame, not an op
+DataFrame.window | python-semantics | frame method written in Python over native calls
+DataFrame.with_column | python-semantics | frame method written in Python over native calls
+DataFrame.with_columns | python-semantics | frame method written in Python over native calls
+DataFrame.with_row_index | python-semantics | frame method written in Python over native calls
+DataFrame.write_csv | conversion | write_csv gives the data in another form
+DataFrame.write_ipc | conversion | write_ipc gives the data in another form
+DataFrame.write_parquet | conversion | write_parquet gives the data in another form
+DataFrame.xs | python-semantics | pandas container API on the frame, written over native calls
+# LazyFrame
+LazyFrame.agg | python-semantics | plan step written in Python over native plan ops
+LazyFrame.aggregate | alias-of:agg | -
+LazyFrame.asof | python-semantics | plan step written in Python over native plan ops
+LazyFrame.auto_spill | python-semantics | plan step written in Python over native plan ops
+LazyFrame.collect | python-semantics | plan step written in Python over native plan ops
+LazyFrame.collect_async | python-semantics | plan step written in Python over native plan ops
+LazyFrame.columns | python-semantics | accessor or shape property of the frame, not an op
+LazyFrame.compare_agg | python-semantics | plan step written in Python over native plan ops
+LazyFrame.concat | python-semantics | plan step written in Python over native plan ops
+LazyFrame.count | python-semantics | plan step written in Python over native plan ops
+LazyFrame.describe | python-semantics | plan step written in Python over native plan ops
+LazyFrame.drop | python-semantics | plan step written in Python over native plan ops
+LazyFrame.drop_duplicates | python-semantics | plan step written in Python over native plan ops
+LazyFrame.drop_nulls | python-semantics | plan step written in Python over native plan ops
+LazyFrame.explain | display | explain describes the frame as text
+LazyFrame.explode | python-semantics | plan step written in Python over native plan ops
+LazyFrame.fill_null | python-semantics | plan step written in Python over native plan ops
+LazyFrame.filter | python-semantics | plan step written in Python over native plan ops
+LazyFrame.filter_mask | python-semantics | plan step written in Python over native plan ops
+LazyFrame.gap_fill | python-semantics | plan step written in Python over native plan ops
+LazyFrame.gather | python-semantics | plan step written in Python over native plan ops
+LazyFrame.group_by | python-semantics | plan step written in Python over native plan ops
+LazyFrame.group_by_dynamic | python-semantics | plan step written in Python over native plan ops
+LazyFrame.head | python-semantics | plan step written in Python over native plan ops
+LazyFrame.head_by | python-semantics | plan step written in Python over native plan ops
+LazyFrame.iloc | python-semantics | accessor or shape property of the frame, not an op
+LazyFrame.interval | python-semantics | plan step written in Python over native plan ops
+LazyFrame.is_duplicated | python-semantics | plan step written in Python over native plan ops
+LazyFrame.is_unique | python-semantics | plan step written in Python over native plan ops
+LazyFrame.join | python-semantics | plan step written in Python over native plan ops
+LazyFrame.kurt | python-semantics | plan step written in Python over native plan ops
+LazyFrame.limit | python-semantics | plan step written in Python over native plan ops
+LazyFrame.loc | python-semantics | accessor or shape property of the frame, not an op
+LazyFrame.max | python-semantics | plan step written in Python over native plan ops
+LazyFrame.mean | python-semantics | plan step written in Python over native plan ops
+LazyFrame.melt | python-semantics | plan step written in Python over native plan ops
+LazyFrame.memory_budget | python-semantics | plan step written in Python over native plan ops
+LazyFrame.min | python-semantics | plan step written in Python over native plan ops
+LazyFrame.null_count | python-semantics | plan step written in Python over native plan ops
+LazyFrame.output_schema | python-semantics | native method of the binding, not one registry op
+LazyFrame.pivot | python-semantics | plan step written in Python over native plan ops
+LazyFrame.reduce | python-semantics | plan step written in Python over native plan ops
+LazyFrame.rename | python-semantics | plan step written in Python over native plan ops
+LazyFrame.rename_columns | python-semantics | native method of the binding, not one registry op
+LazyFrame.resample | python-semantics | plan step written in Python over native plan ops
+LazyFrame.reset_index | python-semantics | plan step written in Python over native plan ops
+LazyFrame.reverse | python-semantics | plan step written in Python over native plan ops
+LazyFrame.sample | python-semantics | plan step written in Python over native plan ops
+LazyFrame.schema | python-semantics | accessor or shape property of the frame, not an op
+LazyFrame.select | python-semantics | plan step written in Python over native plan ops
+LazyFrame.set_index | python-semantics | plan step written in Python over native plan ops
+LazyFrame.share | python-semantics | native method of the binding, not one registry op
+LazyFrame.sink | python-semantics | plan step written in Python over native plan ops
+LazyFrame.skew | python-semantics | plan step written in Python over native plan ops
+LazyFrame.slice | python-semantics | plan step written in Python over native plan ops
+LazyFrame.sort | python-semantics | plan step written in Python over native plan ops
+LazyFrame.sort_by | python-semantics | plan step written in Python over native plan ops
+LazyFrame.sort_by_multi | python-semantics | plan step written in Python over native plan ops
+LazyFrame.sort_values | python-semantics | plan step written in Python over native plan ops
+LazyFrame.std | python-semantics | plan step written in Python over native plan ops
+LazyFrame.stream | python-semantics | plan step written in Python over native plan ops
+LazyFrame.sum | python-semantics | plan step written in Python over native plan ops
+LazyFrame.tail | python-semantics | plan step written in Python over native plan ops
+LazyFrame.take | python-semantics | plan step written in Python over native plan ops
+LazyFrame.to_dummies | python-semantics | plan step written in Python over native plan ops
+LazyFrame.topk | python-semantics | plan step written in Python over native plan ops
+LazyFrame.union | python-semantics | plan step written in Python over native plan ops
+LazyFrame.unique | python-semantics | plan step written in Python over native plan ops
+LazyFrame.unnest | python-semantics | plan step written in Python over native plan ops
+LazyFrame.unpivot | python-semantics | plan step written in Python over native plan ops
+LazyFrame.var | python-semantics | plan step written in Python over native plan ops
+LazyFrame.window | python-semantics | plan step written in Python over native plan ops
+LazyFrame.with_column | python-semantics | plan step written in Python over native plan ops
+LazyFrame.with_columns | python-semantics | plan step written in Python over native plan ops
+LazyFrame.with_row_index | python-semantics | plan step written in Python over native plan ops
+# GroupBy
+GroupBy.agg | python-semantics | group-wise method written in Python over native calls
+GroupBy.aggregate | alias-of:agg | -
+GroupBy.all | python-semantics | group-wise method written in Python over native calls
+GroupBy.any | python-semantics | group-wise method written in Python over native calls
+GroupBy.apply | python-semantics | group-wise method written in Python over native calls
+GroupBy.bfill | python-semantics | group-wise method written in Python over native calls
+GroupBy.corr | python-semantics | group-wise method written in Python over native calls
+GroupBy.count | python-semantics | group-wise method written in Python over native calls
+GroupBy.cov | python-semantics | group-wise method written in Python over native calls
+GroupBy.cumcount | python-semantics | group-wise method written in Python over native calls
+GroupBy.cummax | python-semantics | group-wise method written in Python over native calls
+GroupBy.cummin | python-semantics | group-wise method written in Python over native calls
+GroupBy.cumprod | python-semantics | group-wise method written in Python over native calls
+GroupBy.cumsum | python-semantics | group-wise method written in Python over native calls
+GroupBy.describe | python-semantics | group-wise method written in Python over native calls
+GroupBy.diff | python-semantics | group-wise method written in Python over native calls
+GroupBy.ewm | python-semantics | group-wise method written in Python over native calls
+GroupBy.expanding | python-semantics | group-wise method written in Python over native calls
+GroupBy.ffill | python-semantics | group-wise method written in Python over native calls
+GroupBy.filter | python-semantics | group-wise method written in Python over native calls
+GroupBy.first | python-semantics | group-wise method written in Python over native calls
+GroupBy.get_group | python-semantics | group-wise method written in Python over native calls
+GroupBy.groups | python-semantics | accessor or shape property of the frame, not an op
+GroupBy.head | python-semantics | group-wise method written in Python over native calls
+GroupBy.idxmax | python-semantics | group-wise method written in Python over native calls
+GroupBy.idxmin | python-semantics | group-wise method written in Python over native calls
+GroupBy.indices | python-semantics | accessor or shape property of the frame, not an op
+GroupBy.keys | python-semantics | accessor or shape property of the frame, not an op
+GroupBy.kurt | python-semantics | group-wise method written in Python over native calls
+GroupBy.last | python-semantics | group-wise method written in Python over native calls
+GroupBy.max | python-semantics | group-wise method written in Python over native calls
+GroupBy.mean | python-semantics | group-wise method written in Python over native calls
+GroupBy.median | python-semantics | group-wise method written in Python over native calls
+GroupBy.min | python-semantics | group-wise method written in Python over native calls
+GroupBy.ngroup | python-semantics | group-wise method written in Python over native calls
+GroupBy.ngroups | python-semantics | accessor or shape property of the frame, not an op
+GroupBy.nth | python-semantics | group-wise method written in Python over native calls
+GroupBy.nunique | python-semantics | group-wise method written in Python over native calls
+GroupBy.ohlc | python-semantics | group-wise method written in Python over native calls
+GroupBy.pct_change | python-semantics | group-wise method written in Python over native calls
+GroupBy.pipe | python-semantics | group-wise method written in Python over native calls
+GroupBy.prod | python-semantics | group-wise method written in Python over native calls
+GroupBy.product | alias-of:prod | -
+GroupBy.quantile | python-semantics | group-wise method written in Python over native calls
+GroupBy.rank | python-semantics | group-wise method written in Python over native calls
+GroupBy.reduce | python-semantics | group-wise method written in Python over native calls
+GroupBy.resample | python-semantics | group-wise method written in Python over native calls
+GroupBy.rolling | python-semantics | group-wise method written in Python over native calls
+GroupBy.sample | python-semantics | group-wise method written in Python over native calls
+GroupBy.sem | python-semantics | group-wise method written in Python over native calls
+GroupBy.shift | python-semantics | group-wise method written in Python over native calls
+GroupBy.size | python-semantics | group-wise method written in Python over native calls
+GroupBy.skew | python-semantics | group-wise method written in Python over native calls
+GroupBy.std | python-semantics | group-wise method written in Python over native calls
+GroupBy.sum | python-semantics | group-wise method written in Python over native calls
+GroupBy.tail | python-semantics | group-wise method written in Python over native calls
+GroupBy.take | python-semantics | group-wise method written in Python over native calls
+GroupBy.transform | python-semantics | group-wise method written in Python over native calls
+GroupBy.value_counts | python-semantics | group-wise method written in Python over native calls
+GroupBy.var | python-semantics | group-wise method written in Python over native calls
+# LazyGroupBy
+LazyGroupBy.agg | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.aggregate | alias-of:agg | -
+LazyGroupBy.all | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.any | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.apply | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.bfill | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.count | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.cumcount | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.cummax | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.cummin | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.cumprod | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.cumsum | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.describe | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.diff | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.ffill | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.filter | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.first | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.get_group | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.head | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.idxmax | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.idxmin | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.keys | python-semantics | accessor or shape property of the frame, not an op
+LazyGroupBy.kurt | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.last | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.max | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.mean | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.median | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.min | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.ngroup | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.nth | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.nunique | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.ohlc | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.pct_change | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.pipe | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.prod | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.product | alias-of:prod | -
+LazyGroupBy.quantile | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.rank | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.reduce | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.resample | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.rolling | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.sample | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.sem | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.shift | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.size | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.skew | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.std | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.sum | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.tail | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.take | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.transform | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.value_counts | python-semantics | group-wise method written in Python over native calls
+LazyGroupBy.var | python-semantics | group-wise method written in Python over native calls

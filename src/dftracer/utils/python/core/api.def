@@ -59,6 +59,12 @@ PY_METHOD(Series, cum_prod, "dftu.series.cum_prod", NONE, SAME, KEEP, YES, "", "
           "Running product -> Series.")
 PY_METHOD(Series, cum_count, "dftu.series.cum_count", NONE, INT, KEEP, YES, "", "", "",
           "Running count of non-null rows -> Int64 Series.")
+PY_METHOD(Series, rolling_var, "dftu.series.rolling_var", INT, FLOAT, KEEP, NO, "window", "", "",
+          "rolling_var(window) -> Float64 Series of per-window sample variance.")
+PY_METHOD(Series, rolling_std, "dftu.series.rolling_std", INT, FLOAT, KEEP, NO, "window", "", "",
+          "rolling_std(window) -> Float64 Series of per-window sample std.")
+PY_METHOD(Series, rolling_median, "dftu.series.rolling_median", INT, FLOAT, KEEP, NO, "window", "", "",
+          "rolling_median(window) -> Float64 Series of per-window median.")
 PY_METHOD(Series, ceil, "dftu.series.ceil", NONE, SAME, KEEP, NO, "", "", "",
           "Round floats toward +inf (SIMD).")
 PY_METHOD(Series, floor, "dftu.series.floor", NONE, SAME, KEEP, NO, "", "", "",

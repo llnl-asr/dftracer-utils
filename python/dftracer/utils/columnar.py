@@ -3356,9 +3356,7 @@ class GroupBy:
     ) -> "_GroupSeriesWindow":
         """The exponentially weighted window within each group (pandas
         ``GroupBy.ewm``): ``.mean() .std()``, the Series kernel per group."""
-        from .series import ewm_alpha
-
-        a = ewm_alpha(alpha, span, com, halflife)
+        a = _ext._ewm_alpha(alpha, span=span, com=com, halflife=halflife)
         return _GroupSeriesWindow(self, lambda s: s.ewm(a))
 
     def corr(self) -> DataFrame:

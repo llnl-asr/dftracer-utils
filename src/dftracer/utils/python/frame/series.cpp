@@ -375,22 +375,31 @@ PyMethodDef Series_methods[] = {
      "rank(method='average', descending=False) -> Float64 Series "
      "(method: average|min|dense|ordinal)."},
     {"rolling", DFTU_PYCFUNCTION(Series_rolling), METH_VARARGS | METH_KEYWORDS,
-     "rolling(window, op='sum') -> Float64 Series (op: sum|mean|min|max)."},
-    {"rolling_var",
+     "rolling(window, op=None) -> the Rolling window of window rows, or with "
+     "op (sum|mean|min|max) the Float64 Series of that reduction."},
+    {"rolling_sum",
      DFTU_PYCFUNCTION(
-         (core::kw_one<"rolling_var", "window", Series_rolling_var>)),
+         (core::kw_one<"rolling_sum", "window", Series_rolling_sum>)),
      METH_VARARGS | METH_KEYWORDS,
-     "rolling_var(window) -> Float64 Series of per-window sample variance."},
-    {"rolling_std",
+     "rolling_sum(window) -> Float64 Series of per-window sums."},
+    {"rolling_mean",
      DFTU_PYCFUNCTION(
-         (core::kw_one<"rolling_std", "window", Series_rolling_std>)),
+         (core::kw_one<"rolling_mean", "window", Series_rolling_mean>)),
      METH_VARARGS | METH_KEYWORDS,
-     "rolling_std(window) -> Float64 Series of per-window sample std."},
-    {"rolling_median",
+     "rolling_mean(window) -> Float64 Series of per-window means."},
+    {"rolling_min",
      DFTU_PYCFUNCTION(
-         (core::kw_one<"rolling_median", "window", Series_rolling_median>)),
+         (core::kw_one<"rolling_min", "window", Series_rolling_min>)),
      METH_VARARGS | METH_KEYWORDS,
-     "rolling_median(window) -> Float64 Series of per-window median."},
+     "rolling_min(window) -> Float64 Series of per-window minima."},
+    {"rolling_max",
+     DFTU_PYCFUNCTION(
+         (core::kw_one<"rolling_max", "window", Series_rolling_max>)),
+     METH_VARARGS | METH_KEYWORDS,
+     "rolling_max(window) -> Float64 Series of per-window maxima."},
+    {"ewm", DFTU_PYCFUNCTION(Series_ewm), METH_VARARGS | METH_KEYWORDS,
+     "ewm(alpha=None, *, span=None, com=None, halflife=None) -> the Ewm "
+     "window; pass exactly one parameter."},
     {"rolling_quantile",
      DFTU_PYCFUNCTION((core::kw_pair<"rolling_quantile",
                                      Series_rolling_quantile, "window", "q">)),
@@ -768,6 +777,7 @@ int init_series(PyObject* m) {
     SeriesType.tp_new = nullptr;
     if (register_type(m, &SeriesType, "Series") < 0) return -1;
     if (init_accessors(m) < 0) return -1;
+    if (init_windows(m) < 0) return -1;
 
     static PyMethodDef api_rows_def = {
         "_api_rows",

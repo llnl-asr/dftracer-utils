@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: MIT
 """The Python API table, src/dftracer/utils/python/core/api.def: the native
 module, the Expr methods and the type declarations all come from it, and the
-public methods of Series and Expr that it does not give are listed with a
-reason in api_allowlist.txt."""
+public methods of Series, Expr, the accessors, DataFrame, LazyFrame and both
+GroupBy classes that it does not give are listed with a reason in
+api_allowlist.txt."""
 
 import ast
 import importlib
 import importlib.util
+import inspect
 import os
 import re
 import shutil
@@ -20,7 +22,8 @@ pytest.importorskip("dftracer.utils.dftracer_utils_ext")
 
 import dftracer.utils as dft  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as ext  # noqa: E402
-from dftracer.utils.columnar import Expr  # noqa: E402
+from dftracer.utils.columnar import Expr, GroupBy  # noqa: E402
+from dftracer.utils.lazyframe import LazyGroupBy  # noqa: E402
 from dftracer.utils.series import _DtAccessor, _ListAccessor, _StrAccessor  # noqa: E402
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -209,7 +212,13 @@ _KINDS = {
     "display",
 }
 _WITH_ARGUMENT = {"alias-of", "needs-token", "expr-node"}
-_CLASSES = {"Series": dft.Series, "Expr": Expr, **PUBLIC_ACCESSORS}
+_FRAME_CLASSES = {
+    "DataFrame": dft.DataFrame,
+    "LazyFrame": dft.LazyFrame,
+    "GroupBy": GroupBy,
+    "LazyGroupBy": LazyGroupBy,
+}
+_CLASSES = {"Series": dft.Series, "Expr": Expr, **PUBLIC_ACCESSORS, **_FRAME_CLASSES}
 
 
 def _parse_line(line):
@@ -312,6 +321,27 @@ def test_expr_node_is_the_class_the_method_builds(name, node):
     assert _entry_problem(name, "expr-node", node) is None
 
 
+def _construction_problem(name):
+    """Why a construction entry is not a class or static method, or None."""
+    cls_name, _, attr = name.partition(".")
+    cls = _CLASSES.get(cls_name)
+    if cls is None or not hasattr(cls, attr):
+        return f"{name}: no such method"
+    if not isinstance(inspect.getattr_static(cls, attr), (classmethod, staticmethod)):
+        return f"{name}: a construction builds the object from the class"
+    return None
+
+
+@pytest.mark.parametrize("name", [n for n, _ in _entries("construction")])
+def test_construction_is_a_class_or_static_method(name):
+    assert _construction_problem(name) is None
+
+
+@pytest.mark.parametrize("name", ["Series.abs", "DataFrame.head", "Series.nope"])
+def test_the_construction_check_fails_on_a_method_that_builds_nothing(name):
+    assert _construction_problem(name) is not None
+
+
 @pytest.mark.parametrize(
     "name,base,arg",
     [
@@ -355,7 +385,7 @@ def test_a_duplicate_line_in_a_copy_of_the_allowlist_is_refused(tmp_path):
         _allowlist(copy)
 
 
-@pytest.mark.parametrize("cls_name", ["Series", "Expr", "Str", "Dt", "List"])
+@pytest.mark.parametrize("cls_name", list(_CLASSES))
 def test_every_public_method_is_generated_or_listed(cls_name):
     listed = {k.split(".", 1)[1] for k in _allowlist() if k.startswith(cls_name + ".")}
     public = _public(_CLASSES[cls_name])

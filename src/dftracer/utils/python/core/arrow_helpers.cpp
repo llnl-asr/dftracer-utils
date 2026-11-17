@@ -3,8 +3,8 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/python/core/arrow_batch_capsule.h>
 #include <dftracer/utils/python/core/arrow_helpers.h>
-#include <dftracer/utils/python/trace/trace_reader_iterator.h>
 
 namespace dftracer::utils::python::core {
 

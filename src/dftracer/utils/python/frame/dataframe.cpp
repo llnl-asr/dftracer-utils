@@ -98,8 +98,7 @@ struct dftracer::utils::python::core::NativeTraits<DataFrameObject> {
 namespace {
 
 PyObject* make_dataframe(DataFrame&& b) {
-    Series st = Series::structs(dftracer::utils::dstd::to_strings(b.names),
-                                std::move(b.columns));
+    Series st = Series::structs(b.names, std::move(b.columns));
     auto* self = reinterpret_cast<DataFrameObject*>(
         g_dataframe_type->tp_alloc(g_dataframe_type, 0));
     if (!self) return nullptr;
@@ -260,8 +259,7 @@ PyObject* DataFrame_replace(PyObject* self, PyObject* other) {
     if (b == o) Py_RETURN_NONE;
     return guard([&]() -> PyObject* {
         DataFrame f = to_dataframe(o);
-        Series st = Series::structs(dftracer::utils::dstd::to_strings(f.names),
-                                    std::move(f.columns));
+        Series st = Series::structs(f.names, std::move(f.columns));
         b->names = o->names;
         b->st = std::move(st);
         Py_RETURN_NONE;

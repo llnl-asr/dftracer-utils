@@ -10,10 +10,10 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/plugins/abi_version.h>
+#include <dftracer/utils/python/core/arrow_batch_capsule.h>
 #include <dftracer/utils/python/core/arrow_stream_capsule.h>
 #include <dftracer/utils/python/core/call.h>
 #include <dftracer/utils/python/core/errors.h>
-#include <dftracer/utils/python/core/memoryview_batch.h>
 #include <dftracer/utils/python/core/method.h>
 #include <dftracer/utils/python/frame/columnar_eval.h>
 #include <dftracer/utils/python/frame/dataframe.h>
@@ -29,10 +29,8 @@
 #include <dftracer/utils/python/runtime/runtime.h>
 #include <dftracer/utils/python/runtime/task_handle.h>
 #include <dftracer/utils/python/store/store.h>
-#include <dftracer/utils/python/trace/arrow_parallel_reader.h>
 #include <dftracer/utils/python/trace/distribution.h>
 #include <dftracer/utils/python/trace/streaming_iterator.h>
-#include <dftracer/utils/python/trace/trace_reader_iterator.h>
 #include <dftracer/utils/python/trace/trace_viewer.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/system_metrics.h>
 
@@ -229,15 +227,11 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (dftracer::utils::python::runtime::init_task_handle(m) < 0) return NULL;
     if (dftracer::utils::python::runtime::init_runtime(m) < 0) return NULL;
     if (dftracer::utils::python::store::init_store(m) < 0) return NULL;
-    if (dftracer::utils::python::core::init_memoryview_batch(m) < 0)
-        return NULL;
-    if (dftracer::utils::python::trace::init_trace_reader_iterator(m) < 0)
+    if (dftracer::utils::python::core::init_arrow_batch_capsule(m) < 0)
         return NULL;
     if (dftracer::utils::python::trace::init_arrow_streaming_iterator(m) < 0)
         return NULL;
     if (dftracer::utils::python::core::init_arrow_batch_stream(m) < 0)
-        return NULL;
-    if (dftracer::utils::python::trace::init_arrow_parallel_reader(m) < 0)
         return NULL;
     if (dftracer::utils::python::trace::init_trace_viewer(m) < 0) return NULL;
     if (dftracer::utils::python::plugins::init_plugin_host(m) < 0) return NULL;

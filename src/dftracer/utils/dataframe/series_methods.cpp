@@ -30,6 +30,37 @@ Series Series::rename(const dstd::SharedString& name) const {
     return Series{out};
 }
 
+Series Series::structs_from(const char* const* names,
+                            dstd::Vector<Series> columns) {
+    dstd::Vector<dftu_series*> handles;
+    handles.reserve(columns.size());
+    for (Series& c : columns) handles.push_back(c.release());
+    return Series{
+        dftu_series_new_struct(handles.data(), const_cast<const char**>(names),
+                               static_cast<std::int32_t>(handles.size()))};
+}
+
+Series Series::structs(const dstd::Vector<dstd::String>& names,
+                       dstd::Vector<Series> columns) {
+    dstd::Vector<const char*> cnames;
+    cnames.reserve(names.size());
+    for (const dstd::String& s : names) cnames.push_back(s.c_str());
+    return structs_from(cnames.data(), std::move(columns));
+}
+
+Series Series::structs(const dstd::Vector<dstd::SharedString>& names,
+                       dstd::Vector<Series> columns) {
+    dstd::Vector<const char*> cnames;
+    cnames.reserve(names.size());
+    for (const dstd::SharedString& s : names) cnames.push_back(s.c_str());
+    return structs_from(cnames.data(), std::move(columns));
+}
+
+Series Series::structs(std::initializer_list<const char*> names,
+                       dstd::Vector<Series> columns) {
+    return structs_from(names.begin(), std::move(columns));
+}
+
 Series Series::derived(dftu_series* result) const {
     if (result != nullptr && handle_ != nullptr) result->name = handle_->name;
     return Series{result};

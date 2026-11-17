@@ -374,7 +374,11 @@ autodoc_default_options = {
     "members": True,
     "member-order": "bysource",
     "undoc-members": True,
-    "exclude-members": "__weakref__",
+    # ``str`` and ``list`` are the accessor properties of Series and Expr. A
+    # documented attribute with those names captures every plain ``str`` or
+    # ``list`` type in a docstring field (Sphinx matches a type by its last
+    # name part), so they are not documented as members.
+    "exclude-members": "__weakref__, str, list",
 }
 
 # Type annotations in both signature and description

@@ -362,9 +362,7 @@ class _FramePandasMixin(_ext.DataFrame):
     ) -> "_FrameWindow":
         """The exponentially weighted window over every numeric column
         (pandas ``DataFrame.ewm``): ``.mean() .std()``."""
-        from .series import ewm_alpha
-
-        a = ewm_alpha(alpha, span, com, halflife)
+        a = _ext._ewm_alpha(alpha, span=span, com=com, halflife=halflife)
         return _FrameWindow(self, lambda s: s.ewm(a))
 
     def ffill(self) -> "DataFrame":

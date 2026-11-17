@@ -1098,48 +1098,6 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
             descending = not ascending
         return super().rank(method, descending, pct)
 
-    @overload
-    def rolling(self, window: int) -> "_Rolling": ...
-    @overload
-    def rolling(self, window: int, op: Literal["sum", "mean", "min", "max"]) -> "Series[float]": ...
-    def rolling(
-        self,
-        window: int,
-        op: Optional[Literal["sum", "mean", "min", "max"]] = None,
-    ) -> "Union[Series[float], _Rolling]":
-        """A trailing window of ``window`` rows. With ``op`` the reduced Series;
-        without it a window object with ``.sum() .mean() .min() .max() .var()
-        .std() .median() .quantile(q)``, the pandas ``s.rolling(n).mean()``
-        spelling."""
-        if op is None:
-            return _Rolling(self, window)
-        return super().rolling(window, op)
-
-    def rolling_sum(self, window: int) -> "Series[float]":
-        return super().rolling(window, "sum")
-
-    def rolling_mean(self, window: int) -> "Series[float]":
-        return super().rolling(window, "mean")
-
-    def rolling_min(self, window: int) -> "Series[float]":
-        return super().rolling(window, "min")
-
-    def rolling_max(self, window: int) -> "Series[float]":
-        return super().rolling(window, "max")
-
-    def ewm(
-        self,
-        alpha: Optional[float] = None,
-        *,
-        span: Optional[float] = None,
-        com: Optional[float] = None,
-        halflife: Optional[float] = None,
-    ) -> "_Ewm":
-        """Exponentially weighted window: ``s.ewm(alpha).mean()`` / ``.std()``,
-        the pandas spelling of :meth:`ewm_mean` / :meth:`ewm_std`; ``span``,
-        ``com`` and ``halflife`` are the pandas spellings of ``alpha``."""
-        return _Ewm(self, ewm_alpha(alpha, span, com, halflife))
-
     def expanding(self) -> "_Expanding":
         """The window from the first row to each row (pandas ``expanding``):
         ``.sum() .mean() .min() .max() .count() .var() .std()``, each from
@@ -1401,65 +1359,6 @@ def _ddof_sample(ddof: int) -> bool:
     raise ValueError("ddof must be 0 (population) or 1 (sample)")
 
 
-class _Rolling:
-    """``s.rolling(window)``: the pandas window object."""
-
-    __slots__ = ("_series", "_window")
-
-    def __init__(self, series: Series, window: int) -> None:
-        self._series = series
-        self._window = window
-
-    def sum(self) -> "Series[float]":
-        return self._series.rolling_sum(self._window)
-
-    def mean(self) -> "Series[float]":
-        return self._series.rolling_mean(self._window)
-
-    def min(self) -> "Series[float]":
-        return self._series.rolling_min(self._window)
-
-    def max(self) -> "Series[float]":
-        return self._series.rolling_max(self._window)
-
-    def var(self) -> "Series[float]":
-        return self._series.rolling_var(self._window)
-
-    def std(self) -> "Series[float]":
-        return self._series.rolling_std(self._window)
-
-    def median(self) -> "Series[float]":
-        return self._series.rolling_median(self._window)
-
-    def quantile(self, q: float) -> "Series[float]":
-        return self._series.rolling_quantile(self._window, q)
-
-
-def ewm_alpha(
-    alpha: Optional[float], span: Optional[float], com: Optional[float], halflife: Optional[float]
-) -> float:
-    """The smoothing ``alpha`` from whichever pandas ``ewm`` parameter is given."""
-    given = [p for p in (alpha, span, com, halflife) if p is not None]
-    if len(given) != 1:
-        raise ValueError("ewm: pass exactly one of alpha, span, com or halflife")
-    if alpha is not None:
-        if not 0 < alpha <= 1:
-            raise ValueError("ewm: alpha must be in (0, 1]")
-        return float(alpha)
-    if span is not None:
-        if span < 1:
-            raise ValueError("ewm: span must be >= 1")
-        return 2.0 / (span + 1.0)
-    if com is not None:
-        if com < 0:
-            raise ValueError("ewm: com must be >= 0")
-        return 1.0 / (1.0 + com)
-    assert halflife is not None
-    if halflife <= 0:
-        raise ValueError("ewm: halflife must be > 0")
-    return 1.0 - 0.5 ** (1.0 / halflife)
-
-
 class _Expanding:
     """``s.expanding()``: the pandas expanding window object, from the
     cumulative kernels (``var`` / ``std`` from the running sum and sum of
@@ -1497,22 +1396,6 @@ class _Expanding:
 
     def std(self) -> "Series[float]":
         return self.var().sqrt()
-
-
-class _Ewm:
-    """``s.ewm(alpha)``: the pandas exponentially weighted window object."""
-
-    __slots__ = ("_series", "_alpha")
-
-    def __init__(self, series: Series, alpha: float) -> None:
-        self._series = series
-        self._alpha = alpha
-
-    def mean(self) -> "Series[float]":
-        return self._series.ewm_mean(self._alpha)
-
-    def std(self) -> "Series[float]":
-        return self._series.ewm_std(self._alpha)
 
 
 _NUMERIC_DTYPES = {

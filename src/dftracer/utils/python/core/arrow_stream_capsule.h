@@ -6,7 +6,7 @@
 #include <Python.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/memory.h>
-#include <dftracer/utils/python/trace/trace_reader_iterator.h>
+#include <dftracer/utils/python/core/arrow_batch_capsule.h>
 
 typedef struct {
     PyObject_HEAD dftracer::utils::dstd::SharedPtr<ArrowIteratorState> state;

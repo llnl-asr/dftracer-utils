@@ -20,6 +20,8 @@ ints + "x"  # not a number
 ints.take("x")  # indices, not text
 ints.is_in(5)  # a list or a Series
 ints.rolling("a")  # window is an int
+ints.rolling(3).nope()  # a window has no such method
+ints.ewm(alpha="a")  # alpha is a float
 ints.fillna([1])  # a scalar
 ints.name = 5  # a str or None
 ints.cast(1.5)  # a dtype

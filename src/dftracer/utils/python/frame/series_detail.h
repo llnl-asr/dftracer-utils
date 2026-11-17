@@ -44,6 +44,10 @@ struct AccessorObject {
 
 int init_accessors(PyObject* m);
 
+// The window types s.rolling(n) and s.ewm(alpha) build, and the module
+// function _ewm_alpha. Defined in series/window.cpp.
+int init_windows(PyObject* m);
+
 }  // namespace dftracer::utils::python::frame::series_detail
 
 template <>
@@ -172,9 +176,11 @@ PyObject* Series_logical(PyObject* self, PyObject* args);
 
 // series/window.cpp
 PyObject* Series_rolling(PyObject* self, PyObject* args, PyObject* kwds);
-PyObject* Series_rolling_var(PyObject* self, PyObject* arg);
-PyObject* Series_rolling_std(PyObject* self, PyObject* arg);
-PyObject* Series_rolling_median(PyObject* self, PyObject* arg);
+PyObject* Series_ewm(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* Series_rolling_sum(PyObject* self, PyObject* arg);
+PyObject* Series_rolling_mean(PyObject* self, PyObject* arg);
+PyObject* Series_rolling_min(PyObject* self, PyObject* arg);
+PyObject* Series_rolling_max(PyObject* self, PyObject* arg);
 PyObject* Series_rolling_quantile(PyObject* self, PyObject* args);
 PyObject* Series_ewm_mean(PyObject* self, PyObject* arg);
 PyObject* Series_ewm_std(PyObject* self, PyObject* arg);

@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -206,18 +207,16 @@ class Series {
     /// Build a STRUCT column from field `names` and `columns` (each the same
     /// length, aligned to names); takes ownership of the field columns. The
     /// columns are move-only, so pass them in a vector built by move.
-    static Series structs(dstd::Vector<dstd::String> names,
-                          dstd::Vector<Series> columns) {
-        dstd::Vector<dftu_series*> handles;
-        dstd::Vector<const char*> cnames;
-        handles.reserve(columns.size());
-        cnames.reserve(names.size());
-        for (Series& c : columns) handles.push_back(c.release());
-        for (const dstd::String& s : names) cnames.push_back(s.c_str());
-        return Series{
-            dftu_series_new_struct(handles.data(), cnames.data(),
-                                   static_cast<std::int32_t>(handles.size()))};
-    }
+    static Series structs(const dstd::Vector<dstd::String>& names,
+                          dstd::Vector<Series> columns);
+
+    /// @ref structs over shared names: the names are read, not copied.
+    static Series structs(const dstd::Vector<dstd::SharedString>& names,
+                          dstd::Vector<Series> columns);
+
+    /// @ref structs over literal names, such as `structs({"a", "b"}, ...)`.
+    static Series structs(std::initializer_list<const char*> names,
+                          dstd::Vector<Series> columns);
 
     /// Build a LIST column: `offsets` (n+1 entries) index into `values`; takes
     /// ownership of `values`.
@@ -739,6 +738,9 @@ class Series {
     }
 
    private:
+    static Series structs_from(const char* const* names,
+                               dstd::Vector<Series> columns);
+
     template <class T>
     static dftu_scalar as_scalar(T v) {
         return to_scalar(v);

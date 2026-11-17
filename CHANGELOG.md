@@ -11,6 +11,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 - Add the native types `StrAccessor`, `DtAccessor` and `ListAccessor` behind `Series.str`, `Series.dt` and `Series.list`.
   The accessor methods that are exactly one kernel (`lower`, `strip`, `len_chars`, `startswith`, `find`, `replace_all`, `zfill`, `list.len`, `list.get` and the rest of the rows with class `Str` or `List` in `core/api.def`) are generated from that table and typed in the `.pyi` by `scripts/gen_pyi.py`; a wrong call count or keyword now gives the message of the native argument parser.
+- Add the native types `Rolling` and `Ewm` behind `Series.rolling(window)` and `Series.ewm(...)`, and the native `Series.rolling_sum`, `rolling_mean`, `rolling_min` and `rolling_max`.
+  A window checks its arguments when `rolling` or `ewm` is called, not when you call a method of the window, and a bad argument raises the error of the native call.
+  `DataFrame.ewm` and `GroupBy.ewm` check `alpha`, `span`, `com` and `halflife` when they are called.
 - Add a tutorial on the JIT plugin API, `docs/source/tutorials/extending-the-engine.rst`, with plain state, a batch hook, a config, a finalize task, a channel and a UDF, and run every example of it and of `docs/source/jit.rst` from `examples/jit/` in `tests/python/test_docs_examples_jit.py`.
 - Add `@dft.udf` to register a Python function as a scalar UDF in two forms.
   A typed `def f(x: float, n: int) -> float` is compiled to a native UDF (per-row arithmetic, comparisons, conditions, `abs`, `min`, `max` and `math` functions) that expressions and duql call by name and that never takes the GIL; a body outside the subset is a located `JitError`, never a silent fallback.
@@ -809,6 +812,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove `read_arrow_files_parallel`, `TraceReaderIterator` and `_MemoryViewBatch` from `dftracer_utils_ext`, and `_ArrowStreamingIterator` as a module attribute; `LazyFrame.stream` still yields frames.
+  Read `.arrow` files with `pyarrow.ipc.open_file` and `DataFrame.from_arrow`.
 - Remove `common::str_cat`. Build a message with `dstd::fmt<"...">(args)` and append text in a loop with `dstd::fmt_append<"...">(out, args)`, both in `dftracer/utils/dstd/fmt.h`: the format string is checked at compile time and the result is sized once.
 - Remove `common::DFTUtilsException`, `common::throw_error`, `common::unwrap` and `duql::DuqlParseError`.
   Library calls return `dstd::Result`, so check the result where you called `unwrap` before.

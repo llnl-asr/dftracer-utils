@@ -3229,18 +3229,14 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/store/store.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime/task_handle.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime/task_handle.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/memoryview_batch.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/memoryview_batch.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/trace_reader_iterator.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/trace_reader_iterator.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/arrow_batch_capsule.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/arrow_batch_capsule.h
        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/arrow_helpers.cpp
        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/arrow_helpers.h
        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/arrow_stream_capsule.cpp
        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/arrow_stream_capsule.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/streaming_iterator.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/streaming_iterator.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/arrow_parallel_reader.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/arrow_parallel_reader.h)
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/streaming_iterator.h)
 
   # Link to unified library to test if this fixes the bus error
   target_link_libraries(dftracer_utils_ext PRIVATE dftracer_utils::shared)

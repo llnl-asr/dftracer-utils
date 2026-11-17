@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/python/core/call.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/method.h>
 #include <dftracer/utils/python/core/runtime_mixin.h>
@@ -21,6 +22,9 @@
 #include <structmember.h>
 
 #include <cstring>
+
+using dftracer::utils::python::core::guard;
+using dftracer::utils::python::core::parse_kw;
 
 static void CheckpointIndexer_dealloc(CheckpointIndexerObject *self) {
     if (self->handle) {
@@ -64,13 +68,6 @@ static PyObject *CheckpointIndexer_new(PyTypeObject *type, PyObject *,
 
 static int CheckpointIndexer_init(CheckpointIndexerObject *self, PyObject *args,
                                   PyObject *kwds) {
-    static const char *kwlist[] = {"gz_path",
-                                   "index_path",
-                                   "checkpoint_size",
-                                   "force_rebuild",
-                                   "build_bloom",
-                                   "runtime",
-                                   NULL};
     const char *gz_path;
     const char *index_path = NULL;
     std::uint64_t checkpoint_size =
@@ -79,10 +76,11 @@ static int CheckpointIndexer_init(CheckpointIndexerObject *self, PyObject *args,
     int build_bloom = 0;
     PyObject *runtime_arg = NULL;
 
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "s|snppO", const_cast<char **>(kwlist), &gz_path,
-            &index_path, &checkpoint_size, &force_rebuild, &build_bloom,
-            &runtime_arg)) {
+    if (!parse_kw<"s|snppO">(args, kwds,
+                             {"gz_path", "index_path", "checkpoint_size",
+                              "force_rebuild", "build_bloom", "runtime"},
+                             &gz_path, &index_path, &checkpoint_size,
+                             &force_rebuild, &build_bloom, &runtime_arg)) {
         return -1;
     }
 
@@ -133,7 +131,7 @@ static int CheckpointIndexer_init(CheckpointIndexerObject *self, PyObject *args,
         CheckpointIndexerFactory::try_create(
             gz_path, index_path_str, checkpoint_size, force_rebuild != 0);
     if (!created) {
-        PyErr_SetString(PyExc_RuntimeError, created.error().c_str());
+        dftracer::utils::python::core::set_py_error(created.error());
         return -1;
     }
     auto indexer = std::move(*created);
@@ -272,7 +270,7 @@ static PyObject *CheckpointIndexer_build_async(CheckpointIndexerObject *self,
     }
     auto convert = [](dstd::Result<void> &result) -> PyObject * {
         if (!result) {
-            PyErr_SetString(PyExc_RuntimeError, result.error().c_str());
+            dftracer::utils::python::core::set_py_error(result.error());
             return NULL;
         }
         Py_RETURN_NONE;
@@ -296,12 +294,9 @@ static PyObject *CheckpointIndexer_need_rebuild(CheckpointIndexerObject *self,
         return NULL;
     }
 
-    try {
+    return guard([&]() -> PyObject * {
         return PyBool_FromLong((*self->handle)->need_rebuild() ? 1 : 0);
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
-        return NULL;
-    }
+    });
 }
 
 static PyObject *CheckpointIndexer_exists(CheckpointIndexerObject *self,
@@ -311,12 +306,9 @@ static PyObject *CheckpointIndexer_exists(CheckpointIndexerObject *self,
         return NULL;
     }
 
-    try {
+    return guard([&]() -> PyObject * {
         return PyBool_FromLong((*self->handle)->exists() ? 1 : 0);
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
-        return NULL;
-    }
+    });
 }
 
 static PyObject *CheckpointIndexer_get_max_bytes(CheckpointIndexerObject *self,
@@ -326,13 +318,10 @@ static PyObject *CheckpointIndexer_get_max_bytes(CheckpointIndexerObject *self,
         return NULL;
     }
 
-    try {
+    return guard([&]() -> PyObject * {
         dftracer::utils::python::core::py_unwrap((*self->handle)->load());
         return PyLong_FromUnsignedLongLong((*self->handle)->max_bytes());
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
-        return NULL;
-    }
+    });
 }
 
 static PyObject *CheckpointIndexer_get_num_lines(CheckpointIndexerObject *self,
@@ -342,13 +331,10 @@ static PyObject *CheckpointIndexer_get_num_lines(CheckpointIndexerObject *self,
         return NULL;
     }
 
-    try {
+    return guard([&]() -> PyObject * {
         dftracer::utils::python::core::py_unwrap((*self->handle)->load());
         return PyLong_FromUnsignedLongLong((*self->handle)->line_count());
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
-        return NULL;
-    }
+    });
 }
 
 static PyObject *CheckpointIndexer_has_bloom(CheckpointIndexerObject *self,
@@ -358,7 +344,7 @@ static PyObject *CheckpointIndexer_has_bloom(CheckpointIndexerObject *self,
     if (!idx || !gz) {
         Py_RETURN_FALSE;
     }
-    try {
+    PyObject *has = guard([&]() -> PyObject * {
         auto opened = dftracer::utils::trace::index::Index::open(idx);
         if (opened) {
             auto snapshot = opened->snapshot();
@@ -374,8 +360,10 @@ static PyObject *CheckpointIndexer_has_bloom(CheckpointIndexerObject *self,
                 }
             }
         }
-    } catch (...) {
-    }
+        return nullptr;
+    });
+    if (has) return has;
+    PyErr_Clear();
     Py_RETURN_FALSE;
 }
 

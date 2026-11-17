@@ -5,8 +5,8 @@
 // Arrow PyCapsule interface (__arrow_c_array__).
 //
 // This is the entry translation unit: it owns the SeriesType type object, the
-// PyMethodDef table, init_series, and the shared make_series/as_series
-// file-statics. The method bodies live in series/{arith,math,window,stats,
+// PyMethodDef table, init_series, and the shared make_series
+// file-static. The method bodies live in series/{arith,math,window,stats,
 // reduce,string,arrow}.cpp and are declared in series_detail.h.
 
 #include <dftracer/utils/common/config.h>
@@ -61,23 +61,10 @@ PyObject* make_series(Series&& col) {
     return reinterpret_cast<PyObject*>(self);
 }
 
-Series* as_series(PyObject* o) {
-    if (!PyObject_TypeCheck(o, &SeriesType)) {
-        PyErr_SetString(PyExc_TypeError, "expected a Series");
-        return nullptr;
-    }
-    return &reinterpret_cast<SeriesObject*>(o)->col;
-}
-
-Series* as_series_or_null(PyObject* o) {
-    if (!PyObject_TypeCheck(o, &SeriesType)) return nullptr;
-    return &reinterpret_cast<SeriesObject*>(o)->col;
-}
-
 namespace {
 
 Py_ssize_t Series_length_sq(PyObject* self) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return -1;
     return static_cast<Py_ssize_t>(a->length());
 }
@@ -88,7 +75,7 @@ Py_ssize_t Series_length_sq(PyObject* self) {
 // falls back to the Arrow path.
 int Series_getbuffer(PyObject* self, Py_buffer* view, int flags) {
     view->obj = nullptr;
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return -1;
     if ((flags & PyBUF_WRITABLE) == PyBUF_WRITABLE) {
         PyErr_SetString(PyExc_BufferError, "Series buffer is read-only");
@@ -182,46 +169,46 @@ int Series_getbuffer(PyObject* self, Py_buffer* view, int flags) {
 // ---- getters -------------------------------------------------------------
 
 PyObject* Series_get_type(PyObject* self, void*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     return PyLong_FromLong(static_cast<long>(a->type()));
 }
 PyObject* Series_get_length(PyObject* self, void*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     return PyLong_FromLongLong(a->length());
 }
 PyObject* Series_get_null_count(PyObject* self, void*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     return PyLong_FromLongLong(a->null_count());
 }
 PyObject* Series_get_encoding(PyObject* self, void*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     return PyLong_FromLong(static_cast<long>(a->encoding()));
 }
 PyObject* Series_get_time_unit(PyObject* self, void*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     return PyLong_FromLong(
         static_cast<long>(dftu_series_time_unit(a->handle())));
 }
 
 PyObject* Series_get_timezone(PyObject* self, void*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     return PyUnicode_FromString(dftu_series_timezone(a->handle()));
 }
 
 PyObject* Series_get_is_json(PyObject* self, void*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     return PyBool_FromLong(dftu_series_is_json(a->handle()));
 }
 
 PyObject* Series_get_name(PyObject* self, void*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     const dstd::StringView name = a->name();
     if (name.empty()) Py_RETURN_NONE;
@@ -230,7 +217,7 @@ PyObject* Series_get_name(PyObject* self, void*) {
 }
 
 PyObject* Series_rename(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     if (arg == Py_None) return make_series(a->rename(dstd::StringView{}));
     Py_ssize_t n = 0;
@@ -718,3 +705,8 @@ int init_series(PyObject* m) {
 }
 
 }  // namespace dftracer::utils::python::frame
+
+PyTypeObject* dftracer::utils::python::core::NativeTraits<
+    dftracer::utils::dataframe::Series>::type() {
+    return &dftracer::utils::python::frame::series_detail::SeriesType;
+}

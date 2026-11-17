@@ -565,7 +565,7 @@ bool fast_pylist(const Series& col, PyObject** result) {
 }  // namespace
 
 PyObject* Series_to_pylist(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a || !datetime_ready()) return nullptr;
     if (a->type() == TypeId::String || a->type() == TypeId::LargeString)
         return strings_to_list(*a, Py_None);
@@ -576,7 +576,7 @@ PyObject* Series_to_pylist(PyObject* self, PyObject*) {
         PyObject* fast = nullptr;
         if (fast_pylist(col, &fast)) return fast;
     }
-    try {
+    return guard_as(PyExc_TypeError, [&]() -> PyObject* {
         const Node node = build_node(*a);
         const std::int64_t n = node.col.length();
         PyObject* out = PyList_New(static_cast<Py_ssize_t>(n));
@@ -590,10 +590,7 @@ PyObject* Series_to_pylist(PyObject* self, PyObject*) {
             PyList_SET_ITEM(out, static_cast<Py_ssize_t>(i), v);
         }
         return out;
-    } catch (const std::invalid_argument& e) {
-        PyErr_SetString(PyExc_TypeError, e.what());
-        return nullptr;
-    }
+    });
 }
 
 namespace {
@@ -894,7 +891,7 @@ PyObject* strings_to_list(const Series& col, PyObject* na) {
 //  - String / LargeString: a list of str, null rows holding `na`; dtype "O";
 //  - any other type: TypeError.
 PyObject* Series_np_parts(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     int nullable = 0;
     PyObject* na = Py_None;
@@ -937,7 +934,7 @@ PyObject* Series_np_parts(PyObject* self, PyObject* args) {
         return tuple3(widen_to_double(static_cast<const T*>(data), valid, n),
                       nullptr, "<f8");
     };
-    try {
+    return guard_as(PyExc_TypeError, [&]() -> PyObject* {
         switch (col.type()) {
             case TypeId::Int8:
                 return valid && !nullable ? widen(std::int8_t{}, "i1")
@@ -990,17 +987,14 @@ PyObject* Series_np_parts(PyObject* self, PyObject* args) {
                                 "column type has no native numpy conversion");
                 return nullptr;
         }
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_TypeError, e.what());
-        return nullptr;
-    }
+    });
 }
 
 // str_into(out, na): the String column's rows into `out`, a writable
 // one-dimensional numpy object array of the column's length (made with
 // numpy.empty(n, dtype=object)); null rows get `na`. Returns None.
 PyObject* Series_str_into(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     PyObject* out = nullptr;
     PyObject* na = Py_None;
@@ -1032,7 +1026,7 @@ PyObject* Series_str_into(PyObject* self, PyObject* args) {
 }
 
 PyObject* Series_item(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a || !datetime_ready()) return nullptr;
     const Py_ssize_t i = PyLong_AsSsize_t(arg);
     if (i == -1 && PyErr_Occurred()) return nullptr;
@@ -1040,14 +1034,11 @@ PyObject* Series_item(PyObject* self, PyObject* arg) {
         PyErr_SetString(PyExc_IndexError, "Series index out of range");
         return nullptr;
     }
-    try {
+    return guard_as(PyExc_TypeError, [&] {
         if (a->encoding() == dataframe::Encoding::Chunked)
             return cell(build_node(a->slice(i, 1)), 0);
         return cell(build_node(*a), i);
-    } catch (const std::invalid_argument& e) {
-        PyErr_SetString(PyExc_TypeError, e.what());
-        return nullptr;
-    }
+    });
 }
 
 namespace {
@@ -1494,7 +1485,7 @@ PyObject* build_lists(PyObject** items, Py_ssize_t n, Bits& bits) {
         from_items(flat.data(), static_cast<Py_ssize_t>(flat.size()), 0,
                    static_cast<int>(TypeId::String));
     if (!child) return nullptr;
-    Series* c = as_series(child);
+    Series* c = as_native<Series>(child);
     Series list = Series::list(offsets, c->share());
     Py_DECREF(child);
     return with_validity(std::move(list), bits, n);
@@ -1530,7 +1521,7 @@ PyObject* build_structs(PyObject** items, Py_ssize_t n, Bits& bits) {
             from_items(column.data(), static_cast<Py_ssize_t>(column.size()), 0,
                        static_cast<int>(TypeId::String));
         if (!built) return nullptr;
-        fields.push_back(as_series(built)->share());
+        fields.push_back(as_native<Series>(built)->share());
         Py_DECREF(built);
     }
     for (Py_ssize_t i = 0; i < n; ++i)
@@ -1618,7 +1609,7 @@ PyObject* from_items(PyObject** items, Py_ssize_t n, int want, int empty) {
                             any_big);
     }
     if (!built || want == 0) return built;
-    Series* got = as_series(built);
+    Series* got = as_native<Series>(built);
     if (!got || static_cast<int>(got->type()) == want) return built;
     Series cast = got->cast(static_cast<TypeId>(want));
     Py_DECREF(built);

@@ -12,7 +12,13 @@ import pytest
 
 pa = pytest.importorskip("pyarrow")
 
-from dftracer.utils import DataFrame, LazyFrame, col, lazy  # noqa: E402
+from dftracer.utils import (  # noqa: E402
+    DataFrame,
+    DFTUtilsNotFoundError,
+    LazyFrame,
+    col,
+    lazy,
+)
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
 
 _HAS_ARROW = hasattr(_ext, "_LazyFrame")
@@ -193,7 +199,7 @@ def test_head_by_keeps_first_n_rows_per_key_in_input_order():
     assert _dict(df.lazy().head_by("k", 2).collect())["v"] == [0, 1, 2, 3, 5, 6, 7]
     assert _dict(df.lazy().head_by(["k", "j"], 1).collect())["v"] == [0, 1, 2, 3, 5, 7]
     assert _dict(df.lazy().head_by("k", 0).collect()).get("v", []) == []
-    with pytest.raises(ValueError, match="no column named nope"):
+    with pytest.raises(DFTUtilsNotFoundError, match="no column named nope"):
         df.lazy().head_by("nope", 1)
 
     big = _df({"k": [i % 7 for i in range(20000)], "v": list(range(20000))})

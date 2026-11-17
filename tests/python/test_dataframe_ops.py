@@ -17,7 +17,7 @@ import pytest
 
 pa = pytest.importorskip("pyarrow")
 
-from dftracer.utils import DataFrame  # noqa: E402
+from dftracer.utils import DataFrame, DFTUtilsNotFoundError  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
 
 # The analytical kernels only exist when the extension was built with Arrow.
@@ -373,7 +373,7 @@ def test_lazy_join_matches_eager():
         assert _dict(plan.collect()) == _dict(eager)
         assert _dict(plan.collect(batch_size=1)) == _dict(eager)
     assert "join left [k] = [k]" in left.lazy().join(right.lazy(), "k", "left").explain()
-    with pytest.raises(ValueError):
+    with pytest.raises(DFTUtilsNotFoundError):
         left.lazy().join(right.lazy(), "nope").columns
 
 
@@ -486,9 +486,9 @@ def test_lazy_asof_and_interval_errors():
     left, right = _random_frames(1, 10, 10)
     with pytest.raises(ValueError, match="tolerance"):
         left.lazy().asof(right.lazy(), "ts", "g", "backward", -1)
-    with pytest.raises((KeyError, IndexError, ValueError)):
+    with pytest.raises(DFTUtilsNotFoundError):
         left.lazy().asof(right.lazy(), "nope", "g", "backward")
-    with pytest.raises(ValueError):
+    with pytest.raises(DFTUtilsNotFoundError):
         left.lazy().interval(right.lazy(), "ts", "ts", "nope")
 
 

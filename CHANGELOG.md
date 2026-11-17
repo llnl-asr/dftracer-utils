@@ -145,6 +145,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Release the GIL around every `Series` kernel and every eager `DataFrame` op on 16384 or more rows, so two Python threads run two long kernels at once.
+  `Series.to_pylist`, `np_parts` and the other calls that build Python objects keep the GIL.
+- Raise the typed errors from the native `Series`, `DataFrame` and `LazyFrame` calls, chosen by the error code, in place of a bare `ValueError` or `RuntimeError`.
+  An invalid-argument error is a `DFTUtilsValueError`, which is also a `ValueError`, so `except ValueError` still catches it.
+  A not-found error, such as an unknown column on an eager or a lazy op, is a `DFTUtilsNotFoundError`, which is also a `KeyError`, with the plain message as its `str`.
+  These are no longer a `ValueError`: a lazy op error that is not an invalid-argument error (a not-found error was a `ValueError`, now a `KeyError`; any other code is its own `DFTUtils*Error`, a `RuntimeError`), and an eager op that threw a generic `std::exception` (now a `DFTUtilsError`).
+  `df.group_by("a", "bogus:b")` raises a `DFTUtilsValueError` in place of a `KeyError`, and a failed Arrow import, an index build and a runtime call raise their own `DFTUtils*Error`.
 - A `jit` plugin built into the cache is now `<cache>/<digest>/<plugin name>.so`, and a plugin that has a `jit.Store` loads under its class identity, so its store namespace stays the same when its body changes.
 - `jit.Str` is a `str` to a type checker, so `Set[str]` and `Dict[Tuple[int, str], int]` take `e.name`.
 - Replace `jit.config(jit.i64)` with the dataclass config above, read as `self.config.threshold` in place of `self.threshold`, and declare a `jit.record` as monoid values (`count = jit.count()`) in place of annotations (`count: jit.count`), so a type checker accepts both.

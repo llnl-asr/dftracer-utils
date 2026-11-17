@@ -19,14 +19,18 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/python/core/call.h>
 #include <dftracer/utils/python/core/method.h>
 #include <dftracer/utils/python/core/scalar_helpers.h>
+#include <dftracer/utils/python/core/seq_helpers.h>
 #include <dftracer/utils/python/frame/columnar_eval.h>
 #include <dftracer/utils/python/frame/series.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <cstdint>
 #include <utility>
+
+using dftracer::utils::python::core::release_gil;
 
 using namespace dftracer::utils;
 
@@ -92,48 +96,39 @@ bool py_str_view(PyObject* o, dftracer::utils::dstd::StringView* out) {
 
 // The is_in value list as a Series: all ints (Int64) or all strs (String).
 bool py_values_series(PyObject* list, dataframe::Series* out) {
-    PyObject* seq = PySequence_Fast(list, "is_in values must be a sequence");
-    if (!seq) return false;
-    const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+    dftracer::utils::python::core::FastSeq items;
+    if (!items.open(list, "is_in values must be a sequence")) return false;
+    const auto n = static_cast<std::size_t>(items.size());
     bool all_str = n > 0;
     bool all_int = n > 0;
-    for (Py_ssize_t i = 0; i < n; ++i) {
-        PyObject* v = PySequence_Fast_GET_ITEM(seq, i);
+    for (Py_ssize_t i = 0; i < items.size(); ++i) {
+        PyObject* v = items.item(i);
         if (!PyUnicode_Check(v)) all_str = false;
         if (PyBool_Check(v) || !PyLong_Check(v)) all_int = false;
     }
     if (all_str) {
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> values;
-        values.reserve(static_cast<std::size_t>(n));
-        for (Py_ssize_t i = 0; i < n; ++i) {
+        values.reserve(n);
+        for (Py_ssize_t i = 0; i < items.size(); ++i) {
             dftracer::utils::dstd::StringView s;
-            if (!py_str_view(PySequence_Fast_GET_ITEM(seq, i), &s)) {
-                Py_DECREF(seq);
-                return false;
-            }
+            if (!py_str_view(items.item(i), &s)) return false;
             values.emplace_back(s);
         }
-        Py_DECREF(seq);
         *out = dataframe::Series::strings(values);
         return true;
     }
     if (all_int) {
         dftracer::utils::dstd::Vector<std::int64_t> values;
-        values.reserve(static_cast<std::size_t>(n));
-        for (Py_ssize_t i = 0; i < n; ++i) {
-            values.push_back(static_cast<std::int64_t>(
-                PyLong_AsLongLong(PySequence_Fast_GET_ITEM(seq, i))));
-            if (PyErr_Occurred()) {
-                Py_DECREF(seq);
-                return false;
-            }
+        values.reserve(n);
+        for (Py_ssize_t i = 0; i < items.size(); ++i) {
+            values.push_back(
+                static_cast<std::int64_t>(PyLong_AsLongLong(items.item(i))));
+            if (PyErr_Occurred()) return false;
         }
-        Py_DECREF(seq);
         *out = dataframe::Series::flat_i64(values.data(),
                                            static_cast<std::int64_t>(n));
         return true;
     }
-    Py_DECREF(seq);
     PyErr_SetString(PyExc_TypeError,
                     "is_in values must be a non-empty list of all ints or all "
                     "strings");
@@ -296,9 +291,7 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                     static_cast<dataframe::StrPredOp>(PyLong_AsLong(arg(1))), a,
                     needle);
                 if (!pred) {
-                    const dftracer::utils::dstd::String message(
-                        pred.error().message());
-                    PyErr_SetString(PyExc_ValueError, message.c_str());
+                    dftracer::utils::python::core::set_py_error(pred.error());
                     return false;
                 }
                 stack.push_back(std::move(*pred));
@@ -520,6 +513,26 @@ static PyObject* udaf_names(PyObject* /*self*/, PyObject* /*unused*/) {
     return list;
 }
 
+// The Series behind each item of `obj`, as borrowed pointers into `held`, which
+// must outlive their use; `msg` is the TypeError for an item that is not a
+// Series.
+bool columns_from_seq(
+    PyObject* obj, const char* msg,
+    dftracer::utils::python::core::FastSeq& held,
+    dftracer::utils::dstd::Vector<const dataframe::Series*>& out) {
+    if (!held.open(obj, "columns must be a sequence")) return false;
+    out.reserve(static_cast<std::size_t>(held.size()));
+    for (Py_ssize_t i = 0; i < held.size(); ++i) {
+        const dataframe::Series* c = unwrap_vec_column(held.item(i));
+        if (!c) {
+            PyErr_SetString(PyExc_TypeError, msg);
+            return false;
+        }
+        out.push_back(c);
+    }
+    return true;
+}
+
 // vec_eval(ast, [Series, ...]) -> Series
 static PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
     PyObject* ast = nullptr;
@@ -529,30 +542,15 @@ static PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
     dataframe::Expr expr;
     if (!build_expr(ast, &expr)) return nullptr;
 
-    PyObject* seq = PySequence_Fast(cols_obj, "columns must be a sequence");
-    if (!seq) return nullptr;
-    Py_ssize_t nc = PySequence_Fast_GET_SIZE(seq);
+    dftracer::utils::python::core::FastSeq held;
     dftracer::utils::dstd::Vector<const dataframe::Series*> inputs;
-    inputs.reserve(static_cast<std::size_t>(nc));
-    for (Py_ssize_t i = 0; i < nc; ++i) {
-        const dataframe::Series* c =
-            unwrap_vec_column(PySequence_Fast_GET_ITEM(seq, i));
-        if (!c) {
-            Py_DECREF(seq);
-            PyErr_SetString(PyExc_TypeError, "columns must be SeriesList");
-            return nullptr;
-        }
-        inputs.push_back(c);
-    }
-    Py_DECREF(seq);
+    if (!columns_from_seq(cols_obj, "columns must be SeriesList", held, inputs))
+        return nullptr;
 
     // A per-batch Python udf runs on the Python lane, which needs the GIL.
-    PyThreadState* saved = PyEval_SaveThread();
-    auto out = dataframe::eval(expr, inputs);
-    PyEval_RestoreThread(saved);
+    auto out = release_gil([&] { return dataframe::eval(expr, inputs); });
     if (!out) {
-        const dftracer::utils::dstd::String message(out.error().message());
-        PyErr_SetString(PyExc_RuntimeError, message.c_str());
+        dftracer::utils::python::core::set_py_error(out.error());
         return nullptr;
     }
     return wrap_vec_column(std::move(*out));
@@ -566,43 +564,26 @@ static PyObject* vec_eval_many(PyObject* /*self*/, PyObject* args) {
     PyObject* cols_obj = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &asts_obj, &cols_obj)) return nullptr;
 
-    PyObject* aseq = PySequence_Fast(asts_obj, "asts must be a sequence");
-    if (!aseq) return nullptr;
-    Py_ssize_t ne = PySequence_Fast_GET_SIZE(aseq);
-    dftracer::utils::dstd::Vector<dataframe::Expr> roots(
-        static_cast<std::size_t>(ne));
-    for (Py_ssize_t i = 0; i < ne; ++i) {
-        if (!build_expr(PySequence_Fast_GET_ITEM(aseq, i),
-                        &roots[static_cast<std::size_t>(i)])) {
-            Py_DECREF(aseq);
-            return nullptr;
-        }
-    }
-    Py_DECREF(aseq);
+    dftracer::utils::dstd::Vector<dataframe::Expr> roots;
+    if (!dftracer::utils::python::core::parse_seq<dataframe::Expr>(
+            asts_obj, "asts must be a sequence", roots,
+            [](PyObject* item,
+               dftracer::utils::dstd::Vector<dataframe::Expr>& o) {
+                dataframe::Expr root;
+                if (!build_expr(item, &root)) return false;
+                o.push_back(std::move(root));
+                return true;
+            }))
+        return nullptr;
 
-    PyObject* seq = PySequence_Fast(cols_obj, "columns must be a sequence");
-    if (!seq) return nullptr;
-    Py_ssize_t nc = PySequence_Fast_GET_SIZE(seq);
+    dftracer::utils::python::core::FastSeq held;
     dftracer::utils::dstd::Vector<const dataframe::Series*> inputs;
-    inputs.reserve(static_cast<std::size_t>(nc));
-    for (Py_ssize_t i = 0; i < nc; ++i) {
-        const dataframe::Series* c =
-            unwrap_vec_column(PySequence_Fast_GET_ITEM(seq, i));
-        if (!c) {
-            Py_DECREF(seq);
-            PyErr_SetString(PyExc_TypeError, "columns must be Series");
-            return nullptr;
-        }
-        inputs.push_back(c);
-    }
-    Py_DECREF(seq);
+    if (!columns_from_seq(cols_obj, "columns must be Series", held, inputs))
+        return nullptr;
 
-    PyThreadState* saved = PyEval_SaveThread();
-    auto res = dataframe::eval_many(roots, inputs);
-    PyEval_RestoreThread(saved);
+    auto res = release_gil([&] { return dataframe::eval_many(roots, inputs); });
     if (!res) {
-        const dftracer::utils::dstd::String message(res.error().message());
-        PyErr_SetString(PyExc_RuntimeError, message.c_str());
+        dftracer::utils::python::core::set_py_error(res.error());
         return nullptr;
     }
     dftracer::utils::dstd::Vector<dataframe::Series>& outs = *res;

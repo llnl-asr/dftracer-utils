@@ -15,6 +15,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/python/core/call.h>
 #include <dftracer/utils/python/core/dict_helpers.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/list_helpers.h>
@@ -43,6 +44,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+
+using dftracer::utils::python::core::guard;
+using dftracer::utils::python::core::parse_kw;
 
 using namespace dftracer::utils;
 
@@ -99,31 +103,6 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject*, PyObject*) {
 }
 
 static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
-    static const char* kwlist[] = {"directory",
-                                   "files",
-                                   "index_dir",
-                                   "require_checkpoint",
-                                   "require_bloom",
-                                   "build_bloom",
-                                   "time_interval_ms",
-                                   "group_keys",
-                                   "compute_percentiles",
-                                   "group_by_file",
-                                   "checkpoint_size",
-                                   "parallelism",
-                                   "force_rebuild",
-                                   "runtime",
-                                   "bloom_fields",
-                                   "false_positive_rate",
-                                   "expected_entries",
-                                   "path_budget",
-                                   "stats_share",
-                                   "auto_max_distinct",
-                                   "extensions",
-                                   "memory_budget",
-                                   "schema",
-                                   nullptr};
-
     const char* directory = "";
     PyObject* files_obj = Py_None;
     const char* index_dir = "";
@@ -151,8 +130,31 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     unsigned long long memory_budget = 0;
     PyObject* schema_obj = Py_None;
 
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "|sOspppdOppnnpOOdnndnOKO", const_cast<char**>(kwlist),
+    if (!parse_kw<"|sOspppdOppnnpOOdnndnOKO">(
+            args, kwds,
+            {"directory",
+             "files",
+             "index_dir",
+             "require_checkpoint",
+             "require_bloom",
+             "build_bloom",
+             "time_interval_ms",
+             "group_keys",
+             "compute_percentiles",
+             "group_by_file",
+             "checkpoint_size",
+             "parallelism",
+             "force_rebuild",
+             "runtime",
+             "bloom_fields",
+             "false_positive_rate",
+             "expected_entries",
+             "path_budget",
+             "stats_share",
+             "auto_max_distinct",
+             "extensions",
+             "memory_budget",
+             "schema"},
             &directory, &files_obj, &index_dir, &require_checkpoint,
             &require_bloom, &build_bloom, &time_interval_ms, &group_keys_obj,
             &compute_percentiles, &group_by_file, &checkpoint_size,
@@ -910,14 +912,11 @@ namespace {
 
 template <class Fn>
 PyObject* schema_str(Fn fn) {
-    try {
+    return guard([&] {
         const auto s = dftracer::utils::python::core::py_unwrap(fn());
         return PyUnicode_FromStringAndSize(s.data(),
                                            static_cast<Py_ssize_t>(s.size()));
-    } catch (const std::exception& e) {
-        dftracer::utils::python::core::set_typed_py_error(e);
-        return nullptr;
-    }
+    });
 }
 
 PyObject* schema_register_fn(PyObject*, PyObject* args) {

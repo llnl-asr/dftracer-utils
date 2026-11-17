@@ -32,7 +32,7 @@ PyObject* make_arith_series(Series&& col, TypeId a_type, TypeId b_type) {
 enum class ScalarOp { Add, Sub, Mul, Div };
 
 PyObject* scalar_op(PyObject* self, PyObject* value, ScalarOp op) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     TypeId a_type = a->type();
     if (PyFloat_Check(value)) {
@@ -40,14 +40,22 @@ PyObject* scalar_op(PyObject* self, PyObject* value, ScalarOp op) {
         if (v == -1.0 && PyErr_Occurred()) return nullptr;
         if (op == ScalarOp::Mul)
             return make_arith_series(
-                named_like(dataframe::mul_scalar(*a, v), *a), a_type,
-                TypeId::Float64);
+                named_like(
+                    kernel(*a, [&] { return dataframe::mul_scalar(*a, v); }),
+                    *a),
+                a_type, TypeId::Float64);
         if (op == ScalarOp::Div)
             return make_arith_series(
-                named_like(dataframe::div_scalar(*a, v), *a), a_type,
-                TypeId::Float64);
+                named_like(
+                    kernel(*a, [&] { return dataframe::div_scalar(*a, v); }),
+                    *a),
+                a_type, TypeId::Float64);
         return make_arith_series(
-            named_like(dataframe::add_scalar(*a, op == ScalarOp::Sub ? -v : v),
+            named_like(kernel(*a,
+                              [&] {
+                                  return dataframe::add_scalar(
+                                      *a, op == ScalarOp::Sub ? -v : v);
+                              }),
                        *a),
             a_type, TypeId::Float64);
     }
@@ -55,13 +63,21 @@ PyObject* scalar_op(PyObject* self, PyObject* value, ScalarOp op) {
     if (v == -1 && PyErr_Occurred()) return nullptr;
     auto iv = static_cast<std::int64_t>(v);
     if (op == ScalarOp::Mul)
-        return make_arith_series(named_like(dataframe::mul_scalar(*a, iv), *a),
-                                 a_type, TypeId::Int64);
+        return make_arith_series(
+            named_like(
+                kernel(*a, [&] { return dataframe::mul_scalar(*a, iv); }), *a),
+            a_type, TypeId::Int64);
     if (op == ScalarOp::Div)
-        return make_arith_series(named_like(dataframe::div_scalar(*a, iv), *a),
-                                 a_type, TypeId::Int64);
+        return make_arith_series(
+            named_like(
+                kernel(*a, [&] { return dataframe::div_scalar(*a, iv); }), *a),
+            a_type, TypeId::Int64);
     return make_arith_series(
-        named_like(dataframe::add_scalar(*a, op == ScalarOp::Sub ? -iv : iv),
+        named_like(kernel(*a,
+                          [&] {
+                              return dataframe::add_scalar(
+                                  *a, op == ScalarOp::Sub ? -iv : iv);
+                          }),
                    *a),
         a_type, TypeId::Int64);
 }
@@ -69,32 +85,36 @@ PyObject* scalar_op(PyObject* self, PyObject* value, ScalarOp op) {
 }  // namespace
 
 PyObject* Series_add(PyObject* self, PyObject* other) {
-    Series* a = as_series(self);
-    Series* b = as_series(other);
+    Series* a = as_native<Series>(self);
+    Series* b = as_native<Series>(other);
     if (!a || !b) return nullptr;
-    return make_arith_series(named_like(dataframe::add(*a, *b), *a, *b),
-                             a->type(), b->type());
+    return make_arith_series(
+        named_like(kernel(*a, [&] { return dataframe::add(*a, *b); }), *a, *b),
+        a->type(), b->type());
 }
 PyObject* Series_sub(PyObject* self, PyObject* other) {
-    Series* a = as_series(self);
-    Series* b = as_series(other);
+    Series* a = as_native<Series>(self);
+    Series* b = as_native<Series>(other);
     if (!a || !b) return nullptr;
-    return make_arith_series(named_like(dataframe::sub(*a, *b), *a, *b),
-                             a->type(), b->type());
+    return make_arith_series(
+        named_like(kernel(*a, [&] { return dataframe::sub(*a, *b); }), *a, *b),
+        a->type(), b->type());
 }
 PyObject* Series_mul(PyObject* self, PyObject* other) {
-    Series* a = as_series(self);
-    Series* b = as_series(other);
+    Series* a = as_native<Series>(self);
+    Series* b = as_native<Series>(other);
     if (!a || !b) return nullptr;
-    return make_arith_series(named_like(dataframe::mul(*a, *b), *a, *b),
-                             a->type(), b->type());
+    return make_arith_series(
+        named_like(kernel(*a, [&] { return dataframe::mul(*a, *b); }), *a, *b),
+        a->type(), b->type());
 }
 PyObject* Series_div(PyObject* self, PyObject* other) {
-    Series* a = as_series(self);
-    Series* b = as_series(other);
+    Series* a = as_native<Series>(self);
+    Series* b = as_native<Series>(other);
     if (!a || !b) return nullptr;
-    return make_arith_series(named_like(dataframe::div(*a, *b), *a, *b),
-                             a->type(), b->type());
+    return make_arith_series(
+        named_like(kernel(*a, [&] { return dataframe::div(*a, *b); }), *a, *b),
+        a->type(), b->type());
 }
 
 // floordiv / mod / pow: `other` is a Series, or a number with the optional
@@ -102,15 +122,17 @@ PyObject* Series_div(PyObject* self, PyObject* other) {
 enum class ExtraOp { FloorDiv, Mod, Pow };
 
 static PyObject* extra_op(PyObject* self, PyObject* args, ExtraOp op) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     PyObject* other = nullptr;
     int reverse = 0;
     if (!PyArg_ParseTuple(args, "O|p", &other, &reverse)) return nullptr;
-    if (Series* b = as_series_or_null(other)) {
-        Series out = op == ExtraOp::FloorDiv ? dataframe::floordiv(*a, *b)
-                     : op == ExtraOp::Mod    ? dataframe::mod(*a, *b)
-                                             : dataframe::pow(*a, *b);
+    if (Series* b = as_native_or_null<Series>(other)) {
+        Series out = kernel(*a, [&] {
+            return op == ExtraOp::FloorDiv ? dataframe::floordiv(*a, *b)
+                   : op == ExtraOp::Mod    ? dataframe::mod(*a, *b)
+                                           : dataframe::pow(*a, *b);
+        });
         return make_arith_series(named_like(std::move(out), *a, *b), a->type(),
                                  b->type());
     }
@@ -118,20 +140,23 @@ static PyObject* extra_op(PyObject* self, PyObject* args, ExtraOp op) {
     if (PyFloat_Check(other)) {
         const double v = PyFloat_AsDouble(other);
         if (v == -1.0 && PyErr_Occurred()) return nullptr;
-        Series out = op == ExtraOp::FloorDiv
-                         ? dataframe::floordiv_scalar(*a, v, rev)
-                     : op == ExtraOp::Mod ? dataframe::mod_scalar(*a, v, rev)
-                                          : dataframe::pow_scalar(*a, v, rev);
+        Series out = kernel(*a, [&] {
+            return op == ExtraOp::FloorDiv
+                       ? dataframe::floordiv_scalar(*a, v, rev)
+                   : op == ExtraOp::Mod ? dataframe::mod_scalar(*a, v, rev)
+                                        : dataframe::pow_scalar(*a, v, rev);
+        });
         return make_arith_series(named_like(std::move(out), *a), a->type(),
                                  TypeId::Float64);
     }
     const long long v = PyLong_AsLongLong(other);
     if (v == -1 && PyErr_Occurred()) return nullptr;
     const auto iv = static_cast<std::int64_t>(v);
-    Series out = op == ExtraOp::FloorDiv
-                     ? dataframe::floordiv_scalar(*a, iv, rev)
-                 : op == ExtraOp::Mod ? dataframe::mod_scalar(*a, iv, rev)
-                                      : dataframe::pow_scalar(*a, iv, rev);
+    Series out = kernel(*a, [&] {
+        return op == ExtraOp::FloorDiv ? dataframe::floordiv_scalar(*a, iv, rev)
+               : op == ExtraOp::Mod    ? dataframe::mod_scalar(*a, iv, rev)
+                                       : dataframe::pow_scalar(*a, iv, rev);
+    });
     return make_arith_series(named_like(std::move(out), *a), a->type(),
                              TypeId::Int64);
 }
@@ -159,12 +184,13 @@ PyObject* Series_pow(PyObject* self, PyObject* args) {
 }
 
 PyObject* Series_cast(PyObject* self, PyObject* target) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     long tid = PyLong_AsLong(target);
     if (tid == -1 && PyErr_Occurred()) return nullptr;
     const TypeId to = static_cast<TypeId>(tid);
-    Series out = named_like(dataframe::cast(*a, to), *a);
+    Series out =
+        named_like(kernel(*a, [&] { return dataframe::cast(*a, to); }), *a);
     if (!out.valid()) {
         // The engine refused the pair: say which, not "null column".
         PyErr_Format(PyExc_TypeError, "astype: cannot cast %s to %s",
@@ -175,50 +201,63 @@ PyObject* Series_cast(PyObject* self, PyObject* target) {
 }
 
 PyObject* Series_prim(PyObject* self, PyObject* code) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     long op = PyLong_AsLong(code);
     if (op == -1 && PyErr_Occurred()) return nullptr;
-    return make_series(
-        named_like(dataframe::prim(*a, static_cast<dataframe::Prim>(op)), *a));
+    return make_series(named_like(
+        kernel(*a,
+               [&] {
+                   return dataframe::prim(*a, static_cast<dataframe::Prim>(op));
+               }),
+        *a));
 }
 
 // Compare a column against a scalar (op is a DFTU_CMP_* code) -> Bool
 // column.
 PyObject* Series_compare(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     int op = 0;
     PyObject* value = nullptr;
     if (!PyArg_ParseTuple(args, "iO", &op, &value)) return nullptr;
     dftu_scalar s{};
     if (!py_to_scalar(value, &s)) return nullptr;
-    return make_series(
-        named_like(Series{dftu_series_compare(a->handle(),
-                                              static_cast<dftu_cmp_op>(op), s)},
-                   *a));
+    return make_series(named_like(
+        kernel(*a,
+               [&] {
+                   return Series{dftu_series_compare(
+                       a->handle(), static_cast<dftu_cmp_op>(op), s)};
+               }),
+        *a));
 }
 
 // Boolean AND/OR of two Bool columns (op is a DFTU_LOGICAL_* code).
 PyObject* Series_logical(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     int op = 0;
     PyObject* other = nullptr;
     if (!PyArg_ParseTuple(args, "iO", &op, &other)) return nullptr;
-    Series* b = as_series(other);
+    Series* b = as_native<Series>(other);
     if (!b) return nullptr;
-    return make_series(named_like(
-        Series{dftu_series_logical(a->handle(), b->handle(),
-                                   static_cast<dftu_logical_op>(op))},
-        *a, *b));
+    return make_series(
+        named_like(kernel(*a,
+                          [&] {
+                              return Series{dftu_series_logical(
+                                  a->handle(), b->handle(),
+                                  static_cast<dftu_logical_op>(op))};
+                          }),
+                   *a, *b));
 }
 
 PyObject* Series_logical_not(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
-    return make_series(
-        named_like(Series{dftu_series_logical_not(a->handle())}, *a));
+    return make_series(named_like(
+        kernel(*a,
+               [&] { return Series{dftu_series_logical_not(a->handle())}; }),
+        *a));
 }
 
 }  // namespace dftracer::utils::python::frame::series_detail

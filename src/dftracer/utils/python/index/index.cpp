@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/python/core/call.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/list_helpers.h>
 #include <dftracer/utils/python/core/method.h>
@@ -18,6 +19,9 @@
 #include <dftracer/utils/trace/index/store/root_layout.h>
 
 #include <cstdint>
+
+using dftracer::utils::python::core::guard;
+using dftracer::utils::python::core::parse_kw;
 
 using namespace dftracer::utils;
 
@@ -85,12 +89,9 @@ PyObject *Index_new(PyTypeObject *type, PyObject * /*args*/,
 }
 
 int Index_init(IndexObject *self, PyObject *args, PyObject *kwds) {
-    static const char *kwlist[] = {"index_path", NULL};
     const char *index_path = nullptr;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s",
-                                     const_cast<char **>(kwlist), &index_path))
-        return -1;
-    try {
+    if (!parse_kw<"s">(args, kwds, {"index_path"}, &index_path)) return -1;
+    return guard([&] {
         auto opened =
             dftracer::utils::python::core::py_unwrap(trace::index::Index::open(
                 trace::index::normalize_index_root(index_path)));
@@ -99,20 +100,14 @@ int Index_init(IndexObject *self, PyObject *args, PyObject *kwds) {
         self->index = dftracer::utils::dstd::make_unique<trace::index::Index>(
                           std::move(opened))
                           .release();
-    } catch (const std::exception &e) {
-        python::core::set_typed_py_error(e);
-        return -1;
-    }
-    return 0;
+        return 0;
+    });
 }
 
 PyObject *Index_find_stale_files(IndexObject *self, PyObject *args,
                                  PyObject *kwds) {
-    static const char *kwlist[] = {"paths", NULL};
     PyObject *paths_obj = nullptr;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O",
-                                     const_cast<char **>(kwlist), &paths_obj))
-        return nullptr;
+    if (!parse_kw<"O">(args, kwds, {"paths"}, &paths_obj)) return nullptr;
     if (!self->index) {
         PyErr_SetString(PyExc_RuntimeError, "Index not initialised");
         return nullptr;

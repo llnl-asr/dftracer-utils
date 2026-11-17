@@ -33,7 +33,7 @@ inline double parse_double(dftracer::utils::dstd::StringView text) {
 // Parse an "op[:column[:out[:by[:param]]]]" aggregate spec (the output name
 // defaults to "op" or "op_column"; `by` is the second input column of the
 // two-column aggregates, `param` the quantile / k of the parameterized ones);
-// throws std::out_of_range on a bad op, std::invalid_argument on a bad param.
+// throws std::invalid_argument on a bad op or a bad param.
 inline dftracer::utils::dataframe::GroupAgg group_agg_from_spec(
     const dftracer::utils::dstd::String& spec) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> parts;
@@ -49,7 +49,7 @@ inline dftracer::utils::dataframe::GroupAgg group_agg_from_spec(
     }
     dataframe::GroupAgg a;
     const auto op = dataframe::agg_from_string(parts[0]);
-    if (!op) throw std::out_of_range(op.error().c_str());
+    if (!op) throw std::invalid_argument(op.error().c_str());
     a.op = *op;
     if (parts.size() == 1) {
         a.out = parts[0];
@@ -125,13 +125,10 @@ inline bool aggs_from_seq(
             }
             const char* s = PyUnicode_AsUTF8(item);
             if (!s) return false;
-            try {
+            return core::guard([&] {
                 o.push_back(group_agg_from_spec(s));
-            } catch (const std::exception& e) {
-                PyErr_SetString(PyExc_ValueError, e.what());
-                return false;
-            }
-            return true;
+                return true;
+            });
         });
 }
 

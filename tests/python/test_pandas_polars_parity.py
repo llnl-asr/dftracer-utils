@@ -7,7 +7,7 @@ import pytest
 
 pa = pytest.importorskip("pyarrow")
 
-from dftracer.utils import DataFrame, Series, col  # noqa: E402
+from dftracer.utils import DataFrame, DFTUtilsNotFoundError, Series, col  # noqa: E402
 from dftracer.utils import pandas as upd  # noqa: E402
 from dftracer.utils import polars as upl  # noqa: E402
 from dftracer.utils.enums import DType  # noqa: E402
@@ -266,7 +266,7 @@ def test_unique_subset_eager_and_lazy():
     assert _dict(df.lazy().drop_duplicates("v").collect()) == {"k": [1, 1, 2, 3], "v": [1, 2, 3, 4]}
     with pytest.raises(KeyError):
         df.unique("nope")
-    with pytest.raises(ValueError):
+    with pytest.raises(DFTUtilsNotFoundError):
         df.lazy().unique("nope")
 
 

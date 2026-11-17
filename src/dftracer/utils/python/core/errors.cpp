@@ -3,6 +3,7 @@
 #include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/python/core/errors.h>
 
+#include <new>
 #include <stdexcept>
 
 namespace dftracer::utils::python::core {
@@ -44,11 +45,26 @@ int add_exc(PyObject *m, const char *short_name, PyObject *base,
 int init_py_errors(PyObject *m) {
     if (add_exc(m, "DFTUtilsError", PyExc_RuntimeError, &g_dft_error) < 0)
         return -1;
-    if (add_exc(m, "DFTUtilsValueError", g_dft_error, &g_dft_value_error) < 0)
-        return -1;
-    if (add_exc(m, "DFTUtilsNotFoundError", g_dft_error,
-                &g_dft_not_found_error) < 0)
-        return -1;
+    PyObject *value_bases = PyTuple_Pack(2, g_dft_error, PyExc_ValueError);
+    if (value_bases == nullptr) return -1;
+    const int value_status =
+        add_exc(m, "DFTUtilsValueError", value_bases, &g_dft_value_error);
+    Py_DECREF(value_bases);
+    if (value_status < 0) return -1;
+    PyObject *not_found_bases = PyTuple_Pack(2, g_dft_error, PyExc_KeyError);
+    if (not_found_bases == nullptr) return -1;
+    const int not_found_status = add_exc(
+        m, "DFTUtilsNotFoundError", not_found_bases, &g_dft_not_found_error);
+    Py_DECREF(not_found_bases);
+    if (not_found_status < 0) return -1;
+    // KeyError.__str__ quotes the message; keep the plain one.
+    PyObject *plain_str =
+        PyObject_GetAttrString(PyExc_BaseException, "__str__");
+    if (plain_str == nullptr) return -1;
+    const int str_status =
+        PyObject_SetAttrString(g_dft_not_found_error, "__str__", plain_str);
+    Py_DECREF(plain_str);
+    if (str_status < 0) return -1;
     if (add_exc(m, "DFTUtilsIOError", g_dft_error, &g_dft_io_error) < 0)
         return -1;
     if (add_exc(m, "DFTUtilsParseError", g_dft_error, &g_dft_parse_error) < 0)
@@ -120,6 +136,10 @@ void set_typed_py_error(const std::exception &e) {
         PyErr_SetString(py_error_type_for(de->error()), e.what());
     } else if (dynamic_cast<const std::invalid_argument *>(&e)) {
         PyErr_SetString(g_dft_value_error, e.what());
+    } else if (dynamic_cast<const std::out_of_range *>(&e)) {
+        PyErr_SetString(PyExc_KeyError, e.what());
+    } else if (dynamic_cast<const std::bad_alloc *>(&e)) {
+        PyErr_NoMemory();
     } else {
         PyErr_SetString(g_dft_error, e.what());
     }

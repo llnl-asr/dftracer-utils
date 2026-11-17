@@ -7,6 +7,8 @@
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/python/core/call.h>
+#include <dftracer/utils/python/core/seq_helpers.h>
 
 #include <cstdint>
 #include <cstring>
@@ -19,6 +21,29 @@ struct WindowSpecs {
     dftracer::utils::dstd::Deque<dftracer::utils::dstd::String> names;
     dftracer::utils::dstd::Vector<dftu_window_spec> specs;
 };
+
+/// The sort directions of a multi-key sort: one bool or a sequence of bool,
+/// never a truthy-coerced list. Appends to @p out; false with a Python error
+/// set.
+inline bool descending_from_obj(PyObject* obj,
+                                dftracer::utils::dstd::Vector<bool>& out) {
+    if (!obj) {
+        out.push_back(false);
+        return true;
+    }
+    if (PyBool_Check(obj) || PyLong_Check(obj)) {
+        out.push_back(PyObject_IsTrue(obj) != 0);
+        return true;
+    }
+    return core::parse_seq<bool>(
+        obj, "descending must be a bool or a sequence of bool", out,
+        [](PyObject* item, dftracer::utils::dstd::Vector<bool>& o) {
+            const int truth = PyObject_IsTrue(item);
+            if (truth < 0) return false;
+            o.push_back(truth != 0);
+            return true;
+        });
+}
 
 inline bool window_func_from_str(const char* name, dftu_window_func* out) {
     struct Entry {
@@ -70,9 +95,6 @@ inline bool window_func_from_str(const char* name, dftu_window_func* out) {
 /// counter, frame_preceding, frame_following, end_col|None, span, range_frame).
 /// Returns false with a Python error set.
 inline bool parse_window_specs(PyObject* seq, WindowSpecs& out) {
-    PyObject* fast = PySequence_Fast(seq, "window: specs must be a sequence");
-    if (!fast) return false;
-    const Py_ssize_t n = PySequence_Fast_GET_SIZE(fast);
     // A name the spec holds, or nullptr for None; false on a Python error.
     auto name_of = [&](PyObject* o, const char*& to) {
         to = nullptr;
@@ -82,10 +104,9 @@ inline bool parse_window_specs(PyObject* seq, WindowSpecs& out) {
         to = out.names.emplace_back(c).c_str();
         return true;
     };
-    for (Py_ssize_t i = 0; i < n; ++i) {
-        PyObject* t = PySequence_Fast_GET_ITEM(fast, i);
+    auto parse_one = [&](PyObject* t,
+                         dftracer::utils::dstd::Vector<dftu_window_spec>&) {
         if (!PyTuple_Check(t)) {
-            Py_DECREF(fast);
             PyErr_SetString(PyExc_TypeError,
                             "window: each spec must be a 12-tuple");
             return false;
@@ -112,7 +133,6 @@ inline bool parse_window_specs(PyObject* seq, WindowSpecs& out) {
             !window_func_from_str(func, &s.func) ||
             !name_of(value_obj, s.value) || !name_of(time_obj, time) ||
             !name_of(end_obj, end)) {
-            Py_DECREF(fast);
             return false;
         }
         s.out = out.names.emplace_back(name).c_str();
@@ -149,9 +169,10 @@ inline bool parse_window_specs(PyObject* seq, WindowSpecs& out) {
                 break;
         }
         out.specs.push_back(s);
-    }
-    Py_DECREF(fast);
-    return true;
+        return true;
+    };
+    return core::parse_seq<dftu_window_spec>(
+        seq, "window: specs must be a sequence", out.specs, parse_one);
 }
 
 inline bool gap_fill_mode_from_str(const char* mode, dftu_gap_fill_mode* out) {
@@ -254,16 +275,14 @@ struct GroupwiseArgs {
 template <class Names>
 bool parse_groupwise_args(PyObject* args, PyObject* kwds, Names names_from_obj,
                           GroupwiseArgs& out) {
-    static const char* kw[] = {"keys",   "kind",      "n",
-                               "method", "ascending", nullptr};
     PyObject* keys_obj = nullptr;
     const char* kind = nullptr;
     const char* method = "average";
     long long n = 0;
     int ascending = 1;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "Os|Lsp",
-                                     const_cast<char**>(kw), &keys_obj, &kind,
-                                     &n, &method, &ascending))
+    if (!core::parse_kw<"Os|Lsp">(args, kwds,
+                                  {"keys", "kind", "n", "method", "ascending"},
+                                  &keys_obj, &kind, &n, &method, &ascending))
         return false;
     if (!names_from_obj(keys_obj, out.keys)) return false;
     if (!groupwise_op_from_str(kind, &out.kind)) return false;

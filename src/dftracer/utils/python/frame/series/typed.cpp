@@ -54,7 +54,7 @@ Series retype_series(const Series& s, TypeId type, dataframe::TimeUnit unit,
 // column, sharing its buffers and nulls: int32 for date32 and time32, int64
 // for date64, time64, timestamp and duration, uint16 for float16.
 PyObject* Series_physical(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     Series flat = flat_copy(*a);
     TypeId to = TypeId::Int64;
@@ -93,7 +93,7 @@ PyObject* series_retype(PyObject*, PyObject* args) {
     if (!PyArg_ParseTuple(args, "Oi|isiii", &obj, &type, &unit, &zone,
                           &precision, &scale, &width))
         return nullptr;
-    Series* a = as_series_or_null(obj);
+    Series* a = as_native_or_null<Series>(obj);
     if (!a) {
         PyErr_SetString(PyExc_TypeError, "retype: expected a Series");
         return nullptr;
@@ -115,29 +115,27 @@ PyObject* series_retype(PyObject*, PyObject* args) {
 }
 
 PyObject* Series_get_nbytes(PyObject* self, void*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     return PyLong_FromSize_t(nbytes_of(*a->handle()));
 }
 
 PyObject* Series_to_bytes(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
-    try {
+    return guard_as(PyExc_TypeError, [&]() -> PyObject* {
         dataframe::DataFrame f;
         f.names.emplace_back("v");
         f.columns.push_back(a->share());
-        const auto bytes = dataframe::frame_to_native(f);
+        const auto bytes = without_gil(
+            a->length(), [&] { return dataframe::frame_to_native(f); });
         if (!bytes) {
             PyErr_SetString(PyExc_TypeError, bytes.error().c_str());
             return nullptr;
         }
         return PyBytes_FromStringAndSize(
             bytes->data(), static_cast<Py_ssize_t>(bytes->size()));
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_TypeError, e.what());
-        return nullptr;
-    }
+    });
 }
 
 // _series_nulls(type_id, n): a column of `n` nulls of the given type.

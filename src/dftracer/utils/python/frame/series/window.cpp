@@ -7,13 +7,11 @@
 namespace dftracer::utils::python::frame::series_detail {
 
 PyObject* Series_rolling(PyObject* self, PyObject* args, PyObject* kwds) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     Py_ssize_t window = 0;
     const char* op = "sum";
-    static const char* kwlist[] = {"window", "op", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "n|s",
-                                     const_cast<char**>(kwlist), &window, &op))
+    if (!parse_kw<"n|s">(args, kwds, {"window", "op"}, &window, &op))
         return nullptr;
     const dstd::StringView o(op);
     int code = 0;
@@ -31,87 +29,116 @@ PyObject* Series_rolling(PyObject* self, PyObject* args, PyObject* kwds) {
         return nullptr;
     }
     return make_series(named_like(
-        Series{dftu_series_rolling(a->handle(),
-                                   static_cast<std::int64_t>(window),
-                                   static_cast<dftu_rolling_op>(code))},
+        kernel(*a,
+               [&] {
+                   return Series{dftu_series_rolling(
+                       a->handle(), static_cast<std::int64_t>(window),
+                       static_cast<dftu_rolling_op>(code))};
+               }),
         *a));
 }
 PyObject* Series_rolling_var(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     long long window = PyLong_AsLongLong(arg);
     if (window == -1 && PyErr_Occurred()) return nullptr;
-    return make_series(
-        named_like(Series{dftu_series_rolling_var(
-                       a->handle(), static_cast<std::int64_t>(window))},
-                   *a));
+    return make_series(named_like(
+        kernel(*a,
+               [&] {
+                   return Series{dftu_series_rolling_var(
+                       a->handle(), static_cast<std::int64_t>(window))};
+               }),
+        *a));
 }
 PyObject* Series_rolling_std(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     long long window = PyLong_AsLongLong(arg);
     if (window == -1 && PyErr_Occurred()) return nullptr;
-    return make_series(
-        named_like(Series{dftu_series_rolling_std(
-                       a->handle(), static_cast<std::int64_t>(window))},
-                   *a));
+    return make_series(named_like(
+        kernel(*a,
+               [&] {
+                   return Series{dftu_series_rolling_std(
+                       a->handle(), static_cast<std::int64_t>(window))};
+               }),
+        *a));
 }
 PyObject* Series_rolling_median(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     long long window = PyLong_AsLongLong(arg);
     if (window == -1 && PyErr_Occurred()) return nullptr;
-    return make_series(
-        named_like(Series{dftu_series_rolling_median(
-                       a->handle(), static_cast<std::int64_t>(window))},
-                   *a));
+    return make_series(named_like(
+        kernel(*a,
+               [&] {
+                   return Series{dftu_series_rolling_median(
+                       a->handle(), static_cast<std::int64_t>(window))};
+               }),
+        *a));
 }
 PyObject* Series_rolling_quantile(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     long long window = 0;
     double q = 0.0;
     if (!PyArg_ParseTuple(args, "Ld", &window, &q)) return nullptr;
-    return make_series(
-        named_like(Series{dftu_series_rolling_quantile(
-                       a->handle(), static_cast<std::int64_t>(window), q)},
-                   *a));
+    return make_series(named_like(
+        kernel(*a,
+               [&] {
+                   return Series{dftu_series_rolling_quantile(
+                       a->handle(), static_cast<std::int64_t>(window), q)};
+               }),
+        *a));
 }
 PyObject* Series_ewm_mean(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     double alpha = PyFloat_AsDouble(arg);
     if (alpha == -1.0 && PyErr_Occurred()) return nullptr;
-    return make_series(
-        named_like(Series{dftu_series_ewm_mean(a->handle(), alpha)}, *a));
+    return make_series(named_like(
+        kernel(
+            *a,
+            [&] { return Series{dftu_series_ewm_mean(a->handle(), alpha)}; }),
+        *a));
 }
 PyObject* Series_ewm_std(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     double alpha = PyFloat_AsDouble(arg);
     if (alpha == -1.0 && PyErr_Occurred()) return nullptr;
-    return make_series(
-        named_like(Series{dftu_series_ewm_std(a->handle(), alpha)}, *a));
+    return make_series(named_like(
+        kernel(*a,
+               [&] { return Series{dftu_series_ewm_std(a->handle(), alpha)}; }),
+        *a));
 }
 PyObject* Series_cut(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     PyObject* other = nullptr;
     int flags = 0;
     if (!PyArg_ParseTuple(args, "O|i", &other, &flags)) return nullptr;
-    Series* breaks = as_series(other);
+    Series* breaks = as_native<Series>(other);
     if (!breaks) return nullptr;
-    return make_series(named_like(
-        Series{dftu_series_cut(a->handle(), breaks->handle(), flags)}, *a));
+    return make_series(
+        named_like(kernel(*a,
+                          [&] {
+                              return Series{dftu_series_cut(
+                                  a->handle(), breaks->handle(), flags)};
+                          }),
+                   *a));
 }
 PyObject* Series_qcut(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     long q = PyLong_AsLong(arg);
     if (q == -1 && PyErr_Occurred()) return nullptr;
-    return make_series(named_like(
-        Series{dftu_series_qcut(a->handle(), static_cast<std::int32_t>(q))},
-        *a));
+    return make_series(
+        named_like(kernel(*a,
+                          [&] {
+                              return Series{dftu_series_qcut(
+                                  a->handle(), static_cast<std::int32_t>(q))};
+                          }),
+                   *a));
 }
 
 }  // namespace dftracer::utils::python::frame::series_detail

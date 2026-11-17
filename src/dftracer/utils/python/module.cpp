@@ -11,6 +11,7 @@
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/plugins/abi_version.h>
 #include <dftracer/utils/python/core/arrow_stream_capsule.h>
+#include <dftracer/utils/python/core/call.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/memoryview_batch.h>
 #include <dftracer/utils/python/core/method.h>
@@ -76,11 +77,9 @@ PyObject* py_set_log_color(PyObject*, PyObject* args) {
 
 PyObject* py_memory_budget_advice(PyObject*, PyObject* args, PyObject* kwds) {
     unsigned long long required = 0, available = 0;
-    static const char* kwlist[] = {"required_bytes", "available_bytes",
-                                   nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "K|K",
-                                     const_cast<char**>(kwlist), &required,
-                                     &available))
+    if (!dftracer::utils::python::core::parse_kw<"K|K">(
+            args, kwds, {"required_bytes", "available_bytes"}, &required,
+            &available))
         return nullptr;
     const auto a = dftracer::utils::common::memory_budget_advice(
         static_cast<std::size_t>(required),

@@ -32,21 +32,23 @@ PyObject* scalar_to_py(dftu_scalar v) {
 }
 
 PyObject* Series_all(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
-    return PyBool_FromLong(a->all());
+    return PyBool_FromLong(without_gil(a->length(), [&] { return a->all(); }));
 }
 PyObject* Series_any(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
-    return PyBool_FromLong(a->any());
+    return PyBool_FromLong(without_gil(a->length(), [&] { return a->any(); }));
 }
 PyObject* Series_dot(PyObject* self, PyObject* other) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
-    Series* b = as_series(other);
+    Series* b = as_native<Series>(other);
     if (!b) return nullptr;
-    return scalar_to_py(dftu_series_dot(a->handle(), b->handle()));
+    return scalar_to_py(without_gil(a->length(), [&] {
+        return dftu_series_dot(a->handle(), b->handle());
+    }));
 }
 
 }  // namespace dftracer::utils::python::frame::series_detail

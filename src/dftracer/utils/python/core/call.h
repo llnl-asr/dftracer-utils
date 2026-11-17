@@ -1,0 +1,191 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_PYTHON_CORE_CALL_H
+#define DFTRACER_UTILS_PYTHON_CORE_CALL_H
+
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
+#include <dftracer/utils/python/core/errors.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <type_traits>
+
+#ifndef DFTRACER_UTILS_PYTHON_GIL_RELEASE_ROWS
+#define DFTRACER_UTILS_PYTHON_GIL_RELEASE_ROWS 16384
+#endif
+
+namespace dftracer::utils::python::core {
+
+/// Row count from which @ref without_gil releases the GIL. Below it the
+/// release and reacquire cost more than the call; benchmarks/python/
+/// gil_bench.py sets it. The macro lets that benchmark build the extension
+/// with the release always or never on.
+inline constexpr std::int64_t GIL_RELEASE_ROWS =
+    DFTRACER_UTILS_PYTHON_GIL_RELEASE_ROWS;
+
+namespace detail {
+
+template <std::size_t N>
+struct FormatString {
+    char text[N]{};
+    consteval FormatString(const char (&s)[N]) {
+        for (std::size_t i = 0; i < N; ++i) text[i] = s[i];
+    }
+};
+
+/// What a PyArg format consumes: `keywords` Python arguments (one per unit) and
+/// `pointers` C arguments (`O!`, `O&`, `s#`, `y#` and `z#` take two for one
+/// keyword).
+struct FormatCount {
+    std::size_t keywords = 0;
+    std::size_t pointers = 0;
+};
+
+/// Counts a format. Rejects the units that this parser does not count: nested
+/// tuples and the `e` encoding units.
+template <std::size_t N>
+consteval FormatCount count_format(const FormatString<N> &fmt) {
+    FormatCount count;
+    for (std::size_t i = 0; i + 1 < N; ++i) {
+        const char c = fmt.text[i];
+        if (c == ':' || c == ';') break;
+        if (c == '(' || c == ')' || c == 'e')
+            throw "unsupported PyArg format unit";
+        if (c == '|' || c == '$' || c == '*') continue;
+        if (c == '!' || c == '&' || c == '#') {
+            ++count.pointers;
+            continue;
+        }
+        ++count.keywords;
+        ++count.pointers;
+    }
+    return count;
+}
+
+static_assert(count_format(FormatString("O!")).keywords == 1);
+static_assert(count_format(FormatString("O!")).pointers == 2);
+static_assert(count_format(FormatString("O&")).pointers == 2);
+static_assert(count_format(FormatString("s#")).keywords == 1);
+static_assert(count_format(FormatString("z#")).pointers == 2);
+static_assert(count_format(FormatString("y#")).pointers == 2);
+static_assert(count_format(FormatString("s*")).pointers == 1);
+static_assert(count_format(FormatString("s|O!z#:name")).keywords == 3);
+static_assert(count_format(FormatString("s|O!z#:name")).pointers == 5);
+static_assert(count_format(FormatString("|$Lp")).keywords == 2);
+
+}  // namespace detail
+
+/// Parses a call's arguments with PyArg_ParseTupleAndKeywords. @p Fmt is the
+/// format string, @p names the keyword of each unit in order, @p out one
+/// pointer per C argument. The count of names and of pointers is checked
+/// against the format at compile time (`O!`, `O&`, `s#`, `y#` and `z#` are one
+/// name and two pointers). Returns false with a Python error set.
+template <detail::FormatString Fmt, std::size_t N, class... Out>
+bool parse_kw(PyObject *args, PyObject *kw, const char *const (&names)[N],
+              Out *...out) {
+    constexpr detail::FormatCount COUNT = detail::count_format(Fmt);
+    static_assert(N == COUNT.keywords, "keyword names do not match the format");
+    static_assert(sizeof...(Out) == COUNT.pointers,
+                  "output pointers do not match the format");
+    char *kwlist[N + 1];
+    for (std::size_t i = 0; i < N; ++i)
+        kwlist[i] = const_cast<char *>(names[i]);
+    kwlist[N] = nullptr;
+    return PyArg_ParseTupleAndKeywords(args, kw, Fmt.text, kwlist, out...) != 0;
+}
+
+/// Runs @p fn, which returns a pointer, an int status or a bool, and turns a
+/// C++ exception into the matching typed Python error. The failure value is
+/// nullptr, -1 or false. An @ref PyErrorException keeps its error domain; see
+/// @ref set_typed_py_error for the full map.
+template <class Fn>
+auto guard(Fn &&fn) -> decltype(fn()) {
+    using R = decltype(fn());
+    static_assert(
+        std::is_pointer_v<R> || std::is_same_v<R, int> ||
+            std::is_same_v<R, bool>,
+        "guard wraps a body that returns a pointer, an int or a bool");
+    try {
+        return fn();
+    } catch (const std::exception &e) {
+        set_typed_py_error(e);
+    } catch (...) {
+        PyErr_SetString(g_dft_error, "unknown C++ exception");
+    }
+    if constexpr (std::is_pointer_v<R>) {
+        return nullptr;
+    } else if constexpr (std::is_same_v<R, bool>) {
+        return false;
+    } else {
+        return -1;
+    }
+}
+
+/// Like @ref guard, but every C++ exception becomes @p type, for a call whose
+/// contract names one Python exception type for all its failures.
+template <class Fn>
+auto guard_as(PyObject *type, Fn &&fn) -> decltype(fn()) {
+    using R = decltype(fn());
+    static_assert(std::is_pointer_v<R>,
+                  "guard_as wraps a body that returns a pointer");
+    try {
+        return fn();
+    } catch (const std::exception &e) {
+        PyErr_SetString(type, e.what());
+    } catch (...) {
+        PyErr_SetString(type, "unknown C++ exception");
+    }
+    return nullptr;
+}
+
+/// Runs @p fn with the GIL released. The body must not touch a Python object
+/// or call the Python C API, and it must not leave a borrowed reference to one
+/// that another thread can drop: copy what it needs before the call. The GIL
+/// is taken back on every path, including an exception. Use it where the body
+/// can run Python code on another thread, which needs the GIL.
+template <class Fn>
+auto release_gil(Fn &&fn) -> decltype(fn()) {
+    struct Released {
+        PyThreadState *state = PyEval_SaveThread();
+        ~Released() { PyEval_RestoreThread(state); }
+    } released;
+    return fn();
+}
+
+/// Like @ref release_gil, but only when @p rows is at least
+/// @ref GIL_RELEASE_ROWS; below it the release costs more than the call. The
+/// same rules for the body apply.
+template <class Fn>
+auto without_gil(std::int64_t rows, Fn &&fn) -> decltype(fn()) {
+    if (rows < GIL_RELEASE_ROWS) return fn();
+    return release_gil(fn);
+}
+
+/// How a native type is found behind a PyObject. A specialization gives the
+/// type object, the name for the TypeError and the projection from the
+/// object to T.
+template <class T>
+struct NativeTraits;
+
+/// The T behind @p o, or nullptr with a TypeError set when @p o is not that
+/// native type.
+template <class T>
+T *as_native(PyObject *o) {
+    if (!PyObject_TypeCheck(o, NativeTraits<T>::type())) {
+        PyErr_SetString(PyExc_TypeError, NativeTraits<T>::EXPECTED);
+        return nullptr;
+    }
+    return NativeTraits<T>::get(o);
+}
+
+/// Like @ref as_native, but nullptr with no error set.
+template <class T>
+T *as_native_or_null(PyObject *o) {
+    if (!PyObject_TypeCheck(o, NativeTraits<T>::type())) return nullptr;
+    return NativeTraits<T>::get(o);
+}
+
+}  // namespace dftracer::utils::python::core
+
+#endif  // DFTRACER_UTILS_PYTHON_CORE_CALL_H

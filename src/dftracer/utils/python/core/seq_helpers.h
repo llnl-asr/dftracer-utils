@@ -11,9 +11,40 @@
 
 namespace dftracer::utils::python::core {
 
+/// Holds the PySequence_Fast result of an iterable while its items are used.
+/// For a list or tuple that is the object itself; for a generator or a deque it
+/// is a temporary list, and only this handle keeps the items alive. Keep it for
+/// as long as any borrowed item pointer, or a pointer into an item, is in use.
+class FastSeq {
+   public:
+    FastSeq() = default;
+    FastSeq(const FastSeq&) = delete;
+    FastSeq& operator=(const FastSeq&) = delete;
+    ~FastSeq() { Py_XDECREF(seq_); }
+
+    /// Opens @p obj; false with a TypeError of text @p msg when it is not a
+    /// sequence or iterable.
+    bool open(PyObject* obj, const char* msg) {
+        Py_XDECREF(seq_);
+        seq_ = PySequence_Fast(obj, msg);
+        return seq_ != nullptr;
+    }
+    Py_ssize_t size() const { return PySequence_Fast_GET_SIZE(seq_); }
+    /// Borrowed; valid while this handle lives.
+    PyObject* item(Py_ssize_t i) const {
+        return PySequence_Fast_GET_ITEM(seq_, i);
+    }
+
+   private:
+    PyObject* seq_ = nullptr;
+};
+
 // Convert each item of a Python sequence via `convert`, appending to `out`.
 // `msg` is the TypeError text set when `obj` is not a sequence. Owns the
 // PySequence_Fast handle and releases it on every path, including errors.
+// The handle is released when this returns, so `convert` must copy what it
+// keeps: for a generator the items die with it. A caller that keeps borrowed
+// pointers to the items uses @ref FastSeq instead.
 // `convert(item, out)` returns false with a Python error already set to abort;
 // `out` may be partially filled in that case.
 template <class T, class Convert>

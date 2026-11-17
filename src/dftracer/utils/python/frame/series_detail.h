@@ -7,14 +7,22 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/python/core/call.h>
 
 // Private seam shared by the Series extension translation units (series.cpp
 // plus series/{arith,math,window,stats,reduce,string,arrow}.cpp). series.cpp
-// owns the SeriesType type object and defines make_series/as_series; every
+// owns the SeriesType type object and defines make_series; every
 // family TU calls them and defines the method bodies referenced by the
 // PyMethodDef table back in series.cpp.
 namespace dftracer::utils::python::frame::series_detail {
 
+using core::as_native;
+using core::as_native_or_null;
+using core::guard;
+using core::guard_as;
+using core::parse_kw;
+using core::release_gil;
+using core::without_gil;
 using dataframe::Series;
 using dataframe::TypeId;
 
@@ -26,11 +34,31 @@ struct SeriesObject {
     Py_ssize_t buf_stride;
 };
 
+}  // namespace dftracer::utils::python::frame::series_detail
+
+template <>
+struct dftracer::utils::python::core::NativeTraits<
+    dftracer::utils::dataframe::Series> {
+    static PyTypeObject* type();
+    static constexpr const char* EXPECTED = "expected a Series";
+    static dftracer::utils::dataframe::Series* get(PyObject* o) {
+        return &reinterpret_cast<dftracer::utils::python::frame::series_detail::
+                                     SeriesObject*>(o)
+                    ->col;
+    }
+};
+
+namespace dftracer::utils::python::frame::series_detail {
+
+// Runs a kernel over `a` with the GIL released when `a` is long. The body
+// touches no Python object.
+template <class Fn>
+Series kernel(const Series& a, Fn&& fn) {
+    return without_gil(a.length(), fn);
+}
+
 // Defined in series.cpp (owns the SeriesType type object).
 PyObject* make_series(Series&& col);
-Series* as_series(PyObject* o);
-// The Series behind `o`, or nullptr with no error set when it is not one.
-Series* as_series_or_null(PyObject* o);
 
 // @p out under the name of @p source, as the Series methods give it; @p out
 // unchanged when it is invalid.
@@ -46,9 +74,10 @@ PyObject* scalar_to_py(dftu_scalar v);
 // so each method is one PyMethodDef line.
 template <dftu_series* (*Fn)(const dftu_series*)>
 PyObject* series_unary(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
-    return make_series(named_like(Series{Fn(a->handle())}, *a));
+    return make_series(named_like(
+        without_gil(a->length(), [&] { return Series{Fn(a->handle())}; }), *a));
 }
 
 // No-argument reducers that call a Series member and wrap the result. Method is
@@ -60,9 +89,9 @@ PyObject* series_unary(PyObject* self, PyObject*) {
 // refusal's message.
 template <auto Method>
 PyObject* series_reduce_scalar(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
-    auto out = (a->*Method)();
+    auto out = without_gil(a->length(), [&] { return (a->*Method)(); });
     if constexpr (std::is_same_v<decltype(out),
                                  dftracer::utils::dstd::Result<
                                      dftracer::utils::dataframe::Scalar>>) {
@@ -77,9 +106,9 @@ PyObject* series_reduce_scalar(PyObject* self, PyObject*) {
 }
 template <auto Method>
 PyObject* series_reduce_f64(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
-    auto out = (a->*Method)();
+    auto out = without_gil(a->length(), [&] { return (a->*Method)(); });
     if (!out) {
         PyErr_SetString(PyExc_TypeError, out.error().c_str());
         return nullptr;
@@ -88,9 +117,10 @@ PyObject* series_reduce_f64(PyObject* self, PyObject*) {
 }
 template <auto Method>
 PyObject* series_reduce_i64(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
-    return PyLong_FromLongLong((a->*Method)());
+    return PyLong_FromLongLong(
+        without_gil(a->length(), [&] { return (a->*Method)(); }));
 }
 
 // series/arith.cpp

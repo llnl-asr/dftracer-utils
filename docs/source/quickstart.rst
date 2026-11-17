@@ -260,6 +260,11 @@ The full set is ``DFTUtilsError`` (base) plus ``DFTUtilsValueError``,
 ``DFTUtilsAggregationError``. See :doc:`cpp_api/runtime` for the
 underlying C++ model.
 
+``DFTUtilsValueError`` also derives ``ValueError``, so ``except ValueError``
+catches it. ``DFTUtilsNotFoundError`` also derives ``KeyError`` (its ``str`` is
+the plain message), so an unknown column name on an eager or a lazy op is
+caught by either.
+
 Controlling Log Output
 ~~~~~~~~~~~~~~~~~~~~~~~~
 

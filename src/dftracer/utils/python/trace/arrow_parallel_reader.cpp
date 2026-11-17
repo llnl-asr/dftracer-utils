@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/python/core/call.h>
 #include <dftracer/utils/python/core/errors.h>
 
 #define PY_SSIZE_T_CLEAN
@@ -16,6 +17,8 @@
 #include <dftracer/utils/python/runtime/runtime.h>
 #include <dftracer/utils/python/trace/arrow_parallel_reader.h>
 #include <dftracer/utils/python/trace/trace_reader_iterator.h>
+
+using dftracer::utils::python::core::parse_kw;
 
 namespace dftracer::utils::python::trace {
 
@@ -66,13 +69,11 @@ FileRead read_file(const dftracer::utils::dstd::Path& path,
 static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
                                               PyObject* args,
                                               PyObject* kwargs) {
-    static const char* kwlist[] = {"paths", "runtime", nullptr};
     PyObject* paths_obj = nullptr;
     PyObject* runtime_obj = nullptr;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|O",
-                                     const_cast<char**>(kwlist), &paths_obj,
-                                     &runtime_obj)) {
+    if (!parse_kw<"O|O">(args, kwargs, {"paths", "runtime"}, &paths_obj,
+                         &runtime_obj)) {
         return nullptr;
     }
 
@@ -110,7 +111,7 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
     status = runtime->parallel_for(static_cast<std::int64_t>(paths.size()), 1,
                                    read_all);
     Py_END_ALLOW_THREADS if (!status) {
-        PyErr_SetString(PyExc_RuntimeError, status.error().c_str());
+        dftracer::utils::python::core::set_py_error(status.error());
         return nullptr;
     }
 

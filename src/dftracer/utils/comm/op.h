@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_COMM_OP_H
 #define DFTRACER_UTILS_COMM_OP_H
 
+#include <dftracer/utils/comm/detail/observe.h>
 #include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
@@ -88,8 +89,9 @@ class PendingOp {
     /// resumed through its executor, never on this thread.
     void fail(dstd::Error why) noexcept;
 
-    /// Ends the call with the value it staged, unless it already ended.
-    virtual void commit() noexcept {}
+    /// Ends the call with the value it staged, unless it already ended, and
+    /// gives whether it ended it here.
+    virtual bool commit() noexcept { return false; }
 
     /**
      * @brief Parks @p handle until the call ends, and registers @p awaiter
@@ -124,16 +126,58 @@ class PendingOp {
     void set_timeout(coro::TimerService* timers, coro::TimerService::TimerId id,
                      dstd::SharedPtr<detail::TimerTarget> target) noexcept;
 
+    /// Observes the call with @p meta, from @ref detail::begin_call: its end is
+    /// counted and traced. Set before the call is shared with another thread.
+    void observe(detail::CallMeta meta) noexcept { meta_ = std::move(meta); }
+
+    /// Sets the sequence number of the call, under the lock that registers it.
+    void set_seq(std::uint64_t seq) noexcept { meta_.seq = seq; }
+
+    /// Notes when the call began, on the steady clock, for a call that has a
+    /// deadline and so reads the clock anyway. Before the call is shared.
+    void set_start_ns(std::uint64_t now) noexcept {
+        if (meta_.tally && meta_.start_ns == 0) meta_.start_ns = now;
+    }
+
+    /// What the call knows of itself; the tally is empty for a call nothing
+    /// observes.
+    const detail::CallMeta& meta() const noexcept { return meta_; }
+
+    /// The bytes this call counts when it ends well.
+    std::uint64_t sent() const noexcept {
+        return bytes_sent_.load(std::memory_order_relaxed);
+    }
+    std::uint64_t received() const noexcept {
+        return bytes_received_.load(std::memory_order_relaxed);
+    }
+
+    /// Sets the bytes this call counts when it ends well; once, before it ends.
+    void set_sent(std::uint64_t bytes) noexcept {
+        bytes_sent_.store(bytes, std::memory_order_relaxed);
+    }
+    void set_received(std::uint64_t bytes) noexcept {
+        bytes_received_.store(bytes, std::memory_order_relaxed);
+    }
+
    protected:
     /// Runs @p set and ends the call, unless it already ended. Returns whether
     /// it ended the call here. The waiters resume after the lock is released.
     template <class F>
     bool settle(F&& set) noexcept {
         dstd::Vector<detail::OpWaiter> waiters;
+        detail::EndKind end = detail::EndKind::Ok;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (done_.load(std::memory_order_relaxed)) return false;
             set();
+            if (error_)
+                end = error_->is(dstd::Condition::Cancelled)
+                          ? detail::EndKind::Cancelled
+                          : detail::EndKind::Failed;
+            // Counted and traced before anyone can see the call done, so a
+            // waiter that reads the counters finds this call in them.
+            if (meta_.tally && (end != detail::EndKind::Ok || !meta_.batched))
+                note_end(end);
             done_.store(true, std::memory_order_release);
             waiters = std::move(waiters_);
         }
@@ -153,7 +197,12 @@ class PendingOp {
 
     void end_timeout() noexcept;
 
+    void note_end(detail::EndKind end) noexcept;
+
    private:
+    detail::CallMeta meta_;
+    std::atomic<std::uint64_t> bytes_sent_{0};
+    std::atomic<std::uint64_t> bytes_received_{0};
     std::mutex mutex_;
     std::condition_variable cv_;
     dstd::Vector<detail::OpWaiter> waiters_;
@@ -167,16 +216,17 @@ class PendingOp {
 template <class T>
 class OpState : public PendingOp {
    public:
-    void succeed(T value) noexcept {
-        this->settle([this, &value] { value_.emplace(std::move(value)); });
+    bool succeed(T value) noexcept {
+        return this->settle(
+            [this, &value] { value_.emplace(std::move(value)); });
     }
 
     /// Keeps @p value for @ref commit, so the ranks of one slot all end with a
     /// value or none does. The call stays pending.
     void stage(T value) noexcept { value_.emplace(std::move(value)); }
 
-    void commit() noexcept override {
-        this->settle([] {});
+    bool commit() noexcept override {
+        return this->settle([] {});
     }
 
     /// The outcome; read only once the call ended. Every read gives a copy.
@@ -193,8 +243,8 @@ class OpState : public PendingOp {
 template <>
 class OpState<void> : public PendingOp {
    public:
-    void succeed() noexcept {
-        this->settle([] {});
+    bool succeed() noexcept {
+        return this->settle([] {});
     }
 
     dstd::Result<void> take() const {

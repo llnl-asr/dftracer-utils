@@ -59,6 +59,13 @@ Runtime and scheduler
      - The one directory searched for ``libdftracer_utils_comm_mpi``. When it
        is unset, the directory of the comm library is searched first and the
        loader path second.
+   * - ``DFTRACER_UTILS_COMM_TRACE``
+     - unset
+     - A directory. When it is set and not empty, each rank writes
+       ``comm-<rank>-<pid>-<n>.pfw`` there, with ``n`` the number of the
+       communicator in the process, a DFTracer event file with one event for
+       each communicator call that ended. It is read once, when a communicator
+       starts, and the files are written when the communicator ends.
    * - ``DFTRACER_UTILS_HW_CONCURRENCY``
      - ``std::thread::hardware_concurrency()`` (or ``1`` if that is ``0``)
      - Overrides the detected core count used to size thread pools when the

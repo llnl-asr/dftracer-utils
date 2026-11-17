@@ -2,7 +2,10 @@
 #include <dftracer/utils/comm/backend/bulk.h>
 #include <dftracer/utils/comm/backend/local.h>
 #include <dftracer/utils/comm/detail/group_state.h>
+#include <dftracer/utils/comm/detail/observe.h>
 #include <dftracer/utils/comm/group.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/timer_service.h>
 #include <dftracer/utils/dstd/clock.h>
@@ -149,6 +152,14 @@ dstd::StringView call_name(CallKind kind) noexcept {
             return "neighbors";
         case CallKind::NeighborExchange:
             return "neighbor_exchange";
+        case CallKind::ChannelSend:
+            return "channel_send";
+        case CallKind::ChannelRecv:
+            return "channel_recv";
+        case CallKind::Pull:
+            return "pull";
+        case CallKind::Push:
+            return "push";
     }
     return "unknown";
 }
@@ -198,6 +209,7 @@ dstd::SharedPtr<GroupState> make_group_state(
             state->aborted = std::move(early->second.why);
             backend->early_aborts.erase(early);
         }
+        state->tally = dstd::make_shared<Tally>(backend->observer, state->id);
         // Under the same lock, so a process binds its groups in the order it
         // made them.
         const dstd::Span<const std::uint32_t> ranks(state->members.data(),
@@ -220,16 +232,16 @@ Error abort_error(const GroupState& group, std::uint32_t aborter,
         why.condition(), group.id, aborter, why.message());
 }
 
-/// `1, 3` for the members that had not arrived at a slot, `none` for all, and
-/// why this rank cannot tell.
-dstd::String missing_ranks(const backend::Arrival& arrived) {
+/// `1, 3` for the members that had (@p arrived_ones) or had not arrived at a
+/// slot, `none` for no one, and why this rank cannot tell.
+dstd::String listed_ranks(const backend::Arrival& arrived, bool arrived_ones) {
     if (arrived.empty()) return dstd::String("not known to this rank");
-    dstd::Vector<std::uint32_t> missing;
+    dstd::Vector<std::uint32_t> listed;
     for (std::uint32_t rank = 0; rank < arrived.size(); ++rank)
-        if (!arrived[rank]) missing.push_back(rank);
-    if (missing.empty()) return dstd::String("none");
+        if ((arrived[rank] != 0) == arrived_ones) listed.push_back(rank);
+    if (listed.empty()) return dstd::String("none");
     dstd::String text;
-    dstd::fmt_append_join<", ">(text, missing);
+    dstd::fmt_append_join<", ">(text, listed);
     return text;
 }
 
@@ -298,14 +310,20 @@ void expire(const dstd::SharedPtr<TimerTarget>& target, std::uint32_t rank,
         // outcome, and does not abort its peers.
         if (!op || op->is_done() || group->aborted) return;
         Error why;
+        const auto slot = group->slots.find(seq);
+        const std::uint64_t age_ns = call_age_ns(
+            op->meta(),
+            slot != group->slots.end() ? slot->second->start_ns : 0);
         if (names_missing) {
             why = Error::from_format<
-                "{} at seq {}: deadline {} passed; missing ranks: {}">(
-                Condition::Timeout, call_name(kind), seq, deadline_ns,
-                missing_ranks(arrived));
+                "{} at seq {}: deadline {} passed after {} ns; arrived ranks: "
+                "{}; missing ranks: {}">(
+                Condition::Timeout, call_name(kind), seq, deadline_ns, age_ns,
+                listed_ranks(arrived, true), listed_ranks(arrived, false));
         } else {
-            why = Error::from_format<"{} at seq {}: deadline {} passed">(
-                Condition::Timeout, call_name(kind), seq, deadline_ns);
+            why = Error::from_format<
+                "{} at seq {}: deadline {} passed after {} ns">(
+                Condition::Timeout, call_name(kind), seq, deadline_ns, age_ns);
         }
         abort_locked(*group, abort_error(*group, rank, why), tail);
     }
@@ -373,6 +391,32 @@ void finish_call(Slot& slot, const backend::SlotEnd& end) {
     finish_abort(group->backend, group->id, group->parent, tail);
 }
 
+/// The good ends of the calls of @p slot that the group counts, as one count:
+/// a call of a slot does not count its own, so the group pays for one count and
+/// not one for each member. @p wanted names the ranks whose calls end well. It
+/// runs before they end, so no waiter reads the counters ahead of it.
+template <class Keep>
+void count_slot(const Slot& slot, Tally* tally, Keep&& wanted, bool locked) {
+    CallKind kind = CallKind::Barrier;
+    std::uint64_t ok = 0;
+    std::uint64_t sent = 0;
+    std::uint64_t received = 0;
+    for (std::uint32_t rank = 0; rank < slot.ops.size(); ++rank) {
+        const dstd::SharedPtr<PendingOp>& call = slot.ops[rank];
+        if (!call || call->is_done() || !call->meta().batched || !wanted(rank))
+            continue;
+        kind = call->meta().kind;
+        ++ok;
+        sent += call->sent();
+        received += call->received();
+    }
+    if (ok == 0) return;
+    if (locked)
+        count_batch_locked(*tally, kind, ok, sent, received);
+    else
+        count_batch(*tally, kind, ok, sent, received);
+}
+
 /// The checks every completion passes, with the group mutex held: the slot is
 /// the first to end, the group did not abort, and the members agree on the call
 /// and on the protocol. Gives false when the completion is over, which is also
@@ -428,10 +472,13 @@ void decide_call(Slot& slot, const backend::SlotEnd& end, GroupState& group,
                  AbortTail& tail) {
     if (!accept_slot(slot, end, group, tail)) return;
     const std::uint32_t size = group.size();
+    count_slot(
+        slot, group.tally.get(), [](std::uint32_t) { return true; }, true);
     if constexpr (std::is_void_v<T>) {
         for (std::uint32_t member = 0; member < size; ++member) {
             if (!slot.ops[member]) continue;
-            static_cast<OpState<T>*>(slot.ops[member].get())->succeed();
+            auto* op = static_cast<OpState<T>*>(slot.ops[member].get());
+            op->succeed();
         }
     } else {
         struct Colored {
@@ -478,8 +525,8 @@ void decide_call(Slot& slot, const backend::SlotEnd& end, GroupState& group,
         for (std::uint32_t member = 0; member < size; ++member) {
             if (end.records[member].color != Group::NO_COLOR) continue;
             if (!slot.ops[member]) continue;
-            static_cast<OpState<Group>*>(slot.ops[member].get())
-                ->succeed(Group{});
+            auto* op = static_cast<OpState<Group>*>(slot.ops[member].get());
+            op->succeed(Group{});
         }
     }
     const auto at = group.slots.find(slot.seq);
@@ -505,31 +552,44 @@ void start_call(const dstd::SharedPtr<Backend>& backend,
                 dstd::SharedPtr<const void>* object) {
     if (opts.stop.stop_requested()) (void)cancel_group(*group, rank);
 
+    // Before the group mutex: the ranks of a group queue on it, and what is
+    // done under it is paid by every one of them.
+    state->observe(
+        make_meta(group->tally.get(), kind, group->members[rank], true));
+    state->set_sent(contribution.bytes.size());
+
     dstd::SharedPtr<Slot> slot;
     std::uint64_t seq = 0;
     {
         std::lock_guard<std::mutex> lock(group->mutex);
+        count_start_locked(*group->tally, kind);
         if (group->aborted) {
             state->fail(*group->aborted);
             return;
         }
         seq = group->next_seq[rank]++;
+        state->set_seq(seq);
         std::uint64_t deadline = opts.deadline_ns;
-        if (deadline == 0 && group->default_timeout_ns[rank] != 0)
-            deadline = dstd::steady_now_ns() + group->default_timeout_ns[rank];
         coro::TimerService* timers = backend->bootstrap->timers();
-        if (deadline != 0 && timers != nullptr) {
+        const bool timed =
+            deadline != 0 || group->default_timeout_ns[rank] != 0;
+        if (timed) {
             const std::uint64_t now = dstd::steady_now_ns();
-            const std::chrono::nanoseconds delay{deadline > now ? deadline - now
-                                                                : 0};
-            auto target = dstd::make_shared<detail::TimerTarget>();
-            target->group = group;
-            target->op = state;
-            const coro::TimerService::TimerId timer = timers->register_timeout(
-                delay, [target, rank, kind, seq, deadline]() {
-                    expire(target, rank, kind, seq, deadline);
-                });
-            state->set_timeout(timers, timer, std::move(target));
+            state->set_start_ns(now);
+            if (deadline == 0) deadline = now + group->default_timeout_ns[rank];
+            if (timers != nullptr) {
+                const std::chrono::nanoseconds delay{
+                    deadline > now ? deadline - now : 0};
+                auto target = dstd::make_shared<detail::TimerTarget>();
+                target->group = group;
+                target->op = state;
+                const coro::TimerService::TimerId timer =
+                    timers->register_timeout(
+                        delay, [target, rank, kind, seq, deadline]() {
+                            expire(target, rank, kind, seq, deadline);
+                        });
+                state->set_timeout(timers, timer, std::move(target));
+            }
         }
 
         auto& holder = group->slots[seq];
@@ -538,6 +598,7 @@ void start_call(const dstd::SharedPtr<Backend>& backend,
             // completion reads it without the mutex with no other order.
             holder = dstd::make_shared<Slot>(seq, group->size());
             holder->group = group;
+            holder->start_ns = dstd::coarse_now_ns();
         }
         slot = holder;
         slot->ops[rank] = state;
@@ -880,13 +941,22 @@ void finish_data(Slot& slot, const backend::SlotEnd& end) {
             }
             mine.table = end.tables[rank];
         }
-        dstd::Optional<Error> why = finishers[rank](personal ? mine : outcome);
+        const Outcome& taken = personal ? mine : outcome;
+        dstd::Optional<Error> why = finishers[rank](taken);
         if (why) {
             unusable = std::move(why);
             unusable_rank = rank;
+        } else if ((end.records[rank].flags & backend::RECORD_WANTS) != 0) {
+            slot.ops[rank]->set_received(taken.table.data.size());
         }
     }
     if (!unusable) {
+        count_slot(
+            slot, group->tally.get(),
+            [&finishers](std::uint32_t rank) {
+                return static_cast<bool>(finishers[rank]);
+            },
+            false);
         for (std::uint32_t rank = 0; rank < finishers.size(); ++rank)
             if (finishers[rank] && slot.ops[rank]) slot.ops[rank]->commit();
         return;
@@ -1300,6 +1370,13 @@ dstd::Result<Communicator> Communicator::start(Providers providers) {
     made->bulk = providers.bulk ? std::move(providers.bulk)
                                 : backend::make_message_bulk(made->messaging);
     made->protocol_version.resize(ranks, detail::PROTOCOL_VERSION);
+    {
+        dstd::SharedPtr<detail::Tracer> trace;
+        if (const auto dir = common::Env::get<dstd::StringView>(
+                common::constants::comm_settings::COMM_TRACE_ENV))
+            trace = detail::Tracer::make(*dir);
+        made->observer = dstd::make_shared<detail::Observer>(std::move(trace));
+    }
     // Weak: the messaging belongs to the backend, which must not be kept alive
     // by the handler its own provider holds.
     made->messaging->on_peer_abort(
@@ -1349,6 +1426,56 @@ dstd::Result<Communicator> Communicator::start(BackendKind kind,
                 loaded.error().condition(), loaded.error().message()));
     }
     return start(std::move(*loaded));
+}
+
+namespace {
+
+/// The groups alive on @p backend, so a snapshot reads them without the lock.
+dstd::Vector<dstd::SharedPtr<detail::GroupState>> live_group_states(
+    detail::Backend& backend) {
+    dstd::Vector<dstd::SharedPtr<detail::GroupState>> groups;
+    std::lock_guard<std::mutex> lock(backend.groups_mutex);
+    for (const auto& entry : backend.live_groups)
+        if (auto group = entry.second.lock())
+            groups.push_back(std::move(group));
+    return groups;
+}
+
+}  // namespace
+
+dstd::Vector<CallStats> Communicator::stats() const {
+    dstd::Vector<CallStats> rows;
+    if (!backend_) return rows;
+    for (const auto& group : live_group_states(*backend_))
+        detail::add_stats(*group->tally, rows);
+    detail::add_retired(*backend_->observer, rows);
+    return rows;
+}
+
+dstd::Vector<PendingCall> Communicator::pending() const {
+    dstd::Vector<PendingCall> calls;
+    if (!backend_) return calls;
+    for (const auto& group : live_group_states(*backend_)) {
+        std::lock_guard<std::mutex> lock(group->mutex);
+        for (const auto& entry : group->slots) {
+            const detail::Slot& slot = *entry.second;
+            for (std::uint32_t rank = 0; rank < slot.ops.size(); ++rank) {
+                const auto& op = slot.ops[rank];
+                if (!op || op->is_done()) continue;
+                const detail::CallMeta& meta = op->meta();
+                if (!meta.tally) continue;
+                calls.push_back(PendingCall{
+                    group->id, detail::call_name(meta.kind), meta.seq, rank,
+                    detail::call_age_ns(meta, slot.start_ns)});
+            }
+        }
+    }
+    return calls;
+}
+
+void detail::Hooks::flush_trace(const Communicator& comm) {
+    if (comm.backend_ && comm.backend_->observer->tracer)
+        comm.backend_->observer->tracer->flush();
 }
 
 Group Communicator::world(std::uint32_t rank) noexcept {

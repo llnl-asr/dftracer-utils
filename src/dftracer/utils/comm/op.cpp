@@ -83,6 +83,11 @@ void PendingOp::set_timeout(
     if (target) target->clear();
 }
 
+void PendingOp::note_end(detail::EndKind end) noexcept {
+    detail::end_call(meta_, end, bytes_sent_.load(std::memory_order_relaxed),
+                     bytes_received_.load(std::memory_order_relaxed));
+}
+
 void PendingOp::end_timeout() noexcept {
     coro::TimerService* timers = nullptr;
     coro::TimerService::TimerId id = coro::TimerService::NO_TIMER;

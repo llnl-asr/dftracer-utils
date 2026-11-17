@@ -8,6 +8,7 @@
 #include <dftracer/utils/comm/collective.h>
 #include <dftracer/utils/comm/error.h>
 #include <dftracer/utils/comm/op.h>
+#include <dftracer/utils/comm/stats.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/stop_token.h>
 #include <dftracer/utils/dstd/error.h>
@@ -1327,6 +1328,23 @@ class Communicator {
     /// for the local-threads backend, whose ranks all run here.
     std::uint32_t rank() const noexcept;
 
+    /**
+     * @brief What the calls of every group of this communicator ended with so
+     * far: one row per group and kind of call that was used.
+     *
+     * Read from relaxed counters, so a call that ends while this runs may or
+     * may not be in it. A group that no handle names any more is counted in the
+     * row of group id 0.
+     */
+    dstd::Vector<CallStats> stats() const;
+
+    /**
+     * @brief The calls of the groups' sequence of collectives that have not
+     * ended, with how long each has waited. Calls of channels and bulk
+     * transfers are in @ref stats only.
+     */
+    dstd::Vector<PendingCall> pending() const;
+
    private:
     friend struct detail::Hooks;
     dstd::SharedPtr<detail::Backend> backend_;
@@ -1411,6 +1429,11 @@ struct Hooks {
     /// Releases the groups of @p comm on their provider, as the end of a
     /// communicator does, so a test can ask what a dead group left behind.
     static void release_groups(Communicator& comm) noexcept;
+
+    /// Writes the events @p comm buffered when DFTRACER_UTILS_COMM_TRACE is
+    /// set; they are also written when the last handle of the communicator
+    /// goes.
+    static void flush_trace(const Communicator& comm);
 };
 
 }  // namespace detail

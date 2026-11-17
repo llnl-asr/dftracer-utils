@@ -240,7 +240,8 @@ ChannelState::ChannelState(dstd::SharedPtr<Backend> backend,
                            std::uint64_t group_id, std::uint64_t id,
                            std::uint32_t size, std::uint32_t rank,
                            dstd::StringView name, std::uint32_t value_size,
-                           ChannelOpts opts)
+                           ChannelOpts opts, dstd::SharedPtr<Tally> tally,
+                           std::uint32_t world_rank)
     : backend_(std::move(backend)),
       messaging_(std::move(messaging)),
       hub_(std::move(hub)),
@@ -252,6 +253,8 @@ ChannelState::ChannelState(dstd::SharedPtr<Backend> backend,
       name_(name),
       value_size_(value_size),
       opts_(opts),
+      tally_(std::move(tally)),
+      world_rank_(world_rank),
       declared_(size, 0) {}
 
 backend::MessageKey ChannelState::send_key(std::uint32_t peer) const noexcept {
@@ -357,6 +360,10 @@ std::uint64_t ChannelState::default_timeout() const noexcept {
                : 0;
 }
 
+void ChannelState::observe(PendingOp& call, CallKind kind) const {
+    call.observe(begin_call(tally_.get(), kind, world_rank_));
+}
+
 dstd::SharedPtr<ChannelState> open_channel(
     const dstd::SharedPtr<Backend>& backend,
     const dstd::SharedPtr<GroupState>& group, std::uint32_t rank,
@@ -375,7 +382,8 @@ dstd::SharedPtr<ChannelState> open_channel(
     }
     auto state = dstd::make_shared<ChannelState>(
         backend, backend->messaging, hub, dstd::WeakPtr<GroupState>(group),
-        group->id, id, group->size(), rank, name, value_size, opts);
+        group->id, id, group->size(), rank, name, value_size, opts,
+        group->tally, group->members[rank]);
     hub->note_open(id, value_size);
     return state;
 }
@@ -490,6 +498,7 @@ class SendCall final : public Call<void>,
             return;
         }
         channel->declare(peer_);
+        this->set_sent(bytes.size());
 
         auto self = this->shared_from_this();
         const backend::MessageKey key = channel->send_key(peer_);
@@ -542,6 +551,7 @@ class TakeBytes final : public Call<std::size_t>,
    private:
     void took(std::uint32_t source, std::size_t taken, const dstd::Error* why) {
         if (why == nullptr) {
+            this->set_received(taken);
             this->succeed(taken);
             return;
         }
@@ -562,6 +572,7 @@ Op<void> send_bytes(const dstd::SharedPtr<ChannelState>& channel,
                     std::uint32_t peer, dstd::Vector<std::byte> bytes,
                     const CallOpts& opts) {
     auto call = dstd::make_shared<SendCall>(channel, peer);
+    channel->observe(*call, CallKind::ChannelSend);
     stop_call(call, opts);
     call->start(std::move(bytes));
     watch_deadline(channel, call, opts);
@@ -572,6 +583,7 @@ Op<void> send_bytes(const dstd::SharedPtr<ChannelState>& channel,
 Op<std::size_t> take_bytes(const dstd::SharedPtr<ChannelState>& channel,
                            dstd::Span<std::byte> buffer, const CallOpts& opts) {
     auto call = dstd::make_shared<TakeBytes>(channel, buffer);
+    channel->observe(*call, CallKind::ChannelRecv);
     stop_call(call, opts);
     call->start();
     watch_deadline(channel, call, opts);
@@ -600,6 +612,7 @@ void watch_deadline(const dstd::SharedPtr<Backend>& backend,
         deadline = dstd::steady_now_ns() + default_timeout;
     if (deadline == 0) return;
     const std::uint64_t now = dstd::steady_now_ns();
+    call->set_start_ns(now);
     const std::chrono::nanoseconds delay{deadline > now ? deadline - now : 0};
     auto target = dstd::make_shared<TimerTarget>();
     target->op = call;
@@ -608,8 +621,18 @@ void watch_deadline(const dstd::SharedPtr<Backend>& backend,
             dstd::SharedPtr<PendingOp> op;
             if (!target->take_call(op)) return;
             if (op->is_done()) return;
-            op->cancel_alone(Error::from_format<"the deadline {} passed">(
-                Condition::Timeout, deadline));
+            const detail::CallMeta& meta = op->meta();
+            if (!meta.tally) {
+                op->cancel_alone(Error::from_format<"the deadline {} passed">(
+                    Condition::Timeout, deadline));
+                return;
+            }
+            op->cancel_alone(
+                Error::from_format<
+                    "{} of world rank {} in group {}: the deadline {} passed "
+                    "after {} ns">(Condition::Timeout, call_name(meta.kind),
+                                   meta.world_rank, meta.tally->group, deadline,
+                                   call_age_ns(meta)));
         });
     call->set_timeout(timers, timer, std::move(target));
 }

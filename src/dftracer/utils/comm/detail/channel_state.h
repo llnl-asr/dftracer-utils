@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_COMM_DETAIL_CHANNEL_STATE_H
 
 #include <dftracer/utils/comm/backend/messaging.h>
+#include <dftracer/utils/comm/detail/observe.h>
 #include <dftracer/utils/comm/group.h>
 #include <dftracer/utils/comm/op.h>
 #include <dftracer/utils/dstd/error.h>
@@ -158,7 +159,8 @@ class ChannelState : public std::enable_shared_from_this<ChannelState> {
                  dstd::WeakPtr<GroupState> group, std::uint64_t group_id,
                  std::uint64_t id, std::uint32_t size, std::uint32_t rank,
                  dstd::StringView name, std::uint32_t value_size,
-                 ChannelOpts opts);
+                 ChannelOpts opts, dstd::SharedPtr<Tally> tally,
+                 std::uint32_t world_rank);
 
     ChannelState(const ChannelState&) = delete;
     ChannelState& operator=(const ChannelState&) = delete;
@@ -206,6 +208,10 @@ class ChannelState : public std::enable_shared_from_this<ChannelState> {
     /// The timeout the calls of the group use when they name no deadline, or 0.
     std::uint64_t default_timeout() const noexcept;
 
+    /// Observes @p call as a call of @p kind that this channel's rank makes
+    /// now.
+    void observe(PendingOp& call, CallKind kind) const;
+
    private:
     dstd::SharedPtr<Backend> backend_;
     dstd::SharedPtr<backend::Messaging> messaging_;
@@ -218,6 +224,8 @@ class ChannelState : public std::enable_shared_from_this<ChannelState> {
     dstd::String name_;
     std::uint32_t value_size_ = 0;
     ChannelOpts opts_;
+    dstd::SharedPtr<Tally> tally_;
+    std::uint32_t world_rank_ = 0;
 
     mutable std::mutex mutex_;
     /// One byte per peer: this rank declared its open of the channel to it.

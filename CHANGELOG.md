@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 - Add `--comm local|mpi|auto` and `DFTRACER_UTILS_COMM` to `dftracer_view`, `dftracer_genesis_gen_dist` and `dftracer_replay`.
   The option wins over the variable, and the default is `auto`, which is MPI under a launcher and one local rank otherwise.
+- Add `DFTRACER_UTILS_COMM_TRACE`, a directory where each rank of the communicator writes a DFTracer event file with one event for each call, and `Communicator::stats()` and `Communicator::pending()` for the counters and the calls still waiting.
 - Add `DFTRACER_UTILS_COMM_PATH`, a directory that holds `libdftracer_utils_comm_mpi`.
   When it is set, the tools search only that directory for the MPI backend.
 - Load the MPI backend at run time from `libdftracer_utils_comm_mpi`, built with `-DDFTRACER_UTILS_ENABLE_MPI=ON`, so the tools no longer link MPI.

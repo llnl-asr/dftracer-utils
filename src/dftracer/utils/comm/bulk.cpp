@@ -65,6 +65,11 @@ class BulkCall final : public OpState<std::uint64_t> {
     BulkCall(dstd::SharedPtr<Backend> backend, std::uint64_t group) noexcept
         : backend_(std::move(backend)), group_(group) {}
 
+    /// Keeps the counters of the group, which the call writes when it ends.
+    void hold(dstd::SharedPtr<Tally> tally) noexcept {
+        tally_ = std::move(tally);
+    }
+
     /// Notes the provider's handle for the transfer, so a cancel reaches it. A
     /// cancel that came first reaches it here.
     void note(backend::OpId op) noexcept {
@@ -94,6 +99,7 @@ class BulkCall final : public OpState<std::uint64_t> {
 
    private:
     dstd::SharedPtr<Backend> backend_;
+    dstd::SharedPtr<Tally> tally_;
     std::uint64_t group_ = 0;
     std::mutex mutex_;
     backend::OpId op_;
@@ -145,11 +151,20 @@ Op<std::uint64_t> bulk_transfer(const dstd::SharedPtr<Backend>& backend,
         timeout = state->default_timeout_ns[rank];
     }
     auto call = dstd::make_shared<BulkCall>(backend, state->id);
-    auto done = [call](std::uint64_t moved, const Error* why) {
-        if (why != nullptr)
+    call->hold(state->tally);
+    call->observe(begin_call(state->tally.get(),
+                             writes ? CallKind::Push : CallKind::Pull,
+                             state->members[rank]));
+    auto done = [call, writes](std::uint64_t moved, const Error* why) {
+        if (why != nullptr) {
             call->fail(*why);
+            return;
+        }
+        if (writes)
+            call->set_sent(moved);
         else
-            call->succeed(moved);
+            call->set_received(moved);
+        call->succeed(moved);
     };
     const backend::OpId op =
         writes ? backend->bulk->push(rank, ref, offset,

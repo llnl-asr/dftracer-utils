@@ -89,6 +89,12 @@ inline constexpr const char* COMM_ENV = "DFTRACER_UTILS_COMM";
 /// A directory that holds the MPI backend library. When set, it is the only
 /// place searched.
 inline constexpr const char* COMM_PATH_ENV = "DFTRACER_UTILS_COMM_PATH";
+/// A directory: when set, each rank writes one DFTracer event file there with
+/// one event per communicator call. Read once at communicator start; off when
+/// unset or empty.
+inline constexpr const char* COMM_TRACE_ENV = "DFTRACER_UTILS_COMM_TRACE";
+/// The size at which a rank's trace buffer is appended to its file.
+inline constexpr std::size_t COMM_TRACE_FLUSH_BYTES = std::size_t{1} << 20;
 /// The most bytes one MPI message of the MPI backend carries; a longer payload
 /// goes in several. The default is the largest size that fits an int count.
 inline constexpr const char* MPI_CHUNK_BYTES_ENV =

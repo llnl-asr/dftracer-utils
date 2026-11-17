@@ -79,6 +79,10 @@ struct SlotKey {
     }
 };
 
+/// The bit of a byte of @ref Slot::seen that says the messages of the member
+/// landed.
+constexpr std::uint8_t LANDED = 2;
+
 /// What the provider knows of one slot.
 struct Slot {
     Slot(const SlotKey& slot_key, std::uint32_t member_count)
@@ -104,7 +108,10 @@ struct Slot {
     /// so every later arrival is compared against the same record.
     std::uint32_t anchor = 0;
     dstd::Vector<Record> records;
-    /// One byte per member, 1 for a member that arrived.
+    /// One byte per member: bit 0 for a member that arrived, bit 1 (@ref
+    /// LANDED) once everything the member sends group rank 0 for this slot is
+    /// in. A member of this process that called is seen at once, while its
+    /// messages can still be on their way or lost.
     dstd::Vector<std::uint8_t> seen;
     /// The records group rank 0 took from messages: a member that arrived in
     /// this process still has to send its own before the table is built.
@@ -168,6 +175,7 @@ class LinearCollectives : public Collectives {
             if (slot->ended) return false;
             if (!slot->done) slot->done = std::move(done);
             const bool agrees = arrive_locked(*slot, rank, record);
+            if (rank == 0) slot->seen[0] |= LANDED;
             if (rank == 0 && agrees && (record.flags & RECORD_TABLE) != 0)
                 folder =
                     keep_own(*slot, record, std::move(contribution), batch);
@@ -227,8 +235,13 @@ class LinearCollectives : public Collectives {
             if (gone->fold) gone->fold->cancel_locked();
             slots_.erase(at);
             // Only a rank 0 of this process saw every member; any other rank
-            // would guess, so it reports nothing.
-            if (gone->seen[0] != 0) mask = gone->seen;
+            // would guess, so it reports nothing. A member counts as arrived
+            // when its messages are in, so a lost one names its sender.
+            if (gone->seen[0] != 0) {
+                mask = gone->seen;
+                for (std::uint32_t member = 1; member < gone->members; ++member)
+                    mask[member] = (gone->seen[member] & LANDED) != 0 ? 1 : 0;
+            }
         }
         if (arrived != nullptr) *arrived = std::move(mask);
         // Outside the lock, since the parked messages answer it here.
@@ -455,10 +468,12 @@ class LinearCollectives : public Collectives {
                     } else {
                         unpack_record(bytes, record);
                         ++slot->records_in;
-                        if (arrive_locked(*slot, member, record))
+                        if (arrive_locked(*slot, member, record)) {
                             table = (record.flags & RECORD_TABLE) != 0;
-                        else
+                            if (!table) slot->seen[member] |= LANDED;
+                        } else {
                             broken = slot->seen;
+                        }
                     }
                 }
                 if (is_bad) {
@@ -500,6 +515,7 @@ class LinearCollectives : public Collectives {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (slot->ended) return;
                 ++slot->payloads_in;
+                slot->seen[member] |= LANDED;
                 // Rank 0 decided whether the slot combines, so a member whose
                 // record says otherwise is staged, and the records report the
                 // mismatch.

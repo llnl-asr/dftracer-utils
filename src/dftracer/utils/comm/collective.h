@@ -180,12 +180,18 @@ enum class CallKind : std::uint8_t {
     ExclusiveScan,
     Neighbors,
     NeighborExchange,
+    /// The calls below are not collectives: the counters and the trace name
+    /// them with the same kind.
+    ChannelSend,
+    ChannelRecv,
+    Pull,
+    Push,
 };
 
 /// Whether a call of @p kind moves bytes, so a failure of it names the ranks
 /// that did not arrive.
 constexpr bool carries_data(CallKind kind) noexcept {
-    return kind >= CallKind::Broadcast;
+    return kind >= CallKind::Broadcast && kind <= CallKind::NeighborExchange;
 }
 
 /// What a @ref backend::Record names in @ref backend::Record::reduce.

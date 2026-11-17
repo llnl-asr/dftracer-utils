@@ -62,6 +62,37 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   deadline or a stopped token ends one transfer and leaves the group alone; an
   abort of the group or of the owner's process ends it with the error of the
   group.
+  A deadline that passes on a collective ends the group with an error that
+  names the call, its sequence number, how long it waited, the ranks that
+  arrived and the ranks that did not, and the error of a channel or bulk call
+  names the group, the world rank and the age.
+  ``Communicator::pending()`` lists the calls of the collective sequence that
+  have not ended, each with its group, kind, sequence number, rank and age (a
+  call with a deadline or a trace is timed from its own start, and any other
+  from the start of its slot, so that a call reads no clock), and
+  ``Communicator::stats()`` gives, for each group and kind of call, how many
+  calls started, ended well, failed and were cancelled, and the bytes they sent
+  and received. A collective call is counted under the group mutex that it takes anyway, so
+  it adds no atomic read-modify-write, and a call is counted before any waiter
+  sees it end. A group that no handle names any more is counted in the row of
+  group 0. When ``DFTRACER_UTILS_COMM_TRACE`` names a directory, each rank
+  also writes one DFTracer event file there, ``comm-<rank>-<pid>-<n>.pfw`` (``n`` numbers the communicators of the
+  process), with one
+  complete event for each call that ended (``cat`` is ``comm``, ``name`` is the
+  kind of call, ``args`` hold the group, the sequence number, the bytes and the
+  status); the tools that read ``.pfw`` files read it, and when the variable is
+  unset a call pays one branch for it. A trace that cannot be made or written logs
+  one warning that names the path.
+  For tests and chaos runs, ``FaultMessaging`` wraps any messaging provider and,
+  by seeded rule, delays, reorders, drops or kills what passes through it. A
+  delay runs on the timers of the process and never sleeps a provider thread.
+  A reorder holds messages and releases them in a seeded order across streams
+  only, so each stream stays in order. A lost message is lost: the deadline of
+  the call that waited for it names the rank that never arrived. A killed rank
+  fails its sends and receives, and the groups that hold it abort with one error
+  that names it, so every pending collective, channel and bulk call ends with
+  that error on every rank. The same seed gives the same decisions for the same
+  messages, and the limit of a drop rule counts the messages of one stream.
 - ``dftracer_utils_store`` is the key-value store engine: data files, the
   writer and its committer, and the snapshot that reads them. It links only
   the runtime and knows nothing about traces.

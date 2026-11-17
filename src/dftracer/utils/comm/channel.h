@@ -406,6 +406,7 @@ class TakeCall final : public Call<Message<T>>,
             end_with(size_error(*channel, source, bytes.size()));
             return;
         }
+        this->set_received(bytes.size());
         this->succeed(Message<T>(source, value_of<T>(bytes)));
     }
 
@@ -441,6 +442,7 @@ Op<Message<T>> take_value(const dstd::SharedPtr<ChannelState>& channel,
                           std::uint32_t peer, const CallOpts& opts,
                           std::uint64_t turn = 0) {
     auto call = dstd::make_shared<TakeCall<T>>(channel, peer, turn);
+    channel->observe(*call, CallKind::ChannelRecv);
     stop_call(call, opts);
     call->start();
     watch_deadline(channel, call, opts);

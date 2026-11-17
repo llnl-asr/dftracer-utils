@@ -7,6 +7,7 @@
 #include <dftracer/utils/comm/backend/collectives.h>
 #include <dftracer/utils/comm/backend/messaging.h>
 #include <dftracer/utils/comm/collective.h>
+#include <dftracer/utils/comm/detail/observe.h>
 #include <dftracer/utils/comm/op.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/timer_service.h>
@@ -75,6 +76,8 @@ struct Backend {
     dstd::SharedPtr<backend::Messaging> messaging;
     dstd::SharedPtr<backend::Collectives> collectives;
     dstd::SharedPtr<backend::Bulk> bulk;
+    /// The counters of the groups that are gone and the trace, set at start.
+    dstd::SharedPtr<Observer> observer;
     /// The version each rank reports at the handshake, by world rank.
     dstd::Vector<std::uint32_t> protocol_version;
     /// The id the next group made on this backend takes.
@@ -105,6 +108,9 @@ struct Slot {
     /// it. Weak, because the group holds its slots.
     dstd::WeakPtr<GroupState> group;
     std::uint64_t seq = 0;
+    /// When the slot began, on the coarse clock: the age of a call of the slot
+    /// that read no clock of its own.
+    std::uint64_t start_ns = 0;
     /// Set by the first completion of the slot, which is the only one that ends
     /// the calls of its members.
     std::atomic<bool> finished{false};
@@ -122,8 +128,8 @@ struct Slot {
  *
  * @ref members holds the world ranks in group order, so group rank `r` is
  * world rank `members[r]`. Everything but @ref id, @ref members,
- * @ref processes, @ref single_process and @ref backend is guarded by @ref
- * mutex.
+ * @ref processes, @ref single_process, @ref tally and @ref backend is guarded
+ * by @ref mutex.
  */
 struct GroupState {
     GroupState() noexcept;
@@ -152,6 +158,8 @@ struct GroupState {
     /// What the channels each group rank opened share, made by its first
     /// channel: what it opened, and what its peers declared to it.
     dstd::Vector<dstd::SharedPtr<ChannelHub>> channel_hubs;
+    /// What the calls of the group count, written without the mutex.
+    dstd::SharedPtr<Tally> tally;
 
     std::uint32_t size() const noexcept {
         return static_cast<std::uint32_t>(members.size());

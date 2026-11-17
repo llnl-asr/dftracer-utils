@@ -554,6 +554,8 @@ set(TEST_CPP_SOURCES
     comm/test_loader.cpp
     comm/test_codec.cpp
     comm/test_bulk.cpp
+    comm/test_fault.cpp
+    comm/test_observe.cpp
     # Async I/O tests
     runtime/io/test_async_io.cpp
     # Task Graph tests
@@ -791,6 +793,12 @@ foreach(test_file ${TEST_CPP_SOURCES})
       DFTRACER_UTILS_TEST_INTERPOSE_PATH="$<TARGET_FILE:input_syscalls_interpose>"
       DFTRACER_UTILS_TEST_BIN_DIR="$<TARGET_FILE_DIR:dftracer_index>")
     set_tests_properties(${bin_exec} PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
+  endif()
+
+  if(bin_exec STREQUAL "comm/test_observe")
+    add_dependencies(${target_name} dftracer_event_count)
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_UTILS_EVENT_COUNT_PATH=$<TARGET_FILE:dftracer_event_count>")
   endif()
 
   if(bin_exec STREQUAL "trace/index/test_index_skip")

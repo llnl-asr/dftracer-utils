@@ -81,7 +81,7 @@ def test_series_to_polars_matches_native(layout, chunked):
 @pytest.mark.parametrize("layout,chunked", _layouts())
 def test_dataframe_to_polars_matches_native(layout, chunked):
     df = _frame(layout, chunked)
-    _needs_capsule(df._native, "__arrow_c_stream__")
+    _needs_capsule(df, "__arrow_c_stream__")
     got = df.to_polars()
     want = pl.DataFrame({name: _polars_native(df[name], pl) for name in df.columns})
     assert got.schema == want.schema

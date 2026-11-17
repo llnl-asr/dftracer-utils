@@ -27,7 +27,6 @@ from typing import (
     Union,
     cast,
     get_args,
-    overload,
 )
 
 from . import dftracer_utils_ext as _ext
@@ -42,13 +41,9 @@ from .series import (
     _pandas_default,
     _pandas_nullable,
     _polars_via_arrow,
-    _register,
     _require_pyarrow,
     _StrAccessor,
     _to_pandas,
-    _unwrap,
-    _wrap,
-    _Wrapper,
 )
 
 if TYPE_CHECKING:
@@ -57,6 +52,7 @@ if TYPE_CHECKING:
     import polars as pl  # ty: ignore[import-not-found]
     import pyarrow as pa  # ty: ignore[import-not-found]
     from pandas.api.extensions import ExtensionArray  # ty: ignore[import-not-found]
+    from typing_extensions import Self
 
     from .columnar import Agg, ColumnExpr, GroupBy, Named
     from .indexing import At, ILoc, Loc, Resampler
@@ -350,25 +346,42 @@ def _norm_window_spec(spec: Sequence[Any]) -> Tuple[object, ...]:
     return (func, value, offset, name, time, threshold, counter, pre, post, end, span, range_frame)
 
 
-class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]):
+class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
     """A named set of columns: native frame ops plus Arrow conversion.
 
     ``DataFrame({"a": [1, 2]})`` builds one from a ``{name: array-like}``
-    mapping, the pandas / polars constructor; ``DataFrame(native)`` wraps a
-    native handle."""
+    mapping, the pandas / polars constructor."""
 
-    __slots__ = ("_index",)
+    __slots__ = ("_ix",)
 
-    def __init__(self, data: "Union[_ext.DataFrame, Mapping[str, object]]") -> None:
-        if isinstance(data, Mapping):
-            data = _unwrap(DataFrame.from_dict(data))
-        super().__init__(data)
-        self._index: Optional[List[str]] = None
+    # The native type has no constructor of its own: its factories build this
+    # class directly (_bind_types), so only a Python-data call comes through
+    # here, and __new__ hands back the frame a native importer built.
+    def __new__(cls, data: "Union[Mapping[str, object], _ext.DataFrame]") -> "DataFrame":
+        if cls is not DataFrame:
+            raise TypeError(
+                "DataFrame cannot be subclassed: the native calls build the class bound by "
+                "_bind_types, so an instance of a subclass would come back as a DataFrame"
+            )
+        if isinstance(data, _ext.DataFrame):
+            return cast("DataFrame", data)
+        return DataFrame.from_dict(data)
+
+    def __init__(self, data: "Union[Mapping[str, object], _ext.DataFrame]") -> None:
+        pass
+
+    @property
+    def _index(self) -> Optional[List[str]]:
+        return getattr(self, "_ix", None)
+
+    @_index.setter
+    def _index(self, names: Optional[List[str]]) -> None:
+        self._ix = names
 
     def _like(self, native: object) -> Any:
         """Wrap a native result, carrying this frame's index column names when
         the result still holds every one of them."""
-        out = _wrap(native)
+        out = native
         if isinstance(out, DataFrame) and self._index is not None:
             if all(name in out for name in self._index):
                 out._index = self._index
@@ -383,15 +396,15 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         if self._index is None:
             return Series.from_list(list(range(len(self))))
         if len(self._index) == 1:
-            return self._native[self._index[0]]
-        return _wrap(self._native.select(*self._index))
+            return _ext.DataFrame.__getitem__(self, self._index[0])
+        return _ext.DataFrame.select(self, *self._index)
 
     def index_levels(self) -> List[Series]:
         """The index columns, one Series per level; the row positions when no
         index is set."""
         if self._index is None:
             return [Series.from_list(list(range(len(self))))]
-        return [self._native[name] for name in self._index]
+        return [_ext.DataFrame.__getitem__(self, name) for name in self._index]
 
     def set_index(self, names: "Union[str, Sequence[str]]") -> "DataFrame":
         """Name the column(s) ``loc`` / ``at`` / ``resample`` read labels
@@ -404,7 +417,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         for name in keys:
             if name not in self:
                 raise KeyError(f"set_index: no column named {name!r}")
-        out = DataFrame(self._native)
+        out = _ext.DataFrame.share(self)
         out._index = keys
         return out
 
@@ -413,11 +426,11 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         ``drop``); with no index set, prepend the row positions as ``index``,
         as pandas."""
         if self._index is None:
-            return self if drop else self._like(self._native.with_row_index("index"))
+            return self if drop else self._like(_ext.DataFrame.with_row_index(self, "index"))
         if drop:
             keep = [c for c in self.columns if c not in self._index]
-            return _wrap(self._native.select(*keep))
-        return DataFrame(self._native)
+            return _ext.DataFrame.select(self, *keep)
+        return _ext.DataFrame.share(self)
 
     @property
     def iloc(self) -> "ILoc":
@@ -550,14 +563,12 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
             cols = {name: Series.from_numpy(col) for name, col in arr.items()}
         else:
             cols = {name: Series.from_numpy(arr[:, i]) for i, name in enumerate(columns)}
-        return DataFrame(
-            _ext._dataframe_from_columns(list(cols), [_unwrap(c) for c in cols.values()])
-        )
+        return DataFrame(_ext._dataframe_from_columns(list(cols), [c for c in cols.values()]))
 
     def to_arrow(self) -> "pa.Table":
         """This frame as a ``pyarrow.Table`` (zero-copy via the C Data Interface
         stream)."""
-        return _require_pyarrow().table(self._native)
+        return _require_pyarrow().table(self)
 
     def _arrow_for_parquet(self) -> "pa.Table":
         """The Arrow table a Parquet writer saves: ``to_arrow`` plus the pandas
@@ -599,11 +610,6 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
             {**(table.schema.metadata or {}), b"pandas": pandas_md}
         )
 
-    def to_ipc(self) -> bytes:
-        """This frame serialized as an Arrow IPC stream (schema + one record
-        batch + EOS) - bytes any Arrow IPC reader opens, no pyarrow needed."""
-        return self._native.to_ipc()
-
     def to_pandas(
         self,
         *,
@@ -640,7 +646,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
             import pandas as pd  # ty: ignore[import-not-found]
 
             def one(name: str) -> "Union[pd.Series, np.ndarray, ExtensionArray]":
-                col = self._native[name]
+                col = _ext.DataFrame.__getitem__(self, name)
                 values = _pandas_nullable(col) if nullable else None
                 return values if values is not None else _pandas_default(col)
 
@@ -660,32 +666,16 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
             raise ImportError(
                 "polars is required for to_polars(). Install with: pip install polars"
             ) from None
-        if self._native.num_rows == 0:
+        if self.num_rows == 0:
             return pl.DataFrame()
-        if hasattr(self._native, "__arrow_c_stream__") and all(
-            _polars_via_arrow(self._native[name]) for name in self.columns
+        if hasattr(self, "__arrow_c_stream__") and all(
+            _polars_via_arrow(_ext.DataFrame.__getitem__(self, name)) for name in self.columns
         ):
             return pl.DataFrame(self)
         return pl.DataFrame({name: self[name].to_polars() for name in self.columns})
 
-    @overload
-    def __getitem__(self, key: str) -> Series: ...
-    @overload
-    def __getitem__(self, key: "Union[Sequence[str], Series]") -> "DataFrame": ...
-    def __getitem__(self, key: "Union[str, Sequence[str], Series]") -> "Union[Series, DataFrame]":
-        """``df["a"]`` is a column; ``df[["a", "b"]]`` a projection; ``df[mask]``
-        with a Bool Series the matching rows (the pandas spellings)."""
-        if isinstance(key, str):
-            return self._native[key]
-        if isinstance(key, Series):
-            return self._like(self._native.filter(_unwrap(key)))
-        return self._like(self._native.select(*[str(k) for k in key]))
-
-    def __contains__(self, name: str) -> bool:
-        return name in self._native
-
     def __len__(self) -> int:
-        return self._native.num_rows
+        return self.num_rows
 
     def __repr__(self) -> str:
         from ._repr import frame_repr
@@ -701,19 +691,19 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
     # -- pandas / polars spellings ---------------------------------------------
     @property
     def columns(self) -> List[str]:
-        return list(self._native.column_names)
+        return list(self.column_names)
 
     @property
     def shape(self) -> Tuple[int, int]:
-        return (self._native.num_rows, self._native.num_columns)
+        return (self.num_rows, self.num_columns)
 
     @property
     def height(self) -> int:
-        return self._native.num_rows
+        return self.num_rows
 
     @property
     def width(self) -> int:
-        return self._native.num_columns
+        return self.num_columns
 
     @property
     def dtypes(self) -> List[DType]:
@@ -724,7 +714,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         return {name: self[name].dtype for name in self.columns}
 
     def limit(self, n: int = 5) -> "DataFrame":
-        return self._like(self._native.head(_unwrap(n)))
+        return self._like(_ext.DataFrame.head(self, n))
 
     def drop(
         self, *names: "Union[str, Sequence[str]]", columns: Union[str, Sequence[str], None] = None
@@ -736,7 +726,9 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         missing = [n for n in dropped if n not in self]
         if missing:
             raise KeyError(f"drop: no column named {missing[0]!r}")
-        return self._like(self._native.select(*[c for c in self.columns if c not in dropped]))
+        return self._like(
+            _ext.DataFrame.select(self, *[c for c in self.columns if c not in dropped])
+        )
 
     def _constant_column(self, value: "Union[bool, int, float, str, None]") -> Series:
         """A column of this frame's row count holding ``value``: an Int64, Float64,
@@ -776,7 +768,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
             if value is None or isinstance(value, (bool, int, float, str)):
                 value = out._constant_column(value)
             col = value if isinstance(value, Series) else value.apply(out)
-            out = _wrap(out._native.with_column(name, _unwrap(col)))
+            out = _ext.DataFrame.with_column(out, name, col)
         return out
 
     def with_columns(
@@ -805,12 +797,12 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         casted: Dict[str, Series] = {}
         for name, dtype in dtypes.items():
             try:
-                casted[name] = self._native[name].astype(dtype)
+                casted[name] = _ext.DataFrame.__getitem__(self, name).astype(dtype)
             except TypeError as e:
                 raise TypeError(f"astype: column {name!r}: {e}") from None
         out = self
         for name, column in casted.items():
-            out = _wrap(out._native.with_column(name, _unwrap(column)))
+            out = _ext.DataFrame.with_column(out, name, column)
         return out
 
     def astype(
@@ -825,10 +817,10 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         return out
 
     def dropna(self) -> "DataFrame":
-        return self._like(self._native.drop_nulls())
+        return self._like(_ext.DataFrame.drop_nulls(self))
 
     def fillna(self, value: Union[int, float]) -> "DataFrame":
-        return self._like(self._native.fill_null(_unwrap(value)))
+        return self._like(_ext.DataFrame.fill_null(self, value))
 
     def duplicated(
         self,
@@ -843,7 +835,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         cols = list(self.columns) if subset is None else _names(subset)
         frame = self[cols]
         if keep is False:
-            return cast("Series", _wrap(frame._native.is_duplicated()))
+            return _ext.DataFrame.is_duplicated(frame)
         if keep == "last":
             back = list(range(frame.num_rows - 1, -1, -1))
             return frame.take(back).duplicated(keep="first").take(back)
@@ -878,10 +870,10 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         return out
 
     def nlargest(self, n: int, columns: str) -> "DataFrame":
-        return self._like(self._native.topk(columns, n, True))
+        return self._like(_ext.DataFrame.topk(self, columns, n, True))
 
     def nsmallest(self, n: int, columns: str) -> "DataFrame":
-        return self._like(self._native.topk(columns, n, False))
+        return self._like(_ext.DataFrame.topk(self, columns, n, False))
 
     def pivot_table(
         self,
@@ -910,12 +902,16 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
     def to_dict(self) -> "Dict[str, Sequence[object]]":
         return {name: self[name].to_list() for name in self.columns}
 
-    # Opaque Arrow C Data Interface capsule; Python has no capsule type.
-    def __arrow_c_stream__(self, requested_schema: Optional[object] = None) -> object:
-        return self._native.__arrow_c_stream__(requested_schema)
+    def __copy__(self) -> "Self":
+        return self.copy()
 
+    def __deepcopy__(self, memo: object) -> "Self":
+        """The columns are immutable, so a deep copy is a shallow one."""
+        return self.copy()
+
+    # Opaque Arrow C Data Interface capsule; Python has no capsule type.
     def __reduce__(self) -> "Tuple[Callable[[bytes], DataFrame], Tuple[bytes, ...]]":
-        return (_dataframe_from_bytes, (self._native.to_bytes(),))
+        return (_dataframe_from_bytes, (_ext.DataFrame.to_bytes(self),))
 
     def apply(
         self, func: "Union[ColumnExpr, Callable[..., object]]", axis: int = 0
@@ -947,7 +943,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
             return apply_rows(self, func, "DataFrame.apply(axis=1)")
         if axis != 0:
             raise ValueError("axis must be 0 (per column) or 1 (per row)")
-        results = {name: func(self._native[name]) for name in self.columns}
+        results = {name: func(_ext.DataFrame.__getitem__(self, name)) for name in self.columns}
         if all(isinstance(r, Series) for r in results.values()):
             out = self
             for name, r in results.items():
@@ -959,15 +955,10 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
             )
         return DataFrame({name: [r] for name, r in results.items()})
 
-    def partition_id(self, keys: Union[str, List[str]], n_parts: int) -> "Series":
-        """Int32 column: the part in ``[0, n_parts)`` each row lands in under a
-        stable hash of ``keys`` (equal keys share a part)."""
-        return self._native.partition_id(keys, n_parts)
-
     def hash_partition(self, keys: Union[str, List[str]], n_parts: int) -> "list[DataFrame]":
         """Hash-partition the rows into ``n_parts`` frames by
         :meth:`partition_id` (the shuffle primitive)."""
-        return [DataFrame(p) for p in self._native.hash_partition(keys, n_parts)]
+        return [DataFrame(p) for p in _ext.DataFrame.hash_partition(self, keys, n_parts)]
 
     def window(
         self,
@@ -1018,7 +1009,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         All input columns pass through, then one column per spec, in sorted
         (partition, order) row order."""
         norm = [_norm_window_spec(s) for s in (specs or [])]
-        return self._like(self._native.window(_names(partition_by), _names(order_by), norm))
+        return self._like(_ext.DataFrame.window(self, _names(partition_by), _names(order_by), norm))
 
     def gap_fill(
         self,
@@ -1040,16 +1031,15 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         partition; pass both or neither."""
         if (start is None) != (end is None):
             raise ValueError("gap_fill: pass both start and end, or neither")
-        return _wrap(
-            self._native.gap_fill(
-                _names(partition_by),
-                time,
-                int(bucket),
-                _names(values),
-                mode,
-                start,
-                end,
-            )
+        return _ext.DataFrame.gap_fill(
+            self,
+            _names(partition_by),
+            time,
+            int(bucket),
+            _names(values),
+            mode,
+            start,
+            end,
         )
 
     def join(
@@ -1088,22 +1078,21 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         if isinstance(on, bool):
             raise TypeError("join: 'on' must be a key name/list or an int count")
         if isinstance(on, int):
-            names = list(self._native.column_names)
+            names = list(self.column_names)
             if on < 1 or on > len(names):
                 raise ValueError(
                     f"join: 'on' count {on} is out of range for a {len(names)}-column frame"
                 )
             on = names[:on]
-        return _wrap(
-            self._native.join(
-                _unwrap(other),
-                on=_unwrap(on),
-                how=how,
-                left_on=_unwrap(left_on),
-                right_on=_unwrap(right_on),
-                suffix=suffix,
-                nulls_equal=nulls_equal,
-            )
+        return _ext.DataFrame.join(
+            self,
+            other,
+            on=on,
+            how=how,
+            left_on=left_on,
+            right_on=right_on,
+            suffix=suffix,
+            nulls_equal=nulls_equal,
         )
 
     def merge(
@@ -1159,7 +1148,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         if isinstance(on, bool):
             raise TypeError("compare_agg: 'on' must be a key name/list or an int count")
         if isinstance(on, int):
-            names = list(self._native.column_names)
+            names = list(self.column_names)
             if on < 1 or on > len(names):
                 raise ValueError(
                     f"compare_agg: 'on' count {on} is out of range for a {len(names)}-column frame"
@@ -1170,7 +1159,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
             if not keys:
                 raise ValueError("compare_agg: 'on' must name at least one key column")
             n_key = len(keys)
-        return self._like(self._native.compare_agg(_unwrap(variant), n_key))
+        return self._like(_ext.DataFrame.compare_agg(self, variant, n_key))
 
     def asof(
         self,
@@ -1187,7 +1176,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         (smallest ts >= self.ts), or ``"nearest"``. ``tolerance`` (if given)
         bounds the allowed time distance. Output is all left columns then the
         right value columns; unmatched left rows get null right values."""
-        return self._like(self._native.asof(_unwrap(other), on, _names(by), direction, tolerance))
+        return self._like(_ext.DataFrame.asof(self, other, on, _names(by), direction, tolerance))
 
     def interval(
         self,
@@ -1206,7 +1195,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         unmatched left row once with null right values. Output is all left
         columns then the right value columns."""
         return self._like(
-            self._native.interval(_unwrap(other), point, lo, hi, _names(by), bool(outer))
+            _ext.DataFrame.interval(self, other, point, lo, hi, _names(by), bool(outer))
         )
 
     def unnest(self, column: str, keep_empty: bool = False) -> "DataFrame":
@@ -1219,16 +1208,16 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         value. An empty or null list drops the row unless ``keep_empty=True``
         (then one row with the exploded column(s) null). See :meth:`explode` for
         the single-list variant that always keeps the row."""
-        return self._like(self._native.unnest(column, bool(keep_empty)))
+        return self._like(_ext.DataFrame.unnest(self, column, bool(keep_empty)))
 
     def top_k(self, name: str, k: int, largest: bool = True) -> "DataFrame":
         """The ``k`` best rows by column ``name`` (alias of the native
         :meth:`topk`)."""
-        return self._like(self._native.topk(name, k, largest))
+        return self._like(_ext.DataFrame.topk(self, name, k, largest))
 
     def distinct(self, subset: "str | Sequence[str] | None" = None) -> "DataFrame":
         """Drop duplicate rows, keeping the first (alias of :meth:`unique`)."""
-        return self._like(self._native.unique(subset))
+        return self._like(_ext.DataFrame.unique(self, subset))
 
     def sort_values(
         self,
@@ -1251,8 +1240,8 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         if na_position != "last":
             raise ValueError("na_position must be 'first' or 'last'")
         if len(names) == 1 and isinstance(descending, bool):
-            return self._like(self._native.sort_by(names[0], descending))
-        return self._like(self._native.sort_by_multi(names, descending))
+            return self._like(_ext.DataFrame.sort_by(self, names[0], descending))
+        return self._like(_ext.DataFrame.sort_by_multi(self, names, descending))
 
     def sort(
         self,
@@ -1268,8 +1257,8 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         if not nulls_last:
             return self._sort_nulls_first([by] if isinstance(by, str) else list(by), descending)
         if isinstance(by, str):
-            return self._like(self._native.sort_by(by, descending))
-        return self._like(self._native.sort_by_multi(list(by), descending))
+            return self._like(_ext.DataFrame.sort_by(self, by, descending))
+        return self._like(_ext.DataFrame.sort_by_multi(self, list(by), descending))
 
     def _sort_nulls_first(
         self, names: List[str], descending: Union[bool, "list[bool]"]
@@ -1278,21 +1267,20 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         # sort over (present(key), key) per key: the 0 / 1 presence column
         # sorts the null rows ahead, then the key orders the rest.
         keys, flags = _nulls_first_keys(names, descending)
-        native = self._native
+        native: DataFrame = self
         for name, key in zip(keys[::2], names):
-            native = native.with_column(name, _unwrap(native[key].is_not_null().astype("int64")))
-        return _wrap(native.sort_by_multi(keys, flags).select(*self.columns))
+            col = _ext.DataFrame.__getitem__(native, key).is_not_null().astype("int64")
+            native = _ext.DataFrame.with_column(native, name, col)
+        sorted_ = _ext.DataFrame.sort_by_multi(native, keys, flags)
+        return _ext.DataFrame.select(sorted_, *self.columns)
 
     def union(self, *others: "DataFrame") -> "DataFrame":
         """Vertically concatenate with ``others`` and drop duplicate rows (SQL
         UNION); use :meth:`concat` for UNION ALL (keep duplicates)."""
-        cat = self._native.concat(*[_unwrap(o) for o in others])
-        return _wrap(cat.unique())
+        cat = _ext.DataFrame.concat(self, *[o for o in others])
+        return cat.unique()
 
     # -- native engine ops (SIMD/relational kernels, wrapped from the C extension) --
-    def keys(self) -> List[str]:
-        return self._native.keys()
-
     def filter(
         self,
         mask: "Union[Series, ColumnExpr, None]" = None,
@@ -1309,19 +1297,21 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         if len(keyed) > 1 or (keyed and mask is not None):
             raise TypeError("filter() takes a row mask, or one of items= / like= / regex=")
         if items is not None:
-            return self._like(self._native.select(*[c for c in items if c in self]))
+            return self._like(_ext.DataFrame.select(self, *[c for c in items if c in self]))
         if like is not None:
-            return self._like(self._native.select(*[c for c in self.columns if like in c]))
+            return self._like(_ext.DataFrame.select(self, *[c for c in self.columns if like in c]))
         if regex is not None:
             import re
 
             pat = re.compile(regex)
-            return self._like(self._native.select(*[c for c in self.columns if pat.search(c)]))
+            return self._like(
+                _ext.DataFrame.select(self, *[c for c in self.columns if pat.search(c)])
+            )
         if mask is None:
             raise TypeError("filter() needs a row mask or one of items= / like= / regex=")
         if not isinstance(mask, Series):
             mask = mask.apply(self)
-        return self._like(self._native.filter(_unwrap(mask)))
+        return self._like(_ext.DataFrame.filter(self, mask))
 
     def select(self, *items: object) -> "DataFrame":
         """Project to ``items``: column names, bare column expressions, or
@@ -1338,7 +1328,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         for name, expr in pairs:
             if expr is not None:
                 out = out.assign(**{name: expr})
-        return _wrap(out._native.select(*[name for name, _ in pairs]))
+        return _ext.DataFrame.select(out, *[name for name, _ in pairs])
 
     def rename(
         self,
@@ -1351,48 +1341,43 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
             mapping = columns
         if mapping is None:
             raise TypeError("rename() needs a {old: new} mapping")
-        return self._like(self._native.rename(_unwrap(mapping)))
+        return self._like(_ext.DataFrame.rename(self, mapping))
 
     def with_column(self, name: str, col: "Series") -> "DataFrame":
-        return self._like(self._native.with_column(_unwrap(name), _unwrap(col)))
+        return self._like(_ext.DataFrame.with_column(self, name, col))
 
     def take(self, indices: "Union[Series, Sequence[int]]") -> "DataFrame":
         """The rows at ``indices`` (a Series or a list; any order, repeats
         allowed)."""
-        return self._like(self._native.take(_indices(indices)))
-
-    def column_index(self, name: str) -> int:
-        return self._native.column_index(_unwrap(name))
+        return self._like(_ext.DataFrame.take(self, _indices(indices)))
 
     def head(self, n: int = 5) -> "DataFrame":
-        return self._like(self._native.head(_unwrap(n)))
+        return self._like(_ext.DataFrame.head(self, n))
 
     def tail(self, n: int = 5) -> "DataFrame":
-        return self._like(self._native.tail(_unwrap(n)))
+        return self._like(_ext.DataFrame.tail(self, n))
 
     def reverse(self) -> "DataFrame":
-        return self._like(self._native.reverse())
+        return self._like(_ext.DataFrame.reverse(self))
 
     def drop_nulls(self) -> "DataFrame":
-        return self._like(self._native.drop_nulls())
+        return self._like(_ext.DataFrame.drop_nulls(self))
 
     def fill_null(self, value: Union[int, float]) -> "DataFrame":
-        return self._like(self._native.fill_null(_unwrap(value)))
+        return self._like(_ext.DataFrame.fill_null(self, value))
 
     def unique(self, subset: "str | Sequence[str] | None" = None) -> "DataFrame":
         """Distinct rows, keeping the first occurrence, keyed on every column
         or on ``subset`` (pandas ``drop_duplicates(subset=)``)."""
-        return self._like(self._native.unique(subset))
+        return self._like(_ext.DataFrame.unique(self, subset))
 
     def drop_duplicates(self, subset: "str | Sequence[str] | None" = None) -> "DataFrame":
-        return self._like(self._native.drop_duplicates(subset))
+        return self._like(_ext.DataFrame.drop_duplicates(self, subset))
 
     def lazy(self) -> "LazyFrame":
         """Start a deferred query over this batch. Ops are recorded and nothing
         runs until :meth:`LazyFrame.collect`."""
-        from .lazyframe import LazyFrame
-
-        out = LazyFrame(self._native.lazy())
+        out = _ext.DataFrame.lazy(self)
         out._index = self._index
         return out
 
@@ -1401,38 +1386,38 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
     ) -> "DataFrame":
         """A single flag broadcasts to every key; a sequence maps one flag per
         name (size must be 1 or ``len(names)``)."""
-        return self._like(self._native.sort_by_multi(_unwrap(names), _unwrap(descending)))
+        return self._like(_ext.DataFrame.sort_by_multi(self, names, descending))
 
     def sample(self, n: int, seed: int = 0, *, random_state: Optional[int] = None) -> "DataFrame":
         """A deterministic ``n``-row sample (``random_state`` is the pandas
         spelling of ``seed``)."""
         if random_state is not None:
             seed = random_state
-        return self._like(self._native.sample(_unwrap(n), _unwrap(seed)))
+        return self._like(_ext.DataFrame.sample(self, n, seed))
 
     def with_row_index(self, name: str = "index") -> "DataFrame":
-        return self._like(self._native.with_row_index(_unwrap(name)))
+        return self._like(_ext.DataFrame.with_row_index(self, name))
 
     def describe(self) -> "DataFrame":
-        return self._like(self._native.describe())
+        return self._like(_ext.DataFrame.describe(self))
 
     def null_count(self) -> "DataFrame":
-        return self._like(self._native.null_count())
+        return self._like(_ext.DataFrame.null_count(self))
 
     def is_duplicated(self) -> "Series":
-        return self._like(self._native.is_duplicated())
+        return self._like(_ext.DataFrame.is_duplicated(self))
 
     def is_unique(self) -> "Series":
-        return self._like(self._native.is_unique())
+        return self._like(_ext.DataFrame.is_unique(self))
 
     def slice(self, offset: int, length: int) -> "DataFrame":
-        return self._like(self._native.slice(_unwrap(offset), _unwrap(length)))
+        return self._like(_ext.DataFrame.slice(self, offset, length))
 
     def sort_by(self, name: str, descending: bool = False) -> "DataFrame":
-        return self._like(self._native.sort_by(_unwrap(name), _unwrap(descending)))
+        return self._like(_ext.DataFrame.sort_by(self, name, descending))
 
     def topk(self, name: str, k: int, largest: bool = True) -> "DataFrame":
-        return self._like(self._native.topk(_unwrap(name), _unwrap(k), _unwrap(largest)))
+        return self._like(_ext.DataFrame.topk(self, name, k, largest))
 
     def concat(
         self, *others: "DataFrame", how: Literal["vertical", "diagonal"] = "vertical"
@@ -1440,7 +1425,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         """Vertically concatenate with ``others`` (UNION ALL). ``how='vertical'``
         requires a shared schema; ``how='diagonal'`` unions columns, null-filling
         those absent from a part and promoting a mixed-numeric column to float."""
-        return self._like(self._native.concat(*[_unwrap(x) for x in others], how=how))
+        return self._like(_ext.DataFrame.concat(self, *[x for x in others], how=how))
 
     def unpivot(
         self,
@@ -1457,7 +1442,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         vals = value_vars if value_vars is not None else on
         if vals is None:
             raise TypeError("unpivot() needs value_vars (polars: on=)")
-        return self._like(self._native.unpivot(_names(ids), _names(vals)))
+        return self._like(_ext.DataFrame.unpivot(self, _names(ids), _names(vals)))
 
     def melt(
         self,
@@ -1470,10 +1455,10 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         return self.unpivot(id_vars, value_vars, index=index, on=on)
 
     def explode(self, column: str) -> "DataFrame":
-        return self._like(self._native.explode(_unwrap(column)))
+        return self._like(_ext.DataFrame.explode(self, column))
 
     def to_dummies(self, column: str) -> "DataFrame":
-        return self._like(self._native.to_dummies(_unwrap(column)))
+        return self._like(_ext.DataFrame.to_dummies(self, column))
 
     def pivot(
         self,
@@ -1493,7 +1478,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         if cols is None or values is None:
             raise TypeError("pivot() needs index, columns (polars: on=) and values")
         agg_name = aggregate_function or aggfunc or agg
-        return self._like(self._native.pivot(_unwrap(index), cols, _unwrap(values), agg_name))
+        return self._like(_ext.DataFrame.pivot(self, index, cols, values, agg_name))
 
     def group_by_dynamic(
         self,
@@ -1510,29 +1495,8 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         from .lazyframe import dynamic_aggs
 
         return self._like(
-            self._native.group_by_dynamic(time_col, every, period, dynamic_aggs(self, aggs), origin)
-        )
-
-    def query(
-        self,
-        dsl: "str | None" = None,
-        *,
-        group_by: "str | None" = None,
-        aggs: "list[str] | None" = None,
-        select: "list[str] | None" = None,
-        order_by: "str | None" = None,
-        descending: bool = False,
-        limit: "int | None" = None,
-    ) -> "DataFrame":
-        return _wrap(
-            self._native.query(
-                dsl,
-                group_by=group_by,
-                aggs=aggs,
-                select=select,
-                order_by=order_by,
-                descending=descending,
-                limit=limit,
+            _ext.DataFrame.group_by_dynamic(
+                self, time_col, every, period, dynamic_aggs(self, aggs), origin
             )
         )
 
@@ -1636,9 +1600,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         if not aggs:
             # The Python object over this wrapper, so the index names carry.
             return GroupBy(source, keys)
-        return _wrap(
-            source._native.group_by(*[_unwrap(k) for k in keys], *[_unwrap(a) for a in aggs])
-        )
+        return _ext.DataFrame.group_by(source, *[k for k in keys], *[a for a in aggs])
 
     def reduce(self, agg: str) -> "DataFrame":
         """One row: the engine aggregate named ``agg`` (``sum``, ``mean``,
@@ -1646,7 +1608,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         ``kurt``, ``sumsq``, ``first``, ``last``, ``bit_or``, ``prod``) over every
         eligible column, each under its own name. The grouped form is
         :meth:`group_by` ``(keys).reduce(agg)``."""
-        return self._like(self._native.reduce(agg))
+        return self._like(_ext.DataFrame.reduce(self, agg))
 
     def agg(
         self, func: object = None, axis: "Union[int, str]" = 0, **named: object
@@ -1684,7 +1646,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
             DType.FLOAT32,
             DType.FLOAT64,
         }
-        cols: List[Series] = [self._native[name] for name in self.columns]
+        cols: List[Series] = [_ext.DataFrame.__getitem__(self, name) for name in self.columns]
         cols = [c for c in cols if c.dtype in numeric]
         if not cols:
             raise ValueError("agg(axis=1): no numeric columns")
@@ -1749,15 +1711,10 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]
         return self.reduce("kurt")
 
 
-_register(_ext.DataFrame, DataFrame)
-
-
 def _frame_of(columns: "List[Tuple[str, object]]", read: "Callable[[Any], Series]") -> DataFrame:
     """A frame of ``read(value)`` for each ``(name, value)``."""
     return DataFrame(
-        _ext._dataframe_from_columns(
-            [n for n, _ in columns], [_unwrap(read(v)) for _, v in columns]
-        )
+        _ext._dataframe_from_columns([n for n, _ in columns], [read(v) for _, v in columns])
     )
 
 
@@ -1809,3 +1766,6 @@ def _dataframe_from_bytes(data: bytes) -> DataFrame:
 def _dataframe_from_arrow(table: "pa.Table") -> DataFrame:
     """Import a pyarrow Table into a native DataFrame wrapper."""
     return DataFrame(_arrow_native("_dataframe_from_arrow")(table))
+
+
+_ext._bind_types(DataFrame=DataFrame)

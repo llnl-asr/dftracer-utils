@@ -222,6 +222,25 @@ PyObject* LazyFrame_filter_mask(PyObject* self, PyObject* mask) {
     return run_lazy_op([&] { return b->lf.filter_mask(m->share()); });
 }
 
+// _replace(other): this plan becomes `other`'s, in place. The Python state of
+// the object (index names, runtime) is left alone. A collect or sink that runs
+// on another thread works on a copy of the plan taken under the GIL.
+PyObject* LazyFrame_replace(PyObject* self, PyObject* other) {
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
+    LazyFrameObject* o = as_native<LazyFrameObject>(other);
+    if (!b || !o) return nullptr;
+    if (b != o) b->lf = o->lf;
+    Py_RETURN_NONE;
+}
+
+// share() -> LazyFrame: a new object over the same plan, with no state of its
+// own.
+PyObject* LazyFrame_share(PyObject* self, PyObject*) {
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
+    if (!b) return nullptr;
+    return run_lazy_op([&] { return b->lf; });
+}
+
 PyObject* LazyFrame_reverse(PyObject* self, PyObject*) {
     LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
@@ -814,9 +833,10 @@ PyObject* LazyFrame_collect(PyObject* self, PyObject* args, PyObject* kwds) {
         runtime_from_arg(runtime_arg);
     if (!rt) return nullptr;
     dataframe::DataFrame out;
+    const LazyFrame lf = b->lf;
     if (!run_blocking([&] {
             out = dftracer::utils::python::core::py_unwrap(
-                rt->submit(b->lf.collect(batch_size)).get());
+                rt->submit(lf.collect(batch_size)).get());
         }))
         return nullptr;
     return dftracer::utils::python::frame::wrap_dataframe(std::move(out));
@@ -873,9 +893,10 @@ PyObject* LazyFrame_sink(PyObject* self, PyObject* args, PyObject* kwds) {
         }
     }
     dataframe::SinkSummary summary;
+    const LazyFrame lf = b->lf;
     if (!run_blocking([&] {
             summary = dftracer::utils::python::core::py_unwrap(
-                rt->submit(b->lf.sink(name, std::move(options), batch_size))
+                rt->submit(lf.sink(name, std::move(options), batch_size))
                     .get());
         }))
         return nullptr;
@@ -1169,6 +1190,10 @@ PyMethodDef LazyFrame_methods[] = {
     {"filter_mask", LazyFrame_filter_mask, METH_O,
      "filter_mask(mask) -> LazyFrame keeping rows where the precomputed Bool "
      "mask is true."},
+    {"_replace", LazyFrame_replace, METH_O,
+     "_replace(other) -> None\n\nBecome the plan of `other`, in place."},
+    {"share", LazyFrame_share, METH_NOARGS,
+     "share() -> LazyFrame\n\nA new LazyFrame over the same plan."},
     {"reverse", LazyFrame_reverse, METH_NOARGS,
      "reverse() -> LazyFrame with rows in reverse order."},
     {"sort_by_multi", DFTU_PYCFUNCTION(LazyFrame_sort_by_multi),

@@ -17,9 +17,10 @@ import builtins
 import re
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple, Union
 
+from . import dftracer_utils_ext as _ext
 from ._apply import Row
 from .enums import DType
-from .series import Series, _unwrap
+from .series import Series
 
 if TYPE_CHECKING:
     from .columnar import Expr
@@ -378,7 +379,7 @@ def _per_column(value: object) -> Optional[List[Series]]:
     from .dataframe import DataFrame
 
     if isinstance(value, DataFrame):
-        return [value._native[c] for c in value.columns]
+        return [value[c] for c in value.columns]
     if isinstance(value, (list, tuple)) and value and all(isinstance(v, Series) for v in value):
         return list(value)
     return None
@@ -412,19 +413,19 @@ def assign_rows(df: "DataFrame", rows: Rows, columns: List[str], value: object) 
     per_column = _per_column(value)
     if per_column is not None:
         _check_per_column(columns, per_column, n, mask)
-        before = df._native
+        before = _ext.DataFrame.share(df)
         try:
             for name, series in zip(columns, per_column):
                 assign_rows(df, rows, [name], series)
         except BaseException:
-            df._native = before
+            _ext.DataFrame._replace(df, before)
             raise
         return
     if mask is not None:
         value = _scatter(value, mask, n)
-    native = df._native
+    native: DataFrame = df
     for name in columns:
-        existing = native[name] if name in df else None
+        existing = _ext.DataFrame.__getitem__(native, name) if name in df else None
         try:
             new = _broadcast(value, n, existing)
         except Exception as e:
@@ -440,8 +441,8 @@ def assign_rows(df: "DataFrame", rows: Rows, columns: List[str], value: object) 
                 if existing.dtype != new.dtype:
                     new = new.astype(existing.dtype)
                 new = existing.mask(mask, new)
-        native = native.with_column(name, _unwrap(new))
-    df._native = native
+        native = _ext.DataFrame.with_column(native, name, new)
+    _ext.DataFrame._replace(df, native)
 
 
 class ILoc:
@@ -459,11 +460,11 @@ class ILoc:
         cols, one_col = columns_by_position(df.columns, ck)
         out = _apply_rows(df, rows)
         if one_row and one_col:
-            return out._native[cols[0]][0]
+            return out[cols[0]][0]
         if one_row:
-            return Row({c: out._native[c][0] for c in cols})
+            return Row({c: out[c][0] for c in cols})
         if one_col:
-            return out._native[cols[0]]
+            return out[cols[0]]
         return out.select(*cols) if ck is not None else out
 
     def __setitem__(self, key: object, value: object) -> None:
@@ -494,7 +495,7 @@ class Loc:
         cols, one_col = columns_by_name(df.columns, ck)
         out = _apply_rows(df, rows)
         if one_col:
-            return out._native[cols[0]]
+            return out[cols[0]]
         return out.select(*cols) if ck is not None else out
 
     def __setitem__(self, key: object, value: object) -> None:
@@ -532,7 +533,7 @@ class At:
         out = _apply_rows(self._df, rows)
         if len(out) != 1:
             raise KeyError(f"at: the row key matches {len(out)} rows, not one")
-        return out._native[name][0]
+        return out[name][0]
 
     def __setitem__(self, key: object, value: object) -> None:
         rows, name = self._cell(key)
@@ -670,7 +671,7 @@ def lazy_assign_rows(lf: "LazyFrame", rows: Rows, columns: List[str], value: obj
         )
     if plan.columns != schema:
         plan = plan.select(*schema)
-    lf._native = plan._native
+    _ext.LazyFrame._replace(lf, plan)
 
 
 def lazy_rows_by_position(key: object) -> Rows:
@@ -822,7 +823,9 @@ class Resampler:
     aggregate = agg
 
     def reduce(self, agg: str) -> "Union[DataFrame, LazyFrame]":
-        return self._run(list(self._frame._native.reduce_specs(agg, [self._time])))
+        from .columnar import _reduce_specs
+
+        return self._run(_reduce_specs(self._frame, agg, [self._time]))
 
     def sum(self) -> "Union[DataFrame, LazyFrame]":
         return self.reduce("sum")

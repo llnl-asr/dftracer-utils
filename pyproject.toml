@@ -178,11 +178,18 @@ import-not-found = "ignore"
 missing-attribute = "ignore"
 unused-ignore-comment = "ignore"
 
-# The public Series overrides native methods whose engine form takes codes
+# The public classes override native methods whose engine form takes codes
 # (cast, compare, rolling, ...) with the user-shaped spelling, until those
 # methods take the user-shaped arguments natively.
 [[tool.ty.overrides]]
-include = ["python/dftracer/utils/series.py"]
+include = [
+  "python/dftracer/utils/_pandas_frame.py",
+  "python/dftracer/utils/_trace_lazy.py",
+  "python/dftracer/utils/dataframe.py",
+  "python/dftracer/utils/lazyframe.py",
+  "python/dftracer/utils/series.py",
+  "python/dftracer/utils/trace_viewer.py",
+]
 
 [tool.ty.overrides.rules]
 incompatible-method-override = "ignore"

@@ -36,14 +36,18 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
+from ._trace_lazy import _LazyOps
 from ._units import coerce_bytes, coerce_duration
 from .columnar import Agg, Expr, _Col
 from .dataframe import DataFrame, PhaseArg, TimeUnitArg
-from .lazyframe import LazyFrame, LazyResult, collect_all
+from .lazyframe import BoundColumn, LazyFrame, LazyResult, collect_all
 from .schemas import RecordSchema, schema_id
-from .series import _wrap
 
 _S = TypeVar("_S", bound=RecordSchema)
+
+# The native calls that `columns` makes, bound once: it is read in loops.
+_scan_columns = _ext.TraceViewer.columns
+_plan_columns = _ext.LazyFrame.schema
 
 if TYPE_CHECKING:
     from .enums import DType
@@ -137,49 +141,91 @@ def _partial(frame: DataFrame) -> bytes:
     return bytes(value)
 
 
-class TraceViewer(LazyFrame):
+class TraceViewer(_LazyOps, _ext.TraceViewer):
     """A lazy view over trace files (a file, a directory or a list of files);
     see the module docstring. ``record_schema`` names a registered record
     schema (an id or a :class:`dftracer.utils.schemas.RecordSchema` class) to
     read the files as, instead of their recorded or detected one; an
     unregistered id raises ``DFTUtilsValueError``."""
 
-    __slots__ = ("_tv",)
+    __slots__ = ("_rt", "_pl")
 
-    @overload
-    def __init__(
-        self,
-        files: Union[str, Sequence[str]],
-        index_path: Optional[str] = ...,
-        runtime: "Optional[Runtime]" = ...,
-        record_schema: "Union[str, Type[RecordSchema], None]" = ...,
-    ) -> None: ...
-    @overload
-    def __init__(self, files: "_ext.TraceViewer", /) -> None: ...
+    # The native type builds a viewer from its files; its factories build this
+    # class directly (_bind_types), so a call here reads ``files`` and returns
+    # the viewer, and __init__ has nothing left to do.
+    def __new__(
+        cls,
+        files: Any,
+        index_path: Optional[str] = None,
+        runtime: "Optional[Runtime]" = None,
+        record_schema: "Union[str, Type[RecordSchema], None]" = None,
+    ) -> "TraceViewer":
+        if cls is not TraceViewer:
+            raise TypeError(
+                "TraceViewer cannot be subclassed: the native calls build the class bound by "
+                "_bind_types, so an instance of a subclass would come back as a TraceViewer"
+            )
+        if isinstance(files, _ext.TraceViewer):
+            out = files
+        else:
+            out = _ext.TraceViewer.__new__(TraceViewer)
+            _ext.TraceViewer.__init__(out, files, index_path)
+        if record_schema is not None:
+            out = _ext.TraceViewer.record_schema(out, schema_id(record_schema))
+        if runtime is not None:
+            out._runtime = runtime
+        return out
 
     def __init__(
         self,
         files: Any,
         index_path: Optional[str] = None,
-        runtime: Any = None,
+        runtime: "Optional[Runtime]" = None,
         record_schema: "Union[str, Type[RecordSchema], None]" = None,
     ) -> None:
-        native = (
-            files if isinstance(files, _ext.TraceViewer) else _ext.TraceViewer(files, index_path)
-        )
-        if record_schema is not None:
-            native = native.record_schema(schema_id(record_schema))
-        super().__init__(native.lazy(), runtime)
-        self._tv = native
+        pass
+
+    @property
+    def _runtime(self) -> "Optional[Runtime]":
+        return getattr(self, "_rt", None)
+
+    @_runtime.setter
+    def _runtime(self, runtime: "Optional[Runtime]") -> None:
+        self._rt = runtime
 
     # -- constructing results ----------------------------------------------------
-    def _trace(self, native: "_ext.TraceViewer") -> "TraceViewer":
-        out = TraceViewer(native)
+    def _trace(self, out: "TraceViewer") -> "TraceViewer":
         out._runtime = self._runtime
         return out
 
+    def _new(self, out: LazyFrame) -> LazyFrame:
+        out._runtime = self._runtime
+        return out
+
+    def _finish(self, out: DataFrame) -> DataFrame:
+        return out
+
+    def _schema_plan(self) -> LazyFrame:
+        """The plan that :attr:`columns` and :attr:`schema` read, built once: a
+        viewer never changes."""
+        plan = getattr(self, "_pl", None)
+        if plan is None:
+            plan = self._pl = _ext.TraceViewer.lazy(self)
+        return plan
+
+    def lazy(self) -> LazyFrame:
+        """The plan of this viewer as a :class:`LazyFrame`."""
+        return self._new(_ext.TraceViewer.lazy(self))
+
+    def _plan(self) -> LazyFrame:
+        """:meth:`lazy`, for an op the viewer absorbs: a scan adds columns per
+        batch, so a name the schema does not list may still be a column."""
+        out = self.lazy()
+        out._open = True
+        return out
+
     def _absorbed(self, plan: LazyFrame) -> "TraceViewer":
-        return self._trace(self._tv.with_lazy(plan._native))
+        return self._trace(_ext.TraceViewer.with_lazy(self, plan))
 
     # -- absorbed LazyFrame ops ----------------------------------------------------
     def filter(self, predicate: object) -> "TraceViewer":
@@ -188,20 +234,20 @@ class TraceViewer(LazyFrame):
         it is a plain field predicate and nothing but filters came before it;
         otherwise it filters this plan's rows."""
         if isinstance(predicate, Expr):
-            if self._tv.filters_events():
+            if _ext.TraceViewer.filters_events(self):
                 try:
-                    return self._trace(self._tv.filter(predicate.to_duql()))
+                    return self._trace(_ext.TraceViewer.filter(self, predicate.to_duql()))
                 except TypeError:
                     pass
-            return self._absorbed(LazyFrame.filter(self, predicate))
-        return self._trace(self._tv.filter(predicate))
+            return self._absorbed(self._plan().filter(predicate))
+        return self._trace(_ext.TraceViewer.filter(self, predicate))
 
     def duql(self, text: str, **params: DuqlParam) -> "TraceViewer":
         """Run the duql pipeline ``text`` with ``params`` bound to its
         ``$name`` parameters (bool, int, float or str, or a list of them for
         ``x in $name``). Leading ``where``
         stages filter events in the scan; later stages run on its columns."""
-        return self._trace(self._tv.duql(text, params))
+        return self._trace(_ext.TraceViewer.duql(self, text, params))
 
     def query(self, text: str, **params: DuqlParam) -> "TraceViewer":
         """Same as :meth:`duql`."""
@@ -210,7 +256,7 @@ class TraceViewer(LazyFrame):
     def explain_duql(self, text: str, **params: DuqlParam) -> str:
         """The plan :meth:`duql` builds, one step per line, without
         scanning."""
-        return self._tv.explain_duql(text, params)
+        return _ext.TraceViewer.explain_duql(self, text, params)
 
     def explain_query(self, text: str, **params: DuqlParam) -> str:
         """Same as :meth:`explain_duql`."""
@@ -224,55 +270,69 @@ class TraceViewer(LazyFrame):
         ``args.<name>`` column, as in :meth:`filter`."""
         names = [i for i in items if isinstance(i, str)]
         if items and len(names) == len(items):
-            return self._trace(self._tv.select(names))
-        return self._absorbed(LazyFrame.select(self, *items))
+            return self._trace(_ext.TraceViewer.select(self, names))
+        return self._absorbed(self._plan().select(*items))
 
     def with_column(self, name: str, expr: Expr) -> "TraceViewer":
-        return self._absorbed(LazyFrame.with_column(self, name, expr))
+        return self._absorbed(self._plan().with_column(name, expr))
 
     def with_columns(self, *named: object, **columns: Expr) -> "TraceViewer":
-        return self._absorbed(LazyFrame.with_columns(self, *named, **columns))
+        return self._absorbed(self._plan().with_columns(*named, **columns))
 
     def _schema_complete(self) -> bool:
         return False
 
     def drop(self, *names: Union[str, Sequence[str]]) -> "TraceViewer":
-        return self._absorbed(LazyFrame.drop(self, *names))
+        return self._absorbed(self._plan().drop(*names))
 
     def rename(self, names: Any) -> "TraceViewer":
-        return self._absorbed(LazyFrame.rename(self, names))
+        return self._absorbed(self._plan().rename(names))
 
     def sort_by(self, name: str, descending: bool = False) -> "TraceViewer":
-        return self._absorbed(LazyFrame.sort_by(self, name, descending))
+        return self._absorbed(self._plan().sort_by(name, descending))
 
     def topk(self, name: str, k: int, largest: bool = True) -> "TraceViewer":
-        return self._absorbed(LazyFrame.topk(self, name, k, largest))
+        return self._absorbed(self._plan().topk(name, k, largest))
 
     def head(self, n: int = 5) -> "TraceViewer":
-        return self._absorbed(LazyFrame.head(self, n))
+        return self._absorbed(self._plan().head(n))
 
     def limit(self, n: int = 5) -> "TraceViewer":
-        return self._absorbed(LazyFrame.limit(self, n))
+        return self._absorbed(self._plan().limit(n))
 
     def slice(self, offset: int, length: int) -> "TraceViewer":
-        return self._absorbed(LazyFrame.slice(self, offset, length))
+        return self._absorbed(self._plan().slice(offset, length))
+
+    def __getitem__(self, key: object) -> "Union[BoundColumn, TraceViewer]":
+        """:meth:`LazyFrame.__getitem__` over this viewer: a list of names or a
+        slice is absorbed, so the result is a ``TraceViewer``."""
+        return cast(
+            "Union[BoundColumn, TraceViewer]", LazyFrame.__getitem__(cast("LazyFrame", self), key)
+        )
+
+    def __copy__(self) -> "TraceViewer":
+        """A viewer never changes, so a copy, deep or shallow, is the viewer."""
+        return self
+
+    def __deepcopy__(self, memo: object) -> "TraceViewer":
+        return self
 
     def offset(self, n: int) -> "TraceViewer":
         """Skip the first ``n`` rows."""
-        return self._absorbed(LazyFrame.slice(self, n, (1 << 63) - 1))
+        return self._absorbed(self._plan().slice(n, (1 << 63) - 1))
 
     def auto_spill(self) -> "TraceViewer":
-        return self._absorbed(LazyFrame.auto_spill(self))
+        return self._absorbed(self._plan().auto_spill())
 
     # -- trace builders -------------------------------------------------------------
     def phase(self, phase: PhaseArg) -> "TraceViewer":
-        return self._trace(self._tv.phase(phase))
+        return self._trace(_ext.TraceViewer.phase(self, phase))
 
     def time_range(self, begin: float, end: float) -> "TraceViewer":
         """Keep the events that start in ``[begin, end)``. Busy, concurrency,
         utilization and active take every event overlapping the window,
         clipped to it; utilization divides by ``end - begin``."""
-        return self._trace(self._tv.time_range(float(begin), float(end)))
+        return self._trace(_ext.TraceViewer.time_range(self, float(begin), float(end)))
 
     def time_bucket(
         self,
@@ -284,34 +344,32 @@ class TraceViewer(LazyFrame):
         origin, ``"min"`` for the trace's first timestamp (from the index), or
         ``None`` for 0."""
         us = int(round(coerce_duration(interval_us, 1e6, "interval_us")))
-        return self._trace(self._tv.time_bucket(us, normalize_to))
+        return self._trace(_ext.TraceViewer.time_bucket(self, us, normalize_to))
 
     def resolution(self, cell: Union[int, float, str]) -> "TraceViewer":
         """The grid the occupancy aggregates (busy, concurrency, utilization,
         active) snap interval edges to; a bare number is microseconds. 0 is the
         exact union."""
         us = int(round(coerce_duration(cell, 1e6, "resolution")))
-        return self._trace(self._tv.resolution(us))
+        return self._trace(_ext.TraceViewer.resolution(self, us))
 
     def time_unit(self, unit: TimeUnitArg) -> "TraceViewer":
-        return self._trace(self._tv.time_unit(unit))
+        return self._trace(_ext.TraceViewer.time_unit(self, unit))
 
     def time_scale(self, ns_ratio: float) -> "TraceViewer":
-        return self._trace(self._tv.time_scale(ns_ratio))
+        return self._trace(_ext.TraceViewer.time_scale(self, ns_ratio))
 
     def rollup_root(self, path: str) -> "TraceViewer":
-        return self._trace(self._tv.rollup_root(path))
+        return self._trace(_ext.TraceViewer.rollup_root(self, path))
 
     def views_root(self, path: str) -> "TraceViewer":
-        return self._trace(self._tv.views_root(path))
+        return self._trace(_ext.TraceViewer.views_root(self, path))
 
     def memory_budget(self, nbytes: Union[int, str]) -> "TraceViewer":
         """Spill budget for the scan and the plan; bytes or a unit string."""
-        return self._trace(self._tv.memory_budget(coerce_bytes(nbytes, "nbytes")))
+        return self._trace(_ext.TraceViewer.memory_budget(self, coerce_bytes(nbytes, "nbytes")))
 
-    def group_by(  # ty: ignore[incompatible-method-override]
-        self, *keys: "Union[str, Sequence[str]]"
-    ) -> "TraceViewer":
+    def group_by(self, *keys: "Union[str, Sequence[str]]") -> "TraceViewer":
         """Trace group keys: ``name``/``cat``/``pid``/``tid``/``fhash``/
         ``hhash``/``arg:<key>``, any other field, or a transform call such as
         ``basename(fname)``, as separate arguments or one list. No keys folds
@@ -319,29 +377,35 @@ class TraceViewer(LazyFrame):
         flat: List[str] = []
         for k in keys:
             flat.extend([k] if isinstance(k, str) else k)
-        return self._trace(self._tv.group_by(*flat))
+        return self._trace(_ext.TraceViewer.group_by(self, *flat))
 
-    def agg(self, *specs: Union[str, Agg]) -> "TraceViewer":  # ty: ignore[incompatible-method-override]
+    def agg(self, *specs: Union[str, Agg]) -> "TraceViewer":
         """Trace aggregates: spec strings (``"count"``, ``"mean:dur"``,
         ``"p99:dur"``, ``"busy:dur"``) or bare-field ``Agg`` expressions
         (``F.dur.sum()``, ``F.dur.busy(resolution="1ms")``, ``F.any.mean()``)."""
         if not specs:
             raise TypeError("agg() needs at least one aggregate")
         strings, wildcard, grid = _agg_specs(specs)
-        tv = self._tv
+        tv = self
         if grid is not None:
-            tv = tv.resolution(grid)
+            tv = _ext.TraceViewer.resolution(tv, grid)
         if strings:
-            tv = tv.agg(*strings)
+            tv = _ext.TraceViewer.agg(tv, *strings)
         if wildcard:
             only_mean = wildcard == ["mean"]
-            tv = tv.agg_numeric_args() if only_mean else tv.agg_numeric_args(*wildcard)
+            tv = (
+                _ext.TraceViewer.agg_numeric_args(tv)
+                if only_mean
+                else _ext.TraceViewer.agg_numeric_args(tv, *wildcard)
+            )
         return self._trace(tv)
+
+    aggregate = agg
 
     def agg_numeric_args(self, *reductions: str) -> "TraceViewer":
         """Aggregate every discovered numeric arg: no reductions gives one mean
         column per arg; op names give one ``<op>_<arg>`` column each."""
-        return self._trace(self._tv.agg_numeric_args(*reductions))
+        return self._trace(_ext.TraceViewer.agg_numeric_args(self, *reductions))
 
     def rows(self, cls: Type[_S]) -> Iterator[_S]:
         """One ``cls`` instance per selected record, each field set from the
@@ -367,21 +431,25 @@ class TraceViewer(LazyFrame):
         """Output column names without running the plan. A file whose index
         holds no path catalog is scanned once first, so every path it holds is
         listed."""
-        self._tv.columns()
-        return LazyFrame.columns.fget(self)  # type: ignore[attr-defined]
+        _scan_columns(self)
+        try:
+            plan = self._pl
+        except AttributeError:
+            plan = self._pl = _ext.TraceViewer.lazy(self)
+        return _plan_columns(plan)
 
     @property
     def schema(self) -> "Dict[str, DType]":
         """Output column names and dtypes without running the plan; raises when
         the files have no one record schema."""
-        self._tv.columns()
-        return LazyFrame.schema.fget(self)  # type: ignore[attr-defined]
+        _ext.TraceViewer.columns(self)
+        return self._schema_plan().schema
 
     def column_info(self) -> Dict[str, str]:
         """Every column the index knows, mapped to its type name (``"int64"``
         / ``"float64"`` / ``"string"``), with a ``resolved.*`` alias per hash
         column. Reads index metadata only."""
-        return dict(self._tv.column_info())
+        return dict(_ext.TraceViewer.column_info(self))
 
     def schema_tree(self) -> Dict[str, Any]:
         """The paths the files hold, from the index without scanning, nested by
@@ -391,7 +459,7 @@ class TraceViewer(LazyFrame):
         ``children`` (the nodes below it); keys without a value are left out.
         A declared field that no file holds has ``count`` 0."""
         tree: Dict[str, Any] = {}
-        for leaf in json.loads(self._tv.schema_tree()):
+        for leaf in json.loads(_ext.TraceViewer.schema_tree(self)):
             nodes = tree
             *parents, last = leaf["path"].split(".")
             for part in parents:
@@ -404,11 +472,11 @@ class TraceViewer(LazyFrame):
 
     def time_metric(self) -> str:
         """The trace's own time unit (``"us"``/``"ns"``/``"ms"``/``"sec"``)."""
-        return str(self._tv.time_metric())
+        return str(_ext.TraceViewer.time_metric(self))
 
     def __repr__(self) -> str:
         try:
-            plan = self._native.explain()
+            plan = self.lazy().explain()
         except Exception:  # noqa: BLE001 - repr must never raise
             return "<TraceViewer>"
         return "<TraceViewer>\n" + plan
@@ -423,7 +491,7 @@ class TraceViewer(LazyFrame):
     ) -> LazyFrame:
         """The events plus ``level`` / ``parent_id``: containment nesting of the
         ``[ts, ts+dur)`` intervals within each lane of ``partition``."""
-        return self._new(self._tv.call_tree(list(partition), ts, dur, name))
+        return self._new(_ext.TraceViewer.call_tree(self, list(partition), ts, dur, name))
 
     def flamegraph(
         self,
@@ -436,7 +504,9 @@ class TraceViewer(LazyFrame):
         """The events folded by root-to-node ``name`` path: ``node_id``,
         ``parent``, ``name``, ``level``, ``total``, ``self``, ``count``.
         ``group`` roots one subtree per value of those fields."""
-        return self._new(self._tv.flamegraph(list(partition), ts, dur, name, list(group)))
+        return self._new(
+            _ext.TraceViewer.flamegraph(self, list(partition), ts, dur, name, list(group))
+        )
 
     def containment(
         self,
@@ -447,7 +517,7 @@ class TraceViewer(LazyFrame):
         group: Sequence[str] = (),
     ) -> "LazyResult[Containment]":
         """Both :meth:`call_tree` and :meth:`flamegraph` from one buffered fold."""
-        ct, fg = self._tv.containment(list(partition), ts, dur, name, list(group))
+        ct, fg = _ext.TraceViewer.containment(self, list(partition), ts, dur, name, list(group))
         return LazyResult([self._new(ct), self._new(fg)], lambda f: Containment(f[0], f[1]))
 
     def flamegraph_partial(
@@ -461,31 +531,35 @@ class TraceViewer(LazyFrame):
         """A mergeable flamegraph of this viewer's files, for a distributed
         run; merge with :meth:`merge_flamegraph_partials`. Partition by pid so
         a lane stays on one rank."""
-        plan = self._tv.flamegraph_partial(list(partition), ts, dur, name, list(group))
+        plan = _ext.TraceViewer.flamegraph_partial(
+            self, list(partition), ts, dur, name, list(group)
+        )
         return LazyResult([self._new(plan)], lambda f: _partial(f[0]))
 
     @staticmethod
     def merge_flamegraph_partials(partials: Sequence[bytes]) -> DataFrame:
         """The flamegraph node frame of every rank's partial (no scan)."""
-        return _wrap(_ext.merge_flamegraph_partials(list(partials)))
+        return _ext.merge_flamegraph_partials(list(partials))
 
     def aggregate_partial(self) -> "LazyResult[bytes]":
         """A mergeable partial of this aggregation for a distributed run;
         merge with :meth:`merge_partials`."""
-        return LazyResult([self._new(self._tv.aggregate_partial())], lambda f: _partial(f[0]))
+        return LazyResult(
+            [self._new(_ext.TraceViewer.aggregate_partial(self))], lambda f: _partial(f[0])
+        )
 
     def merge_partials(self, partials: Sequence[bytes]) -> DataFrame:
         """This aggregation's result from every rank's partial (no scan)."""
-        return _wrap(self._tv.merge_partials(list(partials)))
+        return _ext.TraceViewer.merge_partials(self, list(partials))
 
     def materialize_partials(self, partials: Sequence[bytes]) -> None:
         """Write this aggregation's rollup from every rank's partial."""
-        self._tv.materialize_partials(list(partials), self._runtime)
+        _ext.TraceViewer.materialize_partials(self, list(partials), self._runtime)
 
     def reconstruct_if_cached(self) -> Optional[DataFrame]:
         """This aggregation from its rollup, or ``None`` when none serves it."""
-        out = self._tv.reconstruct_if_cached()
-        return None if out is None else _wrap(out)
+        out = _ext.TraceViewer.reconstruct_if_cached(self)
+        return out
 
     def typed(
         self,
@@ -495,11 +569,11 @@ class TraceViewer(LazyFrame):
     ) -> "LazyResult[Dict[str, DataFrame]]":
         """The aggregation index's ``regular`` / ``aggregated`` / ``counters``
         records over shard range ``[shard_begin, shard_end)`` (0 = all)."""
-        tv, runtime = self._tv, self._runtime
+        tv, runtime = self, self._runtime
 
         def finish(_: List[DataFrame]) -> Dict[str, DataFrame]:
-            raw = tv.typed(shard_begin, shard_end, progress, runtime)
-            return {k: _wrap(v) for k, v in raw.items()}
+            raw = _ext.TraceViewer.typed(tv, shard_begin, shard_end, progress, runtime)
+            return cast("Dict[str, DataFrame]", raw)
 
         return LazyResult([], finish)
 
@@ -521,7 +595,9 @@ class TraceViewer(LazyFrame):
         """Write the selected events to ``path`` as NDJSON, verbatim (a
         re-indexable trace). Runs now and returns the scan stats; ``lazy=True``
         returns a :class:`LazyResult` for :func:`collect_all` or a session."""
-        result = LazyResult([self._new(self._tv.sink_json(path))], lambda f: _export_stats(f[0]))
+        result = LazyResult(
+            [self._new(_ext.TraceViewer.sink_json(self, path))], lambda f: _export_stats(f[0])
+        )
         return result if lazy else result.collect()
 
     @overload
@@ -552,12 +628,12 @@ class TraceViewer(LazyFrame):
         """Persist this query so a later matching read is served from it: a
         filtered trace for events, a rollup for an aggregation. Idempotent.
         Sizes take bytes or a unit string."""
-        tv, runtime = self._tv, self._runtime
+        tv, runtime = self, self._runtime
         cs = coerce_bytes(checkpoint_size, "checkpoint_size")
         ps = coerce_bytes(part_size, "part_size")
 
         def finish(_: List[DataFrame]) -> Dict[str, object]:
-            return tv.materialize(cs, ps, progress, runtime)
+            return _ext.TraceViewer.materialize(tv, cs, ps, progress, runtime)
 
         result: LazyResult[Dict[str, object]] = LazyResult([], finish)
         return result if lazy else result.collect()
@@ -574,7 +650,8 @@ class TraceViewer(LazyFrame):
         """Write a trace file now: the aggregation as counter events when this
         viewer aggregates, else the selected events. Sizes take bytes or a
         unit string."""
-        return self._tv.export_trace(
+        return _ext.TraceViewer.export_trace(
+            self,
             path,
             compress,
             index,
@@ -600,25 +677,20 @@ class TraceViewer(LazyFrame):
         """This viewer's ``group_by`` + ``agg`` applied to ``variant``'s events
         too, joined on the group key: the keys, ``l_`` / ``r_`` per metric and
         ``delta_`` / ``pct_``. Both sides over the same files share one scan."""
-        return self._new(self._tv.compare(variant._tv))
+        return self._new(_ext.TraceViewer.compare(self, variant))
 
     def mv_source(self) -> List[str]:
         """The materialized-view files that would serve this query, or ``[]``."""
-        return list(self._tv.mv_source())
+        return list(_ext.TraceViewer.mv_source(self))
 
-    def materialize_dir(self) -> str:
-        """Create and return the shared materialized-view directory (call on a
-        viewer over the full file set)."""
-        return self._tv.materialize_dir()
-
-    def register_materialized(self, dir: str) -> None:
-        """Write the materialized-view manifest at ``dir``."""
-        self._tv.register_materialized(dir)
+    def explain(self) -> str:
+        """The optimized plan as text, for introspection and tests."""
+        return self.lazy().explain()
 
     def stream(self, batch_size: int = 65536) -> "Iterator[DataFrame]":
         """The rows as :class:`DataFrame` chunks of about ``batch_size`` rows,
         holding a bounded amount in memory."""
-        return LazyFrame.stream(self, batch_size)
+        return self.lazy().stream(batch_size)
 
     def session(self) -> "Session":
         """A :class:`Session` whose registered plans run together."""
@@ -689,7 +761,7 @@ class Session:
             raw = _ext.plugin_results(native)
             return {name: plugins._shape(val) for name, val in raw.items()}
 
-        plan = self._viewer._new(self._viewer._tv.plugins(native))
+        plan = self._viewer._new(_ext.TraceViewer.plugins(self._viewer, native))
         return self.collect(LazyResult([plan], finish))
 
     def execute(self) -> None:
@@ -708,3 +780,6 @@ class Session:
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         if exc_type is None:
             self.execute()
+
+
+_ext._bind_types(TraceViewer=TraceViewer)

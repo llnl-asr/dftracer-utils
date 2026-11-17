@@ -57,7 +57,6 @@ from .series import (
     _norm_form_code,
     _NormForm,
     _translate_pairs,
-    _unwrap,
     _wrap_flag_bits,
 )
 
@@ -67,11 +66,11 @@ if TYPE_CHECKING:
     from ._expr_ops import ColumnOp
     from .lazyframe import LazyFrame, LazyGroupBy
 
-# A source of columns for in-memory evaluation: a wrapped or native DataFrame, a
+# A source of columns for in-memory evaluation: a DataFrame, a
 # {name: Series} mapping, or a pyarrow Table imported at the Arrow boundary.
-_Source = Union["DataFrame", "_ext.DataFrame", Dict[str, "Series"], "pa.Table"]
+_Source = Union["DataFrame", Dict[str, "Series"], "pa.Table"]
 # where(): a frame in, the same kind of frame out.
-_Frame = Union["DataFrame", "_ext.DataFrame", "pa.Table"]
+_Frame = Union["DataFrame", "pa.Table"]
 
 __all__ = [
     "col",
@@ -2498,19 +2497,19 @@ def where(table: _Frame, pred: "Expr | str") -> _Frame:
     library and evaluated as a SIMD mask. A native ``DataFrame`` in stays fully
     columnar (returns a filtered ``DataFrame``); a ``pyarrow.Table`` in returns
     a filtered ``pyarrow.Table``."""
-    native = _unwrap(table)  # a wrapped DataFrame -> its native handle
+    native = table
     if isinstance(pred, str):
         if isinstance(native, _ext.DataFrame):
-            return DataFrame(native.query(pred))
+            return _ext.DataFrame.query(native, pred)
         import pyarrow as pa
 
         return pa.table(_arrow_native("_dataframe_from_arrow")(native).query(pred))
     mask = columnar(pred).apply(native)  # a wrapped Series
     if isinstance(native, _ext.DataFrame):
-        return DataFrame(native.filter(_unwrap(mask)))
+        return _ext.DataFrame.filter(native, mask)
     import pyarrow as pa
 
-    return native.filter(pa.array(_unwrap(mask)))
+    return native.filter(pa.array(mask))
 
 
 class Columnar:
@@ -2565,11 +2564,11 @@ class Columnar:
 def _unwrap_source_columns(source: object) -> Dict[str, Series]:
     """Every column of ``source`` (a frame, a native batch, a ``{name:
     Series}`` mapping or a pyarrow Table) as wrapped Series, by name."""
-    native = _unwrap(source)
+    native = source
     if isinstance(native, dict):
         return dict(native)
     if isinstance(native, _ext.DataFrame):
-        return {name: native[name] for name in native.column_names}
+        return {name: _ext.DataFrame.__getitem__(native, name) for name in native.column_names}
     import pyarrow as pa
 
     out: Dict[str, Series] = {}
@@ -2584,7 +2583,7 @@ def _unwrap_source_columns(source: object) -> Dict[str, Series]:
 def _first_column(source: _Source) -> Dict[str, "Series"]:
     """One column of ``source`` to give a constant expression its length (empty
     when the source has no column)."""
-    native = _unwrap(source)
+    native = source
     names = list(native)[:1] if isinstance(native, dict) else list(native.column_names)[:1]
     return _import_vec_columns(names, source) if names else {}
 
@@ -2592,10 +2591,11 @@ def _first_column(source: _Source) -> Dict[str, "Series"]:
 def _import_vec_columns(names: List[str], source: _Source) -> Dict[str, "Series"]:
     """Resolve `names` to native vec columns from `source` (a native batch or a
     pyarrow Table), importing at the Arrow boundary only when needed."""
-    source = _unwrap(source)  # a wrapped DataFrame -> its native handle
-    # A native batch (_DataFrame or a {name: Series} dict) is used directly.
-    if isinstance(source, (dict, _ext.DataFrame)):
-        return {name: _unwrap(source[name]) for name in names}
+    # A native batch (a DataFrame or a {name: Series} dict) is used directly.
+    if isinstance(source, dict):
+        return {name: source[name] for name in names}
+    if isinstance(source, _ext.DataFrame):
+        return {name: _ext.DataFrame.__getitem__(source, name) for name in names}
     # A pyarrow Table: import each needed column into vec at the boundary.
     import pyarrow as pa
 
@@ -3018,14 +3018,22 @@ def _named_agg(column: str, name: str, out: str) -> Agg:
     return Agg(op, _Col(column), out)
 
 
+def _reduce_specs(frame: "Union[DataFrame, LazyFrame]", agg: str, keys: Sequence[str]) -> List[str]:
+    """The group-by spec strings of the engine aggregate ``agg`` over the
+    non-key columns of ``frame``, a frame or a plan."""
+    if isinstance(frame, _ext.LazyFrame):
+        return _ext.LazyFrame.reduce_specs(frame, agg, list(keys))
+    return _ext.DataFrame.reduce_specs(frame, agg, list(keys))
+
+
 def _agg_specs_from_pandas_forms(
-    frame: object,
+    frame: "Union[DataFrame, LazyFrame]",
     keys: Sequence[str],
     func: object,
     named: "Dict[str, object]",
 ) -> "List[Union[str, Agg]]":
     """Lower the pandas ``agg`` argument forms to engine specs, flat names.
-    ``frame`` is a DataFrame or LazyFrame (either wrapper or native handle);
+    ``frame`` is a DataFrame or LazyFrame;
     only its ``reduce_specs`` is used.
 
     - a string: broadcast over every eligible non-key column, each under its
@@ -3038,10 +3046,9 @@ def _agg_specs_from_pandas_forms(
     """
     if func is None and not named:
         raise TypeError("agg() needs at least one aggregate")
-    native = getattr(frame, "_native", frame)
     specs: "List[Union[str, Agg]]" = []
     if isinstance(func, str):
-        specs.extend(native.reduce_specs(_agg_op_name(func), list(keys)))
+        specs.extend(_reduce_specs(frame, _agg_op_name(func), keys))
     elif isinstance(func, Agg):
         specs.append(func)
     elif isinstance(func, dict):
@@ -3061,7 +3068,7 @@ def _agg_specs_from_pandas_forms(
                 continue
             if not isinstance(item, str):
                 raise TypeError(f"agg() list items must be names or Agg, got {type(item).__name__}")
-            for spec in native.reduce_specs(_agg_op_name(item), list(keys)):
+            for spec in _reduce_specs(frame, _agg_op_name(item), keys):
                 column = spec.split(":")[1]
                 specs.append(_named_agg(column, item, f"{column}_{item}"))
     elif func is not None:
@@ -3088,7 +3095,7 @@ class GroupBy:
 
     def __init__(
         self,
-        batch: "Union[DataFrame, _ext.DataFrame]",
+        batch: "DataFrame",
         keys: "Union[str, Sequence[str], None]" = None,
     ) -> None:
         self._batch = batch
@@ -3105,7 +3112,7 @@ class GroupBy:
         over only those value columns (the pandas column selection). With
         one column, a list of aggregate names labels the outputs by name
         alone, as pandas does."""
-        frame = self._batch if isinstance(self._batch, DataFrame) else DataFrame(self._batch)
+        frame = self._batch
         picked = [columns] if isinstance(columns, str) else list(columns)
         for c in picked:
             if c not in frame:
@@ -3126,7 +3133,7 @@ class GroupBy:
         return out
 
     def agg(self, *specs: object, **named: object) -> DataFrame:
-        frame = self._batch if isinstance(self._batch, DataFrame) else DataFrame(self._batch)
+        frame = self._batch
         flat: "List[Union[str, Agg]]" = []
         for spec in specs:
             if isinstance(spec, Agg) or (isinstance(spec, str) and ":" in spec):
@@ -3137,7 +3144,7 @@ class GroupBy:
             flat.extend(_agg_specs_from_pandas_forms(frame, self._keys, None, named))
         if not flat:
             raise TypeError("agg() needs at least one aggregate")
-        native = _unwrap(self._batch)
+        native = self._batch
         aggs = [_to_agg(s) for s in flat]
         # Plain aggregates over plain columns take the engine's group_by
         # directly; anything with an expression goes through the
@@ -3151,7 +3158,7 @@ class GroupBy:
         )
         if plain:
             legacy = ["count" if a.value is None else f"{a.op}:{a.value.name}" for a in aggs]
-            out = DataFrame(native.group_by(*self._keys, *legacy))
+            out = _ext.DataFrame.group_by(native, *self._keys, *legacy)
             engine_names = ["count" if a.value is None else f"{a.op}_{a.value.name}" for a in aggs]
             if engine_names != [a.out for a in aggs]:
                 out = DataFrame(
@@ -3162,7 +3169,7 @@ class GroupBy:
                 )
         else:
             names = list(native.column_names)
-            out = DataFrame(native._group_agg_expr(self._keys, [a._spec(names) for a in aggs]))
+            out = _ext.DataFrame._group_agg_expr(native, self._keys, [a._spec(names) for a in aggs])
         if self._single is not None and any(isinstance(sp, (list, tuple)) for sp in specs):
             prefix = f"{self._single}_"
             out = out.rename({c: c[len(prefix) :] for c in out.columns if c.startswith(prefix)})
@@ -3173,11 +3180,13 @@ class GroupBy:
     def reduce(self, agg: str) -> DataFrame:
         """One engine aggregate by name over every eligible non-key column,
         each under its own name (the ``.sum()`` family's engine)."""
-        native = _unwrap(self._batch)
+        native = self._batch
         if not self._keys:
-            return DataFrame(native.reduce(agg))
+            return _ext.DataFrame.reduce(native, agg)
         return self._sorted(
-            DataFrame(native.group_by(*self._keys, *native.reduce_specs(agg, self._keys)))
+            _ext.DataFrame.group_by(
+                native, *self._keys, *_ext.DataFrame.reduce_specs(native, agg, self._keys)
+            )
         )
 
     # The pandas ``groupby(...).sum()`` family.
@@ -3224,8 +3233,8 @@ class GroupBy:
     def _transform(
         self, kind: str, n: int = 0, method: str = "average", ascending: bool = True
     ) -> DataFrame:
-        return DataFrame(
-            _unwrap(self._batch).group_transform(self._keys, kind, int(n), method, bool(ascending))
+        return _ext.DataFrame.group_transform(
+            self._batch, self._keys, kind, int(n), method, bool(ascending)
         )
 
     def cumsum(self) -> DataFrame:
@@ -3417,14 +3426,14 @@ class GroupBy:
 
     # -- the rest of the pandas GroupBy surface, as compositions of group_by --
     def _frame(self) -> DataFrame:
-        return self._batch if isinstance(self._batch, DataFrame) else DataFrame(self._batch)
+        return self._batch
 
     def _value_columns(self, agg: str = "sum") -> List[str]:
-        return [s.split(":")[1] for s in _unwrap(self._batch).reduce_specs(agg, self._keys)]
+        return [s.split(":")[1] for s in _reduce_specs(self._batch, agg, self._keys)]
 
     @staticmethod
     def _col(frame: DataFrame, name: str) -> Series:
-        return frame._native[name]
+        return _ext.DataFrame.__getitem__(frame, name)
 
     @property
     def ngroups(self) -> int:

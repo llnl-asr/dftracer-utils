@@ -598,10 +598,12 @@ def install_extension_stub() -> None:
         def __arrow_c_array__(self, requested_schema: object = None) -> tuple[object, object]:
             return (None, None)
 
-    class DataFrame(_BaseNative):
-        """Native columnar DataFrame handle (a set of named :class:`Series`).
+    class DataFrame(_BaseNative, metaclass=_NativeMethods):
+        """Native columnar DataFrame (a set of named :class:`Series`).
 
-        The Python :class:`dftracer.utils.DataFrame` wrapper forwards to it.
+        :class:`dftracer.utils.DataFrame` subclasses it; the native methods,
+        including ``_replace`` and ``share``, are documented on the compiled
+        extension.
         """
 
         num_rows = 0
@@ -763,7 +765,8 @@ def install_extension_stub() -> None:
     ext.PLUGIN_ABI_VERSION = 0
     ext.INPUT_FILE_PATTERNS = ("*.gz",)
 
-    # Fallback: any other native symbol (the _Native* handles, LazyFrame, TraceViewer, the
+    # Fallback: any other native symbol (the _Native* handles, LazyFrame, TraceViewer, which the
+    # Python classes subclass and whose methods they bind at import, the
     # arrow ops _join/_window/..., future additions) resolves to a permissive
     # stub class so `from ..._ext import X`, `_ext.X`, and isinstance all work
     # without enumerating every symbol here.
@@ -774,7 +777,7 @@ def install_extension_stub() -> None:
             raise AttributeError(name)
         stub = _generic_stubs.get(name)
         if stub is None:
-            stub = type(
+            stub = _NativeMethods(
                 name,
                 (_BaseNative,),
                 {"__module__": ext_name, "__doc__": "Native extension stub."},

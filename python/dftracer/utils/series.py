@@ -19,14 +19,12 @@ from typing import (
     Any,
     Callable,
     Dict,
-    Generic,
     List,
     Literal,
     Mapping,
     Optional,
     Sequence,
     Tuple,
-    Type,
     TypeVar,
     Union,
     cast,
@@ -53,26 +51,6 @@ if TYPE_CHECKING:
 else:
     # The checkers read T_co (covariant, defaulting to Scalar) from the stub.
     T_co = TypeVar("T_co", covariant=True)
-
-# (native handle type, Python wrapper) pairs for the frame and viewer wrappers,
-# filled as each wrapper module imports. _wrap consults it so the base
-# forwarder can wrap any handle a native op returns without this module
-# importing them. The native Series is the public class itself and needs no
-# wrapper.
-_WRAP: List[Tuple[type, Type["_Wrapper"]]] = []
-
-
-def _register(native_type: type, wrapper: Type["_Wrapper"]) -> None:
-    _WRAP.append((native_type, wrapper))
-
-
-# Any: precise overloads break self-typed builder methods that return _ViewerT.
-def _wrap(obj: Any) -> Any:
-    for native_type, wrapper in _WRAP:
-        if isinstance(obj, native_type):
-            return wrapper(obj)
-    return obj
-
 
 # Python types and the NumPy names that differ from a DType member name.
 _PY_DTYPES: Dict[type, DType] = {
@@ -135,48 +113,7 @@ def _resolve_dtype(dtype: "Union[str, int, DType, type]") -> int:
     )
 
 
-_N = TypeVar("_N")
 _R = TypeVar("_R", bound="Scalar")
-
-
-# Any: a `_Wrapper[_N] -> _N` overload mis-resolves on union-typed arguments.
-def _unwrap(obj: Any) -> Any:
-    return obj._native if isinstance(obj, _Wrapper) else obj
-
-
-class _Wrapper(Generic[_N]):
-    """Holds a native handle and forwards unknown attributes to it, wrapping the
-    handles it hands back and unwrapping the ones passed in. Parameterized by the
-    concrete native handle type."""
-
-    __slots__ = ("_native",)
-
-    _native: _N
-
-    def __init__(self, native: _N) -> None:
-        self._native = native
-
-    # Runtime-only forwarder for native methods not explicitly wrapped; hidden
-    # from the checker so unknown attributes are type errors, not Any.
-    if not TYPE_CHECKING:
-
-        def __getattr__(self, name):
-            attr = getattr(self._native, name)
-            if not callable(attr):
-                return _wrap(attr)
-
-            def forward(*args, **kwargs):
-                uargs = [_unwrap(a) for a in args]
-                ukwargs = {k: _unwrap(v) for k, v in kwargs.items()}
-                return _wrap(attr(*uargs, **ukwargs))
-
-            return forward
-
-    # Opaque Arrow C Data Interface capsules; Python has no capsule type.
-    def __arrow_c_array__(
-        self, requested_schema: Optional[object] = None
-    ) -> "Tuple[object, object]":
-        return self._native.__arrow_c_array__(requested_schema)
 
 
 def _to_pandas(arrow_obj: Any, arrow: bool) -> Any:
@@ -2350,7 +2287,7 @@ class _StrAccessor:
         wide = exploded.pivot(index="r", on="v", values="v", agg="count").drop("r").fillna(0)
         # Presence (1), not a count; an empty token is no category.
         names = [c for c in wide.columns if c != ""]
-        return DataFrame({c: wide._native[c].gt(0).astype("int64") for c in names})
+        return DataFrame({c: wide[c].gt(0).astype("int64") for c in names})
 
 
 def _like(ints: Series, template: Series) -> Series:

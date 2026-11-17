@@ -153,6 +153,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   `s.name = "x"` renames that one Series in place, as pandas and polars do, and the values stay shared with the Series it came from.
   `Series` cannot be subclassed from user code: `Series.__new__` raises a `TypeError` for a subclass, because the native calls build the class that `_bind_types` bound and would hand back a plain `Series`.
   The native types take weak references.
+- Make the native `DataFrame`, `LazyFrame` and `TraceViewer` the public classes too: the Python classes subclass them and keep their state in slots, so a native call returns the public class and the per-call Python wrapper is gone (`df.head()` 523 ns to 340 ns and `df["x"]` 224 ns to 58 ns, in `benchmarks/python/call_bench.py`).
+  Methods that keep the type return `Self` in the `.pyi`, `df["x"]` is a `Series`, and `tests/python/typing/frames_typed_sample.py` and `frames_typed_wrong.py` pin it for `ty` and `mypy --strict`.
+  `TraceViewer` no longer subclasses `LazyFrame`: it holds its plan and `tv.lazy()` returns it, and every method it had still works.
+  `DataFrame._replace` and `share` and `LazyFrame._replace` and `share` are the native in-place rebind and shallow copy; a kernel with the GIL released reads a copy of the frame taken under the GIL.
+  `DataFrame.column_index`, `partition_id` and `TraceViewer.register_materialized` take keyword arguments natively.
+  `DataFrame`, `LazyFrame` and `TraceViewer` copy with `copy.copy` and `copy.deepcopy` as a shallow share, since their values are immutable; `DataFrame[...]` is not subscriptable (it never was), and a typed frame comes later as `TypedFrame[Schema]`.
+  `DataFrame.__contains__(name=)` and `__getitem__(key=)` no longer take a keyword, as they are native slot methods, and pandas does not take one either.
+  Add `scripts/gen_trace_lazy.py`, which writes `python/dftracer/utils/_trace_lazy.py`, and a test that fails when the file is stale.
 - Type `Series` by its element: `Series[int]` is a column of integers, covariant, so a `Series[bool]` is a `Series[int]`.
   A comparison is a `Series[bool]`, an arithmetic op follows promotion (`Series[int] + float` is a `Series[float]`), `cast` and `astype` on a `DType` member give the element type of that member, a method that keeps the type returns `Self`, and `.str` reads on a `Series[str]` only.
   `Series([1, 2, 3])` is a `Series[int]` to mypy, and `tests/python/test_series_typing.py` holds the typed sample and the wrong-use fixture.

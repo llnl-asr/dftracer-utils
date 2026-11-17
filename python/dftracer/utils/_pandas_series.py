@@ -185,8 +185,8 @@ class _SeriesPandasMixin:
             raise ValueError("duplicated: keep must be 'first', 'last' or False")
         rows = DataFrame({"v": s}).with_row_index("r")
         agg = f"{'min' if keep == 'first' else 'max'}:r:r"
-        kept = GroupBy(rows, ["v"]).agg(agg)._native["r"]
-        first = rows._native["r"].is_in(kept)
+        kept = GroupBy(rows, ["v"]).agg(agg)["r"]
+        first = rows["r"].is_in(kept)
         return every.logical(0, first.logical_not()).rename(s.name)
 
     @property
@@ -401,7 +401,7 @@ class _SeriesPandasMixin:
             if s.filter(pairs).var() == 0 or other.filter(pairs).var() == 0:
                 return float("nan")
         out = GroupBy(frame, []).agg(Agg(agg, _Col("y"), "r", by=_Col("x")))
-        value = out._native["r"][0]
+        value = out["r"][0]
         assert isinstance(value, float)
         return value
 
@@ -493,7 +493,7 @@ class _SeriesPandasMixin:
         """A List Series flattened to one row per element."""
         from .dataframe import DataFrame
 
-        return DataFrame({"v": self._s()}).explode("v")._native["v"]
+        return DataFrame({"v": self._s()}).explode("v")["v"]
 
     # -- accessors: a Series is positional, so loc is iloc ----------------------------
     @property

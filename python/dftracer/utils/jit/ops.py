@@ -25,10 +25,10 @@ string, an int, a char) follow the op's signature. The call returns a Series for
 a column op, or a Python scalar for a reducer.
 """
 
-from typing import TYPE_CHECKING, Callable, Dict, List, Union, cast
+from typing import TYPE_CHECKING, Callable, Dict, List, Union
 
 from .. import dftracer_utils_ext as _ext
-from ..series import Series, _unwrap, _wrap
+from ..series import Series
 
 if TYPE_CHECKING:
     from ..columnar import Expr
@@ -73,7 +73,7 @@ def run(name: str, *args: Operand) -> Result:
             raise TypeError(f"op '{name}' takes {uop.n_args} argument(s), got {len(args)}")
         source = {f"__x{i}__": a for i, a in enumerate(args)}
         return uop.expr.apply(source)
-    return cast(Result, _wrap(_ext.op_run(name, *(_unwrap(a) for a in args))))
+    return _ext.op_run(name, *args)
 
 
 def get(name: str) -> Callable[..., Result]:

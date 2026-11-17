@@ -513,6 +513,7 @@ PY_ALLOWLIST = {
         "map",
     },
     "DataFrame": {
+        "share",
         "from_arrow",
         "from_dict",
         "from_numpy",
@@ -578,6 +579,7 @@ PY_ALLOWLIST = {
         "to_feather",
     },
     "LazyFrame": {
+        "share",
         "collect",
         "collect_async",
         "columns",

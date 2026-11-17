@@ -207,5 +207,5 @@ def test_head_by_keeps_first_n_rows_per_key_in_input_order():
     assert want["v"] == list(range(21))
     for threads in (1, 2, 8):
         with Runtime(threads=threads) as rt:
-            lf = LazyFrame(big.lazy()._native, rt)
+            lf = LazyFrame(big.lazy(), rt)
             assert _dict(lf.head_by("k", 3).collect(1000)) == want

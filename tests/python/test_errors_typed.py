@@ -30,17 +30,17 @@ def test_value_error_class_is_also_a_value_error():
 
 def test_explode_of_a_non_list_column_raises_value_error_class():
     with pytest.raises(DFTUtilsValueError, match="not a List column"):
-        _frame()._native.explode("a")
+        ext.DataFrame.explode(_frame(), "a")
 
 
 def test_group_by_unknown_aggregate_raises_value_error_class():
     with pytest.raises(DFTUtilsValueError, match="unknown aggregate op"):
-        _frame()._native.group_by("a", "bogus:a")
+        ext.DataFrame.group_by(_frame(), "a", "bogus:a")
 
 
 def test_lazy_unknown_column_raises_not_found_class():
     with pytest.raises(DFTUtilsNotFoundError, match="no column named zz"):
-        _frame()._native.lazy().head_by("zz", 1)
+        ext.DataFrame.lazy(_frame()).head_by("zz", 1)
 
 
 def test_not_found_class_is_also_a_key_error():
@@ -50,9 +50,9 @@ def test_not_found_class_is_also_a_key_error():
 
 def test_eager_and_lazy_unknown_column_agree():
     with pytest.raises(DFTUtilsNotFoundError) as eager:
-        _frame()._native.select("zz")
+        ext.DataFrame.select(_frame(), "zz")
     with pytest.raises(DFTUtilsNotFoundError) as lazy:
-        _frame()._native.lazy().head_by("zz", 1)
+        ext.DataFrame.lazy(_frame()).head_by("zz", 1)
     assert isinstance(eager.value, KeyError) and isinstance(lazy.value, KeyError)
     assert str(eager.value) == "select: no column named zz"
     assert str(lazy.value) == "head_by: no column named zz"
@@ -60,7 +60,7 @@ def test_eager_and_lazy_unknown_column_agree():
 
 def test_duql_parse_error_raises_duql_class():
     with pytest.raises(DFTUtilsDuqlError):
-        _frame()._native.query("(((")
+        ext.DataFrame.query(_frame(), "(((")
 
 
 def test_missing_gz_path_raises_indexer_class(tmp_path):

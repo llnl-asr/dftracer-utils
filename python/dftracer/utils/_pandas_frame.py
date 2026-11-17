@@ -23,11 +23,14 @@ from typing import (
     Union,
 )
 
+from . import dftracer_utils_ext as _ext
 from ._pandas_series import _OMITTED, _replace_in, _replace_pairs
 from .enums import DType
-from .series import Series, _like, _unwrap
+from .series import Series, _like
 
 if TYPE_CHECKING:
+    from typing_extensions import Self
+
     from ._pandas_series import ReplaceKey, ReplaceValue, _Omitted
     from .columnar import GroupBy
     from .dataframe import DataFrame
@@ -62,18 +65,15 @@ def _group(frame: "DataFrame", keys: Sequence[str]) -> "GroupBy":
 
 
 def _series(frame: "DataFrame", name: str) -> Series:
-    return frame._native[name]
+    return _ext.DataFrame.__getitem__(frame, name)
 
 
-class _FramePandasMixin:
+class _FramePandasMixin(_ext.DataFrame):
     """pandas spellings over the engine's Series kernels, one column at a
     time. ``self`` is a :class:`DataFrame`."""
 
     __slots__ = ()
 
-    # The DataFrame these methods run on; typed loosely so the mixin can be
-    # checked without the concrete class.
-    _native: Any
     columns: List[str]
     _index: Optional[List[str]]
 
@@ -84,21 +84,20 @@ class _FramePandasMixin:
         return self
 
     def _col(self, name: str) -> Series:
-        return self._native[name]
+        return _ext.DataFrame.__getitem__(self, name)
 
     def _rebuild(self, columns: Dict[str, Series], keep_others: bool = True) -> "DataFrame":
         """A frame with ``columns`` replacing (or, with ``keep_others`` off,
         being) this frame's columns, in this frame's order."""
-        from .dataframe import DataFrame
 
-        out = self._native
+        out: DataFrame = self._frame()
         names = self.columns if keep_others else [c for c in self.columns if c in columns]
         if not keep_others:
-            out = out.select(*names)
+            out = _ext.DataFrame.select(out, *names)
         for name in names:
             if name in columns:
-                out = out.with_column(name, _unwrap(columns[name]))
-        frame = DataFrame(out)
+                out = _ext.DataFrame.with_column(out, name, columns[name])
+        frame = _ext.DataFrame.share(out) if out is self else out
         if self._index is not None and all(n in frame for n in self._index):
             frame._index = self._index
         return frame
@@ -123,7 +122,7 @@ class _FramePandasMixin:
         if isinstance(other, DataFrame):
             if name not in other:
                 raise KeyError(f"no column named {name!r} in the other frame")
-            return other._native[name]
+            return _series(other, name)
         if isinstance(other, Series):
             if len(other) != len(self._frame()):
                 raise ValueError(
@@ -594,11 +593,9 @@ class _FramePandasMixin:
             {"column": names, **{str(i): [cell(rows[c][i]) for c in names] for i in range(n)}}
         )
 
-    def copy(self, deep: bool = True) -> "DataFrame":
+    def copy(self, deep: bool = True) -> Self:
         """A new handle on the same immutable columns (nothing is copied)."""
-        from .dataframe import DataFrame
-
-        out = DataFrame(self._native)
+        out = _ext.DataFrame.share(self)
         out._index = self._index
         return out
 
@@ -640,7 +637,9 @@ class _FramePandasMixin:
     def pop(self, name: str) -> Series:
         """Remove ``name`` from this handle and return it."""
         out = self._col(name)
-        self._native = self._native.select(*[c for c in self.columns if c != name])
+        _ext.DataFrame._replace(
+            self, _ext.DataFrame.select(self, *[c for c in self.columns if c != name])
+        )
         return out
 
     def insert(self, loc: int, column: str, value: Union[Series, int, float, str]) -> None:
@@ -652,7 +651,7 @@ class _FramePandasMixin:
         assign_rows(self._frame(), Rows.all(), [column], value)
         order = [c for c in self.columns if c != column]
         order.insert(loc, column)
-        self._native = self._native.select(*order)
+        _ext.DataFrame._replace(self, _ext.DataFrame.select(self, *order))
 
     def add_prefix(self, prefix: str) -> "DataFrame":
         return self._frame().rename({c: prefix + c for c in self.columns})
@@ -808,7 +807,7 @@ class _FramePandasMixin:
         out: Dict[str, Series] = {}
         for name in self.columns:
             if name in other:
-                out[name] = func(self._col(name), other._native[name])
+                out[name] = func(self._col(name), _series(other, name))
         return self._rebuild(out, keep_others=False)
 
     def compare(self, other: "DataFrame") -> "DataFrame":
@@ -825,7 +824,7 @@ class _FramePandasMixin:
         mine: List[Optional[str]] = []
         theirs: List[Optional[str]] = []
         for name in self.columns:
-            diff = self._col(name).compare(other._native[name]).to_dict()
+            diff = self._col(name).compare(_series(other, name)).to_dict()
             for i, va, vb in zip(diff["index"], diff["self"], diff["other"]):
                 assert isinstance(i, int)
                 rows.append(i)
@@ -850,7 +849,7 @@ class _FramePandasMixin:
         for name in self.columns:
             s = self._col(name)
             if name in other and _is_numeric(s):
-                out[name] = [s.corr(other._native[name])]
+                out[name] = [s.corr(_series(other, name))]
         return DataFrame(out)
 
     def info(self) -> str:
@@ -893,7 +892,7 @@ class _FramePandasMixin:
         for name in self.columns:
             if name in other:
                 s = self._col(name)
-                out[name] = s.where(s.notna(), other._native[name])
+                out[name] = s.where(s.notna(), _series(other, name))
         return self._rebuild(out)
 
     def update(self, other: "DataFrame") -> None:
@@ -902,9 +901,9 @@ class _FramePandasMixin:
         out: Dict[str, Series] = {}
         for name in self.columns:
             if name in other:
-                o = other._native[name]
+                o = _series(other, name)
                 out[name] = o.where(o.notna(), self._col(name))
-        self._native = self._rebuild(out)._native
+        _ext.DataFrame._replace(self, self._rebuild(out))
 
     def dot(self, other: Union[Series, "DataFrame"]) -> Union[Series, "DataFrame"]:
         """Matrix product with a Series (one value per column) or a frame
@@ -915,7 +914,7 @@ class _FramePandasMixin:
         if isinstance(other, Series):
             return Series.from_list([self._col(c).dot(other) for c in names])
         return DataFrame(
-            {o: [self._col(c).dot(other._native[o]) for c in names] for o in other.columns}
+            {o: [self._col(c).dot(_series(other, o)) for c in names] for o in other.columns}
         )
 
     @classmethod
@@ -1074,11 +1073,11 @@ class _FramePandasMixin:
             for c in others:
                 if _is_numeric(self._col_of(out, c)):
                     out = out.with_column(c, self._col_of(out, c).fillna(fill_value))
-        return frame._like(out.select(*frame.columns)._native)
+        return frame._like(_ext.DataFrame.select(out, *frame.columns))
 
     @staticmethod
     def _col_of(frame: "DataFrame", name: str) -> Series:
-        return frame._native[name]
+        return _series(frame, name)
 
     # -- exports through pandas / pyarrow -----------------------------------------
     def to_csv(

@@ -81,7 +81,7 @@ def _from_python(values: Sequence[object]) -> "Series":
 
 def _column(frame: "DataFrame", name: str) -> "Series":
 
-    return frame._native[name]
+    return frame[name]
 
 
 def apply_series(series: "Series", func: Callable[..., object], what: str) -> "Series":

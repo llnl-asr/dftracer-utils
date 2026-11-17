@@ -80,7 +80,7 @@ class Array(ctypes.Structure):
                 ("buffers", "children", "dictionary", "release", "private_data")]
 
 frame = DataFrame.from_numpy({"a": np.arange(100_000, dtype=np.int64)}, ["a"])
-cap = frame.lazy().filter(col("a") > 10)._native.__arrow_c_stream__()
+cap = frame.lazy().filter(col("a") > 10).__arrow_c_stream__()
 del frame
 
 get_pointer = ctypes.pythonapi.PyCapsule_GetPointer

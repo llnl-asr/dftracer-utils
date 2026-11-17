@@ -139,13 +139,19 @@ DataFrame to_dataframe(const DataFrameObject* self) {
 // Wrap a batch_ops call over the frame `b` that returns a frame or a frame
 // result, turning its error and any C++ exception into a typed Python error.
 // `fn` runs with the GIL released for a large frame, so it touches no Python
-// object; the frame is immutable, so reading it unlocked is safe. A Series
-// argument is shared under the GIL first, as `s.name = x` renames a Series
-// object in place.
+// object. It reads a view of the frame taken under the GIL, as `_replace`
+// rebinds a DataFrame object's columns in place, and a Series argument is
+// shared under the GIL first, as `s.name = x` renames a Series object in place.
 template <class Fn>
 PyObject* run_batch_op(const DataFrameObject* b, Fn&& fn) {
     return guard([&]() -> PyObject* {
-        auto out = without_gil(b->st.length(), fn);
+        const DataFrame frame = to_dataframe(b);
+        auto out = without_gil(frame.num_rows(), [&] {
+            if constexpr (std::is_invocable_v<Fn&, const DataFrame&>)
+                return fn(frame);
+            else
+                return fn();
+        });
         if constexpr (std::is_same_v<decltype(out), DataFrame>) {
             return make_dataframe(std::move(out));
         } else {
@@ -158,14 +164,71 @@ PyObject* run_batch_op(const DataFrameObject* b, Fn&& fn) {
     });
 }
 
+PyObject* DataFrame_filter(PyObject* self, PyObject* mask);
+PyObject* DataFrame_select(PyObject* self, PyObject* args);
+
+// `result` (a new reference, or null) carrying the index names of `self`, a
+// Python-level property of the subclass, when the result still holds every one
+// of them.
+PyObject* carry_index(PyObject* self, PyObject* result) {
+    if (!result) return nullptr;
+    PyObject* index = PyObject_GetAttrString(self, "_index");
+    if (!index) {
+        PyErr_Clear();
+        return result;
+    }
+    if (index != Py_None) {
+        bool holds_all = true;
+        const Py_ssize_t n = PyList_Check(index) ? PyList_GET_SIZE(index) : 0;
+        for (Py_ssize_t k = 0; k < n && holds_all; ++k) {
+            const int has =
+                PySequence_Contains(result, PyList_GET_ITEM(index, k));
+            if (has < 0) {
+                Py_DECREF(index);
+                Py_DECREF(result);
+                return nullptr;
+            }
+            holds_all = has == 1;
+        }
+        if (holds_all && PyObject_SetAttrString(result, "_index", index) < 0) {
+            Py_DECREF(index);
+            Py_DECREF(result);
+            return nullptr;
+        }
+    }
+    Py_DECREF(index);
+    return result;
+}
+
+// df["a"] is a column; df[["a", "b"]] a projection and df[mask] the rows where
+// a Bool Series holds (the pandas spellings), both carrying the index names.
 PyObject* DataFrame_subscript(PyObject* self, PyObject* key) {
     DataFrameObject* b = as_native<DataFrameObject>(self);
     if (!b) return nullptr;
-    const char* name = PyUnicode_AsUTF8(key);
-    if (!name) {
-        PyErr_SetString(PyExc_TypeError, "DataFrame key must be a column name");
-        return nullptr;
+    if (!PyUnicode_Check(key)) {
+        if (dftracer::utils::python::frame::unwrap_vec_column(key))
+            return carry_index(self, DataFrame_filter(self, key));
+        PyObject* names = PySequence_Tuple(key);
+        if (!names) {
+            PyErr_SetString(PyExc_TypeError,
+                            "DataFrame key must be a column name, a list of "
+                            "names or a Bool Series");
+            return nullptr;
+        }
+        for (Py_ssize_t k = 0; k < PyTuple_GET_SIZE(names); ++k) {
+            PyObject* text = PyObject_Str(PyTuple_GET_ITEM(names, k));
+            if (!text) {
+                Py_DECREF(names);
+                return nullptr;
+            }
+            PyTuple_SET_ITEM(names, k, text);
+        }
+        PyObject* out = DataFrame_select(self, names);
+        Py_DECREF(names);
+        return carry_index(self, out);
     }
+    const char* name = PyUnicode_AsUTF8(key);
+    if (!name) return nullptr;
     std::int64_t i = index_of(b, name);
     if (i < 0) {
         PyErr_Format(PyExc_KeyError, "no column named '%s'", name);
@@ -184,6 +247,34 @@ int DataFrame_contains(PyObject* self, PyObject* key) {
     const char* name = PyUnicode_AsUTF8(key);
     if (!name) return -1;
     return index_of(b, name) >= 0 ? 1 : 0;
+}
+
+// _replace(other): this frame takes the columns of `other`, in place. The
+// frame's own Python state (the index names) is left alone. Kernels read a
+// view taken under the GIL, so one running on another thread keeps the old
+// columns.
+PyObject* DataFrame_replace(PyObject* self, PyObject* other) {
+    DataFrameObject* b = as_native<DataFrameObject>(self);
+    DataFrameObject* o = as_native<DataFrameObject>(other);
+    if (!b || !o) return nullptr;
+    if (b == o) Py_RETURN_NONE;
+    return guard([&]() -> PyObject* {
+        DataFrame f = to_dataframe(o);
+        Series st = Series::structs(dftracer::utils::dstd::to_strings(f.names),
+                                    std::move(f.columns));
+        b->names = o->names;
+        b->st = std::move(st);
+        Py_RETURN_NONE;
+    });
+}
+
+// share() -> DataFrame: a new object over the same columns, with no state of
+// its own.
+PyObject* DataFrame_share(PyObject* self, PyObject*) {
+    DataFrameObject* b = as_native<DataFrameObject>(self);
+    if (!b) return nullptr;
+    return guard(
+        [&]() -> PyObject* { return make_dataframe(to_dataframe(b)); });
 }
 
 PyObject* DataFrame_keys(PyObject* self, PyObject*) {
@@ -212,8 +303,9 @@ PyObject* DataFrame_filter(PyObject* self, PyObject* mask) {
         return nullptr;
     }
     const Series mask_copy = m->share();
-    return run_batch_op(
-        b, [&] { return dataframe::filter(to_dataframe(b), mask_copy); });
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::filter(frame, mask_copy);
+    });
 }
 
 // query(dsl=None, *, group_by=None, aggs=None, select=None, order_by=None,
@@ -302,8 +394,9 @@ PyObject* DataFrame_select(PyObject* self, PyObject* args) {
         }
         names.emplace_back(s);
     }
-    return run_batch_op(
-        b, [&] { return dataframe::select(to_dataframe(b), names); });
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::select(frame, names);
+    });
 }
 
 PyObject* DataFrame_rename(PyObject* self, PyObject* mapping) {
@@ -328,8 +421,9 @@ PyObject* DataFrame_rename(PyObject* self, PyObject* mapping) {
             new_names.emplace_back(name.view());
         }
     }
-    return run_batch_op(
-        b, [&] { return dataframe::rename(to_dataframe(b), new_names); });
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::rename(frame, new_names);
+    });
 }
 
 PyObject* DataFrame_with_column(PyObject* self, PyObject* args) {
@@ -345,8 +439,8 @@ PyObject* DataFrame_with_column(PyObject* self, PyObject* args) {
         return nullptr;
     }
     const Series col_copy = c->share();
-    return run_batch_op(b, [&] {
-        return dataframe::with_column(to_dataframe(b), name, col_copy);
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::with_column(frame, name, col_copy);
     });
 }
 
@@ -356,7 +450,8 @@ PyObject* DataFrame_take(PyObject* self, PyObject* seq) {
     dftracer::utils::dstd::Vector<std::int64_t> idx;
     if (!parse_int_seq(seq, "take() expects a sequence of ints", idx))
         return nullptr;
-    return run_batch_op(b, [&] { return to_dataframe(b).take(idx); });
+    return run_batch_op(
+        b, [&](const DataFrame& frame) { return frame.take(idx); });
 }
 
 PyObject* DataFrame_tail(PyObject* self, PyObject* arg) {
@@ -364,20 +459,23 @@ PyObject* DataFrame_tail(PyObject* self, PyObject* arg) {
     if (!b) return nullptr;
     long long n = PyLong_AsLongLong(arg);
     if (n == -1 && PyErr_Occurred()) return nullptr;
-    return run_batch_op(b, [&] { return dataframe::tail(to_dataframe(b), n); });
+    return run_batch_op(
+        b, [&](const DataFrame& frame) { return dataframe::tail(frame, n); });
 }
 
 PyObject* DataFrame_reverse(PyObject* self, PyObject*) {
     DataFrameObject* b = as_native<DataFrameObject>(self);
     if (!b) return nullptr;
-    return run_batch_op(b, [&] { return dataframe::reverse(to_dataframe(b)); });
+    return run_batch_op(
+        b, [&](const DataFrame& frame) { return dataframe::reverse(frame); });
 }
 
 PyObject* DataFrame_drop_nulls(PyObject* self, PyObject*) {
     DataFrameObject* b = as_native<DataFrameObject>(self);
     if (!b) return nullptr;
-    return run_batch_op(b,
-                        [&] { return dataframe::drop_nulls(to_dataframe(b)); });
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::drop_nulls(frame);
+    });
 }
 
 PyObject* DataFrame_fill_null(PyObject* self, PyObject* value) {
@@ -385,8 +483,9 @@ PyObject* DataFrame_fill_null(PyObject* self, PyObject* value) {
     if (!b) return nullptr;
     dftu_scalar s{};
     if (!py_to_scalar(value, &s)) return nullptr;
-    return run_batch_op(
-        b, [&] { return dataframe::fill_null(to_dataframe(b), s); });
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::fill_null(frame, s);
+    });
 }
 
 // Read a sequence (or single str) of column names into `out`. Returns false and
@@ -411,8 +510,9 @@ PyObject* DataFrame_unique(PyObject* self, PyObject* args, PyObject* kwds) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> subset;
     if (subset_obj != Py_None && !names_from_obj(subset_obj, subset))
         return nullptr;
-    return run_batch_op(
-        b, [&] { return dataframe::unique(to_dataframe(b), subset); });
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::unique(frame, subset);
+    });
 }
 
 PyObject* DataFrame_sort_by_multi(PyObject* self, PyObject* args,
@@ -433,8 +533,8 @@ PyObject* DataFrame_sort_by_multi(PyObject* self, PyObject* args,
     // old "any non-empty list sorts descending" bug).
     dftracer::utils::dstd::Vector<bool> descending;
     if (!descending_from_obj(descending_obj, descending)) return nullptr;
-    return run_batch_op(b, [&] {
-        return dataframe::sort_by_multi(to_dataframe(b), names, descending);
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::sort_by_multi(frame, names, descending);
     });
 }
 
@@ -444,8 +544,8 @@ PyObject* DataFrame_sample(PyObject* self, PyObject* args, PyObject* kwds) {
     Py_ssize_t n = 0;
     unsigned long long seed = 0;
     if (!parse_kw<"n|K">(args, kwds, {"n", "seed"}, &n, &seed)) return nullptr;
-    return run_batch_op(b, [&] {
-        return dataframe::sample(to_dataframe(b), static_cast<std::int64_t>(n),
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::sample(frame, static_cast<std::int64_t>(n),
                                  static_cast<std::uint64_t>(seed));
     });
 }
@@ -458,22 +558,24 @@ PyObject* DataFrame_with_row_index(PyObject* self, PyObject* arg) {
         PyErr_SetString(PyExc_TypeError, "with_row_index() expects a str");
         return nullptr;
     }
-    return run_batch_op(
-        b, [&] { return dataframe::with_row_index(to_dataframe(b), name); });
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::with_row_index(frame, name);
+    });
 }
 
 PyObject* DataFrame_describe(PyObject* self, PyObject*) {
     DataFrameObject* b = as_native<DataFrameObject>(self);
     if (!b) return nullptr;
-    return run_batch_op(b,
-                        [&] { return dataframe::describe(to_dataframe(b)); });
+    return run_batch_op(
+        b, [&](const DataFrame& frame) { return dataframe::describe(frame); });
 }
 
 PyObject* DataFrame_null_count(PyObject* self, PyObject*) {
     DataFrameObject* b = as_native<DataFrameObject>(self);
     if (!b) return nullptr;
-    return run_batch_op(b,
-                        [&] { return dataframe::null_count(to_dataframe(b)); });
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::null_count(frame);
+    });
 }
 
 // reduce(agg): `agg` is an aggregate name (sum, mean, ...) broadcast over
@@ -483,11 +585,13 @@ PyObject* DataFrame_reduce(PyObject* self, PyObject* arg) {
     if (!b) return nullptr;
     const char* agg = PyUnicode_AsUTF8(arg);
     if (!agg) return nullptr;
-    return run_batch_op(b, [&]() -> dftracer::utils::dstd::Result<DataFrame> {
-        const auto op = dataframe::agg_from_string(agg);
-        if (!op) return op.error();
-        return dataframe::reduce(to_dataframe(b), *op);
-    });
+    return run_batch_op(b,
+                        [&](const DataFrame& frame)
+                            -> dftracer::utils::dstd::Result<DataFrame> {
+                            const auto op = dataframe::agg_from_string(agg);
+                            if (!op) return op.error();
+                            return dataframe::reduce(frame, *op);
+                        });
 }
 
 PyObject* DataFrame_group_transform(PyObject* self, PyObject* args,
@@ -498,8 +602,8 @@ PyObject* DataFrame_group_transform(PyObject* self, PyObject* args,
     if (!dftracer::utils::python::frame::parse_groupwise_args(
             args, kwds, names_from_obj, a))
         return nullptr;
-    return run_batch_op(b, [&] {
-        return dataframe::GroupBy(to_dataframe(b), a.keys)
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::GroupBy(frame, a.keys)
             .transform(static_cast<dataframe::GroupwiseOp>(a.kind), a.n,
                        static_cast<dataframe::RankMethod>(a.method),
                        a.ascending != 0);
@@ -579,7 +683,8 @@ PyObject* DataFrame_head(PyObject* self, PyObject* arg) {
     if (!b) return nullptr;
     long long n = PyLong_AsLongLong(arg);
     if (n == -1 && PyErr_Occurred()) return nullptr;
-    return run_batch_op(b, [&] { return dataframe::head(to_dataframe(b), n); });
+    return run_batch_op(
+        b, [&](const DataFrame& frame) { return dataframe::head(frame, n); });
 }
 
 PyObject* DataFrame_slice(PyObject* self, PyObject* args) {
@@ -587,8 +692,9 @@ PyObject* DataFrame_slice(PyObject* self, PyObject* args) {
     if (!b) return nullptr;
     long long offset = 0, length = 0;
     if (!PyArg_ParseTuple(args, "LL", &offset, &length)) return nullptr;
-    return run_batch_op(
-        b, [&] { return dataframe::slice(to_dataframe(b), offset, length); });
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::slice(frame, offset, length);
+    });
 }
 
 PyObject* DataFrame_sort_by(PyObject* self, PyObject* args, PyObject* kwds) {
@@ -599,8 +705,8 @@ PyObject* DataFrame_sort_by(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!parse_kw<"s|p">(args, kwds, {"name", "descending"}, &name,
                          &descending))
         return nullptr;
-    return run_batch_op(b, [&] {
-        return dataframe::sort_by(to_dataframe(b), name, descending != 0);
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::sort_by(frame, name, descending != 0);
     });
 }
 
@@ -613,9 +719,9 @@ PyObject* DataFrame_topk(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!parse_kw<"sn|p">(args, kwds, {"name", "k", "largest"}, &name, &k,
                           &largest))
         return nullptr;
-    return run_batch_op(b, [&] {
-        return dataframe::topk(to_dataframe(b), name,
-                               static_cast<std::int64_t>(k), largest != 0);
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::topk(frame, name, static_cast<std::int64_t>(k),
+                               largest != 0);
     });
 }
 
@@ -872,12 +978,12 @@ PyObject* DataFrame_group_by(PyObject* self, PyObject* args) {
         if (!s) return nullptr;
         specs.emplace_back(s);
     }
-    return run_batch_op(b, [&] {
+    return run_batch_op(b, [&](const DataFrame& frame) {
         dftracer::utils::dstd::Vector<dataframe::GroupAgg> aggs;
         aggs.reserve(specs.size());
         for (const dftracer::utils::dstd::String& spec : specs)
             aggs.push_back(group_agg_from_spec(spec));
-        return dataframe::group_by(to_dataframe(b), keys, aggs);
+        return dataframe::group_by(frame, keys, aggs);
     });
 }
 
@@ -906,9 +1012,10 @@ PyObject* DataFrame_join(PyObject* self, PyObject* args, PyObject* kwds) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> l;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> r;
     if (!join_keys_from_objs(on, left_on, right_on, jh, l, r)) return nullptr;
-    return run_batch_op(b, [&] {
-        return dataframe::join(to_dataframe(b), to_dataframe(o), l, r, jh,
-                               suffix, nulls_equal != 0);
+    const DataFrame other_frame = to_dataframe(o);
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::join(frame, other_frame, l, r, jh, suffix,
+                               nulls_equal != 0);
     });
 }
 
@@ -920,8 +1027,9 @@ PyObject* DataFrame_compare_agg(PyObject* self, PyObject* args) {
     if (!PyArg_ParseTuple(args, "On", &other, &n_key)) return nullptr;
     DataFrameObject* o = as_native<DataFrameObject>(other);
     if (!o) return nullptr;
-    return run_batch_op(b, [&] {
-        return dataframe::compare_agg(to_dataframe(b), to_dataframe(o),
+    const DataFrame other_frame = to_dataframe(o);
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::compare_agg(frame, other_frame,
                                       static_cast<std::int64_t>(n_key));
     });
 }
@@ -939,8 +1047,8 @@ PyObject* DataFrame_unpivot(PyObject* self, PyObject* args, PyObject* kwds) {
         value_vars;
     if (!names_from_obj(id_obj, id_vars)) return nullptr;
     if (!names_from_obj(val_obj, value_vars)) return nullptr;
-    return run_batch_op(b, [&] {
-        return dataframe::unpivot(to_dataframe(b), id_vars, value_vars);
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::unpivot(frame, id_vars, value_vars);
     });
 }
 
@@ -952,8 +1060,9 @@ PyObject* DataFrame_explode(PyObject* self, PyObject* arg) {
         PyErr_SetString(PyExc_TypeError, "explode() expects a column name");
         return nullptr;
     }
-    return run_batch_op(
-        b, [&] { return dataframe::explode(to_dataframe(b), name); });
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::explode(frame, name);
+    });
 }
 
 PyObject* DataFrame_window(PyObject* self, PyObject* args, PyObject* kwds) {
@@ -977,8 +1086,8 @@ PyObject* DataFrame_window(PyObject* self, PyObject* args, PyObject* kwds) {
     specv.reserve(parsed.specs.size());
     for (const dftu_window_spec& w : parsed.specs)
         specv.push_back(dataframe::window_column(w));
-    return run_batch_op(b, [&] {
-        return dataframe::window(to_dataframe(b), pcols, ocols, specv);
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::window(frame, pcols, ocols, specv);
     });
 }
 
@@ -1019,8 +1128,8 @@ PyObject* DataFrame_gap_fill(PyObject* self, PyObject* args, PyObject* kwds) {
         range = dftracer::utils::dstd::Pair<std::int64_t, std::int64_t>{
             static_cast<std::int64_t>(s), static_cast<std::int64_t>(e)};
     }
-    return run_batch_op(b, [&] {
-        return dataframe::gap_fill(to_dataframe(b), pcols, time,
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::gap_fill(frame, pcols, time,
                                    static_cast<std::int64_t>(bucket), vcols, m,
                                    range);
     });
@@ -1058,9 +1167,9 @@ PyObject* DataFrame_asof(PyObject* self, PyObject* args, PyObject* kwds) {
         }
         tol = t;
     }
-    return run_batch_op(b, [&] {
-        return dataframe::asof(to_dataframe(b), to_dataframe(o), on, equi, dir,
-                               tol);
+    const DataFrame other_frame = to_dataframe(o);
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::asof(frame, other_frame, on, equi, dir, tol);
     });
 }
 
@@ -1082,9 +1191,10 @@ PyObject* DataFrame_interval(PyObject* self, PyObject* args, PyObject* kwds) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> equi;
     if (!parse_string_seq(by, "interval: by must be names", equi))
         return nullptr;
-    return run_batch_op(b, [&] {
-        return dataframe::interval(to_dataframe(b), to_dataframe(o), point, lo,
-                                   hi, equi, outer != 0);
+    const DataFrame other_frame = to_dataframe(o);
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::interval(frame, other_frame, point, lo, hi, equi,
+                                   outer != 0);
     });
 }
 
@@ -1096,8 +1206,8 @@ PyObject* DataFrame_unnest(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!parse_kw<"s|p">(args, kwds, {"column", "keep_empty"}, &name,
                          &keep_empty))
         return nullptr;
-    return run_batch_op(b, [&] {
-        return dataframe::unnest(to_dataframe(b), name, keep_empty != 0);
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::unnest(frame, name, keep_empty != 0);
     });
 }
 
@@ -1109,8 +1219,9 @@ PyObject* DataFrame_to_dummies(PyObject* self, PyObject* arg) {
         PyErr_SetString(PyExc_TypeError, "to_dummies() expects a column name");
         return nullptr;
     }
-    return run_batch_op(
-        b, [&] { return dataframe::to_dummies(to_dataframe(b), name); });
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::to_dummies(frame, name);
+    });
 }
 
 // pivot(index, columns, values, agg="first"): long -> wide.
@@ -1124,8 +1235,8 @@ PyObject* DataFrame_pivot(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!parse_kw<"sss|s">(args, kwds, {"index", "columns", "values", "agg"},
                            &index, &columns, &values, &agg))
         return nullptr;
-    return run_batch_op(b, [&] {
-        return dataframe::pivot(to_dataframe(b), index, columns, values, agg);
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::pivot(frame, index, columns, values, agg);
     });
 }
 
@@ -1170,8 +1281,8 @@ PyObject* DataFrame_group_by_dynamic(PyObject* self, PyObject* args,
     dftracer::utils::dstd::Vector<dataframe::GroupAgg> aggs;
     if (aggs_obj && aggs_obj != Py_None && !aggs_from_seq(aggs_obj, aggs))
         return nullptr;
-    return run_batch_op(b, [&] {
-        return dataframe::group_by_dynamic(to_dataframe(b), time_col,
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::group_by_dynamic(frame, time_col,
                                            static_cast<std::int64_t>(every),
                                            period, aggs, origin, origin_min);
     });
@@ -1277,9 +1388,11 @@ PyObject* DataFrame_arrow_c_array(PyObject* self, PyObject*) {
 // collected frame), so pa.table(batch) / pl.from_arrow(batch) import every
 // column zero-copy without an explicit to_arrow(). The single struct array
 // carries all fields.
-PyObject* DataFrame_arrow_c_stream(PyObject* self, PyObject* args) {
+PyObject* DataFrame_arrow_c_stream(PyObject* self, PyObject* args,
+                                   PyObject* kwds) {
     PyObject* requested_schema = Py_None;
-    if (!PyArg_ParseTuple(args, "|O", &requested_schema)) return nullptr;
+    if (!parse_kw<"|O">(args, kwds, {"requested_schema"}, &requested_schema))
+        return nullptr;
     if (!dftracer::utils::python::core::no_requested_schema(requested_schema))
         return nullptr;
     DataFrameObject* b = as_native<DataFrameObject>(self);
@@ -1305,8 +1418,9 @@ PyObject* DataFrame_to_ipc(PyObject* self, PyObject*) {
     if (!b) return nullptr;
     return guard([&]() -> PyObject* {
         auto writer = arrow::Writer::to_buffer();
-        auto status = without_gil(b->st.length(), [&] {
-            auto written = writer.write(to_dataframe(b));
+        const DataFrame frame = to_dataframe(b);
+        auto status = without_gil(frame.num_rows(), [&] {
+            auto written = writer.write(frame);
             if (written) written = writer.finish();
             return written;
         });
@@ -1325,8 +1439,9 @@ PyObject* DataFrame_to_bytes(PyObject* self, PyObject*) {
     DataFrameObject* b = as_native<DataFrameObject>(self);
     if (!b) return nullptr;
     return guard([&]() -> PyObject* {
-        const auto bytes = without_gil(b->st.length(), [&] {
-            return dataframe::frame_to_native(to_dataframe(b));
+        const DataFrame frame = to_dataframe(b);
+        const auto bytes = without_gil(frame.num_rows(), [&] {
+            return dataframe::frame_to_native(frame);
         });
         if (!bytes) {
             PyErr_SetString(PyExc_TypeError, bytes.error().c_str());
@@ -1380,6 +1495,10 @@ PyMethodDef DataFrame_methods[] = {
     {"lazy", DataFrame_lazy, METH_NOARGS,
      "lazy() -> LazyFrame, a deferred query over this batch."},
     {"keys", DataFrame_keys, METH_NOARGS, "Series names, in order."},
+    {"_replace", DataFrame_replace, METH_O,
+     "_replace(other) -> None\n\nTake the columns of `other`, in place."},
+    {"share", DataFrame_share, METH_NOARGS,
+     "share() -> DataFrame\n\nA new DataFrame over the same columns."},
     {"filter", DataFrame_filter, METH_O,
      "filter(mask) -> DataFrame keeping rows where the Bool mask is true."},
     {"select", DataFrame_select, METH_VARARGS,
@@ -1390,7 +1509,10 @@ PyMethodDef DataFrame_methods[] = {
      "with_column(name, Series) -> DataFrame adding/replacing a column."},
     {"take", DataFrame_take, METH_O,
      "take(indices) -> DataFrame gathered at the given row indices."},
-    {"column_index", DataFrame_column_index, METH_O,
+    {"column_index",
+     DFTU_PYCFUNCTION((dftracer::utils::python::core::kw_one<
+                       "name", DataFrame_column_index>)),
+     METH_VARARGS | METH_KEYWORDS,
      "column_index(name) -> int index of a column, or -1 if absent."},
     {"head", DataFrame_head, METH_O,
      "head(n) -> DataFrame of the first n rows."},
@@ -1509,7 +1631,10 @@ PyMethodDef DataFrame_methods[] = {
      "compare_agg(variant, n_key) -> DataFrame: FULL-join two aggregation "
      "results on the first n_key group-key columns and append delta_/pct_ per "
      "numeric metric (the CompareView result)."},
-    {"partition_id", DataFrame_partition_id, METH_VARARGS,
+    {"partition_id",
+     DFTU_PYCFUNCTION((dftracer::utils::python::core::kw_pair<
+                       DataFrame_partition_id, "keys", "n_parts">)),
+     METH_VARARGS | METH_KEYWORDS,
      "partition_id(keys, n_parts) -> Int32 Series: the part in [0, n_parts) "
      "each row lands in under a stable hash of the key columns."},
     {"hash_partition", DataFrame_hash_partition, METH_VARARGS,
@@ -1517,7 +1642,8 @@ PyMethodDef DataFrame_methods[] = {
      "hash of the key columns (the distributed shuffle primitive)."},
     {"__arrow_c_array__", DataFrame_arrow_c_array, METH_VARARGS,
      "Arrow PyCapsule export of the struct: (schema_capsule, array_capsule)."},
-    {"__arrow_c_stream__", DataFrame_arrow_c_stream, METH_VARARGS,
+    {"__arrow_c_stream__", DFTU_PYCFUNCTION(DataFrame_arrow_c_stream),
+     METH_VARARGS | METH_KEYWORDS,
      "Arrow PyCapsule stream export (one struct batch); pa.table(batch) uses "
      "this to import every column zero-copy."},
     {"to_ipc", DataFrame_to_ipc, METH_NOARGS,

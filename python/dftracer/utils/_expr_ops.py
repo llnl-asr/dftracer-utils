@@ -225,7 +225,7 @@ def _eager_over(
         raise TypeError(f"{spec.op}: over() has no group-wise form for this op")
     frame = DataFrame({**{k: columns[k] for k in keys}, "__dftu_v__": value})
     out = GroupBy(frame, keys)._transform(spec.kind, spec.n, _rank_name(spec), _ascending(spec))
-    return out._native["__dftu_v__"]
+    return out["__dftu_v__"]
 
 
 def _eager_agg_over(columns: Dict[str, Series], spec: ColumnOp) -> Series:
@@ -238,7 +238,7 @@ def _eager_agg_over(columns: Dict[str, Series], spec: ColumnOp) -> Series:
     value = "__dftu_over_v__"
     grouped = GroupBy(frame, keys).agg(spec.agg.alias(value))
     if not keys:
-        v = grouped._native[value][0]
+        v = grouped[value][0]
         assert isinstance(v, (int, float))
         first = next(iter(columns.values()))
         return first.full_like(float(v))
@@ -249,7 +249,7 @@ def _eager_agg_over(columns: Dict[str, Series], spec: ColumnOp) -> Series:
         .join(grouped, on=keys, how="left", nulls_equal=True)
         .sort_values(row)
     )
-    return joined._native[value]
+    return joined[value]
 
 
 def _rank_name(spec: ColumnOp) -> str:
@@ -271,7 +271,6 @@ def lower_column_ops(plan: "LazyFrame", expr: "Expr") -> "Tuple[LazyFrame, Expr,
     place), the expression rewritten over those temporaries, and the
     temporaries to drop once the caller has used the expression."""
     from .columnar import _Col
-    from .lazyframe import LazyFrame
 
     rewritten, ops = split_column_ops(expr)
     temps: List[str] = []
@@ -291,10 +290,8 @@ def lower_column_ops(plan: "LazyFrame", expr: "Expr") -> "Tuple[LazyFrame, Expr,
                 plan = plan.with_column(column2, spec.column2)
                 temps.append(column2)
         if spec.over is None:
-            plan = LazyFrame(
-                plan._native.column_op(
-                    name, spec.op, column2=column2, a=spec.a, b=spec.b, text=spec.text
-                )
+            plan = _ext.LazyFrame.column_op(
+                plan, name, spec.op, column2=column2, a=spec.a, b=spec.b, text=spec.text
             )
         else:
             plan = _lazy_over(plan, name, spec)

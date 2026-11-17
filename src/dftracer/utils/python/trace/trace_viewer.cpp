@@ -385,6 +385,10 @@ void tv_dealloc(TraceViewerObject* self) {
 }
 
 int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
+    if (self->tv) {
+        PyErr_SetString(PyExc_TypeError, "TraceViewer is already initialized");
+        return -1;
+    }
     PyObject* files = nullptr;
     PyObject* index_obj = nullptr;
     if (!parse_kw<"O|O">(args, kwds, {"files", "index_path"}, &files,
@@ -1226,7 +1230,10 @@ PyMethodDef tv_methods[] = {
      "Materialized-view files that would serve this query."},
     {"materialize_dir", tv_materialize_dir, METH_NOARGS,
      "Create and return the shared materialized-view directory."},
-    {"register_materialized", tv_register_materialized, METH_O,
+    {"register_materialized",
+     DFTU_PYCFUNCTION((dftracer::utils::python::core::kw_one<
+                       "dir", tv_register_materialized>)),
+     METH_VARARGS | METH_KEYWORDS,
      "Write the materialized-view manifest at `dir`."},
     {"compare", tv_compare, METH_O,
      "Plan comparing this aggregation against another viewer's events."},

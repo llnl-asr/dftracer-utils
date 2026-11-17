@@ -21,8 +21,8 @@ def _instances():
     frame = d.DataFrame({"x": [1, 2, 3]})
     return {
         "Series": Series([1, 2, 3]),
-        "DataFrame": frame._native,
-        "LazyFrame": frame.lazy()._native,
+        "DataFrame": frame,
+        "LazyFrame": frame.lazy(),
     }
 
 

@@ -239,8 +239,7 @@ the name is rebound to a new frame, the old one is untouched, so a frame
 another variable holds never changes under it.
 
 Not there yet: label alignment in frame arithmetic (``df + other`` is
-positional), ``reindex`` / ``align`` and a ``MultiIndex`` type (several index
-columns stand for one).
+positional) and a ``MultiIndex`` type (several index columns stand for one).
 
 Label lookup
 ~~~~~~~~~~~~
@@ -299,6 +298,59 @@ labels. ``get`` gives its default for a missing label. Assignment by label
 (``df.loc[label, "c"] = v``) writes every row with that label; a label that is
 not there is a ``KeyError`` (no enlargement). A LazyFrame has no frame to hash:
 its ``loc`` still builds a mask over the index columns.
+
+Reindex and align
+~~~~~~~~~~~~~~~~~
+
+``reindex``, ``reindex_like`` and ``align`` work on a Series and a DataFrame as
+in pandas 2 and 3, over the same label hash as ``loc``. ``reindex(labels)`` (or
+``index=``) gives the rows of the labels you ask for, in that order, with the
+labels you gave as the new index: a label with no row gets a null, and an
+integer column that gains a null becomes Float64, as pandas. ``fill_value``
+fills only the new rows and keeps the column type when it fits (an integer in
+range for an integer column, any number for a float column, a string for a
+string column); a float into an integer column widens it, and a value a column
+cannot take is a ``TypeError`` (pandas 3; pandas 2 makes the column ``object``).
+Labels that equal the index, row for row, return the frame unchanged even when
+they repeat; otherwise a repeated label is a ``ValueError`` ("cannot reindex on
+an axis with duplicate labels"). A frame or Series with no index has the labels
+``0 .. n-1``. A MultiIndex takes a list of tuples naming every level (a scalar
+key is a ``ValueError``, where pandas gives all-NaN).
+
+``method`` fills a label that has no row from the row of the nearest label:
+``'ffill'``/``'pad'`` before it, ``'bfill'``/``'backfill'`` after it,
+``'nearest'`` on either side (a tie takes the larger label). It needs labels
+that increase or decrease, found by binary search, and raises ``ValueError``
+for any other order. On decreasing labels "before" and "after" follow the label
+order, as pandas. ``limit`` caps how many labels one row fills (the exact match
+counts for nothing) and needs increasing labels and targets that do not
+decrease; ``tolerance`` bounds ``|target - label|``, in label units or as a
+timedelta for timestamp, date and duration labels. ``limit`` or ``tolerance``
+with no method is a ``ValueError``; ``nearest`` and ``tolerance`` on text labels
+a ``TypeError``, and on a MultiIndex a ``NotImplementedError``. A fill ``method``
+with ``columns=``, a tolerance per label and ``level=`` are not supported, and
+column labels must be strings. ``reindex(columns=[...])`` adds a column of nulls
+(Float64) or of ``fill_value`` for a name the frame lacks. ``reindex_like(other)``
+is ``reindex`` on the labels (and, for a frame, the columns) of ``other``.
+
+``align(other, join=...)`` gives the two objects on the join of their row
+labels: ``outer`` (default) the sorted union, nulls last; ``inner`` the common
+labels in the order of the first; ``left`` and ``right`` one side's labels. A
+repeated label meets every row that has it (the first object's rows outermost),
+and labels that are equal stay as they are. A DataFrame aligns its columns too
+(``axis=None``), only the rows (``axis=0``) or only the column names
+(``axis=1``); against a Series it needs ``axis``, and a Series against a
+DataFrame aligns on the rows. Missing rows and columns are nulls (Float64 for
+an integer column). ``fill_value`` fills the nulls of a Series result, and only
+the new rows and columns of a frame result, as pandas.
+
+.. code-block:: python
+
+   s = DataFrame({"k": [10, 20, 30], "v": [1, 2, 3]}).set_index("k")["v"]
+   s.reindex([20, 40, 10])                       # [2.0, NaN, 1.0] under 20, 40, 10
+   s.reindex([20, 40], fill_value=0)             # stays integer: [2, 0]
+   s.reindex([5, 15, 35], method="ffill", tolerance=10)   # [NaN, 1.0, 3.0]
+   left, right = s.align(other, join="inner")    # the common labels, first object's order
 
 A Series carries labels too
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

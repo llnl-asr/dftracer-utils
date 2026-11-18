@@ -173,6 +173,17 @@ struct DataFrame {
     /// The rows between two index labels; see @ref Series::locate_range.
     dstd::Result<LabelSpan> locate_range(dstd::Span<const Series> start,
                                          dstd::Span<const Series> stop) const;
+    /// This frame on the row labels `keys` as pandas `reindex`: row `r` of the
+    /// result is the row whose index labels equal key `r`, and a null where
+    /// none does, in every column but the index columns, which take the keys
+    /// (a frame with no index gets the one column `__index_level_0__` last,
+    /// and a column of that name is an error). The result keeps the column
+    /// order and names. The rules of @ref Series::reindex apply, `fill`
+    /// included, per column: a column that cannot take the fill value is an
+    /// InvalidArgument error naming it.
+    dstd::Result<DataFrame> reindex(dstd::Span<const Series> keys,
+                                    const ReindexOptions& options = {},
+                                    const Series& fill = Series{}) const;
     /// A zero-copy copy of this frame whose row index is `names`. An empty
     /// span drops the index. A NotFound error for a name that is no column
     /// (naming it), an InvalidArgument error for a repeated name or for a
@@ -393,6 +404,26 @@ struct DataFrame {
                                              std::int64_t origin = 0,
                                              bool origin_min = false) const;
 };
+
+/// Two frames aligned on their row index, each carrying the result index.
+struct AlignedFrames {
+    DataFrame left;
+    DataFrame right;
+};
+
+/// Aligns the rows of `a` and `b` on their index labels as pandas
+/// `DataFrame.align(join=how, axis=0)`; see @ref align_labels for the join and
+/// the label order. Every column of each side is gathered by the joined rows
+/// (a null where a side has no row, an integer column becoming Float64 unless
+/// `fill`, a one-row column, supplies a value as in @ref Series::reindex). The
+/// result index columns are the joined labels under `a`'s index column names
+/// for both sides (the default `__index_level_<i>__` for a frame with no
+/// index). An InvalidArgument error for the errors of @ref align_labels, a
+/// `fill` a column cannot take, or a result index column name that a data
+/// column of `b` already has.
+dstd::Result<AlignedFrames> align_rows(const DataFrame& a, const DataFrame& b,
+                                       JoinHow how,
+                                       const Series& fill = Series{});
 
 /// The two-step group-by: a frame (shared zero-copy) and its key columns,
 /// with the aggregates chosen on it. Every method is one call to

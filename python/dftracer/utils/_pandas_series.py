@@ -21,6 +21,7 @@ from typing import (
     cast,
 )
 
+from ._label_align import LabelAlignMixin
 from ._series_index import (
     labels_from,
     levels_of,
@@ -273,7 +274,7 @@ def replace_in(
     return out
 
 
-class SeriesPandasMixin:
+class SeriesPandasMixin(LabelAlignMixin):
     """``self`` is a :class:`Series`."""
 
     __slots__ = ()
@@ -467,6 +468,43 @@ class SeriesPandasMixin:
         column name that repeats raises ``ValueError`` (a frame has no duplicate
         names, so ``allow_duplicates`` is not offered)."""
         return reset(self._s(), level, drop, name)
+
+    def reindex(
+        self,
+        index: object = None,
+        *,
+        axis: int | str | None = None,
+        method: str | None = None,
+        copy: bool | None = None,
+        level: object = None,
+        fill_value: object = None,
+        limit: int | None = None,
+        tolerance: object = None,
+    ) -> Series:
+        """The pandas ``reindex``: this Series on the row labels ``index`` (a
+        list, a Series, a pandas ``Index``; tuples for a ``MultiIndex``), by the
+        native label lookup. A label with no row gets a null (an integer column
+        becomes Float64) or ``fill_value``, which keeps the type when it fits.
+        ``method`` (``'ffill'``/``'pad'``, ``'bfill'``/``'backfill'``,
+        ``'nearest'``) fills it from the row of the nearest label on monotonic
+        labels, at most ``limit`` labels per row and no farther than
+        ``tolerance`` (a number, or a timedelta for timestamp labels).
+        ``ValueError`` for repeated labels (unless ``index`` equals them), for a
+        method on labels that are not monotonic, and for ``limit`` or
+        ``tolerance`` with no method. A positional Series has the labels
+        ``0 .. n-1``. ``level`` is not supported."""
+        from ._reindex import reindex_series
+
+        return reindex_series(
+            self._s(),
+            index,
+            axis=axis,
+            method=method,
+            level=level,
+            fill_value=fill_value,
+            limit=limit,
+            tolerance=tolerance,
+        )
 
     def set_axis(self, labels: object, *, axis: int | str = 0, copy: bool | None = None) -> Series:
         """The pandas ``set_axis``: this Series under new row labels, a sequence

@@ -3,7 +3,6 @@
 # Reason kinds: out-of-scope, python-semantics, needs-index, needs-kernel, deprecated-upstream.
 # scripts/api_coverage.py reads this file; a name that appears in the library and is neither ours nor here fails.
 # A line for a name that we now have fails too, so the list only shrinks.
-pandas DataFrame.align | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas DataFrame.attrs | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
 pandas DataFrame.bool | deprecated-upstream | removed or deprecated in pandas 3 (still present in pandas 2)
 pandas DataFrame.boxplot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
@@ -12,8 +11,6 @@ pandas DataFrame.flags | python-semantics | per-object metadata dict (attrs, fla
 pandas DataFrame.hist | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
 pandas DataFrame.isetitem | python-semantics | assigns a column in place by position; frames are immutable (use with_columns or assign)
 pandas DataFrame.plot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
-pandas DataFrame.reindex | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
-pandas DataFrame.reindex_like | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas DataFrame.reorder_levels | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas DataFrame.set_flags | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
 pandas DataFrame.sparse | out-of-scope | sparse arrays (D3b out-of-scope)
@@ -37,7 +34,6 @@ pandas DataFrame.to_xml | out-of-scope | foreign I/O (D3b out-of-scope); call to
 pandas DataFrame.unstack | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas Series.add_prefix | needs-index | renames the index labels; a Series has no labels until the row index step
 pandas Series.add_suffix | needs-index | renames the index labels; a Series has no labels until the row index step
-pandas Series.align | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas Series.asfreq | needs-index | selects or resamples by a DatetimeIndex; waits for the row index step (D3b point 4)
 pandas Series.at_time | needs-index | selects or resamples by a DatetimeIndex; waits for the row index step (D3b point 4)
 pandas Series.attrs | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
@@ -51,8 +47,6 @@ pandas Series.hist | out-of-scope | plotting (D3b out-of-scope); call to_pandas(
 pandas Series.info | python-semantics | prints a text summary to a buffer; DataFrame.info is the engine's summary
 pandas Series.plot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
 pandas Series.ravel | deprecated-upstream | removed or deprecated in pandas 3 (still present in pandas 2)
-pandas Series.reindex | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
-pandas Series.reindex_like | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas Series.reorder_levels | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas Series.resample | needs-index | acts on a DatetimeIndex (the values go through s.dt.tz_convert / tz_localize); waits for the row index step
 pandas Series.set_flags | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles

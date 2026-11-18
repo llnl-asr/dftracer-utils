@@ -53,6 +53,22 @@ class CellColumn {
     }
     /// The bytes of a text, blob or tagged byte cell.
     dstd::StringView bytes(std::int64_t i) const;
+    /// Whether cell `i` is a number or a temporal value that subtracts from
+    /// another (a null, a text and a decimal do not), and its value as a
+    /// double (a temporal value counts its ticks).
+    bool is_number(std::int64_t i) const noexcept;
+    double number(std::int64_t i) const noexcept;
+    /// The type of the column the cells came from, and for a Timestamp,
+    /// Duration or Time column the unit its ticks count.
+    TypeId type() const noexcept { return type_; }
+    bool has_unit() const noexcept { return has_unit_; }
+    TimeUnit unit() const noexcept { return unit_; }
+    /// The same cells (sharing the column's buffers).
+    CellColumn copy() const;
+    /// The cells of a column with a unit, counted in the finer unit `to`
+    /// (exact: every tick is multiplied up). An InvalidArgument error when a
+    /// value does not fit 64 bits in that unit.
+    dstd::Result<CellColumn> in_unit(TimeUnit to) const;
     /// The hash of a cell; equal cells (@ref equal) hash equal.
     std::uint64_t hash(std::int64_t i) const noexcept;
 
@@ -72,6 +88,9 @@ class CellColumn {
     Series column_;  // flat
     dstd::Vector<std::uint64_t> bits_;
     dstd::Vector<std::uint8_t> kind_;
+    TypeId type_ = TypeId::Unknown;
+    bool has_unit_ = false;
+    TimeUnit unit_ = TimeUnit::Nano;
 };
 
 /// The lookup structure of a set of label columns: for each prefix of the
@@ -99,6 +118,10 @@ class LabelIndex {
     /// @ref Series::locate_range over the labels.
     dstd::Result<LabelSpan> locate_range(dstd::Span<const Series> start,
                                          dstd::Span<const Series> stop) const;
+    /// @ref Series::reindex over the labels: for each key row, the row of the
+    /// label it finds (through `options`), or -1.
+    dstd::Result<dstd::Vector<std::int64_t>> reindex(
+        dstd::Span<const Series> keys, const ReindexOptions& options) const;
 
    private:
     struct Table {
@@ -113,19 +136,52 @@ class LabelIndex {
         Table table;
     };
 
+    // One Int64 or Timestamp level of unique labels as a flat open-addressing
+    // array of (label, row): one probe, one cache line.
+    struct IntSlot {
+        std::int64_t label = 0;
+        std::uint32_t row_plus_one = 0;
+    };
+    enum class IntState : std::uint8_t { Unusable, Duplicate, Usable };
+    struct IntTable {
+        dstd::Vector<IntSlot> slots;
+        IntState state = IntState::Unusable;
+        std::uint8_t kind = 0;
+    };
+
     const Table& table(std::size_t prefix) const;
+    const IntTable& int_table() const;
+    // The label hash of the typed table when `keys` are one level of cells of
+    // its kind, else null.
+    const IntTable* int_table_for(dstd::Span<const CellColumn> keys) const;
+    dstd::Result<dstd::SharedPtr<const LabelIndex>> in_units(
+        dstd::Span<dstd::Vector<CellColumn>* const> sets) const;
+    Located locate_cells(dstd::Span<const CellColumn> keys,
+                         std::int64_t count) const;
+    dstd::Result<dstd::Vector<std::int64_t>> reindex_cells(
+        dstd::Span<const CellColumn> keys, std::int64_t count,
+        const ReindexOptions& options) const;
+    dstd::Result<std::int64_t> bound_cells(dstd::Span<const CellColumn> keys,
+                                           std::int64_t count,
+                                           dstd::StringView which) const;
+    dstd::Result<LabelSpan> locate_range_cells(
+        dstd::Span<const CellColumn> start, std::int64_t start_count,
+        dstd::Span<const CellColumn> stop, std::int64_t stop_count) const;
     std::int64_t find(const Table& t, std::uint64_t hash,
                       dstd::Span<const CellColumn> key, std::int64_t key_row,
                       std::size_t prefix) const noexcept;
     void order() const;
-    dstd::Result<std::int64_t> bound(dstd::Span<const Series> key,
-                                     dstd::StringView which) const;
+    dstd::Result<dstd::Vector<std::int64_t>> reindex_fill(
+        dstd::Span<const CellColumn> keys, std::int64_t count,
+        const ReindexOptions& options) const;
 
     std::int64_t rows_ = 0;
     dstd::Vector<CellColumn> levels_;
     dstd::Vector<Series> sources_;
     mutable dstd::Vector<dstd::UniquePtr<Slot>> tables_;
     mutable std::once_flag order_once_;
+    mutable std::once_flag int_once_;
+    mutable IntTable int_;
     mutable bool increasing_ = false;
     mutable bool decreasing_ = false;
 };
@@ -141,6 +197,11 @@ dstd::Result<Located> locate_labels(LabelCache* cache,
                                     dstd::Span<const Series> levels,
                                     std::int64_t rows,
                                     dstd::Span<const Series> keys);
+/// The lookup of @ref Series::reindex and @ref DataFrame::reindex, through
+/// `cache` as @ref locate_labels: the row of `levels` for each key row, or -1.
+dstd::Result<dstd::Vector<std::int64_t>> reindex_labels(
+    LabelCache* cache, dstd::Span<const Series> levels, std::int64_t rows,
+    dstd::Span<const Series> keys, const ReindexOptions& options);
 dstd::Result<LabelSpan> locate_label_range(LabelCache* cache,
                                            dstd::Span<const Series> levels,
                                            std::int64_t rows,

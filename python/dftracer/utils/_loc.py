@@ -26,6 +26,8 @@ from .expr import Expr, col, collect_columns, lit, when
 from .series import Series
 
 if TYPE_CHECKING:
+    import pyarrow as pa
+
     from .dataframe import DataFrame
     from .expr import Expr
     from .lazyframe import LazyFrame
@@ -217,6 +219,21 @@ def _awareness_differs(values: list[object], tz: object) -> bool:
     )
 
 
+def _stamp_type(values: list[object], arrow_type: pa.DataType) -> pa.DataType:
+    """The type a key column of timestamps is built in. A key keeps all its
+    precision (nanoseconds when a value has them, else microseconds) when the
+    labels are coarser, and the engine compares them in the finer unit, so a key
+    that is not a whole tick of the labels finds nothing instead of rounding
+    into a match."""
+    unit = getattr(arrow_type, "unit", None)
+    if unit not in ("s", "ms", "us") or not hasattr(arrow_type, "tz"):
+        return arrow_type
+    import pyarrow as pa
+
+    has_nanos = any(getattr(v, "nanosecond", 0) for v in values)
+    return pa.timestamp("ns" if has_nanos else "us", tz=arrow_type.tz)
+
+
 def _key_series(labels: Labels, level: int, values: list[object], scalar: bool = False) -> Series:
     """``values`` as the key column of index level ``level``."""
     own = labels.dtype(level)
@@ -242,7 +259,7 @@ def _key_series(labels: Labels, level: int, values: list[object], scalar: bool =
     if _awareness_differs(values, getattr(arrow_type, "tz", None)):
         raise _Unkeyable
     try:
-        return Series.from_list(values, dtype=arrow_type)
+        return Series.from_list(values, dtype=_stamp_type(values, arrow_type))
     except Exception:
         raise _Unkeyable from None
 

@@ -382,6 +382,92 @@ PyObject* Series_locate_range(PyObject* self, PyObject* args) {
         a->length(), [&] { return a->locate_range(start, stop); }));
 }
 
+// The options of _reindex: method 0 none, 1 pad, 2 backfill, 3 nearest.
+bool reindex_options(int method, long long limit, double tolerance,
+                     PyObject* nanos, dataframe::ReindexOptions& out) {
+    if (method < 0 || method > 3) {
+        PyErr_SetString(PyExc_ValueError, "_reindex: method must be 0..3");
+        return false;
+    }
+    out.method = static_cast<dataframe::FillMethod>(method);
+    out.limit = limit;
+    out.tolerance = tolerance;
+    if (nanos != Py_None) {
+        out.tolerance_nanos = PyLong_AsLongLong(nanos);
+        if (out.tolerance_nanos == -1 && PyErr_Occurred()) return false;
+        out.tolerance_is_nanos = true;
+    }
+    return true;
+}
+
+// _reindex(keys, method, limit, tolerance, fill) -> Series: the column on the
+// label key Series (one per level) as dataframe::Series::reindex; `fill` is a
+// one-row Series or None.
+PyObject* Series_reindex(PyObject* self, PyObject* args) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    PyObject* keys_obj = nullptr;
+    PyObject* fill_obj = nullptr;
+    PyObject* nanos_obj = Py_None;
+    int method = 0;
+    long long limit = -1;
+    double tolerance = 0;
+    if (!PyArg_ParseTuple(args, "OiLdO|O", &keys_obj, &method, &limit,
+                          &tolerance, &fill_obj, &nanos_obj))
+        return nullptr;
+    dstd::Vector<Series> keys;
+    if (!frame::series_list_from_py(keys_obj, "_reindex: keys must be Series",
+                                    keys))
+        return nullptr;
+    dataframe::ReindexOptions options;
+    if (!reindex_options(method, limit, tolerance, nanos_obj, options))
+        return nullptr;
+    Series fill;
+    if (fill_obj != Py_None) {
+        const Series* f = as_native_or_null<Series>(fill_obj);
+        if (!f) {
+            PyErr_SetString(PyExc_TypeError, "_reindex: fill must be a Series");
+            return nullptr;
+        }
+        fill = f->share();
+    }
+    auto r = core::without_gil(a->length(),
+                               [&] { return a->reindex(keys, options, fill); });
+    if (!r) {
+        core::set_py_error(r.error());
+        return nullptr;
+    }
+    return make_series(std::move(*r));
+}
+
+// _align(other, how) -> (left, right): the two columns on the joined labels
+// (see dataframe::align_labels); how is a JoinHow (0 inner, 1 left, 2 right,
+// 3 outer).
+PyObject* Series_align(PyObject* self, PyObject* args) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    PyObject* other_obj = nullptr;
+    int how = 0;
+    if (!PyArg_ParseTuple(args, "Oi", &other_obj, &how)) return nullptr;
+    Series* b = as_native<Series>(other_obj);
+    if (!b) return nullptr;
+    auto r = core::without_gil(a->length() + b->length(), [&] {
+        return dataframe::align_labels(*a, *b,
+                                       static_cast<dataframe::JoinHow>(how));
+    });
+    if (!r) {
+        core::set_py_error(r.error());
+        return nullptr;
+    }
+    PyObject* left = make_series(std::move(r->left));
+    PyObject* right = left ? make_series(std::move(r->right)) : nullptr;
+    if (!right) {
+        Py_XDECREF(left);
+        return nullptr;
+    }
+    return Py_BuildValue("NN", left, right);
+}
+
 // The name is the one thing a Series changes in place, as pandas and polars
 // do; the buffers stay shared.
 int Series_set_name(PyObject* self, PyObject* value, void*) {
@@ -647,6 +733,16 @@ PyMethodDef Series_methods[] = {
     {"_locate_range", Series_locate_range, METH_VARARGS,
      "_locate_range(start, stop) -> (offset, length): the rows between two "
      "label bounds (lists of one-row Series, empty for an open end)."},
+    {"_reindex", Series_reindex, METH_VARARGS,
+     "_reindex(keys, method, limit, tolerance, fill) -> Series on the label "
+     "key "
+     "Series (one per level); method 0 none, 1 pad, 2 backfill, 3 nearest, "
+     "limit -1 for none, tolerance infinite for none, fill a one-row Series or "
+     "None, nanos a tolerance as whole nanoseconds for temporal labels."},
+    {"_align", Series_align, METH_VARARGS,
+     "_align(other, how) -> (left, right) on the joined labels; how is 0 "
+     "inner, "
+     "1 left, 2 right, 3 outer."},
     {"_with_index", Series_with_index, METH_VARARGS,
      "_with_index(names, levels) -> Series sharing this column's buffers "
      "whose row labels are the level Series; empty lists drop them."},

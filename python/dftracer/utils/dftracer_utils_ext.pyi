@@ -1022,6 +1022,17 @@ class Series(Generic[T_co]):
     def _locate_range(
         self, start: Sequence[PublicSeries], stop: Sequence[PublicSeries], /
     ) -> tuple[int, int]: ...
+    def _reindex(
+        self,
+        keys: Sequence[PublicSeries],
+        method: int,
+        limit: int,
+        tolerance: float,
+        fill: PublicSeries | None,
+        nanos: int | None = None,
+        /,
+    ) -> Self: ...
+    def _align(self, other: PublicSeries, how: int, /) -> tuple[Self, Self]: ...
     def slice(self, offset: int, length: int) -> Self: ...
     def is_null_at(self, i: int) -> bool: ...
     def num_children(self) -> int: ...
@@ -1262,6 +1273,19 @@ class DataFrame:
     def _locate_range(
         self, start: Sequence[PublicSeries], stop: Sequence[PublicSeries], /
     ) -> tuple[int, int]: ...
+    def _reindex(
+        self,
+        keys: Sequence[PublicSeries],
+        method: int,
+        limit: int,
+        tolerance: float,
+        fill: PublicSeries | None,
+        nanos: int | None = None,
+        /,
+    ) -> Self: ...
+    def _align_rows(
+        self, other: Self, how: int, fill: PublicSeries | None, /
+    ) -> tuple[Self, Self]: ...
     def with_index(self, names: Sequence[str], /) -> Self: ...
     @overload
     def __getitem__(self, key: str, /) -> PublicSeries: ...

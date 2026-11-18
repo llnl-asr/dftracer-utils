@@ -951,3 +951,9 @@ LazyFrame.gather_every | python-semantics | a row-index filter over existing pla
 LazyFrame.remove | python-semantics | filter on the negated predicate, null rows kept
 LazyFrame.shift | python-semantics | one with_column shift step per column
 LazyFrame.top_k | python-semantics | a filter, a sort and a head over existing plan steps
+Series.align | python-semantics | pandas container API, joins the row labels (and the column names of a frame) over native calls, not an op
+Series.reindex | python-semantics | pandas container API, looks the labels up natively and fills the new rows, not an op
+Series.reindex_like | python-semantics | pandas container API, reindex on the labels of another object, not an op
+DataFrame.align | python-semantics | pandas container API, joins the row labels (and the column names of a frame) over native calls, not an op
+DataFrame.reindex | python-semantics | pandas container API, looks the labels up natively and fills the new rows, not an op
+DataFrame.reindex_like | python-semantics | pandas container API, reindex on the labels of another object, not an op

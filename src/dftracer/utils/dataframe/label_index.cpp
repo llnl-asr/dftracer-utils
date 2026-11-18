@@ -132,6 +132,24 @@ dstd::StringView CellColumn::bytes(std::int64_t i) const {
     return read_bytes(column_, i);
 }
 
+bool CellColumn::is_number(std::int64_t i) const noexcept {
+    const CellKind k = kind(i);
+    return k == CellKind::Int || k == CellKind::Uint || k == CellKind::Float ||
+           (static_cast<std::uint8_t>(k) >= TAGGED && !is_bytes(k));
+}
+
+double CellColumn::number(std::int64_t i) const noexcept {
+    const std::uint64_t x = bits(i);
+    switch (kind(i)) {
+        case CellKind::Uint:
+            return static_cast<double>(x);
+        case CellKind::Float:
+            return as_double(x);
+        default:
+            return static_cast<double>(static_cast<std::int64_t>(x));
+    }
+}
+
 std::uint64_t CellColumn::hash(std::int64_t i) const noexcept {
     const std::uint8_t k = kind_[static_cast<std::size_t>(i)];
     return dstd::hash::splitmix64(bits_[static_cast<std::size_t>(i)] +
@@ -144,6 +162,7 @@ dstd::Result<CellColumn> CellColumn::make(const Series& column) {
         return invalid_argument<"labels of type {} have no hash and equality">(
             type_name(t));
     CellColumn out;
+    out.type_ = t;
     out.column_ = column.is_flat() ? column.share() : column.materialize();
     if (!out.column_.valid())
         return invalid_argument<"labels of type {} cannot be read">(
@@ -269,6 +288,11 @@ dstd::Result<CellColumn> CellColumn::make(const Series& column) {
                     b = dstd::hash::xxh3_64(read_bytes(c, i));
                 });
             } else {
+                if (t == TypeId::Timestamp || t == TypeId::Duration ||
+                    t == TypeId::Time32 || t == TypeId::Time64) {
+                    out.has_unit_ = true;
+                    out.unit_ = raw.time_unit();
+                }
                 each([&](std::int64_t i, std::uint8_t& k, std::uint64_t& b) {
                     k = tag;
                     b = static_cast<std::uint64_t>(read_i64(c, i));
@@ -276,6 +300,38 @@ dstd::Result<CellColumn> CellColumn::make(const Series& column) {
             }
         }
     }
+    return out;
+}
+
+CellColumn CellColumn::copy() const {
+    CellColumn out;
+    out.column_ = column_.share();
+    out.bits_ = bits_;
+    out.kind_ = kind_;
+    out.type_ = type_;
+    out.has_unit_ = has_unit_;
+    out.unit_ = unit_;
+    return out;
+}
+
+dstd::Result<CellColumn> CellColumn::in_unit(TimeUnit to) const {
+    CellColumn out = copy();
+    if (!has_unit_ || to == unit_) return out;
+    std::int64_t ratio = 1;
+    for (int u = static_cast<int>(unit_); u < static_cast<int>(to); ++u)
+        ratio *= 1000;
+    const std::int64_t hi = std::numeric_limits<std::int64_t>::max() / ratio;
+    const std::int64_t lo = std::numeric_limits<std::int64_t>::min() / ratio;
+    for (std::size_t i = 0; i < bits_.size(); ++i) {
+        if (kind_[i] == static_cast<std::uint8_t>(CellKind::Null)) continue;
+        const auto v = static_cast<std::int64_t>(bits_[i]);
+        if (v > hi || v < lo)
+            return invalid_argument<
+                "a time value does not fit 64 bits in the finer unit of the "
+                "other side">();
+        out.bits_[i] = static_cast<std::uint64_t>(v * ratio);
+    }
+    out.unit_ = to;
     return out;
 }
 
@@ -474,18 +530,86 @@ dstd::Result<dstd::Vector<CellColumn>> key_cells(dstd::Span<const Series> keys,
 
 }  // namespace
 
-dstd::Result<Located> LabelIndex::locate(dstd::Span<const Series> keys) const {
-    std::int64_t count = 0;
-    auto cells = key_cells(keys, levels_.size(), count);
-    if (!cells) return dstd::Unexpected<dstd::Error>(cells.error());
-    const std::size_t prefix = cells->size();
-    const Table& t = table(prefix);
+const LabelIndex::IntTable& LabelIndex::int_table() const {
+    std::call_once(int_once_, [&] {
+        if (levels_.size() != 1 || rows_ == 0) return;
+        const CellColumn& level = levels_.front();
+        const std::uint8_t kind = static_cast<std::uint8_t>(level.kind(0));
+        const bool signed_ints =
+            kind == static_cast<std::uint8_t>(CellKind::Int);
+        const bool tagged = kind >= TAGGED && level.is_number(0);
+        if (!signed_ints && !tagged) return;
+        for (std::int64_t i = 1; i < rows_; ++i)
+            if (static_cast<std::uint8_t>(level.kind(i)) != kind) return;
+        IntTable& t = int_;
+        t.kind = kind;
+        t.slots.assign(pow2_at_least(2 * static_cast<std::size_t>(rows_)),
+                       IntSlot{});
+        const std::size_t mask = t.slots.size() - 1;
+        for (std::int64_t i = 0; i < rows_; ++i) {
+            const auto label = static_cast<std::int64_t>(level.bits(i));
+            std::size_t at = static_cast<std::size_t>(
+                                 dstd::hash::splitmix64(level.bits(i))) &
+                             mask;
+            while (t.slots[at].row_plus_one != 0) {
+                if (t.slots[at].label == label) {
+                    t.state = IntState::Duplicate;
+                    return;
+                }
+                at = (at + 1) & mask;
+            }
+            t.slots[at] = IntSlot{label, static_cast<std::uint32_t>(i) + 1};
+        }
+        t.state = IntState::Usable;
+    });
+    return int_;
+}
+
+const LabelIndex::IntTable* LabelIndex::int_table_for(
+    dstd::Span<const CellColumn> keys) const {
+    if (levels_.size() != 1 || keys.size() != 1) return nullptr;
+    const IntTable& t = int_table();
+    if (t.state == IntState::Unusable) return nullptr;
+    const CellColumn& key = keys.front();
+    for (std::int64_t i = 0; i < key.size(); ++i)
+        if (static_cast<std::uint8_t>(key.kind(i)) != t.kind) return nullptr;
+    return &t;
+}
+
+Located LabelIndex::locate_cells(dstd::Span<const CellColumn> keys,
+                                 std::int64_t count) const {
     Located out;
+    if (const IntTable* it = int_table_for(keys);
+        it != nullptr && it->state == IntState::Usable) {
+        const std::size_t mask = it->slots.size() - 1;
+        const CellColumn& key = keys.front();
+        for (std::int64_t r = 0; r < count; ++r) {
+            const auto label = static_cast<std::int64_t>(key.bits(r));
+            std::size_t at =
+                static_cast<std::size_t>(dstd::hash::splitmix64(key.bits(r))) &
+                mask;
+            for (;;) {
+                const IntSlot& slot = it->slots[at];
+                if (slot.row_plus_one == 0) {
+                    out.missing.push_back(r);
+                    break;
+                }
+                if (slot.label == label) {
+                    out.positions.push_back(slot.row_plus_one - 1);
+                    break;
+                }
+                at = (at + 1) & mask;
+            }
+        }
+        return out;
+    }
+    const std::size_t prefix = keys.size();
+    const Table& t = table(prefix);
     for (std::int64_t r = 0; r < count; ++r) {
         std::uint64_t h = 0;
         for (std::size_t l = 0; l < prefix; ++l)
-            h = combine(h, (*cells)[l].hash(r));
-        const std::int64_t g = find(t, h, *cells, r, prefix);
+            h = combine(h, keys[l].hash(r));
+        const std::int64_t g = find(t, h, keys, r, prefix);
         if (g < 0) {
             out.missing.push_back(r);
             continue;
@@ -496,6 +620,62 @@ dstd::Result<Located> LabelIndex::locate(dstd::Span<const Series> keys) const {
         out.positions.insert(out.positions.end(), from, to);
     }
     return out;
+}
+
+// Brings the keys and the labels of each temporal level to one unit: a key in
+// a coarser unit is multiplied up, and a key in a finer one gives a copy of
+// the labels counted in that unit, so ticks are compared exactly and a key
+// that is not a whole tick of the labels matches none of them. Null when the
+// labels need no copy.
+dstd::Result<dstd::SharedPtr<const LabelIndex>> LabelIndex::in_units(
+    dstd::Span<dstd::Vector<CellColumn>* const> sets) const {
+    dstd::Vector<TimeUnit> finest;
+    finest.reserve(levels_.size());
+    for (const CellColumn& level : levels_) finest.push_back(level.unit());
+    bool rescale = false;
+    for (const dstd::Vector<CellColumn>* set : sets)
+        for (std::size_t l = 0; l < set->size() && l < levels_.size(); ++l) {
+            const CellColumn& key = (*set)[l];
+            if (!key.has_unit() || !levels_[l].has_unit() ||
+                key.type() != levels_[l].type())
+                continue;
+            if (static_cast<int>(key.unit()) > static_cast<int>(finest[l])) {
+                finest[l] = key.unit();
+                rescale = true;
+            }
+        }
+    for (dstd::Vector<CellColumn>* set : sets)
+        for (std::size_t l = 0; l < set->size() && l < levels_.size(); ++l) {
+            CellColumn& key = (*set)[l];
+            if (!key.has_unit() || !levels_[l].has_unit() ||
+                key.type() != levels_[l].type() || key.unit() == finest[l])
+                continue;
+            auto up = key.in_unit(finest[l]);
+            if (!up) return dstd::Unexpected<dstd::Error>(up.error());
+            key = std::move(*up);
+        }
+    if (!rescale) return dstd::SharedPtr<const LabelIndex>();
+    auto out = dstd::make_shared<LabelIndex>();
+    out->rows_ = rows_;
+    for (std::size_t l = 0; l < levels_.size(); ++l) {
+        auto up = levels_[l].in_unit(finest[l]);
+        if (!up) return dstd::Unexpected<dstd::Error>(up.error());
+        out->levels_.push_back(std::move(*up));
+        out->sources_.push_back(sources_[l].share());
+        out->tables_.push_back(dstd::make_unique<Slot>());
+    }
+    return dstd::SharedPtr<const LabelIndex>(std::move(out));
+}
+
+dstd::Result<Located> LabelIndex::locate(dstd::Span<const Series> keys) const {
+    std::int64_t count = 0;
+    auto cells = key_cells(keys, levels_.size(), count);
+    if (!cells) return dstd::Unexpected<dstd::Error>(cells.error());
+    dstd::Vector<CellColumn>* sets[] = {&*cells};
+    auto alt = in_units(sets);
+    if (!alt) return dstd::Unexpected<dstd::Error>(alt.error());
+    if (*alt) return (*alt)->locate_cells(*cells, count);
+    return locate_cells(*cells, count);
 }
 
 void LabelIndex::order() const {
@@ -521,19 +701,16 @@ void LabelIndex::order() const {
     });
 }
 
-dstd::Result<std::int64_t> LabelIndex::bound(dstd::Span<const Series> key,
-                                             dstd::StringView which) const {
-    std::int64_t count = 0;
-    auto cells = key_cells(key, levels_.size(), count);
-    if (!cells) return dstd::Unexpected<dstd::Error>(cells.error());
+dstd::Result<std::int64_t> LabelIndex::bound_cells(
+    dstd::Span<const CellColumn> keys, std::int64_t count,
+    dstd::StringView which) const {
     if (count != 1)
         return invalid_argument<"a label slice bound is one label">();
-    const std::size_t prefix = cells->size();
+    const std::size_t prefix = keys.size();
     const Table& t = table(prefix);
     std::uint64_t h = 0;
-    for (std::size_t l = 0; l < prefix; ++l)
-        h = combine(h, (*cells)[l].hash(0));
-    const std::int64_t g = find(t, h, *cells, 0, prefix);
+    for (std::size_t l = 0; l < prefix; ++l) h = combine(h, keys[l].hash(0));
+    const std::int64_t g = find(t, h, keys, 0, prefix);
     if (g < 0)
         return not_found<"the {} bound of a label slice is not in the index">(
             which);
@@ -546,25 +723,6 @@ dstd::Result<std::int64_t> LabelIndex::bound(dstd::Span<const Series> key,
 
 dstd::Result<LabelSpan> LabelIndex::locate_range(
     dstd::Span<const Series> start, dstd::Span<const Series> stop) const {
-    order();
-    if (!increasing_ && !decreasing_) {
-        if (levels_.size() > 1)
-            return not_found<
-                "a label slice needs a MultiIndex sorted by its levels">();
-        std::int64_t from = 0;
-        std::int64_t to = rows_ - 1;
-        if (!start.empty()) {
-            auto r = bound(start, "start");
-            if (!r) return dstd::Unexpected<dstd::Error>(r.error());
-            from = *r;
-        }
-        if (!stop.empty()) {
-            auto r = bound(stop, "stop");
-            if (!r) return dstd::Unexpected<dstd::Error>(r.error());
-            to = *r;
-        }
-        return LabelSpan{from, to >= from ? to - from + 1 : 0};
-    }
     std::int64_t s_count = 0;
     std::int64_t e_count = 0;
     dstd::Vector<CellColumn> s_cells;
@@ -572,17 +730,46 @@ dstd::Result<LabelSpan> LabelIndex::locate_range(
     if (!start.empty()) {
         auto c = key_cells(start, levels_.size(), s_count);
         if (!c) return dstd::Unexpected<dstd::Error>(c.error());
-        if (s_count != 1)
-            return invalid_argument<"a label slice bound is one label">();
         s_cells = std::move(*c);
     }
     if (!stop.empty()) {
         auto c = key_cells(stop, levels_.size(), e_count);
         if (!c) return dstd::Unexpected<dstd::Error>(c.error());
-        if (e_count != 1)
-            return invalid_argument<"a label slice bound is one label">();
         e_cells = std::move(*c);
     }
+    dstd::Vector<CellColumn>* sets[] = {&s_cells, &e_cells};
+    auto alt = in_units(sets);
+    if (!alt) return dstd::Unexpected<dstd::Error>(alt.error());
+    if (*alt)
+        return (*alt)->locate_range_cells(s_cells, s_count, e_cells, e_count);
+    return locate_range_cells(s_cells, s_count, e_cells, e_count);
+}
+
+dstd::Result<LabelSpan> LabelIndex::locate_range_cells(
+    dstd::Span<const CellColumn> s_cells, std::int64_t s_count,
+    dstd::Span<const CellColumn> e_cells, std::int64_t e_count) const {
+    order();
+    if (!increasing_ && !decreasing_) {
+        if (levels_.size() > 1)
+            return not_found<
+                "a label slice needs a MultiIndex sorted by its levels">();
+        std::int64_t from = 0;
+        std::int64_t to = rows_ - 1;
+        if (!s_cells.empty()) {
+            auto r = bound_cells(s_cells, s_count, "start");
+            if (!r) return dstd::Unexpected<dstd::Error>(r.error());
+            from = *r;
+        }
+        if (!e_cells.empty()) {
+            auto r = bound_cells(e_cells, e_count, "stop");
+            if (!r) return dstd::Unexpected<dstd::Error>(r.error());
+            to = *r;
+        }
+        return LabelSpan{from, to >= from ? to - from + 1 : 0};
+    }
+    if ((!s_cells.empty() && s_count != 1) ||
+        (!e_cells.empty() && e_count != 1))
+        return invalid_argument<"a label slice bound is one label">();
     bool incomparable = false;
     // Row against the bound over the bound's leading levels: -1, 0 or 1.
     auto against = [&](std::int64_t row,
@@ -626,6 +813,343 @@ dstd::Result<LabelSpan> LabelIndex::locate_range(
         return invalid_argument<
             "the label slice bounds do not compare with the labels">();
     return LabelSpan{from, to > from ? to - from : 0};
+}
+
+// The row each key row fills from, on labels that are monotonic. `before[r]`
+// is the row of the nearest label before key `r` in label order (the key's own
+// row when it is a label), `after[r]` the nearest after, -1 where there is
+// none.
+dstd::Result<dstd::Vector<std::int64_t>> LabelIndex::reindex_fill(
+    dstd::Span<const CellColumn> keys, std::int64_t count,
+    const ReindexOptions& options) const {
+    order();
+    if (!increasing_ && !decreasing_)
+        return invalid_argument<
+            "index must be monotonic increasing or decreasing">();
+    const bool nearest = options.method == FillMethod::Nearest;
+    const bool finite =
+        std::isfinite(options.tolerance) || options.tolerance_is_nanos;
+    if ((nearest || finite) && levels_.size() > 1)
+        return invalid_argument<
+            "the nearest method and a tolerance need a single-level index">();
+    if (options.tolerance < 0 ||
+        (options.tolerance_is_nanos && options.tolerance_nanos < 0))
+        return invalid_argument<"tolerance must be non-negative">();
+    if (options.tolerance_is_nanos && !levels_[0].has_unit())
+        return invalid_argument<
+            "a tolerance in nanoseconds needs timestamp, duration or time "
+            "labels">();
+    const int dir = increasing_ ? 1 : -1;
+    const std::size_t depth = levels_.size();
+    const std::size_t n = static_cast<std::size_t>(count);
+    dstd::Vector<std::int64_t> before(n, -1);
+    dstd::Vector<std::int64_t> after(n, -1);
+    dstd::Vector<std::uint8_t> exact(n, 0);
+
+    bool walk = count > 1 && count * 16 >= rows_;
+    for (std::int64_t r = 1; walk && r < count; ++r) {
+        for (std::size_t l = 0; l < depth; ++l) {
+            bool ok = true;
+            const int c = CellColumn::compare(keys[l], r - 1, keys[l], r, ok);
+            if (!ok || c * dir > 0) {
+                walk = false;
+                break;
+            }
+            if (c != 0) break;
+        }
+    }
+    // The first row not before key `k` in label order at or after row `from`,
+    // -2 when the key does not compare with the labels (a null, a text against
+    // numbers).
+    auto lower = [&](std::int64_t k, std::int64_t from,
+                     bool& is_exact) -> std::int64_t {
+        is_exact = false;
+        std::int64_t lo = from;
+        std::int64_t hi = rows_;
+        if (walk) {
+            for (; lo < rows_; ++lo) {
+                int c = 0;
+                for (std::size_t l = 0; l < depth && c == 0; ++l) {
+                    bool ok = true;
+                    c = CellColumn::compare(levels_[l], lo, keys[l], k, ok);
+                    if (!ok) return -2;
+                }
+                if (c * dir >= 0) break;
+            }
+            hi = lo;
+        }
+        while (lo < hi) {
+            const std::int64_t mid = lo + (hi - lo) / 2;
+            int c = 0;
+            for (std::size_t l = 0; l < depth && c == 0; ++l) {
+                bool ok = true;
+                c = CellColumn::compare(levels_[l], mid, keys[l], k, ok);
+                if (!ok) return -2;
+            }
+            if (c * dir < 0)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        if (lo < rows_) {
+            is_exact = true;
+            for (std::size_t l = 0; is_exact && l < depth; ++l)
+                is_exact = CellColumn::equal(levels_[l], lo, keys[l], k);
+        }
+        return lo;
+    };
+    // Keys sorted the way the labels are: each key's row is at or after the
+    // previous one, so one forward walk replaces a search per key. Checked in
+    // one pass; worth it unless the keys are few against the labels.
+    std::int64_t cursor = 0;
+    for (std::int64_t r = 0; r < count; ++r) {
+        bool is_exact = false;
+        const std::int64_t at = lower(r, walk ? cursor : 0, is_exact);
+        if (at == -2) {
+            bool null_key = false;
+            for (std::size_t l = 0; l < depth; ++l)
+                null_key = null_key || keys[l].kind(r) == CellKind::Null;
+            if (null_key) {
+                walk = false;
+                cursor = 0;
+                continue;
+            }
+            return invalid_argument<
+                "'<' not supported between the keys and the labels">();
+        }
+        if (walk) cursor = at;
+        const std::size_t i = static_cast<std::size_t>(r);
+        exact[i] = is_exact ? 1 : 0;
+        before[i] = is_exact ? at : at - 1;
+        after[i] = at < rows_ ? at : -1;
+    }
+
+    if (options.limit >= 0 && count > 0) {
+        const char* which =
+            options.method == FillMethod::Backfill ? "backfill" : "pad";
+        bool monotonic = dir > 0;
+        for (std::int64_t r = 1; monotonic && r < count; ++r) {
+            for (std::size_t l = 0; l < depth; ++l) {
+                bool ok = true;
+                const int c =
+                    CellColumn::compare(keys[l], r - 1, keys[l], r, ok);
+                if (!ok || c > 0) monotonic = false;
+                if (!ok || c != 0) break;
+            }
+        }
+        if (count > 0 && depth > 0 && keys[0].kind(0) == CellKind::Null)
+            monotonic = false;
+        if (!monotonic)
+            return invalid_argument<
+                "limit argument for '{}' method only well-defined if index "
+                "and target are monotonic">(which);
+        // A row fills at most `limit` consecutive targets; an exact match
+        // fills itself and counts for nothing.
+        auto cap = [&](dstd::Vector<std::int64_t>& from, bool forward) {
+            std::int64_t last = -1;
+            std::int64_t run = 0;
+            for (std::int64_t step = 0; step < count; ++step) {
+                const std::size_t i =
+                    static_cast<std::size_t>(forward ? step : count - 1 - step);
+                if (from[i] < 0 || exact[i]) continue;
+                if (from[i] == last) {
+                    ++run;
+                } else {
+                    last = from[i];
+                    run = 1;
+                }
+                if (run > options.limit) from[i] = -1;
+            }
+        };
+        if (options.method != FillMethod::Backfill) cap(before, true);
+        if (options.method != FillMethod::Pad) cap(after, false);
+    }
+
+    dstd::Vector<std::int64_t> out(n, -1);
+    // |key - label| of key `r` and label row `row`: an exact unsigned count
+    // for integer and temporal cells, a double only when a float is involved.
+    struct Dist {
+        bool exact;
+        std::uint64_t whole;
+        double inexact;
+    };
+    auto distance = [&](std::int64_t r, std::int64_t row) -> Dist {
+        const CellKind a = levels_[0].kind(row);
+        const CellKind b = keys[0].kind(r);
+        auto integral = [](CellKind k) {
+            return k == CellKind::Int || k == CellKind::Tagged ||
+                   static_cast<std::uint8_t>(k) >= TAGGED;
+        };
+        if (integral(a) && integral(b)) {
+            const std::uint64_t x = levels_[0].bits(row);
+            const std::uint64_t y = keys[0].bits(r);
+            const bool x_below =
+                static_cast<std::int64_t>(x) < static_cast<std::int64_t>(y);
+            return {true, x_below ? y - x : x - y, 0.0};
+        }
+        if (a == CellKind::Uint && b == CellKind::Uint) {
+            const std::uint64_t x = levels_[0].bits(row);
+            const std::uint64_t y = keys[0].bits(r);
+            return {true, x < y ? y - x : x - y, 0.0};
+        }
+        return {false, 0,
+                std::fabs(levels_[0].number(row) - keys[0].number(r))};
+    };
+    auto as_double = [](const Dist& d) {
+        return d.exact ? static_cast<double>(d.whole) : d.inexact;
+    };
+    auto closer = [&](const Dist& x, const Dist& y, bool or_equal) {
+        if (x.exact && y.exact)
+            return or_equal ? x.whole <= y.whole : x.whole < y.whole;
+        return or_equal ? as_double(x) <= as_double(y)
+                        : as_double(x) < as_double(y);
+    };
+    // Whole counts compare to the tolerance as integers, so a nanosecond
+    // timestamp or an integer above 2**53 is exact.
+    std::uint64_t tolerance_whole = 0;
+    if (options.tolerance_is_nanos) {
+        std::uint64_t per_tick = 1;
+        for (int u = static_cast<int>(levels_[0].unit()); u < 3; ++u)
+            per_tick *= 1000;
+        tolerance_whole =
+            static_cast<std::uint64_t>(options.tolerance_nanos) / per_tick;
+    } else if (finite) {
+        tolerance_whole = options.tolerance >= 18446744073709551616.0
+                              ? std::numeric_limits<std::uint64_t>::max()
+                              : static_cast<std::uint64_t>(options.tolerance);
+    }
+    auto within = [&](const Dist& d) {
+        if (d.exact || options.tolerance_is_nanos)
+            return d.exact && d.whole <= tolerance_whole;
+        return d.inexact <= options.tolerance;
+    };
+    if (nearest || finite) {
+        for (std::int64_t r = 0; r < count; ++r) {
+            const std::size_t i = static_cast<std::size_t>(r);
+            if (before[i] < 0 && after[i] < 0) continue;
+            if (!keys[0].is_number(r) ||
+                (before[i] >= 0 && !levels_[0].is_number(before[i])) ||
+                (after[i] >= 0 && !levels_[0].is_number(after[i])))
+                return invalid_argument<
+                    "the nearest method and a tolerance need labels that "
+                    "subtract">();
+        }
+    }
+    for (std::int64_t r = 0; r < count; ++r) {
+        const std::size_t i = static_cast<std::size_t>(r);
+        std::int64_t pick = -1;
+        switch (options.method) {
+            case FillMethod::Pad:
+                pick = before[i];
+                break;
+            case FillMethod::Backfill:
+                pick = after[i];
+                break;
+            default:
+                if (after[i] < 0) {
+                    pick = before[i];
+                } else if (before[i] < 0) {
+                    pick = after[i];
+                } else {
+                    const Dist left = distance(r, before[i]);
+                    const Dist right = distance(r, after[i]);
+                    pick = closer(left, right, dir < 0) ? before[i] : after[i];
+                }
+        }
+        if (pick >= 0 && finite && !within(distance(r, pick))) pick = -1;
+        out[i] = pick;
+    }
+    return out;
+}
+
+dstd::Result<dstd::Vector<std::int64_t>> LabelIndex::reindex(
+    dstd::Span<const Series> keys, const ReindexOptions& options) const {
+    std::int64_t count = 0;
+    auto cells = key_cells(keys, levels_.size(), count);
+    if (!cells) return dstd::Unexpected<dstd::Error>(cells.error());
+    dstd::Vector<CellColumn>* sets[] = {&*cells};
+    auto alt = in_units(sets);
+    if (!alt) return dstd::Unexpected<dstd::Error>(alt.error());
+    if (*alt) return (*alt)->reindex_cells(*cells, count, options);
+    return reindex_cells(*cells, count, options);
+}
+
+dstd::Result<dstd::Vector<std::int64_t>> LabelIndex::reindex_cells(
+    dstd::Span<const CellColumn> keys, std::int64_t count,
+    const ReindexOptions& options) const {
+    if (keys.size() != levels_.size())
+        return invalid_argument<
+            "reindex keys have {} levels, the index has {}">(keys.size(),
+                                                             levels_.size());
+    const std::size_t n = static_cast<std::size_t>(count);
+    if (count == rows_) {
+        bool same = true;
+        for (std::int64_t r = 0; same && r < count; ++r)
+            for (std::size_t l = 0; same && l < levels_.size(); ++l)
+                same = CellColumn::equal(levels_[l], r, keys[l], r);
+        if (same) {
+            dstd::Vector<std::int64_t> out(n);
+            for (std::size_t r = 0; r < n; ++r)
+                out[r] = static_cast<std::int64_t>(r);
+            return out;
+        }
+    }
+    const bool filling = options.method != FillMethod::None;
+    if (!filling && options.limit >= 0)
+        return invalid_argument<
+            "limit argument only valid if doing pad, backfill or nearest "
+            "reindexing">();
+    if (!filling &&
+        (options.tolerance_is_nanos ||
+         !(options.tolerance == std::numeric_limits<double>::infinity())))
+        return invalid_argument<
+            "tolerance argument only valid if doing pad, backfill or nearest "
+            "reindexing">();
+    const IntTable* typed = int_table_for(keys);
+    if (typed != nullptr && typed->state == IntState::Duplicate)
+        return invalid_argument<
+            "cannot reindex on an axis with duplicate labels">();
+    const bool use_typed = typed != nullptr && typed->state == IntState::Usable;
+    const std::size_t prefix = levels_.size();
+    const Table* t = nullptr;
+    if (!use_typed) {
+        t = &table(prefix);
+        if (t->first.size() != static_cast<std::size_t>(rows_))
+            return invalid_argument<
+                "cannot reindex on an axis with duplicate labels">();
+    }
+    if (filling) return reindex_fill(keys, count, options);
+    dstd::Vector<std::int64_t> out(n, -1);
+    if (use_typed) {
+        const std::size_t mask = typed->slots.size() - 1;
+        const CellColumn& key = keys.front();
+        for (std::int64_t r = 0; r < count; ++r) {
+            const auto label = static_cast<std::int64_t>(key.bits(r));
+            std::size_t at =
+                static_cast<std::size_t>(dstd::hash::splitmix64(key.bits(r))) &
+                mask;
+            for (;;) {
+                const IntSlot& slot = typed->slots[at];
+                if (slot.row_plus_one == 0) break;
+                if (slot.label == label) {
+                    out[static_cast<std::size_t>(r)] = slot.row_plus_one - 1;
+                    break;
+                }
+                at = (at + 1) & mask;
+            }
+        }
+        return out;
+    }
+    for (std::int64_t r = 0; r < count; ++r) {
+        std::uint64_t h = 0;
+        for (std::size_t l = 0; l < prefix; ++l)
+            h = combine(h, keys[l].hash(r));
+        const std::int64_t g = find(*t, h, keys, r, prefix);
+        if (g >= 0)
+            out[static_cast<std::size_t>(r)] =
+                t->first[static_cast<std::size_t>(g)];
+    }
+    return out;
 }
 
 // ---- the lookups
@@ -674,6 +1198,38 @@ dstd::Result<Located> locate_labels(LabelCache* cache,
     auto index = index_of(cache, levels);
     if (!index) return dstd::Unexpected<dstd::Error>(index.error());
     return (*index)->locate(keys);
+}
+
+dstd::Result<dstd::Vector<std::int64_t>> reindex_labels(
+    LabelCache* cache, dstd::Span<const Series> levels, std::int64_t rows,
+    dstd::Span<const Series> keys, const ReindexOptions& options) {
+    if (levels.empty()) {
+        if (options.method == FillMethod::None && options.limit < 0 &&
+            !std::isfinite(options.tolerance) && !options.tolerance_is_nanos) {
+            // The labels 0 .. rows-1: a key is its own row, no hash.
+            std::int64_t count = 0;
+            auto cells = key_cells(keys, 1, count);
+            if (!cells) return dstd::Unexpected<dstd::Error>(cells.error());
+            dstd::Vector<std::int64_t> out(static_cast<std::size_t>(count), -1);
+            const CellColumn& key = cells->front();
+            for (std::int64_t r = 0; r < count; ++r) {
+                const auto v = static_cast<std::int64_t>(key.bits(r));
+                if (key.kind(r) == CellKind::Int && v >= 0 && v < rows)
+                    out[static_cast<std::size_t>(r)] = v;
+            }
+            return out;
+        }
+        dstd::Vector<std::int64_t> v(static_cast<std::size_t>(rows));
+        for (std::int64_t i = 0; i < rows; ++i)
+            v[static_cast<std::size_t>(i)] = i;
+        const Series positions[] = {Series::flat_i64(v.data(), rows)};
+        auto index = LabelIndex::make(positions);
+        if (!index) return dstd::Unexpected<dstd::Error>(index.error());
+        return (*index)->reindex(keys, options);
+    }
+    auto index = index_of(cache, levels);
+    if (!index) return dstd::Unexpected<dstd::Error>(index.error());
+    return (*index)->reindex(keys, options);
 }
 
 dstd::Result<LabelSpan> locate_label_range(LabelCache* cache,

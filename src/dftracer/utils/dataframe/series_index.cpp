@@ -4,9 +4,11 @@
 #include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/internal/label_index.h>
 #include <dftracer/utils/dataframe/kernels/cast.h>
+#include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -15,7 +17,8 @@
 #include <utility>
 
 // The row labels of a Series: the accessors, the row-selecting methods that
-// move the labels with the rows, and the alignment of two labelled columns.
+// move the labels with the rows, the alignment of two labelled columns, and
+// reindex and align by label for a Series and a DataFrame.
 namespace dftracer::utils::dataframe {
 
 namespace {
@@ -508,6 +511,371 @@ dstd::Result<AlignedSeries> align_labels(const Series& a, const Series& b) {
         return invalid_argument<"cannot align: widening to Float64 failed">();
     return AlignedSeries{va.rename(a.handle()->name).with_index(views, levels),
                          vb.rename(b.handle()->name).with_index(views, levels)};
+}
+
+namespace {
+
+bool is_integer_number(TypeId t) { return is_integer(t) && t != TypeId::Bool; }
+
+// The range of an integer type: a signed one holds [lo, hi], an unsigned one
+// [0, hi].
+void integer_range(TypeId t, std::int64_t& lo, std::uint64_t& hi) {
+    const int bits = integer_bits(t);
+    if (is_signed_integer(t)) {
+        hi = bits == 64 ? static_cast<std::uint64_t>(INT64_MAX)
+                        : (std::uint64_t{1} << (bits - 1)) - 1;
+        lo = -static_cast<std::int64_t>(hi) - 1;
+    } else {
+        lo = 0;
+        hi = bits == 64 ? UINT64_MAX : (std::uint64_t{1} << bits) - 1;
+    }
+}
+
+// Whether the one value of `cell` converts to a column of type `to` without
+// loss, as a pandas reindex fill keeps the dtype.
+bool fill_fits(TypeId to, TypeId own, const CellColumn& cell) {
+    const bool float_to =
+        to == TypeId::Float32 || to == TypeId::Float64 || to == TypeId::Float16;
+    switch (cell.kind(0)) {
+        case CellKind::Int: {
+            if (float_to) return true;
+            if (!is_integer_number(to)) return false;
+            std::int64_t lo = 0;
+            std::uint64_t hi = 0;
+            integer_range(to, lo, hi);
+            const auto v = static_cast<std::int64_t>(cell.bits(0));
+            return v >= lo && (v < 0 || static_cast<std::uint64_t>(v) <= hi);
+        }
+        case CellKind::Uint: {
+            if (float_to) return true;
+            if (!is_integer_number(to)) return false;
+            std::int64_t lo = 0;
+            std::uint64_t hi = 0;
+            integer_range(to, lo, hi);
+            return cell.bits(0) <= hi;
+        }
+        case CellKind::Float:
+            return float_to;
+        case CellKind::Bool:
+            return to == TypeId::Bool;
+        case CellKind::Text:
+            return to == TypeId::String || to == TypeId::LargeString;
+        case CellKind::Blob:
+            return to == TypeId::Binary || to == TypeId::LargeBinary;
+        case CellKind::Null:
+            return false;
+        default:
+            return to == own;
+    }
+}
+
+// A Bool column, bit i set where `pos[i]` names a row.
+Series found_mask(dstd::Span<const std::int64_t> pos) {
+    dstd::Vector<std::uint8_t> bytes((pos.size() + 7) / 8, 0);
+    for (std::size_t i = 0; i < pos.size(); ++i)
+        if (pos[i] >= 0)
+            bytes[i >> 3] =
+                static_cast<std::uint8_t>(bytes[i >> 3] | (1u << (i & 7)));
+    return Series::flat(TypeId::Bool, bytes.data(),
+                        static_cast<std::int64_t>(pos.size()));
+}
+
+// `taken`, a column gathered at `pos` (-1 is a null row): where `pos` has a -1
+// the null stays, or becomes the one value of `fill` (a one-row column) as
+// `reindex` fills it. Without a fill an integer column that gained nulls is
+// Float64, as pandas. `what` names the column in an error.
+dstd::Result<Series> fill_rows(Series taken, dstd::Span<const std::int64_t> pos,
+                               const Series& fill, dstd::StringView what) {
+    if (!taken.valid())
+        return invalid_argument<"{}: the rows cannot be gathered">(what);
+    bool added = false;
+    for (const std::int64_t p : pos)
+        if (p < 0) {
+            added = true;
+            break;
+        }
+    if (!added) return taken;
+    const TypeId type = taken.type();
+    dstd::Optional<CellColumn> cell;
+    if (fill.valid() && fill.length() == 1) {
+        auto made = CellColumn::make(fill);
+        if (!made) return dstd::Unexpected<dstd::Error>(made.error());
+        if (made->kind(0) != CellKind::Null) cell = std::move(*made);
+    }
+    if (!cell) {
+        if (!is_integer_number(type)) return taken;
+        Series wide = cast(taken, TypeId::Float64);
+        if (!wide.valid())
+            return invalid_argument<"{}: widening to Float64 failed">(what);
+        return wide;
+    }
+    TypeId target = type;
+    if (!fill_fits(type, fill.type(), *cell)) {
+        const TypeId common =
+            is_integer_number(type) && cell->kind(0) != CellKind::Bool
+                ? common_label_type(type, fill.type())
+                : TypeId::Unknown;
+        if (common == TypeId::Unknown || (cell->kind(0) != CellKind::Int &&
+                                          cell->kind(0) != CellKind::Uint &&
+                                          cell->kind(0) != CellKind::Float))
+            return invalid_argument<
+                "{}: a fill value of type {} does not fit a column of type "
+                "{}">(what, type_name(fill.type()), type_name(type));
+        target = common;
+    }
+    Series base = target == type ? std::move(taken) : cast(taken, target);
+    const Series value =
+        fill.type() == target ? fill.share() : cast(fill, target);
+    if (!base.valid() || !value.valid())
+        return invalid_argument<"{}: the fill value cannot be converted">(what);
+    // A column with no nulls of its own gained exactly the -1 rows, so
+    // filling its nulls is the same one pass, with no mask and no spread.
+    std::int64_t missing = 0;
+    for (const std::int64_t p : pos) missing += p < 0 ? 1 : 0;
+    if (base.null_count() == missing && base.type() == value.type()) {
+        const Series flat =
+            value.is_flat() ? value.share() : value.materialize();
+        Series quick;
+        if (base.type() == TypeId::Int64)
+            quick = base.fillna(flat.data<std::int64_t>()[0]);
+        else if (base.type() == TypeId::Float64)
+            quick = base.fillna(flat.data<double>()[0]);
+        if (quick.valid() && quick.type() == base.type()) return quick;
+    }
+    const dstd::Vector<std::int64_t> zeros(pos.size(), 0);
+    const Series spread = take(value, zeros);
+    Series out = base.where(found_mask(pos), spread);
+    if (!out.valid())
+        return invalid_argument<"{}: the fill cannot be applied">(what);
+    return out;
+}
+
+// An integer column that gained nulls is Float64, as pandas.
+Series widen_gained(Series taken, const Series& original) {
+    if (!taken.valid() || !is_integer_number(taken.type()) ||
+        taken.null_count() <= original.null_count())
+        return taken;
+    return cast(taken, TypeId::Float64);
+}
+
+dstd::Vector<std::int64_t> positions_of(const Series& column) {
+    const Series settled = column.fillna(std::int64_t{-1});
+    const Series flat =
+        settled.is_flat() ? settled.share() : settled.materialize();
+    const auto* d = flat.data<std::int64_t>();
+    return dstd::Vector<std::int64_t>(d, d + flat.length());
+}
+
+struct LabelJoin {
+    dstd::Vector<dstd::String> names;
+    dstd::Vector<Series> levels;
+    dstd::Vector<std::int64_t> left;   // row of the left side per row, or -1
+    dstd::Vector<std::int64_t> right;  // row of the right side per row, or -1
+    bool same = false;                 // the labels are equal, rows stay put
+};
+
+// The join of two label sets on their rows: Outer (sorted, nulls last), Inner
+// or Left (in the order of `la`). `levels` are the joined label columns.
+dstd::Result<LabelJoin> join_rows(dstd::Span<const Level> la,
+                                  dstd::Span<const Level> lb, JoinHow how) {
+    const std::size_t k = la.size();
+    dstd::Vector<dstd::String> keys;
+    DataFrame left;
+    DataFrame right;
+    for (std::size_t i = 0; i < k; ++i) {
+        keys.push_back(dstd::fmt<"l{}">(i));
+        left.names.emplace_back(keys.back());
+        left.columns.push_back(la[i].column.share());
+        right.names.emplace_back(keys.back());
+        right.columns.push_back(lb[i].column.share());
+    }
+    left.names.emplace_back("pa");
+    left.columns.push_back(positions(la.front().column.length()));
+    right.names.emplace_back("pb");
+    right.columns.push_back(positions(lb.front().column.length()));
+    auto joined = left.join(right, keys, how, "_right", true);
+    if (!joined) return joined.error();
+    DataFrame result = std::move(*joined);
+    if (how == JoinHow::Outer) {
+        auto sorted = result.sort_by_multi(keys, false, true);
+        if (!sorted) return sorted.error();
+        result = std::move(*sorted);
+    }
+    LabelJoin out;
+    for (std::size_t i = 0; i < k; ++i)
+        out.levels.push_back(result.columns[i].share());
+    out.left = positions_of(result.columns[k]);
+    out.right = positions_of(result.columns[k + 1]);
+    return out;
+}
+
+// Joins two label sets as `Series.align(join=how)`: the shared prefix of
+// align_labels (the level counts, the common numeric type) and the join.
+dstd::Result<LabelJoin> join_labels(dstd::Vector<Level> la,
+                                    dstd::Vector<Level> lb, JoinHow how) {
+    if (how != JoinHow::Inner && how != JoinHow::Left &&
+        how != JoinHow::Right && how != JoinHow::Outer)
+        return invalid_argument<
+            "align: join must be inner, left, right or outer">();
+    if (la.size() != lb.size())
+        return invalid_argument<
+            "cannot align a row index of {} levels with one of {}">(la.size(),
+                                                                    lb.size());
+    std::size_t bad = 0;
+    if (!promote_levels(la, lb, bad))
+        return invalid_argument<
+            "cannot align row labels of type {} with labels of type {}">(
+            type_name(la[bad].column.type()), type_name(lb[bad].column.type()));
+    LabelJoin out;
+    for (const Level& l : la) out.names.push_back(l.name);
+    if (same_levels(la, lb)) {
+        out.same = true;
+        return out;
+    }
+    auto joined = how == JoinHow::Right ? join_rows(lb, la, JoinHow::Left)
+                                        : join_rows(la, lb, how);
+    if (!joined) return joined.error();
+    joined->names = std::move(out.names);
+    if (how == JoinHow::Right) std::swap(joined->left, joined->right);
+    return joined;
+}
+
+dstd::Vector<Level> frame_levels(const DataFrame& f) {
+    dstd::Vector<Level> out;
+    const dstd::Span<const dstd::SharedString> names = f.index_names();
+    if (names.empty()) {
+        out.push_back({default_level_name(0), positions(f.num_rows())});
+        return out;
+    }
+    for (const dstd::SharedString& n : names)
+        out.push_back({dstd::String(dstd::StringView(n)), f.column(n)});
+    return out;
+}
+
+// The frame `f` on the rows `pos` (-1 a null row), its index columns replaced
+// by `levels` named `names`.
+dstd::Result<DataFrame> gathered_frame(const DataFrame& f,
+                                       dstd::Span<const std::int64_t> pos,
+                                       dstd::Span<const dstd::String> names,
+                                       dstd::Span<const Series> levels,
+                                       const Series& fill) {
+    const dstd::Span<const dstd::SharedString> own = f.index_names();
+    dstd::Vector<Series> data;
+    dstd::Vector<dstd::StringView> data_names;
+    for (std::size_t i = 0; i < f.columns.size(); ++i) {
+        bool is_index = false;
+        for (const dstd::SharedString& n : own)
+            if (n == f.names[i]) is_index = true;
+        if (is_index) continue;
+        data.push_back(f.columns[i].share());
+        data_names.emplace_back(f.names[i]);
+    }
+    for (const dstd::String& n : names)
+        for (const dstd::StringView d : data_names)
+            if (d == dstd::StringView(n))
+                return invalid_argument<
+                    "the index column {} is also a column of the frame">(n);
+    const dstd::Vector<Series> taken =
+        take_all(data, pos.data(), static_cast<std::int64_t>(pos.size()));
+    DataFrame out;
+    for (std::size_t i = 0; i < data.size(); ++i) {
+        auto filled = fill_rows(taken[i].share(), pos, fill, data_names[i]);
+        if (!filled) return dstd::Unexpected<dstd::Error>(filled.error());
+        out.names.emplace_back(data_names[i]);
+        out.columns.push_back(std::move(*filled));
+    }
+    dstd::Vector<dstd::StringView> views;
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        out.names.emplace_back(dstd::StringView(names[i]));
+        out.columns.push_back(levels[i].share());
+        views.emplace_back(names[i]);
+    }
+    return out.with_index(views);
+}
+
+}  // namespace
+
+dstd::Result<Series> Series::reindex(dstd::Span<const Series> keys,
+                                     const ReindexOptions& options) const {
+    return reindex(keys, options, Series{});
+}
+
+dstd::Result<Series> Series::reindex(dstd::Span<const Series> keys,
+                                     const ReindexOptions& options,
+                                     const Series& fill) const {
+    const dstd::Vector<Series> levels = label_levels(*this);
+    auto pos =
+        reindex_labels(handle_->labels ? &handle_->labels->cache : nullptr,
+                       levels, length(), keys, options);
+    if (!pos) return dstd::Unexpected<dstd::Error>(pos.error());
+    auto filled = fill_rows(dataframe::take(without_index(), *pos), *pos, fill,
+                            "reindex");
+    if (!filled) return dstd::Unexpected<dstd::Error>(filled.error());
+    dstd::Vector<dstd::String> names;
+    dstd::Vector<dstd::StringView> views;
+    const std::int32_t count = static_cast<std::int32_t>(keys.size());
+    for (std::int32_t i = 0; i < count; ++i)
+        names.push_back(has_index() ? dstd::String(index_name(i))
+                                    : default_level_name(i));
+    for (const dstd::String& name : names) views.emplace_back(name);
+    Series out = filled->rename(handle_->name).with_index(views, keys);
+    if (!out.valid())
+        return invalid_argument<"reindex: the keys cannot be row labels">();
+    return std::move(out);
+}
+
+dstd::Result<DataFrame> DataFrame::reindex(dstd::Span<const Series> keys,
+                                           const ReindexOptions& options,
+                                           const Series& fill) const {
+    dstd::Vector<Series> levels;
+    for (const dstd::SharedString& n : index_names())
+        levels.push_back(column(n));
+    auto pos = reindex_labels(row_index ? row_index->cache.get() : nullptr,
+                              levels, num_rows(), keys, options);
+    if (!pos) return dstd::Unexpected<dstd::Error>(pos.error());
+    dstd::Vector<dstd::String> level_names;
+    for (std::size_t i = 0; i < keys.size(); ++i)
+        level_names.push_back(
+            row_index ? dstd::String(dstd::StringView(row_index->names[i]))
+                      : default_level_name(static_cast<std::int32_t>(i)));
+    return gathered_frame(*this, *pos, level_names, keys, fill);
+}
+
+dstd::Result<AlignedSeries> align_labels(const Series& a, const Series& b,
+                                         JoinHow how) {
+    auto joined = join_labels(levels_of(a), levels_of(b), how);
+    if (!joined) return joined.error();
+    if (joined->same)
+        return a.has_index() ? AlignedSeries{a.share(), b.with_index_of(a)}
+                             : AlignedSeries{a.share(), b.without_index()};
+    dstd::Vector<dstd::StringView> views;
+    for (const dstd::String& name : joined->names) views.emplace_back(name);
+    Series left = widen_gained(take(a.without_index(), joined->left), a);
+    Series right = widen_gained(take(b.without_index(), joined->right), b);
+    left = left.valid()
+               ? left.rename(a.handle()->name).with_index(views, joined->levels)
+               : Series{};
+    right =
+        right.valid()
+            ? right.rename(b.handle()->name).with_index(views, joined->levels)
+            : Series{};
+    if (!left.valid() || !right.valid())
+        return invalid_argument<"cannot align: the rows cannot be gathered">();
+    return AlignedSeries{std::move(left), std::move(right)};
+}
+
+dstd::Result<AlignedFrames> align_rows(const DataFrame& a, const DataFrame& b,
+                                       JoinHow how, const Series& fill) {
+    auto joined = join_labels(frame_levels(a), frame_levels(b), how);
+    if (!joined) return joined.error();
+    if (joined->same) return AlignedFrames{a.share(), b.share()};
+    auto left =
+        gathered_frame(a, joined->left, joined->names, joined->levels, fill);
+    if (!left) return dstd::Unexpected<dstd::Error>(left.error());
+    auto right =
+        gathered_frame(b, joined->right, joined->names, joined->levels, fill);
+    if (!right) return dstd::Unexpected<dstd::Error>(right.error());
+    return AlignedFrames{std::move(*left), std::move(*right)};
 }
 
 }  // namespace dftracer::utils::dataframe

@@ -46,6 +46,35 @@ struct LabelSpan {
     std::int64_t length = 0;
 };
 
+/// How @ref Series::reindex fills a label that has no row, as the pandas
+/// `method`: the row of the nearest label before it (Pad, `ffill`), after it
+/// (Backfill, `bfill`) or on either side (Nearest; a tie takes the larger
+/// label). Before and after are in label order, whether the labels increase or
+/// decrease.
+enum class FillMethod : std::uint8_t { None, Pad, Backfill, Nearest };
+
+/// The options of @ref Series::reindex and @ref DataFrame::reindex. With no
+/// method, a label with no row gets a null and `limit` and `tolerance` must be
+/// left unset.
+struct ReindexOptions {
+    FillMethod method = FillMethod::None;
+    /// The most target labels that one row fills, counting only the labels it
+    /// fills (not an exact match), or negative for no limit. A limit needs
+    /// labels that increase and target labels that do not decrease.
+    std::int64_t limit = -1;
+    /// The farthest a fill may reach, `|target - label| <= tolerance`, in the
+    /// units of the label (a timestamp counts its ticks), or infinite for no
+    /// limit. Labels must be numbers or temporal values. Integer and temporal
+    /// labels are compared exactly (a count above 2**53 is not rounded), floats
+    /// in double precision.
+    double tolerance = std::numeric_limits<double>::infinity();
+    /// For Timestamp, Duration and Time labels, a tolerance as whole
+    /// nanoseconds, exact in any unit of the labels and keys (`tolerance` is
+    /// then ignored). An InvalidArgument error for labels with no time unit.
+    bool tolerance_is_nanos = false;
+    std::int64_t tolerance_nanos = 0;
+};
+
 /// A typed column. Move-only owning wrapper over the C ABI handle; the buffers,
 /// encoding, and null handling live behind it. Typed accessors are inline
 /// (zero-cost) for in-tree callers; the C ABI is the stable cross-boundary
@@ -464,6 +493,33 @@ class Series {
     /// of a type that does not compare with the labels.
     dstd::Result<LabelSpan> locate_range(dstd::Span<const Series> start,
                                          dstd::Span<const Series> stop) const;
+    /// This column on the labels `keys` as pandas `reindex`: row `r` of the
+    /// result is the row whose label equals key `r`, and a null where none
+    /// does (or the row @p options names). `keys` holds one column per label
+    /// level, as long as the number of keys; a positional column has the one
+    /// level 0 .. length-1. The result carries `keys` as its labels, under the
+    /// level names of this column (the default `__index_level_<i>__` when it
+    /// has none). An integer column that gains nulls becomes Float64. With a
+    /// one-row @p fill, a row with no label takes that value instead: the
+    /// column keeps its type when the value fits it (an integer in range for an
+    /// integer column, any number for a float one, a string for a string
+    /// column) and widens to Float64 for a float value in an integer column; a
+    /// null the column already held stays. Labels that are the same as the
+    /// keys, row for row, return the column unchanged even when they repeat.
+    /// Otherwise an InvalidArgument error for repeated labels ("cannot reindex
+    /// on an axis with duplicate labels"), a key level count other than the
+    /// label level count, a @p fill that does not fit the type, a limit or
+    /// tolerance with no method, a method on labels that are not monotonic
+    /// ("index must be monotonic increasing or decreasing"), a limit on labels
+    /// that do not increase or targets that decrease, a tolerance or the
+    /// nearest method on labels that do not subtract (text) or on more than one
+    /// level.
+    dstd::Result<Series> reindex(dstd::Span<const Series> keys,
+                                 const ReindexOptions& options,
+                                 const Series& fill) const;
+    /// @ref reindex with no fill value.
+    dstd::Result<Series> reindex(dstd::Span<const Series> keys,
+                                 const ReindexOptions& options = {}) const;
 
     /// Whether this is a JSON column: String values of canonical JSON text.
     bool is_json() const noexcept { return dftu_series_is_json(handle_) != 0; }
@@ -952,6 +1008,19 @@ struct AlignedSeries {
 /// number of levels or a level whose two types have no common type, or when the
 /// engine's join refuses the labels.
 dstd::Result<AlignedSeries> align_labels(const Series& a, const Series& b);
+
+/// Aligns `a` and `b` on their labels as pandas `Series.align(join=how)`: the
+/// result labels are those of the outer join (sorted, nulls last), the inner
+/// join (the order of `a`), `a`'s own (Left) or `b`'s own (Right), a repeated
+/// label meeting every row that has it (the rows of `a` outermost). Labels that
+/// are the same, level for level, leave the rows in place. A column that
+/// misses a row has a null there (an integer column becomes Float64). A
+/// positional column counts as 0 .. length-1 even when the other has none, so
+/// two positional columns of different lengths align too. The errors of
+/// @ref align_labels, and an InvalidArgument error for a `how` that is not
+/// Inner, Left, Right or Outer.
+dstd::Result<AlignedSeries> align_labels(const Series& a, const Series& b,
+                                         JoinHow how);
 
 /// Whether `a` and `b` carry the same labels as @ref align_labels counts them
 /// (a positional column is 0 .. length-1), so a comparison needs no alignment.

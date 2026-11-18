@@ -23,6 +23,7 @@ from typing import (
 
 from . import dftracer_utils_ext as _ext
 from ._convert import _like
+from ._label_align import LabelAlignMixin
 from ._pandas_series import OMITTED, replace_in, replace_pairs, valid_edge
 from .enums import DType, rule_to_units
 from .series import Series
@@ -60,7 +61,7 @@ def column_series(frame: DataFrame, name: str) -> Series:
     return _ext.DataFrame.__getitem__(frame, name)
 
 
-class FramePandasMixin(_ext.DataFrame):
+class FramePandasMixin(LabelAlignMixin, _ext.DataFrame):
     """pandas spellings over the engine's Series kernels, one column at a
     time. ``self`` is a :class:`DataFrame`."""
 
@@ -676,6 +677,44 @@ class FramePandasMixin(_ext.DataFrame):
 
     def add_suffix(self, suffix: str) -> DataFrame:
         return self._frame().rename({c: c + suffix for c in self.columns})
+
+    def reindex(
+        self,
+        labels: object = None,
+        *,
+        index: object = None,
+        columns: object = None,
+        axis: int | str | None = None,
+        method: str | None = None,
+        copy: bool | None = None,
+        level: object = None,
+        fill_value: object = None,
+        limit: int | None = None,
+        tolerance: object = None,
+    ) -> DataFrame:
+        """The pandas ``reindex``: the rows on the index labels ``index`` (or
+        ``labels`` with ``axis=0``) and the columns on ``columns`` (or
+        ``labels`` with ``axis=1``). A row or column that is new gets nulls (an
+        integer column that gains rows becomes Float64) or ``fill_value``, which
+        keeps a column's type when it fits and raises ``TypeError`` when it does
+        not. The rules of :meth:`Series.reindex` apply to the rows, ``method``,
+        ``limit`` and ``tolerance`` included; a frame with no index has the
+        labels ``0 .. n-1``. A fill ``method`` with ``columns`` and ``level``
+        are not supported, and column labels must be strings."""
+        from ._reindex import reindex_frame
+
+        return reindex_frame(
+            self._frame(),
+            labels,
+            index=index,
+            columns=columns,
+            level=level,
+            axis=axis,
+            tolerance=tolerance,
+            method=method,
+            limit=limit,
+            fill_value=fill_value,
+        )
 
     def set_axis(self, labels: Sequence[str]) -> DataFrame:
         """New column names, positionally."""

@@ -568,6 +568,96 @@ PyObject* DataFrame_locate_range(PyObject* self, PyObject* args) {
     });
 }
 
+// _reindex(keys, method, limit, tolerance, fill) -> DataFrame on the index
+// label key Series (one per level); see DataFrame::reindex.
+PyObject* DataFrame_reindex(PyObject* self, PyObject* args) {
+    DataFrameObject* b = as_native<DataFrameObject>(self);
+    if (!b) return nullptr;
+    PyObject* keys_obj = nullptr;
+    PyObject* fill_obj = nullptr;
+    PyObject* nanos_obj = Py_None;
+    int method = 0;
+    long long limit = -1;
+    double tolerance = 0;
+    if (!PyArg_ParseTuple(args, "OiLdO|O", &keys_obj, &method, &limit,
+                          &tolerance, &fill_obj, &nanos_obj))
+        return nullptr;
+    dstd::Vector<Series> keys;
+    if (!dftracer::utils::python::frame::series_list_from_py(
+            keys_obj, "_reindex: keys must be Series", keys))
+        return nullptr;
+    if (method < 0 || method > 3) {
+        PyErr_SetString(PyExc_ValueError, "_reindex: method must be 0..3");
+        return nullptr;
+    }
+    dataframe::ReindexOptions options;
+    options.method = static_cast<dataframe::FillMethod>(method);
+    options.limit = limit;
+    options.tolerance = tolerance;
+    if (nanos_obj != Py_None) {
+        options.tolerance_nanos = PyLong_AsLongLong(nanos_obj);
+        if (options.tolerance_nanos == -1 && PyErr_Occurred()) return nullptr;
+        options.tolerance_is_nanos = true;
+    }
+    Series fill;
+    if (fill_obj != Py_None) {
+        const Series* f =
+            dftracer::utils::python::frame::unwrap_vec_column(fill_obj);
+        if (!f) {
+            PyErr_SetString(PyExc_TypeError, "_reindex: fill must be a Series");
+            return nullptr;
+        }
+        fill = f->share();
+    }
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return frame.reindex(keys, options, fill);
+    });
+}
+
+// _align_rows(other, how, fill) -> (left, right): the rows of two frames on
+// the joined index labels; see dataframe::align_rows.
+PyObject* DataFrame_align_rows(PyObject* self, PyObject* args) {
+    DataFrameObject* b = as_native<DataFrameObject>(self);
+    if (!b) return nullptr;
+    PyObject* other_obj = nullptr;
+    PyObject* fill_obj = nullptr;
+    int how = 0;
+    if (!PyArg_ParseTuple(args, "OiO", &other_obj, &how, &fill_obj))
+        return nullptr;
+    DataFrameObject* o = as_native<DataFrameObject>(other_obj);
+    if (!o) return nullptr;
+    Series fill;
+    if (fill_obj != Py_None) {
+        const Series* f =
+            dftracer::utils::python::frame::unwrap_vec_column(fill_obj);
+        if (!f) {
+            PyErr_SetString(PyExc_TypeError,
+                            "_align_rows: fill must be a Series");
+            return nullptr;
+        }
+        fill = f->share();
+    }
+    return guard([&]() -> PyObject* {
+        const DataFrame left = to_dataframe(b);
+        const DataFrame right = to_dataframe(o);
+        auto r = without_gil(left.num_rows() + right.num_rows(), [&] {
+            return dataframe::align_rows(
+                left, right, static_cast<dataframe::JoinHow>(how), fill);
+        });
+        if (!r) {
+            dftracer::utils::python::core::set_py_error(r.error());
+            return nullptr;
+        }
+        PyObject* l = make_dataframe(std::move(r->left));
+        PyObject* rt = l ? make_dataframe(std::move(r->right)) : nullptr;
+        if (!rt) {
+            Py_XDECREF(l);
+            return nullptr;
+        }
+        return Py_BuildValue("NN", l, rt);
+    });
+}
+
 PyObject* DataFrame_tail(PyObject* self, PyObject* arg) {
     DataFrameObject* b = as_native<DataFrameObject>(self);
     if (!b) return nullptr;
@@ -1656,6 +1746,16 @@ PyMethodDef DataFrame_methods[] = {
     {"_locate_range", DataFrame_locate_range, METH_VARARGS,
      "_locate_range(start, stop) -> (offset, length): the rows between two "
      "index label bounds (lists of one-row Series, empty for an open end)."},
+    {"_reindex", DataFrame_reindex, METH_VARARGS,
+     "_reindex(keys, method, limit, tolerance, fill, nanos=None) -> DataFrame "
+     "on the index "
+     "label key Series (one per level); method 0 none, 1 pad, 2 backfill, 3 "
+     "nearest, limit -1 for none, tolerance infinite for none, fill a one-row "
+     "Series or None, nanos a tolerance as whole nanoseconds for temporal "
+     "labels."},
+    {"_align_rows", DataFrame_align_rows, METH_VARARGS,
+     "_align_rows(other, how, fill) -> (left, right): the rows of two frames "
+     "on the joined index labels; how is 0 inner, 1 left, 2 right, 3 outer."},
     {"take", DataFrame_take, METH_O,
      "take(indices) -> DataFrame gathered at the given row indices."},
     {"column_index",

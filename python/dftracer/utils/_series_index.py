@@ -179,15 +179,17 @@ def _pick_levels(names: list[str], level: object) -> list[int]:
 # -- set_axis, rename_axis ---------------------------------------------------------
 
 
-def labels_from(labels: object, n: int) -> tuple[list[str], list[Series]]:
+def labels_from(labels: object, n: int | None) -> tuple[list[str], list[Series]]:
     """The level names and columns of the new labels a caller gives
     ``set_axis``: a Series (one level, named like it), a frame (one level per
     column), a pandas ``Index`` or ``MultiIndex``, or a sequence (of tuples for
-    several levels). ``ValueError`` when the length is not ``n``."""
+    several levels). ``ValueError`` when the length is not ``n`` (any length
+    for ``None``)."""
     from .dataframe import DataFrame
     from .series import Series
 
     pd = sys.modules.get("pandas")
+    np = sys.modules.get("numpy")
     names: list[str]
     levels: list[Series]
     if isinstance(labels, DataFrame):
@@ -205,6 +207,17 @@ def labels_from(labels: object, n: int) -> tuple[list[str], list[Series]]:
     elif pd is not None and isinstance(labels, pd.Index):
         names = [internal_name(labels.name, 0)]
         levels = [Series._from_pandas_values(pd.Series(labels))]
+    elif pd is not None and isinstance(labels, pd.Series):
+        names = [internal_name(labels.name, 0)]
+        levels = [Series._from_pandas_values(labels.reset_index(drop=True))]
+    elif (
+        np is not None
+        and isinstance(labels, np.ndarray)
+        and labels.ndim == 1
+        and labels.dtype.kind in "biuf"
+    ):
+        names = [default_name(0)]
+        levels = [Series.from_numpy(labels)]
     else:
         items = list(cast("Sequence[object]", labels))
         if items and all(isinstance(x, tuple) for x in items):
@@ -219,7 +232,7 @@ def labels_from(labels: object, n: int) -> tuple[list[str], list[Series]]:
         else:
             names = [default_name(0)]
             levels = [Series.from_list(items)]
-    if len(levels[0]) != n:
+    if n is not None and len(levels[0]) != n:
         raise ValueError(
             f"Length mismatch: Expected axis has {n} elements, new values have {len(levels[0])} elements"
         )

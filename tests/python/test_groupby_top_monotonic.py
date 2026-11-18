@@ -50,8 +50,8 @@ def test_top_matches_pandas(values, n, method):
 
 
 def test_top_without_the_keys_in_the_index_keeps_the_row_labels():
-    if int(pd.__version__.split(".")[0]) < 3:
-        pytest.skip("pandas 2 raises ValueError for nlargest with as_index=False")
+    if tuple(int(p) for p in pd.__version__.split(".")[:2]) < (3, 1):
+        pytest.skip("pandas before 3.1 does not label nlargest with as_index=False by rows")
     ours, theirs = _frame(FLOATS)
     got = ours.groupby("k", as_index=False)["v"].nlargest(2)
     want = theirs.groupby("k", as_index=False)["v"].nlargest(2)

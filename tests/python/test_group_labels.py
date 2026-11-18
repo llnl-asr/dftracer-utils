@@ -14,6 +14,7 @@ from dftracer.utils import DataFrame, Series  # noqa: E402
 pytestmark = pytest.mark.filterwarnings("ignore::FutureWarning", "ignore::DeprecationWarning")
 
 PANDAS3 = int(pd.__version__.split(".")[0]) >= 3
+PANDAS31 = tuple(int(p) for p in pd.__version__.split(".")[:2]) >= (3, 1)
 
 BASE = pd.DataFrame(
     {
@@ -176,6 +177,8 @@ def test_top_of_an_integer_column(name, method):
 def test_without_the_keys_as_index(name, keys, form):
     if not PANDAS3:
         pytest.skip("pandas 2 labels as_index=False results differently")
+    if form == "top" and not PANDAS31:
+        pytest.skip("pandas before 3.1 gives as_index=False nlargest a frame")
     forms = {
         "take": lambda g: g.take([0, 1]),
         "top": lambda g: g["v"].nlargest(1),

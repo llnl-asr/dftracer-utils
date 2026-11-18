@@ -19,6 +19,7 @@ Series.argsort | needs-token:FLAG | -
 Series.array | conversion | array gives the data in another form
 Series.asof | python-semantics | pandas or polars semantics written over several native calls
 Series.autocorr | python-semantics | pandas or polars semantics written over several native calls
+Series.axes | python-semantics | accessor property of the Series, not an op
 Series.bottom_k | needs-token:I64_ARG | -
 Series.case_when | python-semantics | pandas container API on the Series, not an op
 Series.cast | needs-token:DTYPE | -
@@ -74,6 +75,8 @@ Series.has_nulls | python-semantics | polars spelling written over native calls
 Series.hasnans | python-semantics | accessor or shape property of the column, not an op
 Series.head | needs-token:I64_ARG | -
 Series.iloc | python-semantics | pandas container API on the Series, not an op
+Series.index | python-semantics | accessor property of the Series, not an op
+Series.index_names | python-semantics | native method of the binding, the row labels of the Series, not one registry op
 Series.infer_objects | python-semantics | pandas container API on the Series, not an op
 Series.is_empty | python-semantics | polars spelling written over native calls
 Series.is_in | needs-token:SERIES | -
@@ -125,6 +128,7 @@ Series.rank | needs-token:RANK | -
 Series.rdiv | python-semantics | pandas spelling written in Python; an alias with an adapter in Phase 2
 Series.rdivmod | python-semantics | Python logic around native calls
 Series.rename | python-semantics | a new handle under another name
+Series.rename_axis | python-semantics | pandas container API on the Series, edits the label names, not an op
 Series.repeat | python-semantics | pandas or polars semantics written over several native calls
 Series.replace | python-semantics | pandas or polars semantics written over several native calls
 Series.reset_index | python-semantics | pandas container API on the Series, not an op
@@ -142,6 +146,7 @@ Series.rsub | python-semantics | pandas spelling written in Python; an alias wit
 Series.sample | needs-token:FLAG | -
 Series.search_sorted | needs-token:SERIES | -
 Series.sem | python-semantics | pandas or polars semantics written over several native calls
+Series.set_axis | python-semantics | pandas container API on the Series, sets the row labels, not an op
 Series.shape | python-semantics | accessor or shape property of the column, not an op
 Series.share | python-semantics | a new handle on the same buffers
 Series.shift | needs-token:I64_ARG | -

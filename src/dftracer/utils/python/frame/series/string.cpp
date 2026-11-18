@@ -385,7 +385,8 @@ PyObject* Series_str_cat(PyObject* self, PyObject* other) {
     Series out = kernel(*a, [&] { return a->str_cat(*b); });
     if (!out.valid()) {
         PyErr_SetString(core::g_dft_value_error,
-                        "str_cat: both must be String columns of one length");
+                        "str_cat: both must be String columns of one length "
+                        "with the same row labels");
         return nullptr;
     }
     return make_series(std::move(out));

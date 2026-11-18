@@ -41,7 +41,6 @@ pandas Series.align | needs-index | labels and (multi-)index alignment; waits fo
 pandas Series.asfreq | needs-index | selects or resamples by a DatetimeIndex; waits for the row index step (D3b point 4)
 pandas Series.at_time | needs-index | selects or resamples by a DatetimeIndex; waits for the row index step (D3b point 4)
 pandas Series.attrs | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
-pandas Series.axes | needs-index | the index object and its name; waits for the row index step
 pandas Series.between_time | needs-index | selects or resamples by a DatetimeIndex; waits for the row index step (D3b point 4)
 pandas Series.bool | deprecated-upstream | removed or deprecated in pandas 3 (still present in pandas 2)
 pandas Series.cat | needs-kernel | categorical dtype and the .cat accessor (codes, categories): the engine has no categorical column type
@@ -49,16 +48,13 @@ pandas Series.combine | python-semantics | calls a two-argument Python function 
 pandas Series.droplevel | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas Series.flags | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
 pandas Series.hist | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
-pandas Series.index | needs-index | the index object and its name; waits for the row index step
 pandas Series.info | python-semantics | prints a text summary to a buffer; DataFrame.info is the engine's summary
 pandas Series.plot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
 pandas Series.ravel | deprecated-upstream | removed or deprecated in pandas 3 (still present in pandas 2)
 pandas Series.reindex | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas Series.reindex_like | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
-pandas Series.rename_axis | needs-index | the index object and its name; waits for the row index step
 pandas Series.reorder_levels | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas Series.resample | needs-index | acts on a DatetimeIndex (the values go through s.dt.tz_convert / tz_localize); waits for the row index step
-pandas Series.set_axis | needs-index | the index object and its name; waits for the row index step
 pandas Series.set_flags | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
 pandas Series.sparse | out-of-scope | sparse arrays (D3b out-of-scope)
 pandas Series.struct | needs-kernel | the .struct accessor (field, explode, rename_fields): DType.STRUCT has no accessor kernel

@@ -30,6 +30,16 @@ Series Series::rename(const dstd::SharedString& name) const {
     return Series{out};
 }
 
+template <class Op>
+Series Series::paired(const Series& other, Op op) const {
+    if (!has_index() && !other.has_index())
+        return derived(op(handle_, other.handle_), other);
+    dstd::Result<AlignedSeries> aligned = align_labels(*this, other);
+    if (!aligned) return Series{};
+    return aligned->left.derived(
+        op(aligned->left.handle_, aligned->right.handle_), aligned->right);
+}
+
 Series Series::structs_from(dstd::Span<const char* const> names,
                             dstd::Vector<Series> columns) {
     dstd::Vector<dftu_series*> handles;
@@ -63,21 +73,6 @@ Series Series::structs(std::initializer_list<const char*> names,
         std::move(columns));
 }
 
-Series Series::derived(dftu_series* result) const {
-    if (result != nullptr && handle_ != nullptr) result->name = handle_->name;
-    return Series{result};
-}
-
-Series Series::derived(dftu_series* result, const Series& other) const {
-    if (result == nullptr) return Series{};
-    if (handle_ != nullptr && other.handle_ != nullptr &&
-        name() == other.name())
-        result->name = handle_->name;
-    else
-        result->name = {};
-    return Series{result};
-}
-
 DataType Series::data_type() const {
     DataType dt;
     dt.id = type();
@@ -103,16 +98,24 @@ DataType Series::data_type() const {
 }
 
 Series Series::add(const Series& o) const {
-    return derived(dftu_series_add(handle_, o.handle_), o);
+    return paired(o, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_add(a, b);
+    });
 }
 Series Series::sub(const Series& o) const {
-    return derived(dftu_series_sub(handle_, o.handle_), o);
+    return paired(o, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_sub(a, b);
+    });
 }
 Series Series::mul(const Series& o) const {
-    return derived(dftu_series_mul(handle_, o.handle_), o);
+    return paired(o, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_mul(a, b);
+    });
 }
 Series Series::div(const Series& o) const {
-    return derived(dftu_series_div(handle_, o.handle_), o);
+    return paired(o, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_div(a, b);
+    });
 }
 
 dstd::Result<Scalar> Series::sum() const {
@@ -301,9 +304,6 @@ Series Series::bitwise_trailing_zeros() const {
 Scalar Series::bitwise_and() const { return dftu_series_bitwise_and(handle_); }
 Scalar Series::bitwise_or() const { return dftu_series_bitwise_or(handle_); }
 Scalar Series::bitwise_xor() const { return dftu_series_bitwise_xor(handle_); }
-Series Series::unique(bool maintain_order) const {
-    return derived(dftu_series_unique_nulls(handle_, maintain_order ? 1 : 0));
-}
 Series Series::dictionary_encode() const {
     return derived(dftu_series_dictionary_encode(handle_));
 }
@@ -332,51 +332,33 @@ Series Series::is_duplicated() const {
 bool Series::is_sorted(bool descending) const {
     return dftu_series_is_sorted(handle_, descending ? 1 : 0) != 0;
 }
-Series Series::drop_nulls() const {
-    return derived(dftu_series_drop_nulls(handle_));
-}
 Series Series::is_in(const Series& values) const {
     return derived(dftu_series_is_in(handle_, values.handle_));
 }
-Series Series::sort(bool descending, bool nulls_last) const {
-    return derived(dftu_series_sort_nulls(handle_, descending ? 1 : 0,
-                                          nulls_last ? 1 : 0));
-}
-Series Series::head(std::int64_t n) const {
-    return derived(dftu_series_head(handle_, n));
-}
-Series Series::tail(std::int64_t n) const {
-    return derived(dftu_series_tail(handle_, n));
-}
-Series Series::reverse() const { return derived(dftu_series_reverse(handle_)); }
 Series Series::shift(std::int64_t n) const {
     return derived(dftu_series_shift(handle_, n));
-}
-Series Series::top_k(std::int64_t k) const {
-    return derived(dftu_series_top_k(handle_, k));
-}
-Series Series::bottom_k(std::int64_t k) const {
-    return derived(dftu_series_bottom_k(handle_, k));
-}
-Series Series::sample(std::int64_t n, std::uint64_t seed) const {
-    return derived(dftu_series_sample(handle_, n, seed));
 }
 Series Series::argsort(bool descending, bool nulls_last) const {
     return derived(dftu_series_argsort_nulls(handle_, descending ? 1 : 0,
                                              nulls_last ? 1 : 0));
 }
-Series Series::take(dstd::Span<const std::int64_t> indices) const {
-    return derived(dftu_series_take(handle_, indices.data(),
-                                    static_cast<std::int64_t>(indices.size())));
-}
 Series Series::materialize() const {
     return derived(dftu_series_materialize(handle_));
 }
 Series Series::where(const Series& mask, const Series& other) const {
-    return derived(dftu_series_where(mask.handle_, handle_, other.handle_));
-}
-Series Series::filter(const Series& mask) const {
-    return derived(dftu_series_filter(handle_, mask.handle_));
+    if ((has_index() && other.has_index() && !same_labels(*this, other)) ||
+        (mask.has_index() && has_index() && !same_labels(*this, mask)) ||
+        (mask.has_index() && other.has_index() && !same_labels(other, mask)))
+        return Series{};
+    Series out =
+        derived(dftu_series_where(mask.handle_, handle_, other.handle_));
+    if (out.valid() && !out.has_index()) {
+        if (other.has_index())
+            out = out.with_index_of(other);
+        else if (mask.has_index())
+            out = out.with_index_of(mask);
+    }
+    return out;
 }
 
 Series Series::str_eq(dstd::StringView rhs) const {
@@ -519,7 +501,12 @@ Series Series::str_center(std::int64_t width, char fill) const {
     return derived(dftu_series_str_center(handle_, width, fill));
 }
 Series Series::str_cat(const Series& other) const {
-    return derived(dftu_series_str_cat(handle_, other.handle_));
+    if (has_index() && other.has_index() && !same_labels(*this, other))
+        return Series{};
+    Series out = derived(dftu_series_str_cat(handle_, other.handle_));
+    if (out.valid() && !out.has_index() && other.has_index())
+        out = out.with_index_of(other);
+    return out;
 }
 Series Series::str_findall(dstd::StringView pattern) const {
     return derived(
@@ -560,23 +547,32 @@ Series Series::with_timezone(dstd::StringView tz) const {
         handle_, tz.data(), static_cast<std::int32_t>(tz.size())));
 }
 Series Series::floordiv(const Series& other) const {
-    return derived(dftu_series_floordiv(handle_, other.handle_), other);
+    return paired(other, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_floordiv(a, b);
+    });
 }
 Series Series::mod(const Series& other) const {
-    return derived(dftu_series_mod(handle_, other.handle_), other);
+    return paired(other, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_mod(a, b);
+    });
 }
 Series Series::pow(const Series& other) const {
-    return derived(dftu_series_pow(handle_, other.handle_), other);
+    return paired(other, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_pow(a, b);
+    });
 }
 Series Series::ffill() const { return derived(dftu_series_ffill(handle_)); }
 Series Series::bfill() const { return derived(dftu_series_bfill(handle_)); }
 
 Series Series::logical_and(const Series& o) const {
-    return derived(dftu_series_logical(handle_, o.handle_, DFTU_LOGICAL_AND),
-                   o);
+    return paired(o, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_logical(a, b, DFTU_LOGICAL_AND);
+    });
 }
 Series Series::logical_or(const Series& o) const {
-    return derived(dftu_series_logical(handle_, o.handle_, DFTU_LOGICAL_OR), o);
+    return paired(o, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_logical(a, b, DFTU_LOGICAL_OR);
+    });
 }
 Series Series::logical_not() const {
     return derived(dftu_series_logical_not(handle_));

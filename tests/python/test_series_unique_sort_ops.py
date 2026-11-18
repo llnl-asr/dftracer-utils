@@ -144,10 +144,11 @@ def test_arithmetic_names_take_a_scalar_and_the_pandas_names_are_the_same():
         assert getattr(dft.Series, alias) is getattr(dft.Series, canonical)
 
 
-def test_series_positional_accessors_are_one_property():
+def test_series_positional_accessors_without_labels_agree():
     s = dft.Series([6, 4, 9])
     assert s.iloc[1] == s.loc[1] == s.iat[1] == s.at[1] == 4
-    assert dft.Series.loc is dft.Series.iloc and dft.Series.at is dft.Series.iloc
+    assert dft.Series.iat is dft.Series.iloc
+    assert dft.Series.at is dft.Series.loc
 
 
 def test_dataframe_kurtosis_follows_the_polars_name():

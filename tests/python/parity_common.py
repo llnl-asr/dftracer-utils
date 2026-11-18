@@ -150,11 +150,25 @@ def close(a: Any, b: Any) -> bool:
 Norm = Tuple[str, Dict[str, Any]]
 
 
+def _ours_labels(x: Series) -> Optional[List[Any]]:
+    """The row labels of ``x`` (a tuple per row for several levels), None when
+    it is positional."""
+    names = x.index_names()
+    if not names:
+        return None
+    levels = [clean(x._index_level(i).to_list()) for i in range(len(names))]
+    return levels[0] if len(levels) == 1 else [tuple(row) for row in zip(*levels)]
+
+
 def norm_ours(x: Any) -> Norm:
     if isinstance(x, LazyFrame):
         x = x.collect()
     if isinstance(x, Series):
-        return "series", {"values": clean(x.to_list()), "kind": ours_kind(x)}
+        return "series", {
+            "values": clean(x.to_list()),
+            "kind": ours_kind(x),
+            "labels": _ours_labels(x),
+        }
     if isinstance(x, DataFrame):
         cols = list(x.columns)
         return "frame", {
@@ -179,7 +193,12 @@ def norm_pandas(pd: Any, x: Any) -> Norm:
         kind = pandas_kind(pd, x.dtype)
         if kind == "str" and any(isinstance(v, list) for v in values):
             kind = "list"
-        return "series", {"values": values, "kind": kind, "range": _is_range(pd, x.index)}
+        return "series", {
+            "values": values,
+            "kind": kind,
+            "range": _is_range(pd, x.index),
+            "labels": clean(x.index.tolist()),
+        }
     if isinstance(x, pd.DataFrame):
         cols = [str(c) for c in x.columns]
         return "frame", {
@@ -253,7 +272,7 @@ def compare(ours: Any, theirs: Any, theirs_norm: Norm, is_unordered: bool = Fals
             return f"[dtype] {a['kind']} vs {b['kind']}"
         if not close(a["values"], b["values"]):
             return f"[values] {a['values']} vs {b['values']}"
-        if not b.get("range", True):
+        if not b.get("range", True) and a.get("labels") != b["labels"]:
             return "[index] the library result has row labels"
     elif kind == "frame":
         if a["columns"] != b["columns"]:

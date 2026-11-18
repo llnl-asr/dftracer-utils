@@ -521,7 +521,7 @@ class At:
         out = _apply_rows(self._df, rows)
         if len(out) != 1:
             raise KeyError(f"at: the row key matches {len(out)} rows, not one")
-        return out[name][0]
+        return out[name].item(0)
 
     def __setitem__(self, key: object, value: object) -> None:
         rows, name = self._cell(key)

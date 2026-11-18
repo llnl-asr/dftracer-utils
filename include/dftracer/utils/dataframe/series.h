@@ -376,6 +376,49 @@ class Series {
     /// bump, no data copy).
     Series share() const noexcept { return Series{dftu_series_share(handle_)}; }
 
+    /// The number of row-label levels; 0 for a positional column (the pandas
+    /// RangeIndex, nothing materialized). The labels are ordinary columns as
+    /// long as this one. @ref share, @ref rename, @ref slice and @ref as_json
+    /// keep them. A method that keeps the rows in place (a unary op, cast,
+    /// fillna, cumsum, shift, rank, scalar arithmetic) keeps them, and one that
+    /// selects or reorders rows (@ref sort, @ref head, @ref tail, @ref filter,
+    /// @ref take, @ref drop_nulls, @ref top_k, @ref bottom_k, @ref sample,
+    /// @ref reverse) moves them with the rows. A reducer, @ref unique and
+    /// @ref value_counts give none. Labels match by value: see @ref
+    /// align_labels.
+    std::int32_t index_count() const noexcept {
+        return dftu_series_index_count(handle_);
+    }
+    bool has_index() const noexcept { return index_count() > 0; }
+    /// Name of label level `i`, valid while this column lives; empty out of
+    /// range.
+    dstd::StringView index_name(std::int32_t i) const noexcept {
+        const char* p = nullptr;
+        std::size_t n = 0;
+        return dftu_series_index_name(handle_, i, &p, &n) == 0
+                   ? dstd::StringView(p, n)
+                   : dstd::StringView();
+    }
+    /// Label column of level `i`, sharing its buffers and carrying no labels
+    /// of its own; invalid out of range.
+    Series index_level(std::int32_t i) const {
+        return Series{dftu_series_index_column(handle_, i)};
+    }
+    /// A zero-copy copy of this column whose labels are `levels` named
+    /// `names`; empty spans drop them. Invalid when the spans differ in size, a
+    /// level is not as long as this column, a level is a List or Struct, or a
+    /// name repeats.
+    Series with_index(dstd::Span<const dstd::StringView> names,
+                      dstd::Span<const Series> levels) const;
+    /// A zero-copy copy of this column with no labels.
+    Series without_index() const;
+    /// This column under the labels of `source`, shared, not copied; the column
+    /// unchanged when `source` has none or has another length.
+    Series with_index_of(const Series& source) const;
+    /// The label levels as a frame, one column per level in order, whose row
+    /// index is all of them; an empty frame when there are none.
+    DataFrame index_frame() const;
+
     /// Whether this is a JSON column: String values of canonical JSON text.
     bool is_json() const noexcept { return dftu_series_is_json(handle_) != 0; }
 
@@ -400,7 +443,9 @@ class Series {
     Series div(const Series& other) const;
     /// Python-semantics floor division, remainder and power: Int64 when both
     /// operands are integral, else Float64; a zero divisor or a negative
-    /// integer exponent is null.
+    /// integer exponent is null. A row that lacks a side after label alignment
+    /// is null in every op; pandas follows IEEE `pow` there, so `1 ** NaN` and
+    /// `NaN ** 0` are 1.0 in pandas and null here.
     Series floordiv(const Series& other) const;
     Series mod(const Series& other) const;
     Series pow(const Series& other) const;
@@ -606,7 +651,10 @@ class Series {
     /// Keep the rows where the bit-packed Bool `mask` (same length) is true.
     Series filter(const Series& mask) const;
     /// Per row, this column's value where `mask` is true, else `other`'s
-    /// (`mask ? this : other`); both must share a type and length.
+    /// (`mask ? this : other`); both must share a type and length. Columns
+    /// that carry row labels must carry the same ones (@ref same_labels): an
+    /// invalid column otherwise. The result takes the labels of this column,
+    /// else of @p other, else of @p mask.
     Series where(const Series& mask, const Series& other) const;
 
     Series str_eq(dstd::StringView rhs) const;
@@ -676,6 +724,8 @@ class Series {
     Series str_remove_suffix(dstd::StringView suffix) const;
     Series str_repeat(std::int64_t n) const;
     Series str_center(std::int64_t width, char fill = ' ') const;
+    /// Row-wise concatenation; two columns that carry row labels must carry
+    /// the same ones (@ref same_labels), an invalid column otherwise.
     Series str_cat(const Series& other) const;
     Series str_findall(dstd::StringView pattern) const;
     Series str_partition(dstd::StringView sep, bool from_right = false) const;
@@ -825,9 +875,41 @@ class Series {
     Series derived(dftu_series* result) const;
     /// Same for a binary op: the name is kept only when @p other has the same.
     Series derived(dftu_series* result, const Series& other) const;
+    /// A binary op over this column and @p other, aligned on their row labels
+    /// first (see @ref align_labels); an invalid column when they cannot align.
+    template <class Op>
+    Series paired(const Series& other, Op op) const;
 
     dftu_series* handle_ = nullptr;
 };
+
+/// Two columns aligned on their row labels, each carrying the result labels.
+struct AlignedSeries {
+    Series left;
+    Series right;
+};
+
+/// Aligns `a` and `b` for a binary op as pandas does. Two positional columns
+/// pass through unchanged (their lengths are the op's to check). A positional
+/// column counts as the labels 0 .. length-1 once the other has labels. Labels
+/// that are the same by value, level for level, and in the same order leave
+/// the rows in place under those labels. Otherwise the result is the outer
+/// join of the labels, sorted by them, with a null where a side has no row
+/// (an integer column that gains a null becomes Float64 first, a Bool one
+/// takes false, as the pandas logical ops); a duplicated label matches every
+/// row that has it. A null label equals another null label (the pandas index
+/// treats NaN as one label) and sorts last. Numeric labels of different types
+/// meet in the numpy common type (Int32 with Int64 in Int64, an integer with
+/// a float in Float64); a string label never meets a number. The result labels
+/// take `a`'s level names (the default `__index_level_<i>__` for a positional
+/// `a`), as pandas. An InvalidArgument error when the labels have a different
+/// number of levels or a level whose two types have no common type, or when the
+/// engine's join refuses the labels.
+dstd::Result<AlignedSeries> align_labels(const Series& a, const Series& b);
+
+/// Whether `a` and `b` carry the same labels as @ref align_labels counts them
+/// (a positional column is 0 .. length-1), so a comparison needs no alignment.
+bool same_labels(const Series& a, const Series& b);
 
 // Reflected scalar arithmetic: `v + s`, `v * s` (commutative) and `v - s`.
 // Reflected division `v / s` is intentionally absent (no reciprocal kernel).

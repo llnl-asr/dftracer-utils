@@ -10,6 +10,7 @@ from . import dftracer_utils_ext as _ext
 from ._aliases import install as _install_aliases
 from ._apply import trace_errors, uses_identity_test, warn_fallback
 from ._group_transforms import GroupTransforms
+from ._series_index import to_frame, with_levels
 from .agg import (
     PANDAS_AGG_NAMES,
     AggForm,
@@ -235,6 +236,23 @@ class GroupBy(GroupTransforms[DataFrame]):
                 out, name, column if rows is None else column.take(rows)
             )
         return _ext.DataFrame.with_index(out, names)
+
+    def _labelled_series(self, out: Series) -> Series:
+        """``out``, one value per row of the grouped frame in input order, under
+        the labels that frame had (pandas also puts the group keys before them;
+        a level of keys is not added here)."""
+        origin = self._origin
+        names = _ext.DataFrame.index_names(origin) if origin is not None else []
+        if origin is None or not names:
+            return out
+        rows = self._rows
+        levels = []
+        for name in names:
+            column = _ext.DataFrame.__getitem__(origin, name)
+            levels.append(column if rows is None else column.gather(rows))
+        if len(levels[0]) != len(out):
+            return out
+        return with_levels(out, names, levels)
 
     def median(self) -> DataFrame:
         """The exact median of each numeric column per group (pandas
@@ -776,7 +794,7 @@ class GroupBy(GroupTransforms[DataFrame]):
             )
         if not has_agg_leaf(traced):
             # A row expression with no aggregate: one value per row.
-            return traced.apply(frame)
+            return self._labelled_series(traced.apply(frame))
         grouped, rewritten = self._group_values(traced)
         row_cols = [c for c in collect_columns(traced) if c in frame]
         if not row_cols:
@@ -791,7 +809,7 @@ class GroupBy(GroupTransforms[DataFrame]):
                 v = self._col(grouped, name)[0]
                 assert isinstance(v, (int, float))
                 joined = joined.with_column(name, self._col(frame, row_cols[0]).full_like(v))
-        return rewritten.apply(joined)
+        return self._labelled_series(rewritten.apply(joined))
 
     def _lower_filter(self, traced: object) -> DataFrame:
         frame = self._frame()
@@ -829,11 +847,12 @@ class GroupBy(GroupTransforms[DataFrame]):
                 out = out.concat(r)
             return out
         if isinstance(first, Series):
-            values: list[object] = []
+            # The pieces keep the labels their group frame gave them.
+            pieces: list[DataFrame] = []
             for _, r in results:
                 assert isinstance(r, Series)
-                values.extend(r.to_list())
-            return Series.from_list(values)
+                pieces.append(to_frame(r, "value"))
+            return pieces[0].concat(*pieces[1:])["value"].rename(None)
         keys: dict[str, list[object]] = {k: [] for k in self._keys}
         for label, _ in results:
             parts = label if isinstance(label, tuple) else (label,)

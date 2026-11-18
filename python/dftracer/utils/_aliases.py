@@ -142,7 +142,11 @@ ADAPTERS = {
         "nsmallest",
         "kurt",
         "drop_duplicates",
+        "dropna",
+        "take",
         "between",
+        "loc",
+        "at",
     ),
     "Expr": ("between",),
     "DataFrame": (

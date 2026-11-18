@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/kernels/prims.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/scalar_helpers.h>
 #include <dftracer/utils/python/frame/series_detail.h>
 
@@ -24,6 +26,23 @@ PyObject* make_arith_series(Series&& col, TypeId a_type, TypeId b_type) {
         return nullptr;
     }
     return make_series(std::move(col));
+}
+
+// The operands of a Series-Series op aligned on their row labels as pandas
+// does (see dataframe::align_labels): `a` and `b` are repointed at the aligned
+// pair, kept in `store`. Two positional operands stay as they are. False with
+// a ValueError set when the labels cannot align.
+bool align_operands(Series*& a, Series*& b, dataframe::AlignedSeries& store) {
+    if (!a->has_index() && !b->has_index()) return true;
+    auto aligned = dataframe::align_labels(*a, *b);
+    if (!aligned) {
+        PyErr_SetString(core::g_dft_value_error, aligned.error().c_str());
+        return false;
+    }
+    store = std::move(*aligned);
+    a = &store.left;
+    b = &store.right;
+    return true;
 }
 
 // A Python number as either an i64 or an f64 scalar; the kernel converts it to
@@ -91,6 +110,8 @@ PyObject* Series_add(PyObject* self, PyObject* other) {
     Held held_b(other);
     Series* b = held_b.get();
     if (!a || !b) return nullptr;
+    dataframe::AlignedSeries aligned;
+    if (!align_operands(a, b, aligned)) return nullptr;
     return make_arith_series(
         named_like(kernel(*a, [&] { return dataframe::add(*a, *b); }), *a, *b),
         a->type(), b->type());
@@ -101,6 +122,8 @@ PyObject* Series_sub(PyObject* self, PyObject* other) {
     Held held_b(other);
     Series* b = held_b.get();
     if (!a || !b) return nullptr;
+    dataframe::AlignedSeries aligned;
+    if (!align_operands(a, b, aligned)) return nullptr;
     return make_arith_series(
         named_like(kernel(*a, [&] { return dataframe::sub(*a, *b); }), *a, *b),
         a->type(), b->type());
@@ -111,6 +134,8 @@ PyObject* Series_mul(PyObject* self, PyObject* other) {
     Held held_b(other);
     Series* b = held_b.get();
     if (!a || !b) return nullptr;
+    dataframe::AlignedSeries aligned;
+    if (!align_operands(a, b, aligned)) return nullptr;
     return make_arith_series(
         named_like(kernel(*a, [&] { return dataframe::mul(*a, *b); }), *a, *b),
         a->type(), b->type());
@@ -121,6 +146,8 @@ PyObject* Series_div(PyObject* self, PyObject* other) {
     Held held_b(other);
     Series* b = held_b.get();
     if (!a || !b) return nullptr;
+    dataframe::AlignedSeries aligned;
+    if (!align_operands(a, b, aligned)) return nullptr;
     return make_arith_series(
         named_like(kernel(*a, [&] { return dataframe::div(*a, *b); }), *a, *b),
         a->type(), b->type());
@@ -137,6 +164,8 @@ static PyObject* extra_apply(PyObject* self, PyObject* other, ExtraOp op,
     if (!a) return nullptr;
     Held held_b(other, Held::Optional);
     if (Series* b = held_b.get()) {
+        dataframe::AlignedSeries aligned;
+        if (!align_operands(a, b, aligned)) return nullptr;
         Series out = kernel(*a, [&] {
             return op == ExtraOp::FloorDiv ? dataframe::floordiv(*a, *b)
                    : op == ExtraOp::Mod    ? dataframe::mod(*a, *b)
@@ -262,6 +291,8 @@ PyObject* Series_logical(PyObject* self, PyObject* args) {
     Held held_b(other);
     Series* b = held_b.get();
     if (!b) return nullptr;
+    dataframe::AlignedSeries aligned;
+    if (!align_operands(a, b, aligned)) return nullptr;
     return make_series(
         named_like(kernel(*a,
                           [&] {
@@ -443,6 +474,13 @@ PyObject* Series_richcompare(PyObject* self, PyObject* other, int op) {
     if (!a) return nullptr;
     Held held_b(other, Held::Optional);
     if (Series* b = held_b.get()) {
+        const bool labelled = a->has_index() || b->has_index();
+        if (labelled && !dataframe::same_labels(*a, *b)) {
+            PyErr_SetString(core::g_dft_value_error,
+                            "Can only compare identically-labeled Series "
+                            "objects");
+            return nullptr;
+        }
         Series out = kernel(*a, [&] {
             return Series{
                 dftu_series_compare_series(a->handle(), b->handle(), code)};
@@ -452,6 +490,7 @@ PyObject* Series_richcompare(PyObject* self, PyObject* other, int op) {
                             "op 'dftu.series.compare_series' failed");
             return nullptr;
         }
+        if (a->has_index()) out.handle()->labels = a->handle()->labels;
         return make_series(std::move(out));
     }
     if (other == Py_None) {

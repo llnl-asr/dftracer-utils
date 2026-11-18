@@ -383,6 +383,38 @@ DFTU_EXPORT const char* dftu_series_name(const dftu_series* s, size_t* len);
 DFTU_EXPORT dftu_series* dftu_series_rename(const dftu_series* s,
                                             const char* name, size_t len);
 
+/* The row labels of a column: one label column per level, each as long as the
+ * column. A column with none is positional (the pandas RangeIndex, nothing
+ * materialized). dftu_series_share, dftu_series_rename, dftu_series_mark_json
+ * and dftu_series_slice carry the labels, and the shape-keeping functions of
+ * the C++ Series do; a function that reorders or selects rows through this C
+ * ABI promises none. */
+
+/** The number of label levels of `s`: 0 when it has none or `s` is NULL. */
+DFTU_EXPORT int32_t dftu_series_index_count(const dftu_series* s);
+/** Level `i` of `s`: stores its name in `*ptr` (NUL-terminated, not owned) and
+ * its byte length in `*len` (`len` may be NULL). The text stays valid until `s`
+ * is freed. Returns 0, or -1 and leaves `*ptr` and `*len` untouched when `s` or
+ * `ptr` is NULL or `i` is out of range. */
+DFTU_EXPORT int32_t dftu_series_index_name(const dftu_series* s, int32_t i,
+                                           const char** ptr, size_t* len);
+/** A new owned column holding the label column of level `i` of `s`, sharing its
+ * buffers zero-copy and carrying no labels of its own. Free it with
+ * dftu_series_free. NULL for a NULL `s` and an out-of-range `i`. */
+DFTU_EXPORT dftu_series* dftu_series_index_column(const dftu_series* s,
+                                                  int32_t i);
+/** A new owned column sharing `s`'s buffers (as dftu_series_share) whose labels
+ * are the `n` columns in `levels`, named by the `lens[i]` bytes at `names[i]`
+ * (copied; not necessarily NUL-terminated). The level columns are shared, not
+ * consumed, and a level of type List or Struct is refused. `n` == 0 gives a
+ * column with no labels. NULL for a NULL `s`, a NULL pointer with `n` > 0, a
+ * negative `n`, a level whose length differs from `s`, an invalid level, a
+ * repeated name and on allocation failure. Free the result with
+ * dftu_series_free. */
+DFTU_EXPORT dftu_series* dftu_series_with_index(
+    const dftu_series* s, const char* const* names, const size_t* lens,
+    const dftu_series* const* levels, int32_t n);
+
 /** Elementwise binary arithmetic (same numeric type, same length). */
 DFTU_EXPORT dftu_series* dftu_series_add(const dftu_series* a,
                                          const dftu_series* b);

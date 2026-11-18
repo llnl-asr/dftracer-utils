@@ -652,6 +652,61 @@ dftu_series* dftu_series_rename(const dftu_series* s, const char* name,
     return out;
 }
 
+std::int32_t dftu_series_index_count(const dftu_series* s) {
+    return s && s->labels ? static_cast<std::int32_t>(s->labels->levels.size())
+                          : 0;
+}
+
+std::int32_t dftu_series_index_name(const dftu_series* s, std::int32_t i,
+                                    const char** ptr, std::size_t* len) {
+    if (!s || !ptr || i < 0 || !s->labels ||
+        static_cast<std::size_t>(i) >= s->labels->levels.size())
+        return -1;
+    const auto& name = s->labels->levels[static_cast<std::size_t>(i)].name;
+    *ptr = name.c_str();
+    if (len) *len = name.size();
+    return 0;
+}
+
+dftu_series* dftu_series_index_column(const dftu_series* s, std::int32_t i) {
+    if (!s || i < 0 || !s->labels ||
+        static_cast<std::size_t>(i) >= s->labels->levels.size())
+        return nullptr;
+    return dftu_series_share(
+        s->labels->levels[static_cast<std::size_t>(i)].series.get());
+}
+
+dftu_series* dftu_series_with_index(const dftu_series* s,
+                                    const char* const* names,
+                                    const std::size_t* lens,
+                                    const dftu_series* const* levels,
+                                    std::int32_t n) {
+    if (!s || n < 0 || (n > 0 && (!names || !lens || !levels))) return nullptr;
+    auto labels = dftracer::utils::dstd::make_shared<dftu_labels>();
+    labels->levels.reserve(static_cast<std::size_t>(n));
+    for (std::int32_t i = 0; i < n; ++i) {
+        const dftu_series* level = levels[i];
+        if (!names[i] || !level || level->length != s->length ||
+            level->type == TypeId::List || level->type == TypeId::Struct)
+            return nullptr;
+        const dftracer::utils::dstd::StringView name(names[i], lens[i]);
+        for (const dftu_nested& seen : labels->levels)
+            if (dftracer::utils::dstd::StringView(seen.name) == name)
+                return nullptr;
+        dftu_series* shared = dftu_series_share(level);
+        shared->labels = {};
+        shared->name = {};
+        labels->levels.push_back(
+            {adopt_series(shared), dftracer::utils::dstd::String(name)});
+    }
+    auto* out = new dftu_series(*s);
+    if (n == 0)
+        out->labels = {};
+    else
+        out->labels = std::move(labels);
+    return out;
+}
+
 namespace {
 
 BufferView window(const BufferView& parent, std::size_t at, std::size_t bytes) {
@@ -792,6 +847,18 @@ dftu_series* slice_unnamed(const dftu_series* col, std::int64_t offset,
 dftu_series* dftu_series_slice(const dftu_series* col, std::int64_t offset,
                                std::int64_t len) {
     dftu_series* out = slice_unnamed(col, offset, len);
-    if (out) out->name = col->name;
+    if (!out) return out;
+    out->name = col->name;
+    if (!col->labels) return out;
+    auto labels = dftracer::utils::dstd::make_shared<dftu_labels>();
+    for (const dftu_nested& level : col->labels->levels) {
+        dftu_series* part = slice_unnamed(level.series.get(), offset, len);
+        if (!part) {
+            dftu_series_free(out);
+            return nullptr;
+        }
+        labels->levels.push_back({adopt_series(part), level.name});
+    }
+    out->labels = std::move(labels);
     return out;
 }

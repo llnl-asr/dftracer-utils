@@ -202,6 +202,14 @@ PyObject* run_op_noargs(std::size_t id, PyObject* self) {
     Held held_a(self);
     Series* a = held_a.get();
     if (!a) return nullptr;
+    // The two row-selecting ops move the labels with the rows.
+    if (a->has_index()) {
+        const dstd::StringView name = ROWS[id].name;
+        if (name == "drop_nulls")
+            return make_series(kernel(*a, [&] { return a->drop_nulls(); }));
+        if (name == "reverse")
+            return make_series(kernel(*a, [&] { return a->reverse(); }));
+    }
     dftu_op_generic_fn op = bound_fn(id);
     if (!op) return nullptr;
     auto fn = reinterpret_cast<dftu_series* (*)(const dftu_series*)>(op);

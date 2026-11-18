@@ -10,6 +10,7 @@ import math
 import numbers
 from typing import (
     TYPE_CHECKING,
+    Any,
     Callable,
     Iterator,
     Literal,
@@ -20,6 +21,19 @@ from typing import (
     cast,
 )
 
+from ._series_index import (
+    labels_from,
+    levels_of,
+    names_of,
+    positional,
+    positions,
+    public_name,
+    rename_levels,
+    renamed_names,
+    reset,
+    to_frame,
+    with_levels,
+)
 from .enums import DType
 
 if TYPE_CHECKING:
@@ -287,7 +301,7 @@ class SeriesPandasMixin:
         """The pandas ``drop_duplicates``: the values that are not a repeat,
         in order, one null kept. ``keep`` is ``"first"`` (default), ``"last"``
         or ``False`` (drop every value that repeats). See :meth:`unique`."""
-        s = self._s()
+        s = positional(self._s())
         return s.filter(~s.duplicated(keep))
 
     @property
@@ -326,6 +340,11 @@ class SeriesPandasMixin:
 
     def get(self, key: int, default: object = None) -> object:
         s = self._s()
+        if names_of(s):
+            raise NotImplementedError(
+                "get looks a row up by label, which a Series with row labels "
+                "does not support yet; use iloc"
+            )
         if -len(s) <= key < len(s):
             return s[key]
         return default
@@ -365,7 +384,7 @@ class SeriesPandasMixin:
     def squeeze(self) -> Scalar | Series:
         """The one element of a one-element Series, else the Series itself."""
         s = self._s()
-        return cast("Scalar | Series", s[0] if len(s) == 1 else s)
+        return cast("Scalar | Series", s.item(0) if len(s) == 1 else s)
 
     @property
     def T(self) -> Series:
@@ -398,16 +417,15 @@ class SeriesPandasMixin:
         return codes, uniques
 
     def repeat(self, repeats: int) -> Series:
-        """Each element repeated ``repeats`` times, in place."""
-        s = self._s()
+        """Each element repeated ``repeats`` times, in place, with its label."""
+        s = positional(self._s())
         n = int(repeats)
         if n < 0:
             raise ValueError("repeat: repeats must be non-negative")
         if n == 0:
             return s.head(0)
-        from .dataframe import DataFrame
 
-        frame = DataFrame({"v": s}).with_row_index("_i")
+        frame = to_frame(s, "v").with_column("_i", positions(len(s)))
         out = frame.concat(*[frame] * (n - 1)).sort_values("_i")["v"]
         return out.rename(s.name)
 
@@ -426,30 +444,117 @@ class SeriesPandasMixin:
 
     def to_frame(self, name: str | None = None) -> DataFrame:
         """A one-column frame; the column is ``name``, else this Series' name,
-        else ``"0"``."""
-        from .dataframe import DataFrame
-
-        if name is None:
-            own = self._s().name
-            name = own if own is not None else "0"
-        return DataFrame({name: self._s()})
+        else ``"0"``. The row labels become the frame's row index. A name that
+        a label level also has raises ``ValueError`` (pandas allows it)."""
+        return to_frame(self._s(), name)
 
     def to_dict(self) -> dict[int, object]:
         return dict(enumerate(self._s().to_list()))
 
-    def reset_index(self, drop: bool = False, name: str | None = None) -> Series | DataFrame:
-        """A frame of ``index`` (positions) and the values under ``name``
-        (default as :meth:`to_frame`); with ``drop`` the Series itself."""
-        if drop:
-            return self._s()
-        return self.to_frame(name).with_row_index("index")
+    def reset_index(
+        self,
+        level: object = None,
+        *,
+        drop: bool = False,
+        name: str | Omitted = OMITTED,
+    ) -> Series | DataFrame:
+        """The pandas ``reset_index``: a frame of the row labels as columns
+        (``index`` for one unnamed level, ``level_<i>`` for several; named levels
+        keep their name) and the values under ``name`` (default: the Series' name,
+        else ``"0"``). ``level`` picks which levels move out, the others stay the
+        index; with ``drop`` the Series itself comes back under the remaining
+        levels. A positional Series has the one level ``index`` of positions. A
+        column name that repeats raises ``ValueError`` (a frame has no duplicate
+        names, so ``allow_duplicates`` is not offered)."""
+        return reset(self._s(), level, drop, name)
 
-    def truncate(self, before: int | None = None, after: int | None = None) -> Series:
-        """Elements at positions ``[before, after]``, both included."""
+    def set_axis(self, labels: object, *, axis: int | str = 0, copy: bool | None = None) -> Series:
+        """The pandas ``set_axis``: this Series under new row labels, a sequence
+        as long as it (of tuples for a ``MultiIndex``), a Series, a frame (one
+        level per column) or a pandas ``Index``. ``ValueError`` for another
+        length, ``ValueError`` for an axis other than 0."""
+        if axis not in (0, "index", "rows"):
+            raise ValueError(f"No axis named {axis} for object type Series")
         s = self._s()
-        lo = 0 if before is None else int(before)
-        hi = len(s) - 1 if after is None else int(after)
-        return s.slice(lo, max(hi - lo + 1, 0))
+        names, levels = labels_from(labels, len(s))
+        return with_levels(s, names, levels)
+
+    def rename_axis(
+        self,
+        mapper: object = OMITTED,
+        *,
+        index: object = OMITTED,
+        axis: int | str = 0,
+        copy: bool | None = None,
+        inplace: bool = False,
+    ) -> Series:
+        """The pandas ``rename_axis``: the name of the row labels (``None`` to
+        clear it). A list names each level of a ``MultiIndex``; with ``index=`` a
+        dict or a function maps the current names. A positional Series gains the
+        labels ``0 .. n-1`` under the name."""
+        if inplace:
+            raise ValueError("rename_axis: a Series is immutable; use the result")
+        if axis not in (0, "index", "rows"):
+            raise ValueError(f"No axis named {axis} for object type Series")
+        given = index if not isinstance(index, Omitted) else mapper
+        if isinstance(given, Omitted):
+            return self._s()
+        s = self._s()
+        return rename_levels(s, renamed_names(s, given))
+
+    @property
+    def index(self) -> Series | DataFrame:
+        """The row labels: a Series of the labels for one level (named by the
+        level), a frame of them for several, and the positions ``0 .. n-1`` (the
+        pandas ``RangeIndex``) for a Series with none. The labels of a Series
+        that came from ``df[col]`` are the frame's row index; they follow the
+        rows through ``sort_values``, ``filter``, ``head`` and the like, and
+        two labelled Series align on them in arithmetic."""
+        from .dataframe import DataFrame
+
+        s = self._s()
+        names = names_of(s)
+        if not names:
+            return positions(len(s))
+        levels = levels_of(s)
+        if len(names) == 1:
+            return levels[0].rename(public_name(names[0]))
+        return DataFrame.from_dict(dict(zip(names, levels)))
+
+    @property
+    def axes(self) -> list[Series | DataFrame]:
+        """``[index]``, the pandas ``axes`` of a Series."""
+        return [self.index]
+
+    def truncate(self, before: object = None, after: object = None) -> Series:
+        """The pandas ``truncate``: the rows whose label is between ``before`` and
+        ``after``, both included, of a sorted index (``ValueError`` when the
+        labels are not sorted, or ``after`` is before ``before``; a Series with
+        several levels is not supported). A positional Series takes them as
+        positions ``[before, after]``."""
+        s = self._s()
+        names = names_of(s)
+        if not names:
+            s = positional(s)
+            lo = 0 if before is None else int(cast(int, before))
+            hi = len(s) - 1 if after is None else int(cast(int, after))
+            return s.slice(lo, max(hi - lo + 1, 0))
+        if len(names) != 1:
+            raise NotImplementedError("truncate: a Series with several index levels")
+        label = levels_of(s)[0]
+        ascending = label.is_sorted()
+        if not ascending and not label.is_sorted(descending=True):
+            raise ValueError("truncate requires a sorted index")
+        lo, hi = cast("tuple[Any, Any]", (before, after) if ascending else (after, before))
+        if before is not None and after is not None and lo > hi:
+            raise ValueError(f"Truncate: {after} must be after {before}")
+        keep = None
+        if lo is not None:
+            keep = label >= lo
+        if hi is not None:
+            upper = label <= hi
+            keep = upper if keep is None else keep & upper
+        return s if keep is None else s.filter(keep)
 
     def first_valid_index(self) -> int | None:
         return valid_edge(self._s().notna(), first=True)
@@ -519,13 +624,28 @@ class SeriesPandasMixin:
 
     def xs(self, key: int) -> object:
         """The element at position ``key`` (a Series has one axis)."""
-        return self._s()[key]
+        return self._s().item(key)
 
-    def sort_index(self, ascending: bool = True) -> Series:
-        """The positional index is already sorted: this Series, or reversed
-        for ``ascending=False``."""
+    def sort_index(
+        self, ascending: bool = True, na_position: Literal["first", "last"] = "last"
+    ) -> Series:
+        """The rows ordered by their row labels, level by level (a null label
+        last, or first with ``na_position="first"``); a Series without labels
+        has the positional index, which is already sorted: this Series, or
+        reversed for ``ascending=False``."""
+        from .dataframe import DataFrame
+
+        if na_position not in ("first", "last"):
+            raise ValueError("na_position must be 'first' or 'last'")
         s = self._s()
-        return s if ascending else s.reverse()
+        if not names_of(s):
+            return s if ascending else s.reverse()
+        columns = {f"l{i}": level for i, level in enumerate(levels_of(s))}
+        columns["pos"] = positions(len(s))
+        order = DataFrame(columns).sort_values(
+            [k for k in columns if k != "pos"], ascending=ascending, na_position=na_position
+        )["pos"]
+        return s.gather(order)
 
     def memory_usage(self, index: bool = False, deep: bool = False) -> int:
         """The bytes this column's Arrow buffers hold (``nbytes``)."""
@@ -640,10 +760,16 @@ class SeriesPandasMixin:
 
         return DataFrame({"v": self._s()}).explode("v")["v"]
 
-    # -- accessors: a Series is positional, so loc is iloc ----------------------------
+    # -- accessors: iloc and iat are positional; loc and at wait for label lookup ----
     @property
     def iloc(self) -> _SeriesILoc:
         return _SeriesILoc(self._s())
+
+    @property
+    def loc(self) -> _SeriesLabelLoc:
+        return _SeriesLabelLoc(self._s())
+
+    at = loc
 
     def to_csv(self, path: str | None = None, **kwargs: object) -> str | None:
         to_csv = cast("Callable[..., str | None]", self._s().to_pandas().to_csv)
@@ -660,7 +786,8 @@ class SeriesPandasMixin:
 
 class _SeriesILoc:
     """``s.iloc[i]`` / ``s.iloc[a:b]`` / ``s.iloc[[i, j]]`` / ``s.iloc[mask]``;
-    a Series has no labels, so ``loc`` is the same accessor."""
+    a Series without row labels has the positional index, so ``loc`` is the
+    same accessor there."""
 
     __slots__ = ("_s",)
 
@@ -677,7 +804,7 @@ class _SeriesILoc:
         if isinstance(key, int):
             if not -len(s) <= key < len(s):
                 raise IndexError(f"iloc: position {key} is out of bounds for {len(s)} elements")
-            return s[key]
+            return s.item(key + len(s) if key < 0 else key)
         rows, _ = rows_by_position(len(s), key)
         if rows.kind == "all":
             return s
@@ -695,4 +822,19 @@ class _SeriesILoc:
         raise TypeError("a Series is immutable; assign through df.loc[rows, column] = value")
 
 
-__all__ = ["SeriesPandasMixin", "_SeriesILoc"]
+class _SeriesLabelLoc(_SeriesILoc):
+    """``s.loc[...]`` and ``s.at[...]``: positional on a Series without row
+    labels; a Series with labels has no lookup by label yet."""
+
+    __slots__ = ()
+
+    def __getitem__(self, key: object) -> object:
+        if names_of(self._s):
+            raise NotImplementedError(
+                "loc and at look rows up by label, which a Series with row labels "
+                "does not support yet; use iloc for positions"
+            )
+        return super().__getitem__(key)
+
+
+__all__ = ["SeriesPandasMixin", "_SeriesILoc", "_SeriesLabelLoc"]

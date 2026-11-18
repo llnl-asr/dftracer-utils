@@ -43,8 +43,11 @@ void Series_dealloc(SeriesObject* self) {
 }  // namespace
 
 Series named_like(Series out, const Series& source) {
-    if (out.valid() && source.valid())
+    if (out.valid() && source.valid()) {
         out.handle()->name = source.handle()->name;
+        out.handle()->labels =
+            out.length() == source.length() ? source.handle()->labels : nullptr;
+    }
     return out;
 }
 
@@ -52,6 +55,9 @@ Series named_like(Series out, const Series& a, const Series& b) {
     if (!out.valid()) return out;
     out.handle()->name =
         a.name() == b.name() ? a.handle()->name : dstd::SharedString{};
+    const dftu_series* from = a.has_index() ? a.handle() : b.handle();
+    out.handle()->labels =
+        out.length() == from->length ? from->labels : nullptr;
     return out;
 }
 
@@ -248,6 +254,100 @@ PyObject* Series_rename(PyObject* self, PyObject* arg) {
     dstd::StringView name;
     if (!name_from_py(arg, "rename: the name", name)) return nullptr;
     return make_series(a->rename(name));
+}
+
+// index_names() -> list[str]: the row label levels, in order; [] for none.
+PyObject* Series_index_names(PyObject* self, PyObject*) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    const std::int32_t n = a->index_count();
+    PyObject* list = PyList_New(n);
+    if (!list) return nullptr;
+    for (std::int32_t i = 0; i < n; ++i) {
+        const dstd::StringView name = a->index_name(i);
+        PyObject* text = PyUnicode_FromStringAndSize(
+            name.data(), static_cast<Py_ssize_t>(name.size()));
+        if (!text) {
+            Py_DECREF(list);
+            return nullptr;
+        }
+        PyList_SET_ITEM(list, i, text);
+    }
+    return list;
+}
+
+// _index_level(i) -> Series: the label column of level i, sharing its buffers.
+PyObject* Series_index_level(PyObject* self, PyObject* arg) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    const long i = PyLong_AsLong(arg);
+    if (i == -1 && PyErr_Occurred()) return nullptr;
+    if (i < 0 || i >= a->index_count()) {
+        PyErr_SetString(PyExc_IndexError, "index level out of range");
+        return nullptr;
+    }
+    return make_series(a->index_level(static_cast<std::int32_t>(i)));
+}
+
+// _with_index(names, levels) -> Series: a copy sharing the buffers whose row
+// labels are the `levels` (Series as long as this one) under `names`; empty
+// lists drop them.
+PyObject* Series_with_index(PyObject* self, PyObject* args) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    PyObject* names_obj = nullptr;
+    PyObject* levels_obj = nullptr;
+    if (!PyArg_ParseTuple(args, "OO", &names_obj, &levels_obj)) return nullptr;
+    PyObject* names = PySequence_Fast(names_obj, "names must be a sequence");
+    if (!names) return nullptr;
+    PyObject* levels = PySequence_Fast(levels_obj, "levels must be a sequence");
+    if (!levels) {
+        Py_DECREF(names);
+        return nullptr;
+    }
+    PyObject* result = nullptr;
+    const Py_ssize_t n = PySequence_Fast_GET_SIZE(names);
+    if (n != PySequence_Fast_GET_SIZE(levels)) {
+        PyErr_SetString(PyExc_ValueError,
+                        "with_index: names and levels differ in length");
+    } else {
+        dstd::Vector<dstd::StringView> views;
+        dstd::Vector<Series> columns;
+        bool ok = true;
+        for (Py_ssize_t i = 0; ok && i < n; ++i) {
+            dstd::StringView view;
+            const Series* level =
+                as_native_or_null<Series>(PySequence_Fast_GET_ITEM(levels, i));
+            if (!level) {
+                PyErr_SetString(PyExc_TypeError,
+                                "with_index: levels must be Series");
+                ok = false;
+            } else if (PySequence_Fast_GET_ITEM(names, i) == Py_None ||
+                       !name_from_py(PySequence_Fast_GET_ITEM(names, i),
+                                     "with_index: a level name", view)) {
+                if (!PyErr_Occurred())
+                    PyErr_SetString(PyExc_TypeError,
+                                    "with_index: a level name must be a str");
+                ok = false;
+            } else {
+                views.push_back(view);
+                columns.push_back(level->share());
+            }
+        }
+        if (ok) {
+            Series out = a->with_index(views, columns);
+            if (!out.valid())
+                PyErr_SetString(core::g_dft_value_error,
+                                "with_index: each level must be as long as "
+                                "the Series, not a list or a struct, and "
+                                "named apart");
+            else
+                result = make_series(std::move(out));
+        }
+    }
+    Py_DECREF(names);
+    Py_DECREF(levels);
+    return result;
 }
 
 // The name is the one thing a Series changes in place, as pandas and polars
@@ -491,6 +591,9 @@ PyMethodDef Series_methods[] = {
      "to_bytes() -> bytes: the column in the native frame format."},
     {"item", Series_item, METH_O,
      "item(i) -> the value at row i as a Python object (None for null)."},
+    {"_item_unlabelled", Series_item_unlabelled, METH_O,
+     "_item_unlabelled(i) -> the element at position i; NotImplementedError "
+     "on a Series with row labels."},
     {"materialize", Series_materialize, METH_NOARGS,
      "Materialize any encoding to a new FLAT Series (gather)."},
     {"__class_getitem__", Series_class_getitem, METH_O | METH_CLASS,
@@ -501,6 +604,14 @@ PyMethodDef Series_methods[] = {
      "supported."},
     {"share", Series_share, METH_NOARGS,
      "A new owned Series sharing this column's buffers zero-copy."},
+    {"index_names", Series_index_names, METH_NOARGS,
+     "index_names() -> list[str]\n\nThe row label levels, in order; [] for "
+     "a positional Series."},
+    {"_index_level", Series_index_level, METH_O,
+     "_index_level(i) -> Series: the label column of level i."},
+    {"_with_index", Series_with_index, METH_VARARGS,
+     "_with_index(names, levels) -> Series sharing this column's buffers "
+     "whose row labels are the level Series; empty lists drop them."},
     {"slice",
      DFTU_PYCFUNCTION(
          (core::kw_pair<"slice", Series_slice, "offset", "length">)),

@@ -1516,6 +1516,7 @@ use_precompiled_header(dftracer_utils_duql_objects)
 set(DFTRACER_UTILS_DATAFRAME_SOURCES
     ${DFTRACER_UTILS_VEC_SOURCES}
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/series_methods.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/series_index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/dataframe_methods.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/frame_index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/frame_ops.cpp

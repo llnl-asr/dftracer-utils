@@ -101,6 +101,9 @@ struct dftracer::utils::python::core::NativeTraits<DataFrameObject> {
 namespace {
 
 PyObject* make_dataframe(DataFrame&& b) {
+    // A column of a frame is labelled by the frame's row index alone.
+    for (Series& column : b.columns)
+        if (column.has_index()) column = column.without_index();
     Series st = Series::structs(b.names, std::move(b.columns));
     auto* self = reinterpret_cast<DataFrameObject*>(
         g_dataframe_type->tp_alloc(g_dataframe_type, 0));
@@ -212,8 +215,25 @@ PyObject* DataFrame_subscript(PyObject* self, PyObject* key) {
         PyErr_Format(PyExc_KeyError, "no column named '%s'", name);
         return nullptr;
     }
+    // The labels a column was built with are not the frame's: only its own
+    // row index labels it.
+    Series column = b->st.child(i).rename(name);
+    if (column.has_index()) column = column.without_index();
+    if (b->index_names.empty())
+        return dftracer::utils::python::frame::wrap_vec_column(
+            std::move(column));
+    // The frame's row index travels with the column as its labels.
+    dstd::Vector<dstd::StringView> level_names;
+    dstd::Vector<Series> levels;
+    for (const dstd::SharedString& index_name : b->index_names) {
+        const std::int64_t at = index_of(b, index_name.c_str());
+        if (at < 0) continue;
+        level_names.emplace_back(index_name);
+        levels.push_back(b->st.child(at));
+    }
+    Series labelled = column.with_index(level_names, levels);
     return dftracer::utils::python::frame::wrap_vec_column(
-        b->st.child(i).rename(name));
+        labelled.valid() ? std::move(labelled) : std::move(column));
 }
 
 int DataFrame_contains(PyObject* self, PyObject* key) {

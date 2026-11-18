@@ -42,7 +42,7 @@ the polars call.
      - pandas spellings (alias = canonical)
      - polars spellings
    * - ``Series``
-     - ``aggregate`` = ``agg``, ``astype`` = ``cast``, ``isna`` = ``is_null``, ``isnull`` = ``is_null``, ``notna`` = ``is_not_null``, ``notnull`` = ``is_not_null``, ``dropna`` = ``drop_nulls``, ``fillna`` = ``fill_null``, ``isin`` = ``is_in``, ``nunique`` = ``n_unique``, ``prod`` = ``product``, ``argmax`` = ``arg_max``, ``idxmax`` = ``arg_max``, ``argmin`` = ``arg_min``, ``idxmin`` = ``arg_min``, ``cumsum`` = ``cum_sum``, ``cumprod`` = ``cum_prod``, ``cummax`` = ``cum_max``, ``cummin`` = ``cum_min``, ``searchsorted`` = ``search_sorted``, ``tolist`` = ``to_list``, ``ffill`` = ``forward_fill``, ``pad`` = ``forward_fill``, ``bfill`` = ``backward_fill``, ``backfill`` = ``backward_fill``, ``kurt`` (own signature) = ``kurtosis``, ``take`` = ``gather``, ``iat`` = ``iloc``, ``at`` = ``iloc``, ``loc`` = ``iloc``, ``rtruediv`` = ``rdiv``, ``divide`` = ``truediv``, ``div`` = ``truediv``, ``multiply`` = ``mul``, ``subtract`` = ``sub``, ``sort_values`` (own signature) = ``sort``, ``nlargest`` (own signature) = ``top_k``, ``nsmallest`` (own signature) = ``bottom_k``, ``drop_duplicates`` (own signature) = ``unique``, ``between`` (own signature) = ``is_between``
+     - ``aggregate`` = ``agg``, ``astype`` = ``cast``, ``isna`` = ``is_null``, ``isnull`` = ``is_null``, ``notna`` = ``is_not_null``, ``notnull`` = ``is_not_null``, ``dropna`` = ``drop_nulls``, ``fillna`` = ``fill_null``, ``isin`` = ``is_in``, ``nunique`` = ``n_unique``, ``prod`` = ``product``, ``argmax`` = ``arg_max``, ``idxmax`` = ``arg_max``, ``argmin`` = ``arg_min``, ``idxmin`` = ``arg_min``, ``cumsum`` = ``cum_sum``, ``cumprod`` = ``cum_prod``, ``cummax`` = ``cum_max``, ``cummin`` = ``cum_min``, ``searchsorted`` = ``search_sorted``, ``tolist`` = ``to_list``, ``ffill`` = ``forward_fill``, ``pad`` = ``forward_fill``, ``bfill`` = ``backward_fill``, ``backfill`` = ``backward_fill``, ``kurt`` (own signature) = ``kurtosis``, ``take`` = ``gather``, ``iat`` = ``iloc``, ``at`` (own signature) = ``iloc``, ``loc`` (own signature) = ``iloc``, ``rtruediv`` = ``rdiv``, ``divide`` = ``truediv``, ``div`` = ``truediv``, ``multiply`` = ``mul``, ``subtract`` = ``sub``, ``sort_values`` (own signature) = ``sort``, ``nlargest`` (own signature) = ``top_k``, ``nsmallest`` (own signature) = ``bottom_k``, ``drop_duplicates`` (own signature) = ``unique``, ``between`` (own signature) = ``is_between``
      - ``alias`` = ``rename``, ``clone`` = ``copy``, ``limit`` = ``head``, ``not_`` = ``__invert__``
    * - ``Expr``
      - ``isna`` = ``is_null``, ``isnull`` = ``is_null``, ``notna`` = ``is_not_null``, ``notnull`` = ``is_not_null``, ``isin`` = ``is_in``, ``astype`` = ``cast``, ``fillna`` = ``fill_null``, ``cumsum`` = ``cum_sum``, ``cumprod`` = ``cum_prod``, ``cummax`` = ``cum_max``, ``cummin`` = ``cum_min``, ``ffill`` = ``forward_fill``, ``bfill`` = ``backward_fill``, ``between`` (own signature) = ``is_between``, ``startswith`` = ``starts_with``, ``endswith`` = ``ends_with``
@@ -238,8 +238,55 @@ Assignment through ``loc`` / ``iloc`` / ``at`` / ``iat`` is copy-on-write:
 the name is rebound to a new frame, the old one is untouched, so a frame
 another variable holds never changes under it.
 
-Not there yet: label alignment in arithmetic (``df + other`` is positional) and
-a ``MultiIndex`` type; a ``Series`` carries no index of its own.
+Not there yet: label alignment in frame arithmetic (``df + other`` is
+positional), ``reindex`` / ``align``, label lookup by hash and a ``MultiIndex``
+type (several index columns stand for one).
+
+A Series carries labels too
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A ``Series`` holds optional label columns, one per level, as long as it is: the
+pandas index, as columns. A Series with none is positional (nothing is
+stored). ``df["a"]`` of a frame with an index is a Series under the frame's
+index, ``Series.from_pandas`` reads a non-default pandas index and
+``to_pandas()`` writes it back (a ``MultiIndex`` for several levels).
+``s.index`` gives the labels (a Series for one level, a frame for several, the
+positions when there are none), ``s.index_names()`` the level names,
+``s.set_axis(labels)`` and ``s.rename_axis(name)`` change them,
+``s.reset_index()`` moves them into a frame, and ``s.to_frame()`` makes them
+the frame's index.
+
+The ops that keep rows in place keep the labels (casts, ``fillna``, ``cumsum``,
+``shift``, ``diff``, ``rank``, scalar arithmetic, string and date ops), and the
+ops that select or reorder rows move them with the rows (``sort``, ``filter``,
+``take``, ``head``, ``tail``, ``slice``, ``drop_nulls``, ``top_k``,
+``bottom_k``, ``sample``, ``reverse``). Reducers and ``unique`` give none. The
+pandas spellings ``sort_values``, ``nlargest``, ``nsmallest``, ``tail``,
+``take``, ``dropna``, ``drop_duplicates``, ``repeat`` and ``truncate`` label a
+positional Series by the positions they keep, as pandas shows the original row
+of each; the Polars names give a positional Series no labels.
+
+Arithmetic between two Series aligns on the labels, as pandas does. Labels that
+are equal, level for level and in order, leave the rows in place. Otherwise the
+result is the outer join of the labels, sorted, with a null where a side has no
+row (an integer column that gains a null widens to Float64, a Bool one takes
+false), a duplicated label matches every row that has it, a null label equals
+another null label and sorts last, and the result takes the left side's level
+names. A positional Series counts as the labels ``0 .. n-1`` when the other has
+labels. The labels must have the same number of levels on both sides, and numeric
+labels of different types meet in their common type (``Int32`` with ``Int64`` in
+``Int64``, an integer with a float in ``Float64``). A string label against a
+number raises ``ValueError`` (pandas would produce an all-NaN union). A missing
+side makes ``**`` null, where pandas gives ``1.0`` for ``1 ** NaN``. ``where``,
+``mask`` and ``str.cat`` of two Series with labels need the same labels and
+raise ``ValueError`` otherwise. ``sort_index`` orders the rows by their labels,
+level by level. ``loc``, ``at``, ``get`` and ``s[label]`` on a Series with
+labels raise ``NotImplementedError`` until label lookup exists; use ``iloc``.
+``s[mask]`` keeps the rows where a Bool Series is true, a null counting as false. Comparing two
+Series whose labels differ raises ``ValueError``, as pandas. A group-by
+``apply`` that returns a Series, and ``take``, keep the original labels of the
+rows; pandas also puts the group keys before them, which is not done here.
+``value_counts`` keeps the Polars frame of ``value`` and ``count``.
 
 Several columns can be assigned at once from a frame or a list of Series. The
 targets and the value's columns pair by position (the value's own names are
@@ -326,8 +373,8 @@ Left out, and why
   needs a zone database the engine does not have.
 - ``dt.strftime`` takes the directives of ``Series.dt_format`` only, and
   formats in UTC. Other directives raise ``ValueError``.
-- ``MultiIndex`` methods, ``align`` / ``reindex``: label alignment was ruled
-  out with the index model above.
+- ``MultiIndex`` methods, ``align`` / ``reindex``: they follow the row index
+  (``Series`` labels exist, the lookup and reindex methods do not yet).
 - Plotting, styling, ``attrs`` / ``flags``, the file writers beyond
   Parquet / CSV / IPC: not this engine's layer.
 - ``GroupBy.fillna(value)``: pandas deprecates it; ``ffill`` / ``bfill``

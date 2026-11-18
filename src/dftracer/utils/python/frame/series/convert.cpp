@@ -1044,6 +1044,22 @@ PyObject* Series_item(PyObject* self, PyObject* arg) {
     });
 }
 
+// The element at a position of a Series without row labels: a labelled one
+// has no lookup by label yet, so `s[i]` is refused rather than read by
+// position.
+PyObject* Series_item_unlabelled(PyObject* self, PyObject* arg) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    if (a->has_index()) {
+        PyErr_SetString(PyExc_NotImplementedError,
+                        "s[label] looks a row up by label, which a Series "
+                        "with row labels does not support yet; use "
+                        "s.iloc[position]");
+        return nullptr;
+    }
+    return Series_item(self, arg);
+}
+
 namespace {
 
 PyObject* build_plain(PyObject** items, Py_ssize_t n, Bits& bits, bool any_bool,

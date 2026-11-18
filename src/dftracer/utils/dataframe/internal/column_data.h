@@ -46,6 +46,12 @@ struct dftu_nested {
     dftracer::utils::dstd::String name;
 };
 
+/// The row labels of a dftu_series: one column per level, each as long as the
+/// series. Shared by every handle that copies the series; never modified.
+struct dftu_labels {
+    dftracer::utils::dstd::Vector<dftu_nested> levels;
+};
+
 /// Takes ownership of @p p, freed with dftu_series_free.
 inline dftracer::utils::dstd::SharedPtr<dftu_series> adopt_series(
     dftu_series* p) {
@@ -84,6 +90,9 @@ struct dftu_series : dftracer::utils::dstd::HeapObject {
     /// The series name; null when the series has none. Shared by every handle
     /// that copies this one.
     dftracer::utils::dstd::SharedString name;
+    /// The row labels (see dftu_series_index_count); null when the series has
+    /// none, the positional RangeIndex. A copy of a handle shares them.
+    dftracer::utils::dstd::SharedPtr<const dftu_labels> labels;
     dftracer::utils::dataframe::TypeParams params;
 
     /// Whether `nested` holds Struct fields.

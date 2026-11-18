@@ -285,6 +285,7 @@ PyObject* Series_to_pylist(PyObject* self, PyObject* args);
 PyObject* Series_np_parts(PyObject* self, PyObject* args);
 PyObject* Series_str_into(PyObject* self, PyObject* args);
 PyObject* Series_item(PyObject* self, PyObject* arg);
+PyObject* Series_item_unlabelled(PyObject* self, PyObject* arg);
 PyObject* vec_from_list(PyObject* self, PyObject* args);
 
 // series/typed.cpp

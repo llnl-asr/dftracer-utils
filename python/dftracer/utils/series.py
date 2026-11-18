@@ -48,6 +48,17 @@ from ._convert import (
     polars_to_native,
 )
 from ._pandas_series import SeriesPandasMixin, differs
+from ._series_index import (
+    default_name,
+    drop_levels,
+    levels_of,
+    names_of,
+    pandas_index,
+    pandas_labels,
+    positional,
+    positions,
+    with_levels,
+)
 from .enums import (
     DT_UNIT_CODES,
     DTYPE_BY_NAME,
@@ -317,7 +328,19 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         float column and a ``NaT`` or ``NA`` read as null, a categorical as its
         values, a zoned ``datetime64`` as a zoned timestamp. An Arrow-backed
         column imports through pyarrow. The name is ``s.name`` when that is a
-        ``str``; any other name (``None``, an int, a tuple) is dropped."""
+        ``str``; any other name (``None``, an int, a tuple) is dropped. An index
+        other than the default ``RangeIndex`` becomes the row labels (a
+        ``MultiIndex`` one level each; an unnamed level is named
+        ``__index_level_<i>__``)."""
+        out = cls._from_pandas_values(s)
+        labels = pandas_labels(s)
+        if labels is not None:
+            out = with_levels(out, *labels)
+        return out
+
+    @classmethod
+    def _from_pandas_values(cls, s: pd.Series) -> Series:
+        """The values and the name of ``s``, with no index."""
         try:
             out = pandas_to_native(s)
         except NeedsArrow:
@@ -404,7 +427,9 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         converts as without the option. A dictionary column uses pyarrow, where
         installed, to read its codes without building a string per row, and
         keeps the dictionary order of its used values; without pyarrow the
-        categories come out sorted. The pandas Series takes this name."""
+        categories come out sorted. The pandas Series takes this name and the row
+        labels as its index (a ``MultiIndex`` for several levels; an unnamed level
+        has the name ``None``)."""
         if arrow and nullable:
             raise ValueError("to_pandas: pass either arrow=True or nullable=True, not both")
         if arrow:
@@ -417,6 +442,8 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
                 values = _pandas_default(self)
             out = values if isinstance(values, pd.Series) else pd.Series(values)
         out.name = self.name
+        if names_of(self):
+            out.index = pandas_index(self)
         return out
 
     def to_numpy(self) -> np.ndarray:
@@ -468,9 +495,18 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
     def __getitem__(self, key: int) -> T_co | None: ...
     @overload
     def __getitem__(self, key: builtins.slice) -> Self: ...
-    def __getitem__(self, key: int | builtins.slice) -> Self | T_co | None:
+    @overload
+    def __getitem__(self, key: Series[bool]) -> Self: ...
+    def __getitem__(self, key: int | builtins.slice | Series[bool]) -> Self | T_co | None:
         """``s[i]`` returns the element as a Python scalar; ``s[a:b]`` returns a
-        Series (step-1 slices only)."""
+        Series (step-1 slices only); ``s[mask]`` keeps the rows where the Bool
+        Series ``mask`` is true (a null is false)."""
+        if type(key) is int:
+            return super()._item_unlabelled(key + len(self) if key < 0 else key)
+        if isinstance(key, Series):
+            if key.dtype != DType.BOOL:
+                raise TypeError("a Series key must be a Bool Series")
+            return self.filter(key)
         if isinstance(key, slice):
             start, stop, step = key.indices(len(self))
             if step != 1:
@@ -481,7 +517,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             except RuntimeError:
                 return super().take(list(range(start, stop)))
         idx = key + len(self) if key < 0 else key
-        return super().item(idx)
+        return super()._item_unlabelled(idx)
 
     def item(self, i: int | None = None) -> T_co | None:
         """The element at row ``i``; with no ``i`` the only element of a
@@ -847,7 +883,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
     def first(self) -> T_co | None:
         """The first element, ``None`` when the Series is empty (polars
         ``first``)."""
-        return self[0] if len(self) else None
+        return self.item(0) if len(self) else None
 
     def last(self) -> T_co | None:
         """The last element, ``None`` when the Series is empty (polars
@@ -968,18 +1004,47 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
 
     def sort_values(self, ascending: bool = True, na_position: builtins.str = "last") -> Self:
         """The pandas ``sort_values``: :meth:`sort` with ``ascending`` and
-        ``na_position`` (nulls last by default, unlike :meth:`sort`)."""
+        ``na_position`` (nulls last by default, unlike :meth:`sort`). The rows
+        keep their labels; a positional Series is labelled by the positions, as
+        pandas' index shows where each row came from."""
         if na_position not in ("first", "last"):
             raise ValueError("na_position must be 'first' or 'last'")
-        return self.sort(descending=not ascending, nulls_last=na_position == "last")
+        return positional(self).sort(descending=not ascending, nulls_last=na_position == "last")
 
     def nlargest(self, n: int = 5) -> Self:
-        """The pandas ``nlargest``: :meth:`top_k` with ``n``."""
-        return self.top_k(n)
+        """The pandas ``nlargest``: :meth:`top_k` with ``n``, labelled as
+        :meth:`sort_values` is."""
+        return positional(self).top_k(n)
 
     def nsmallest(self, n: int = 5) -> Self:
-        """The pandas ``nsmallest``: :meth:`bottom_k` with ``n``."""
-        return self.bottom_k(n)
+        """The pandas ``nsmallest``: :meth:`bottom_k` with ``n``, labelled as
+        :meth:`sort_values` is."""
+        return positional(self).bottom_k(n)
+
+    def tail(self, n: int = 5) -> Self:
+        """The last ``n`` rows (all but the first ``-n`` for a negative ``n``).
+        The rows keep their labels; a positional Series is labelled by the
+        positions it kept, as pandas."""
+        out = super().tail(n)
+        if names_of(self):
+            return out
+        return with_levels(out, [default_name(0)], [positions(len(out), len(self) - len(out))])
+
+    def dropna(self) -> Self:
+        """The pandas ``dropna``: :meth:`drop_nulls`. The rows keep their
+        labels; a positional Series that loses a row is labelled by the
+        positions it kept, as pandas."""
+        if self.null_count == 0:
+            return self
+        return positional(self).drop_nulls()
+
+    def take(self, indices: Sequence[int] | Series) -> Self:
+        """The pandas ``take``: :meth:`gather`. The rows keep their labels; a
+        positional Series is labelled by the positions taken."""
+        if names_of(self):
+            return self.gather(indices)
+        out = self.gather(indices)
+        return with_levels(out, [default_name(0)], [Series.from_list(_indices(indices))])
 
     # ``s.str``: string methods under both spellings, pandas (``s.str.lower()``,
     # ``s.str.contains("x")``, ``s.str.len()``) and polars
@@ -998,8 +1063,12 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
     def dt(self: Series[Scalar]) -> _DtAccessor:
         return _DtAccessor(self)
 
-    def __reduce__(self) -> tuple[Callable[[bytes], Series], tuple[bytes, ...]]:
-        return (_series_from_bytes, (self.to_bytes(),))
+    def __reduce__(self) -> tuple[Callable[..., Series], tuple[object, ...]]:
+        names = names_of(self)
+        if not names:
+            return (_series_from_bytes, (self.to_bytes(),))
+        levels = [level.to_bytes() for level in levels_of(self)]
+        return (_series_from_bytes, (drop_levels(self).to_bytes(), names, levels))
 
     # BEGIN GENERATED aliases from _aliases.py by scripts/gen_pyi.py
     if TYPE_CHECKING:
@@ -1009,7 +1078,6 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         isnull = _ext.Series.is_null
         notna = _ext.Series.is_not_null
         notnull = _ext.Series.is_not_null
-        dropna = _ext.Series.drop_nulls
         fillna = _ext.Series.fill_null
         isin = is_in
         nunique = _ext.Series.n_unique
@@ -1028,10 +1096,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         pad = _ext.Series.forward_fill
         bfill = _ext.Series.backward_fill
         backfill = _ext.Series.backward_fill
-        take = gather
         iat = SeriesPandasMixin.iloc
-        at = SeriesPandasMixin.iloc
-        loc = SeriesPandasMixin.iloc
         rtruediv = SeriesPandasMixin.rdiv
         divide = truediv
         div = truediv
@@ -1805,9 +1870,15 @@ class _StrAccessor(_ext.StrAccessor):
         return DataFrame({c: wide[c].gt(0).astype("int64") for c in names})
 
 
-def _series_from_bytes(data: bytes) -> Series:
-    """The Series a pickle holds (``Series.to_bytes`` of the native frame format)."""
-    return _ext._series_from_bytes(data)
+def _series_from_bytes(
+    data: bytes, names: list[str] | None = None, levels: list[bytes] | None = None
+) -> Series:
+    """The Series a pickle holds (``Series.to_bytes`` of the native frame format),
+    under the row labels it was pickled with."""
+    out = _ext._series_from_bytes(data)
+    if names:
+        out = with_levels(out, names, [_ext._series_from_bytes(b) for b in levels or ()])
+    return out
 
 
 def _series_from_arrow(array: pa.Array | pa.ChunkedArray) -> Series:

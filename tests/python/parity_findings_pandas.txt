@@ -56,20 +56,12 @@ series.rank#4[I] | semantics | [error] ours raised TypeError: Series.rank() got 
 series.rank#4[F] | semantics | [error] ours raised TypeError: Series.rank() got an unexpected keyword argument 'na_option'
 series.ffill#2[I] | keyword | [error] ours raised TypeError: Series.forward_fill() takes no keyword arguments
 series.ffill#2[F] | keyword | [error] ours raised TypeError: Series.forward_fill() takes no keyword arguments
-series.dropna#2[I] | semantics | [index] the library result has row labels
-series.dropna#2[F] | semantics | [index] the library result has row labels
-series.dropna#2[S] | semantics | [index] the library result has row labels
 series.mask#2[I] | semantics | [values] [1, None, 0, 0, 0, None, -4] vs [1, 0, 0, 0, 0, 0, -4]
 series.mask#2[F] | semantics | [values] [0.0, None, 0.0, -2.5, 0.0, 0.0] vs [0.0, 0.0, 0.0, -2.5, 0.0, 0.0]
 series.astype#1[I] | semantics | [values] [1.0, None, 3.0, 2.0, 2.0, None, -4.0] vs [1.0, nan, 3.0, 2.0, 2.0, nan, -4.0]
 series.astype#1[F] | semantics | [values] [1.5, None, 3.0, -2.5, 3.0, 0.0] vs [1.5, nan, 3.0, -2.5, 3.0, 0.0]
 series.astype#2[I] | semantics | [raises] pandas raised ValueError, ours returned
 series.astype#2[F] | semantics | [raises] pandas raised ValueError, ours returned
-series.drop_duplicates#1[I] | needs-index | [index] the library result has row labels
-series.drop_duplicates#1[F] | needs-index | [index] the library result has row labels
-series.drop_duplicates#2[I] | needs-index | [index] the library result has row labels
-series.drop_duplicates#2[F] | needs-index | [index] the library result has row labels
-series.drop_duplicates#2[S] | needs-index | [index] the library result has row labels
 series.unique#1[I] | semantics | [values] [None, -4, 1, 2, 3] vs [1, None, 3, 2, -4]
 series.unique#1[F] | semantics | [values] [None, -2.5, 0.0, 1.5, 3.0] vs [1.5, None, 3.0, -2.5, 0.0]
 series.unique#1[S] | semantics | [values] [None, 'a', 'ab', 'b'] vs ['b', 'a', None, 'ab']
@@ -87,31 +79,12 @@ series.value_counts#4[F] | shape | [type] ours DataFrame (frame), library Series
 series.value_counts#4[S] | shape | [type] ours DataFrame (frame), library Series (series)
 series.mode#1[S] | semantics | [dtype] int64 vs str
 series.mode#2[I] | semantics | [error] ours raised TypeError: Series.mode() got an unexpected keyword argument 'dropna'
-series.sort_values#1[I] | needs-index | [index] the library result has row labels
-series.sort_values#1[F] | needs-index | [index] the library result has row labels
-series.sort_values#1[S] | needs-index | [index] the library result has row labels
-series.sort_values#2[I] | needs-index | [index] the library result has row labels
-series.sort_values#2[F] | needs-index | [index] the library result has row labels
-series.sort_values#2[S] | needs-index | [index] the library result has row labels
-series.sort_values#3[I] | needs-index | [index] the library result has row labels
-series.sort_values#3[F] | needs-index | [index] the library result has row labels
-series.sort_values#3[S] | needs-index | [index] the library result has row labels
-series.nlargest#1[I] | needs-index | [index] the library result has row labels
-series.nlargest#1[F] | needs-index | [index] the library result has row labels
-series.nsmallest#1[I] | needs-index | [index] the library result has row labels
-series.nsmallest#1[F] | needs-index | [index] the library result has row labels
 series.nlargest#2[I] | needs-index | [error] ours raised TypeError: Series.nlargest() got an unexpected keyword argument 'keep'
 series.nlargest#2[F] | needs-index | [error] ours raised TypeError: Series.nlargest() got an unexpected keyword argument 'keep'
 series.head#3[I] | shape | [shape] length 0 vs 6
 series.head#3[F] | shape | [shape] length 0 vs 5
-series.tail#1[I] | needs-index | [index] the library result has row labels
-series.tail#1[F] | needs-index | [index] the library result has row labels
-series.tail#1[S] | needs-index | [index] the library result has row labels
 series.tail#2[I] | needs-index | [shape] length 0 vs 6
 series.tail#2[F] | needs-index | [shape] length 0 vs 5
-series.take#1[I] | needs-index | [index] the library result has row labels
-series.take#1[F] | needs-index | [index] the library result has row labels
-series.take#1[S] | needs-index | [index] the library result has row labels
 series.searchsorted#1[F] | semantics | [raises] pandas raised ValueError, ours returned
 series.factorize#1[I] | semantics | [values] [[1, -1, 3, 2, 2, -1, 0], [-4, 1, 2, 3]] vs [[0, -1, 1, 2, 2, -1, 3], [1, 3, 2, -4]]
 series.factorize#1[S] | semantics | [error] ours raised DFTUtilsValueError: dataframe kernel produced a null column
@@ -121,11 +94,6 @@ series.explode#1[F] | engine | [error] ours raised DFTUtilsValueError: explode: 
 series.explode#1[S] | engine | [error] ours raised DFTUtilsValueError: explode: v is not a List column
 series.compare#1[I] | shape | [shape] columns ['index', 'self', 'other'] vs ['self', 'other']
 series.compare#1[F] | shape | [shape] columns ['index', 'self', 'other'] vs ['self', 'other']
-series.repeat#1[I] | needs-index | [index] the library result has row labels
-series.repeat#1[F] | needs-index | [index] the library result has row labels
-series.repeat#1[S] | needs-index | [index] the library result has row labels
-series.truncate#1[I] | needs-index | [index] the library result has row labels
-series.truncate#1[F] | needs-index | [index] the library result has row labels
 series.agg#2[I] | shape | [type] ours DataFrame (frame), library Series (series)
 series.agg#2[F] | shape | [type] ours DataFrame (frame), library Series (series)
 series.rolling#1[F] | semantics | [values] <dftracer_utils_ext.Rolling object at 0x11441f930> vs Rolling [window=2,center=False,method=single]
@@ -269,7 +237,6 @@ pandas2:series.rank#1[I] | semantics | pandas 2 only: [values] [2.0, None, 5.0, 
 pandas2:series.rank#1[F] | semantics | pandas 2 only: [values] [3.0, None, 4.5, 1.0, 4.5, 2.0] vs [3.0, nan, 4.5, 1.0, 4.5, 2.0]
 pandas2:series.rank#5[I] | semantics | pandas 2 only: [values] [0.4, None, 1.0, 0.7, 0.7, None, 0.2] vs [0.42857142857142855, 0.42857142857142855, 1.0, 0.7857142857142857, 0.7857142857142857, 0.42857142857142855, 0.14285714285714285]
 pandas2:series.rank#5[F] | semantics | pandas 2 only: [values] [0.6, None, 0.9, 0.2, 0.9, 0.4] vs [0.6, nan, 0.9, 0.2, 0.9, 0.4]
-pandas2:series.drop_duplicates#1[S] | needs-index | pandas 2 only: [index] the library result has row labels
 pandas2:series.argsort#1[I] | semantics | pandas 2 only: [values] [6, 0, 3, 4, 2, 1, 5] vs [4, -1, 0, 2, 3, -1, 1]
 pandas2:series.argsort#1[F] | semantics | pandas 2 only: [values] [3, 5, 0, 2, 4, 1] vs [2, -1, 4, 0, 1, 3]
 pandas<3.1:series.apply#1[I] | semantics | pandas before 3.1: [dtype] int64 vs float64

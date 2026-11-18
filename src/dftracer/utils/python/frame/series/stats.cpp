@@ -121,12 +121,7 @@ PyObject* Series_sort(PyObject* self, PyObject* args, PyObject* kwds) {
                          &nulls_last))
         return nullptr;
     return make_series(
-        named_like(kernel(*a,
-                          [&] {
-                              return Series{dftu_series_sort_nulls(
-                                  a->handle(), descending, nulls_last)};
-                          }),
-                   *a));
+        kernel(*a, [&] { return a->sort(descending != 0, nulls_last != 0); }));
 }
 PyObject* Series_head(PyObject* self, PyObject* args, PyObject* kwds) {
     Held held_a(self);
@@ -135,12 +130,7 @@ PyObject* Series_head(PyObject* self, PyObject* args, PyObject* kwds) {
     long long n = 5;
     if (!parse_kw<"|L">(args, kwds, {"n"}, &n)) return nullptr;
     return make_series(
-        named_like(kernel(*a,
-                          [&] {
-                              return Series{dftu_series_head(
-                                  a->handle(), static_cast<std::int64_t>(n))};
-                          }),
-                   *a));
+        kernel(*a, [&] { return a->head(static_cast<std::int64_t>(n)); }));
 }
 PyObject* Series_tail(PyObject* self, PyObject* args, PyObject* kwds) {
     Held held_a(self);
@@ -149,12 +139,7 @@ PyObject* Series_tail(PyObject* self, PyObject* args, PyObject* kwds) {
     long long n = 5;
     if (!parse_kw<"|L">(args, kwds, {"n"}, &n)) return nullptr;
     return make_series(
-        named_like(kernel(*a,
-                          [&] {
-                              return Series{dftu_series_tail(
-                                  a->handle(), static_cast<std::int64_t>(n))};
-                          }),
-                   *a));
+        kernel(*a, [&] { return a->tail(static_cast<std::int64_t>(n)); }));
 }
 PyObject* Series_shift(PyObject* self, PyObject* arg) {
     Held held_a(self);
@@ -177,12 +162,7 @@ PyObject* Series_top_k(PyObject* self, PyObject* arg) {
     long long k = PyLong_AsLongLong(arg);
     if (k == -1 && PyErr_Occurred()) return nullptr;
     return make_series(
-        named_like(kernel(*a,
-                          [&] {
-                              return Series{dftu_series_top_k(
-                                  a->handle(), static_cast<std::int64_t>(k))};
-                          }),
-                   *a));
+        kernel(*a, [&] { return a->top_k(static_cast<std::int64_t>(k)); }));
 }
 PyObject* Series_bottom_k(PyObject* self, PyObject* arg) {
     Held held_a(self);
@@ -191,12 +171,7 @@ PyObject* Series_bottom_k(PyObject* self, PyObject* arg) {
     long long k = PyLong_AsLongLong(arg);
     if (k == -1 && PyErr_Occurred()) return nullptr;
     return make_series(
-        named_like(kernel(*a,
-                          [&] {
-                              return Series{dftu_series_bottom_k(
-                                  a->handle(), static_cast<std::int64_t>(k))};
-                          }),
-                   *a));
+        kernel(*a, [&] { return a->bottom_k(static_cast<std::int64_t>(k)); }));
 }
 PyObject* Series_sample(PyObject* self, PyObject* args, PyObject* kwds) {
     Held held_a(self);
@@ -205,14 +180,10 @@ PyObject* Series_sample(PyObject* self, PyObject* args, PyObject* kwds) {
     long long n = 0;
     unsigned long long seed = 0;
     if (!parse_kw<"L|K">(args, kwds, {"n", "seed"}, &n, &seed)) return nullptr;
-    return make_series(
-        named_like(kernel(*a,
-                          [&] {
-                              return Series{dftu_series_sample(
-                                  a->handle(), static_cast<std::int64_t>(n),
-                                  static_cast<std::uint64_t>(seed))};
-                          }),
-                   *a));
+    return make_series(kernel(*a, [&] {
+        return a->sample(static_cast<std::int64_t>(n),
+                         static_cast<std::uint64_t>(seed));
+    }));
 }
 PyObject* Series_rank(PyObject* self, PyObject* args, PyObject* kwds) {
     Held held_a(self);
@@ -300,12 +271,7 @@ PyObject* Series_unique(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!parse_kw<"|p">(args, kwds, {"maintain_order"}, &maintain_order))
         return nullptr;
     return make_series(
-        named_like(kernel(*a,
-                          [&] {
-                              return Series{dftu_series_unique_nulls(
-                                  a->handle(), maintain_order)};
-                          }),
-                   *a));
+        kernel(*a, [&] { return a->unique(maintain_order != 0); }));
 }
 
 PyObject* Series_duplicated(PyObject* self, PyObject* args, PyObject* kwds) {
@@ -381,9 +347,10 @@ PyObject* Series_where(PyObject* self, PyObject* args) {
     if (!other) return nullptr;
     Series out = kernel(*a, [&] { return a->where(*mask, *other); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_ValueError,
-                        "where() needs a Bool mask and two columns of one type "
-                        "and length");
+        PyErr_SetString(
+            PyExc_ValueError,
+            "where() needs a Bool mask and two columns of one type, "
+            "one length and the same row labels");
         return nullptr;
     }
     return make_series(std::move(out));

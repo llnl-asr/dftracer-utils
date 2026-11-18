@@ -460,7 +460,7 @@ class FramePandasMixin(_ext.DataFrame):
 
         def one(s: Series) -> object:
             pos = fn(s)
-            return index[pos] if index is not None else pos
+            return index.item(pos) if index is not None else pos
 
         return self._reduce_scalar(one)
 

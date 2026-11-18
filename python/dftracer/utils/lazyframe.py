@@ -31,6 +31,7 @@ from typing import (
 from . import dftracer_utils_ext as _ext
 from ._aliases import install as _install_aliases
 from ._expr_ops import lower_column_ops
+from ._group_transforms import GroupTransforms
 from ._window_spec import norm_window_spec
 from .agg import (
     PANDAS_AGG_NAMES,
@@ -961,7 +962,7 @@ def _drop_null_key_groups(grouped: LazyFrame, keys: Sequence[str]) -> LazyFrame:
     return out
 
 
-class LazyGroupBy:
+class LazyGroupBy(GroupTransforms[LazyFrame]):
     """The two-step lazy group-by: a plan and its key columns (none makes the
     whole plan one group). Every method appends one streaming group-by step.
     ``.agg(...)`` takes ``"op:column[:out]"`` strings, the pandas forms (a
@@ -1051,64 +1052,6 @@ class LazyGroupBy:
                 self._plan, self._keys, kind, int(n), method, bool(ascending)
             )
         )
-
-    def cumsum(self) -> LazyFrame:
-        return self._transform("cumsum")
-
-    def cummax(self) -> LazyFrame:
-        return self._transform("cummax")
-
-    def cummin(self) -> LazyFrame:
-        return self._transform("cummin")
-
-    def cumcount(self) -> LazyFrame:
-        """The 0-based position of each row within its group, as ``cumcount``."""
-        return self._transform("cumcount")
-
-    def shift(self, periods: int = 1) -> LazyFrame:
-        """Each column shifted by ``periods`` rows within its group (a negative
-        ``periods`` looks ahead); the vacated rows are null."""
-        return self._transform("shift", periods)
-
-    def diff(self) -> LazyFrame:
-        return self._transform("diff")
-
-    def pct_change(self) -> LazyFrame:
-        return self._transform("pct_change")
-
-    def rank(self, method: str = "average", ascending: bool = True) -> LazyFrame:
-        """Each numeric column's rank within its group by value: ``method`` is
-        ``average`` (the pandas default), ``min``, ``max``, ``dense`` or ``first``; a
-        null value has a null rank."""
-        return self._transform("rank", 0, method, ascending)
-
-    def ngroup(self) -> LazyFrame:
-        """The 0-based number of each row's group, groups numbered in sorted
-        key order (pandas ``ngroup``)."""
-        return self._transform("ngroup")
-
-    def head(self, n: int = 5) -> LazyFrame:
-        """The first ``n`` rows of each group, in input order (pandas
-        ``head``)."""
-        return self._transform("head", n)
-
-    def tail(self, n: int = 5) -> LazyFrame:
-        """The last ``n`` rows of each group, in input order."""
-        return self._transform("tail", n)
-
-    def nth(self, n: int | Sequence[int]) -> LazyFrame:
-        """The ``n``-th row of each group (0-based; negative counts from the
-        end), or of each position in a list, in input order."""
-        if isinstance(n, int):
-            return self._transform("nth", n)
-        return self.take(n)
-
-    def cumprod(self) -> LazyFrame:
-        """Each numeric column's running product within its group (Float64)."""
-        return self._transform("cumprod")
-
-    def prod(self) -> LazyFrame:
-        return self.reduce("prod")
 
     def median(self) -> LazyFrame:
         """The exact median of each numeric column per group (pandas

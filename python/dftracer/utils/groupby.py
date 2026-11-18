@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Callable, List, Optional, Sequence, Tuple, Typ
 from . import dftracer_utils_ext as _ext
 from ._aliases import install as _install_aliases
 from ._apply import trace_errors, uses_identity_test, warn_fallback
+from ._group_transforms import GroupTransforms
 from .agg import (
     PANDAS_AGG_NAMES,
     AggForm,
@@ -40,7 +41,7 @@ _CMP_GT = 0  # DFTU_CMP_GT, dataframe/c_api.h
 _CMP_LT = 2  # DFTU_CMP_LT
 
 
-class GroupBy:
+class GroupBy(GroupTransforms[DataFrame]):
     """A lazy group-by over a native ``DataFrame`` (zero or more key columns;
     none makes the whole frame one group). ``.agg(...)`` takes aggregate
     expressions (``col("x").sum()``, ``count()``), ``"op:column"`` strings, or
@@ -234,53 +235,6 @@ class GroupBy:
                 out, name, column if rows is None else column.take(rows)
             )
         return _ext.DataFrame.with_index(out, names)
-
-    def cumsum(self) -> DataFrame:
-        return self._transform("cumsum")
-
-    def cummax(self) -> DataFrame:
-        return self._transform("cummax")
-
-    def cummin(self) -> DataFrame:
-        return self._transform("cummin")
-
-    def cumcount(self) -> DataFrame:
-        return self._transform("cumcount")
-
-    def shift(self, periods: int = 1) -> DataFrame:
-        return self._transform("shift", periods)
-
-    def diff(self) -> DataFrame:
-        return self._transform("diff")
-
-    def pct_change(self) -> DataFrame:
-        return self._transform("pct_change")
-
-    def rank(self, method: str = "average", ascending: bool = True) -> DataFrame:
-        return self._transform("rank", 0, method, ascending)
-
-    def ngroup(self) -> DataFrame:
-        return self._transform("ngroup")
-
-    def head(self, n: int = 5) -> DataFrame:
-        return self._transform("head", n)
-
-    def tail(self, n: int = 5) -> DataFrame:
-        return self._transform("tail", n)
-
-    def nth(self, n: int | Sequence[int]) -> DataFrame:
-        """The ``n``-th row of each group (0-based; negative from the end), or
-        of each position in a list, in input order."""
-        if isinstance(n, int):
-            return self._transform("nth", n)
-        return self.take(n)
-
-    def cumprod(self) -> DataFrame:
-        """Each numeric column's running product within its group (Float64)."""
-        return self._transform("cumprod")
-
-    def prod(self) -> DataFrame:
-        return self.reduce("prod")
 
     def median(self) -> DataFrame:
         """The exact median of each numeric column per group (pandas

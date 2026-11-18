@@ -57,6 +57,12 @@ const void* providers_ext_vtable();
 const void* file_formats_ext_vtable();
 const void* nodes_ext_vtable();
 const void* index_ext_vtable();
+/// The hash fields of dftu_svc_index, shared by the scan-time and the
+/// build-phase tables.
+std::uint32_t index_hash_version();
+std::uint64_t index_hash_value(const ::dftu_value* v);
+dftu_status index_hash_series(const ::dftu_series* column, std::uint64_t* out,
+                              std::uint64_t n);
 const void* task_ext_vtable();
 /// The dftu.svc.ports table of a fold's host.
 const void* ports_ext_vtable();

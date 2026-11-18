@@ -14,6 +14,7 @@ ColumnFeeder::ColumnFeeder(
 void ColumnFeeder::feed(std::uint64_t granule,
                         const dataframe::DataFrame& frame) {
     const auto rows = static_cast<std::uint64_t>(frame.num_rows());
+    if (builders_) builders_->step_frame(granule, frame);
     for (std::size_t c = 0; c < frame.num_columns(); ++c) {
         const dstd::String path(frame.names[c].view());
         const auto& column = frame.columns[c];

@@ -854,6 +854,7 @@ endif()
 set(TEST_C_SOURCES
     trace/index/test_indexer_abi.c
     store/test_c_api.c
+    plugins/test_index_abi.c
     )
 
 foreach (test_file ${TEST_C_SOURCES})

@@ -94,6 +94,38 @@ bool FileIndexData::may_hold_strings(dstd::StringView path) {
     return true;
 }
 
+dataframe::TypeId FileIndexData::path_type(dstd::StringView path) {
+    using dataframe::TypeId;
+    const auto& name = evidence_name(path);
+    if (!name) return TypeId::Unknown;
+    if (fixed_field(*name)) {
+        if (*name == "pid" || *name == "tid" || *name == "ts" || *name == "dur")
+            return TypeId::Int64;
+        if (*name == "name" || *name == "cat" || *name == "hhash" ||
+            *name == "fhash")
+            return TypeId::String;
+        return TypeId::Unknown;
+    }
+    const dstd::String leaf = by_path ? *name : "args." + *name;
+    for (const auto& [p, stat] : catalog()) {
+        if (dstd::StringView(p) != leaf) continue;
+        switch (stat.type) {
+            case trace::index::store::PathType::Bool:
+            case trace::index::store::PathType::Int:
+                return TypeId::Int64;
+            case trace::index::store::PathType::Uint:
+                return TypeId::Uint64;
+            case trace::index::store::PathType::Double:
+                return TypeId::Float64;
+            case trace::index::store::PathType::String:
+                return TypeId::String;
+            default:
+                return TypeId::Unknown;
+        }
+    }
+    return TypeId::Unknown;
+}
+
 const FileIndexData::Zones& FileIndexData::zones(dstd::StringView path) {
     auto it = zones_.find(path);
     if (it != zones_.end()) return it->second;

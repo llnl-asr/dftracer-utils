@@ -44,13 +44,13 @@ constexpr StructLimit PLUGIN_STRUCT_LIMITS[] = {
     {"dftu_source_vt",
      static_cast<std::uint32_t>(offsetof(dftu_source_vt, apply))},
     {"dftu_file_format_vt", static_cast<std::uint32_t>(sizeof(
-                                dftu_file_format_vt))},    // no optional tail
+                                dftu_file_format_vt))},  // no optional tail
     {"dftu_sink_vt",
-     static_cast<std::uint32_t>(sizeof(dftu_sink_vt))},    // no optional tail
-    {"dftu_index_extension", static_cast<std::uint32_t>(sizeof(
-                                 dftu_index_extension))},  // no optional tail
+     static_cast<std::uint32_t>(sizeof(dftu_sink_vt))},  // no optional tail
+    {"dftu_index_extension",
+     static_cast<std::uint32_t>(offsetof(dftu_index_extension, columns))},
     {"dftu_job_desc",
-     static_cast<std::uint32_t>(sizeof(dftu_job_desc))},   // no optional tail
+     static_cast<std::uint32_t>(sizeof(dftu_job_desc))},  // no optional tail
     {"dftu_udf_desc",
      static_cast<std::uint32_t>(offsetof(dftu_udf_desc, free_bound))},
     {"dftu_udaf_desc",

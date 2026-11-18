@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Let a plugin index extension take typed columns in place of record lines. `dftu_index_extension` gets `columns` (a NULL-ended list of paths, `{"*", NULL}` for every path) and `step_column`, which receives one borrowed column per path and chunk with the dtype int64, uint64, float64 or string; `step` is now optional, and an extension with neither is refused at registration with a message that names it.
+  A path whose values have no single type in a chunk is not passed, and the host stores nothing for that chunk, so it is never pruned.
+  `dftu_index_leaf` gets `type`, the dtype of the column the leaf targets, and `dftu_svc_index` gets `hash_version`, `hash_value` and `hash_series`, the host's canonical value hash for a literal and for a whole column.
+  The fields are added at the ends of the structs, so a plugin built before this change loads and runs unchanged.
 - Add the exact quantile aggregate, `AggOp::Quantile` / `Agg::Quantile` / `DFTU_AGG_QUANTILE` ("quantile"), with `agg_quantile` and `dftu_agg_quantile`: the group keeps every present value (8 bytes each), partial states merge by concatenation, the aggregation spill path bounds the state across groups and a group with no value is null.
   The level and the interpolation are separate fields (`AggSpec::interp`, `dftu_agg_spec::interp`); a level outside [0, 1] or NaN is an `InvalidArgument` error from `agg_quantile` and the engine, and `dftu_dataframe_group_agg_expr` returns -1 for it.
   `Expr.quantile(q, interpolation="nearest")` (Polars), `Expr.percentile(p, interpolation="linear")` and `Expr.median()` are exact; `Expr.approx_quantile(q)` is the DDSketch estimate they used to be.

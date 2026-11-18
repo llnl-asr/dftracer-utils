@@ -957,6 +957,7 @@ class PluginCondition final : public Condition {
         // The plugin ABI carries no uint64 above int64.
         LeafHolder h;
         if (!h.assign(leaf) || h.has_uint64_above_int64()) return nullptr;
+        h.leaf.type = d_.path_type(h.leaf.path);
         auto compiled = ext_->compile(h.leaf);
         if (!compiled) {
             DFTRACER_UTILS_LOG_WARN(

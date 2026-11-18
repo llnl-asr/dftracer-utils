@@ -436,8 +436,10 @@ dftu_status build_register_index(::dftu_ctx* ctx, void* h, const char* name,
     return status;
 }
 
-const ::dftu_svc_index g_build_index = {sizeof(::dftu_svc_index),
-                                        build_register_index};
+const ::dftu_svc_index g_build_index = {
+    sizeof(::dftu_svc_index), build_register_index,
+    detail::index_hash_version(), detail::index_hash_value,
+    detail::index_hash_series};
 
 dftu_status build_task_job(::dftu_ctx* ctx, void* h, const ::dftu_job_desc*,
                            ::dftu_job**) {

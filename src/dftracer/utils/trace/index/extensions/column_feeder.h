@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/trace/index/extensions/extension_registry.h>
 #include <dftracer/utils/trace/index/extensions/summary.h>
 #include <dftracer/utils/trace/index/store/file.h>
 
@@ -37,6 +38,12 @@ class ColumnFeeder {
     explicit ColumnFeeder(
         dstd::Vector<dstd::SharedPtr<const Summary>> summaries);
 
+    /// Also hands each frame to `builders`, whose extensions take the columns
+    /// they asked for through step_column. `builders` must outlive the feeder.
+    void set_plugin_builders(ExtensionBuilders* builders) {
+        builders_ = builders;
+    }
+
     /// Feeds chunk `granule`: every column of `frame` to every summary. A
     /// column whose type a summary cannot build for records nothing for that
     /// summary, and so never prunes. The rows of the frame are the records the
@@ -58,6 +65,7 @@ class ColumnFeeder {
     };
 
     dstd::Vector<dstd::SharedPtr<const Summary>> summaries_;
+    ExtensionBuilders* builders_ = nullptr;
     dstd::Vector<Payload> granules_;
     dstd::Map<dstd::String, FileState> files_;
 };

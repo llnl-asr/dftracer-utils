@@ -212,9 +212,12 @@ endif()
 if(TARGET plugins_test_plugin_index_extension)
   target_compile_definitions(
     plugins_test_plugin_index_extension PRIVATE
-    INDEX_MINMAX_PLUGIN_PATH="$<TARGET_FILE:index_minmax_plugin>")
+    INDEX_MINMAX_PLUGIN_PATH="$<TARGET_FILE:index_minmax_plugin>"
+    INDEX_COLUMNS_PLUGIN_PATH="$<TARGET_FILE:index_columns_plugin>"
+    INDEX_NO_STEP_PLUGIN_PATH="$<TARGET_FILE:index_no_step_plugin>")
   add_dependencies(plugins_test_plugin_index_extension
-                   index_minmax_plugin)
+                   index_minmax_plugin index_columns_plugin
+                   index_no_step_plugin)
 endif()
 
 # +++++++++++++++++++++++++++++++++++++++++
@@ -226,7 +229,8 @@ endif()
 foreach(fh_plugin toy_format_plugin toy_format_tie_plugin
                   toy_bad_sink_plugin
                   factory_registers_op_plugin factory_escapes_plugin
-                  scan_registers_op_plugin index_minmax_plugin udf_plugin
+                  scan_registers_op_plugin index_minmax_plugin
+                  index_columns_plugin index_no_step_plugin udf_plugin
                   udf_clash_plugin udaf_plugin udaf_bad_plugin
                   leaky_plugin crash_plugin reject_destroy_plugin)
   add_library(${fh_plugin} MODULE ${fh_plugin}.c)
@@ -283,7 +287,7 @@ foreach(df_plugin toy_format_plugin toy_format_tie_plugin toy_sink_plugin
                   borrowed_frame_plugin sessionize_input_plugin
                   macro_plugin macro_error_plugin
                   error_after_register_plugin empty_config_key_plugin
-                  leaky_plugin crash_plugin)
+                  leaky_plugin crash_plugin index_columns_plugin)
   if(TARGET dftracer_utils_dataframe::shared)
     target_link_libraries(${df_plugin} PRIVATE dftracer_utils_dataframe::shared)
   elseif(TARGET dftracer_utils_dataframe::static)

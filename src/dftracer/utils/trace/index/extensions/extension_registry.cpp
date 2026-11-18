@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/index/extensions/extension_registry.h>
+#include <dftracer/utils/trace/index/extensions/plugin_columns.h>
 #include <dftracer/utils/trace/index/tables.h>
 
 #include <mutex>
@@ -93,8 +94,17 @@ ExtensionBuilders::ExtensionBuilders(dstd::Vector<ExtensionPtr> extensions) {
                 ext->name(),
                 made ? dstd::StringView() : made.error().message());
         }
-        built_.push_back(
-            {std::move(ext), std::move(b), false, false, false, {}, {}});
+        dstd::UniquePtr<PluginColumns> columns;
+        if (b && !ext->columns().empty())
+            columns = dstd::make_unique<PluginColumns>(ext->columns());
+        built_.push_back({std::move(ext),
+                          std::move(b),
+                          false,
+                          false,
+                          false,
+                          {},
+                          {},
+                          std::move(columns)});
     }
 }
 
@@ -114,6 +124,33 @@ void ExtensionBuilders::end_granule() {
     if (!granule_) return;
     for (auto& b : built_) {
         if (!b.builder) continue;
+        if (b.columns) {
+            auto taken = b.columns->take();
+            if (!b.chunk_failed && !taken.never.empty()) {
+                fail_chunk(
+                    b, "step_column",
+                    common::make_error<
+                        "the path '{}' is never_index in the record schema, "
+                        "so the index has no value of it">(
+                        common::ErrorCode::InvalidArgument, taken.never.front())
+                        .error());
+            }
+            if (!b.chunk_failed && !taken.mixed.empty()) {
+                fail_chunk(
+                    b, "step_column",
+                    common::make_error<
+                        "the values of path '{}' have more than one "
+                        "type in the chunk">(common::ErrorCode::InvalidArgument,
+                                             taken.mixed.front())
+                        .error());
+            }
+            for (auto& column : taken.columns) {
+                if (b.chunk_failed) break;
+                const auto status =
+                    b.builder->step_column(column.path, column.series);
+                if (!status) fail_chunk(b, "step_column", status.error());
+            }
+        }
         ExtensionOut out{{}, b.ext->payload_cap(), false};
         const auto status = b.builder->finish_granule(*granule_, out);
         if (!status) report(b, "finish_granule", status.error());
@@ -124,17 +161,79 @@ void ExtensionBuilders::end_granule() {
     granule_.reset();
 }
 
-void ExtensionBuilders::step(std::uint64_t granule,
-                             dstd::Span<const dstd::StringView> lines) {
+void ExtensionBuilders::fail_chunk(Built& built, dstd::StringView callback,
+                                   const dstd::Error& error) {
+    built.chunk_failed = true;
+    built.step_failed = true;
+    report(built, callback, error);
+}
+
+void ExtensionBuilders::set_never_index(dstd::Span<const dstd::String> never) {
+    for (auto& b : built_)
+        if (b.columns) b.columns->set_never_index(never);
+}
+
+bool ExtensionBuilders::takes_lines() const {
+    for (const auto& b : built_)
+        if (b.builder && b.ext->takes_lines()) return true;
+    return false;
+}
+
+void ExtensionBuilders::step(
+    std::uint64_t granule, dstd::Span<const dstd::StringView> lines,
+    dstd::Span<const trace::views::detail::FoldEvent> events,
+    const dftracer::utils::dstd::StringIntern& intern) {
     if (granule_ && *granule_ != granule) end_granule();
     granule_ = granule;
     for (auto& b : built_) {
         if (!b.builder || b.chunk_failed) continue;
-        const auto status = b.builder->step(lines);
-        if (!status) {
-            b.chunk_failed = true;
-            b.step_failed = true;
-            report(b, "step", status.error());
+        if (b.ext->takes_lines()) {
+            const auto status = b.builder->step(lines);
+            if (!status) fail_chunk(b, "step", status.error());
+        }
+        if (b.columns && !b.chunk_failed) b.columns->add(events, intern);
+    }
+}
+
+void ExtensionBuilders::step_frame(std::uint64_t granule,
+                                   const dataframe::DataFrame& frame) {
+    if (granule_ && *granule_ != granule) end_granule();
+    granule_ = granule;
+    for (auto& b : built_) {
+        if (!b.builder || b.chunk_failed) continue;
+        // An extension that reads lines has seen none of this chunk, so what
+        // it stores would claim the chunk is empty.
+        if (b.ext->columns().empty()) {
+            fail_chunk(b, "step_column",
+                       common::make_error<
+                           "the extension takes record lines and the reader "
+                           "has none">(common::ErrorCode::InvalidArgument)
+                           .error());
+            continue;
+        }
+        for (std::size_t c = 0; c < frame.num_columns() && !b.chunk_failed;
+             ++c) {
+            const dstd::String path(frame.names[c].view());
+            bool wanted = false;
+            for (const dstd::String& want : b.ext->columns())
+                wanted |= want == "*" || want == path;
+            if (!wanted) continue;
+            const auto& column = frame.columns[c];
+            const auto type = column.type();
+            if (type != dataframe::TypeId::Int64 &&
+                type != dataframe::TypeId::Uint64 &&
+                type != dataframe::TypeId::Float64 &&
+                type != dataframe::TypeId::String) {
+                fail_chunk(
+                    b, "step_column",
+                    common::make_error<
+                        "the column '{}' has a type the extension "
+                        "cannot take">(common::ErrorCode::InvalidArgument, path)
+                        .error());
+                break;
+            }
+            const auto status = b.builder->step_column(path, column);
+            if (!status) fail_chunk(b, "step_column", status.error());
         }
     }
 }

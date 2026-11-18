@@ -2003,18 +2003,63 @@ process fails the load. ``dftu_index_extension`` holds:
    * - ``step``
      - The next record lines of the current chunk, borrowed for the call. A
        negative status stores nothing for the chunk or the file, and the host
-       logs it once with the message set on the ctx.
+       logs it once with the message set on the ctx. May be NULL when the
+       extension takes columns.
+   * - ``columns`` / ``step_column``
+     - The paths whose typed columns the extension takes, as a NULL-ended array
+       (``{"*", NULL}`` for every path), and the call that receives each one.
+       See `Typed columns`_ below. At least one of ``step`` and ``step_column``
+       is required, and the host refuses to register an extension that has
+       neither.
    * - ``finish_granule`` / ``finish_file``
      - Append the chunk's or the file's payload through ``dftu_index_out``;
        the host owns the bytes. No bytes stores nothing, and a negative status
        stores nothing and is logged.
    * - ``compile`` / ``release``
      - Prepare a ``dftu_index_leaf`` (path, ``any``, operator, literal as a
-       ``dftu_value``), or return NULL when the extension has no evidence for
-       it.
+       ``dftu_value``, and ``type``, the dtype of the column the leaf targets
+       or ``DFTU_TYPE_UNKNOWN``), or return NULL when the extension has no
+       evidence for it.
    * - ``may_match`` / ``file_may_match``
      - 0 only when the payload proves that no record satisfies the leaf.
        ``file_may_match`` may be NULL.
+
+Typed columns
+~~~~~~~~~~~~~
+
+An extension that lists ``columns`` gets a typed column per path and per chunk
+in place of record lines, so it does no JSON parsing of its own and sees values
+the way the host does. The host reads the column from the parse the index build
+already did, and calls ``step_column(ctx, builder, name, name_len, column)``
+once per requested path and chunk, before ``finish_granule``. A path is the
+name a filter uses: ``name``, ``cat``, ``pid``, ``tid``, ``ts``, ``dur``,
+``fhash``, ``hhash`` or ``args.<key>``.
+
+- ``column`` has one row per record of the chunk, null where the record has no
+  value for the path. It is ``DFTU_TYPE_INT64``, ``DFTU_TYPE_UINT64``,
+  ``DFTU_TYPE_FLOAT64`` or ``DFTU_TYPE_STRING``, and borrowed: it is valid
+  until the call returns, so copy what you keep and never free it.
+- A path with no value in the chunk is not called. A path whose values have no
+  single type in the chunk (an integer and a float, or a number and a string)
+  is not called either, and the host stores nothing for that chunk and for the
+  file, so that chunk is never pruned.
+- ``step`` and ``columns`` may both be set. The host then calls each, and a
+  failure of either stores nothing for the chunk.
+
+The host also gives the plugin its own value hash, so a bloom filter or a
+posting list the plugin builds agrees with the one the host probes:
+
+.. code-block:: c
+
+   uint64_t h = index->hash_value(leaf->value);     /* a literal */
+   index->hash_series(column, hashes, n);           /* a whole column */
+
+Every integer hashes as an int64, a whole double equals the integer (``42.0``
+equals ``42``), every NaN is one value, ``-0.0`` equals ``0`` and a string
+never equals a number. Store ``index->hash_version`` with the bytes and have
+``may_match`` return nonzero for bytes of another version.
+``tests/plugins/index_columns_plugin.c`` is a complete extension of this kind:
+a min and max and a bloom filter over typed columns.
 
 Missing, stale or failed data, a chunk without a payload, and an extension
 that is not registered all prune nothing, so an index built with a plugin
@@ -2027,7 +2072,7 @@ Python ``dftracer.utils.plugins.Plugins``, or
 ``dftracer_index --plugin path``. ``Indexer::manifest`` and ``explain`` list
 the extension by name, and ``rebuild_extension`` and ``drop_extension``
 accept it. ``tests/plugins/index_minmax_plugin.c`` is a complete
-extension: per chunk min and max of one number.
+extension over record lines: per chunk min and max of one number.
 
 15. File formats (DFTU_SVC_FILE_FORMATS)
 ----------------------------------------

@@ -414,10 +414,13 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
     }
 
     dstd::SharedPtr<const ParseConfig> config() {
+        if (!config_ && builders_ && record_schema_)
+            builders_->set_never_index(record_schema_->never_index);
         if (!config_)
             config_ = dstd::make_shared<const ParseConfig>(
                 intern_, decoder_, record_schema_, needs_args_, capture_schema_,
-                skip_never_indexed_, builders_ != nullptr, extra_fields_);
+                skip_never_indexed_, builders_ && builders_->takes_lines(),
+                extra_fields_);
         return config_;
     }
 
@@ -637,7 +640,9 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
             auto stepped = f->step(fb);
             if (!stepped) return stepped;
         }
-        if (builders_) builders_->step(c.checkpoint_idx, c.lines);
+        if (builders_)
+            builders_->step(c.checkpoint_idx, c.lines, c.batch->events(),
+                            *intern_);
         return {};
     }
 
@@ -663,7 +668,9 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
     // order while the folds and this thread run at once.
     coro::CoroTask<void> step_ahead(dstd::UniquePtr<Parsed> done) {
         dropped_lines_ += done->dropped;
-        if (builders_) builders_->step(done->checkpoint_idx, done->lines);
+        if (builders_)
+            builders_->step(done->checkpoint_idx, done->lines,
+                            done->batch->events(), *intern_);
         if (!permits_) {
             permits_ = dstd::make_unique<coro::AsyncSemaphore>(MAX_PIECES_HELD);
             tails_.resize(folds_.size());

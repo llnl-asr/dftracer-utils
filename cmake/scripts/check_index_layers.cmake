@@ -39,6 +39,7 @@ set(ALLOWED
   "index/extensions/bloom_fold.h|trace/views/fold.h"
   "index/extensions/catalog_fold.h|trace/views/fold.h"
   "index/extensions/json_feeder.cpp|trace/views/fold_event.h"
+  "index/extensions/plugin_columns.cpp|trace/views/fold_event.h"
   "index/extensions/json_feeder.h|index/schemas/dft/bloom_core.h"
   "index/extensions/json_feeder.h|trace/views/fold.h"
   "index/extensions/rowset_fold.cpp|trace/views/event_source.h"

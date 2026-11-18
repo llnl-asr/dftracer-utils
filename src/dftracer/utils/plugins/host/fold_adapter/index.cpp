@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/c_api_error.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/hash/value_hash.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -42,6 +45,7 @@ class PluginIndexBuilder final
     PluginIndexBuilder& operator=(const PluginIndexBuilder&) = delete;
 
     dstd::Result<void> step(dstd::Span<const dstd::StringView> lines) override {
+        if (!vt_.step) return {};
         lines_.clear();
         lines_.reserve(lines.size());
         for (dstd::StringView l : lines)
@@ -49,6 +53,20 @@ class PluginIndexBuilder final
         plugins::AbiContext ctx;
         const dftu_status status =
             vt_.step(ctx.get(), builder_, lines_.data(), lines_.size());
+        if (status < 0)
+            return dstd::Unexpected<dstd::Error>(
+                callback_failure(status, ctx.message()));
+        return {};
+    }
+
+    dstd::Result<void> step_column(dstd::StringView name,
+                                   const dataframe::Series& column) override {
+        if (!vt_.step_column) return {};
+        const dstd::String path(name);
+        plugins::AbiContext ctx;
+        const dftu_status status = vt_.step_column(
+            ctx.get(), builder_, path.c_str(),
+            static_cast<std::uint32_t>(path.size()), column.handle());
         if (status < 0)
             return dstd::Unexpected<dstd::Error>(
                 callback_failure(status, ctx.message()));
@@ -204,25 +222,45 @@ class PluginIndexExtension final : public trace::index::extensions::Extension {
         common::copy_struct(
             &vt_copy, sizeof(vt_copy), vt, vt->struct_size,
             plugin_struct_min_size(PluginStruct::IndexExtension));
-        if (!vt_copy.make_builder || !vt_copy.step || !vt_copy.finish_granule ||
+        if (!vt_copy.make_builder || !vt_copy.finish_granule ||
             !vt_copy.destroy_builder || !vt_copy.compile ||
             !vt_copy.may_match || !vt_copy.release) {
             return common::make_error<
                 "index extension '{}' refused: a required callback is NULL">(
                 common::ErrorCode::InvalidArgument, name);
         }
+        dstd::Vector<dstd::String> columns;
+        if (vt_copy.columns)
+            for (const char* const* c = vt_copy.columns; *c; ++c)
+                columns.emplace_back(*c);
+        const dstd::StringView plugin = name.substr(0, name.find('.'));
+        if (!columns.empty() && !vt_copy.step_column) {
+            return common::make_error<
+                "index extension '{}' of plugin '{}' refused: it lists "
+                "columns but has no step_column">(
+                common::ErrorCode::InvalidArgument, name, plugin);
+        }
+        if (!vt_copy.step && columns.empty()) {
+            return common::make_error<
+                "index extension '{}' of plugin '{}' refused: it has "
+                "neither step nor step_column with columns, so it would "
+                "read nothing">(common::ErrorCode::InvalidArgument, name,
+                                plugin);
+        }
         return trace::index::extensions::ExtensionPtr(
-            dstd::make_shared<PluginIndexExtension>(
-                std::move(library), dstd::String(name), vt_copy, self));
+            dstd::make_shared<PluginIndexExtension>(std::move(library),
+                                                    dstd::String(name), vt_copy,
+                                                    self, std::move(columns)));
     }
 
     PluginIndexExtension(dstd::SharedPtr<PluginLibrary> library,
                          dstd::String name, const ::dftu_index_extension& vt,
-                         void* self)
+                         void* self, dstd::Vector<dstd::String> columns)
         : library_(std::move(library)),
           name_(std::move(name)),
           vt_(vt),
-          self_(self) {}
+          self_(self),
+          columns_(std::move(columns)) {}
 
     dstd::StringView name() const override { return name_; }
     std::uint32_t version() const override { return vt_.version; }
@@ -231,6 +269,10 @@ class PluginIndexExtension final : public trace::index::extensions::Extension {
     bool has_file_check() const override {
         return vt_.file_may_match != nullptr;
     }
+    dstd::Span<const dstd::String> columns() const override {
+        return {columns_.data(), columns_.size()};
+    }
+    bool takes_lines() const override { return vt_.step != nullptr; }
 
     dstd::Result<dstd::UniquePtr<trace::index::extensions::ExtensionBuilder>>
     make_builder() const override {
@@ -266,6 +308,7 @@ class PluginIndexExtension final : public trace::index::extensions::Extension {
         l.any = leaf.any ? 1 : 0;
         l.op = to_c(leaf.op);
         l.value = &value;
+        l.type = static_cast<std::int32_t>(leaf.type);
         plugins::AbiContext ctx;
         void* compiled = nullptr;
         const dftu_status status = vt_.compile(ctx.get(), self_, &l, &compiled);
@@ -284,6 +327,7 @@ class PluginIndexExtension final : public trace::index::extensions::Extension {
     dstd::String name_;
     ::dftu_index_extension vt_;
     void* self_;
+    dstd::Vector<dstd::String> columns_;
 };
 
 // An extension registered mid-scan would build nothing for the files already
@@ -299,8 +343,112 @@ dftu_status host_index_register(::dftu_ctx* ctx, void*, const char* name,
             dstd::StringView(name ? name : "(null)")));
 }
 
-const ::dftu_svc_index g_index = {sizeof(::dftu_svc_index),
-                                  host_index_register};
+std::uint64_t host_hash_value(const ::dftu_value* v) {
+    if (!v) return dstd::hash::value_hash_null();
+    switch (v->kind) {
+        case DFTU_VAL_BOOL:
+            return dstd::hash::value_hash_bool(v->as.b != 0);
+        case DFTU_VAL_I64:
+            return dstd::hash::value_hash_int64(v->as.i64);
+        case DFTU_VAL_F64:
+            return dstd::hash::value_hash_double(v->as.f64);
+        case DFTU_VAL_STR:
+            return dstd::hash::value_hash_string(
+                dstd::StringView(v->as.str, v->count));
+        default:
+            return dstd::hash::value_hash_null();
+    }
+}
+
+template <class In, class Hash>
+void hash_rows(const ::dftu_series* col, std::uint64_t* out, std::uint64_t n,
+               Hash hash) {
+    const In* data = static_cast<const In*>(::dftu_series_data(col));
+    const bool nulls = ::dftu_series_null_count(col) > 0;
+    for (std::uint64_t i = 0; i < n; ++i)
+        out[i] =
+            nulls && ::dftu_series_is_null(col, static_cast<std::int64_t>(i))
+                ? dstd::hash::value_hash_null()
+                : hash(data[i]);
+}
+
+dftu_status host_hash_series(const ::dftu_series* col, std::uint64_t* out,
+                             std::uint64_t n) {
+    using dataframe::TypeId;
+    if (!col || !out ||
+        static_cast<std::int64_t>(n) != ::dftu_series_length(col))
+        return DFTU_E_INVALID;
+    const auto type = static_cast<TypeId>(::dftu_series_type(col));
+    if (type == TypeId::String || type == TypeId::LargeString) {
+        const bool nulls = ::dftu_series_null_count(col) > 0;
+        for (std::uint64_t i = 0; i < n; ++i) {
+            const auto row = static_cast<std::int64_t>(i);
+            if (nulls && ::dftu_series_is_null(col, row)) {
+                out[i] = dstd::hash::value_hash_null();
+                continue;
+            }
+            std::int64_t len = 0;
+            const char* p = ::dftu_series_string_at(col, row, &len);
+            out[i] = dstd::hash::value_hash_string(
+                dstd::StringView(p ? p : "", static_cast<std::size_t>(len)));
+        }
+        return DFTU_OK;
+    }
+    const bool numeric = type == TypeId::Int8 || type == TypeId::Int16 ||
+                         type == TypeId::Int32 || type == TypeId::Int64 ||
+                         type == TypeId::Uint8 || type == TypeId::Uint16 ||
+                         type == TypeId::Uint32 || type == TypeId::Uint64 ||
+                         type == TypeId::Float32 || type == TypeId::Float64;
+    if (!numeric) return DFTU_E_UNSUPPORTED;
+    dataframe::Series flat;
+    if (::dftu_series_encoding(col) != 0) {
+        flat = dataframe::Series(::dftu_series_materialize(col));
+        if (!flat.valid()) return DFTU_E_NO_MEMORY;
+        col = flat.handle();
+    }
+    switch (type) {
+        case TypeId::Int8:
+            hash_rows<std::int8_t>(col, out, n, dstd::hash::value_hash_int64);
+            break;
+        case TypeId::Int16:
+            hash_rows<std::int16_t>(col, out, n, dstd::hash::value_hash_int64);
+            break;
+        case TypeId::Int32:
+            hash_rows<std::int32_t>(col, out, n, dstd::hash::value_hash_int64);
+            break;
+        case TypeId::Int64:
+            hash_rows<std::int64_t>(col, out, n, dstd::hash::value_hash_int64);
+            break;
+        case TypeId::Uint8:
+            hash_rows<std::uint8_t>(col, out, n, dstd::hash::value_hash_uint64);
+            break;
+        case TypeId::Uint16:
+            hash_rows<std::uint16_t>(col, out, n,
+                                     dstd::hash::value_hash_uint64);
+            break;
+        case TypeId::Uint32:
+            hash_rows<std::uint32_t>(col, out, n,
+                                     dstd::hash::value_hash_uint64);
+            break;
+        case TypeId::Uint64:
+            hash_rows<std::uint64_t>(col, out, n,
+                                     dstd::hash::value_hash_uint64);
+            break;
+        case TypeId::Float32:
+            hash_rows<float>(col, out, n, [](float v) {
+                return dstd::hash::value_hash_double(static_cast<double>(v));
+            });
+            break;
+        default:
+            hash_rows<double>(col, out, n, dstd::hash::value_hash_double);
+            break;
+    }
+    return DFTU_OK;
+}
+
+const ::dftu_svc_index g_index = {sizeof(::dftu_svc_index), host_index_register,
+                                  dstd::hash::VALUE_HASH_VERSION,
+                                  host_hash_value, host_hash_series};
 
 }  // namespace
 
@@ -323,5 +471,18 @@ dftu_status detail::register_plugin_index_extension(
 }
 
 const void* detail::index_ext_vtable() { return &g_index; }
+
+std::uint32_t detail::index_hash_version() {
+    return static_cast<std::uint32_t>(dstd::hash::VALUE_HASH_VERSION);
+}
+
+std::uint64_t detail::index_hash_value(const ::dftu_value* v) {
+    return host_hash_value(v);
+}
+
+dftu_status detail::index_hash_series(const ::dftu_series* column,
+                                      std::uint64_t* out, std::uint64_t n) {
+    return host_hash_series(column, out, n);
+}
 
 }  // namespace dftracer::utils::plugins::host

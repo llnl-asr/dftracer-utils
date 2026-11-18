@@ -289,6 +289,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/scalable_bloom_filter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/column_feeder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/json_feeder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/plugin_columns.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/summaries.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/summary.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/zone_bounds.cpp

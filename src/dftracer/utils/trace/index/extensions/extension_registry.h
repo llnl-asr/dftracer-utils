@@ -2,6 +2,9 @@
 #ifndef DFTRACER_UTILS_TRACE_INDEX_EXTENSIONS_EXTENSION_REGISTRY_H
 #define DFTRACER_UTILS_TRACE_INDEX_EXTENSIONS_EXTENSION_REGISTRY_H
 
+#include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -9,6 +12,7 @@
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/index/store/file.h>
 
@@ -16,6 +20,10 @@
 
 namespace dftracer::utils::trace::index {
 class FileBuild;
+}
+
+namespace dftracer::utils::trace::views::detail {
+struct FoldEvent;
 }
 
 namespace dftracer::utils::trace::index::extensions {
@@ -46,6 +54,16 @@ class ExtensionBuilder {
     /// borrowed for the call. A failure stores nothing for the chunk.
     virtual dstd::Result<void> step(
         dstd::Span<const dstd::StringView> lines) = 0;
+    /// The column of path `name` for the current chunk, one row per record,
+    /// null where the record lacks the path. Borrowed for the call. Called
+    /// before @ref finish_granule, once per path of
+    /// @ref Extension::columns. A failure stores nothing for the chunk.
+    virtual dstd::Result<void> step_column(dstd::StringView name,
+                                           const dataframe::Series& column) {
+        (void)name;
+        (void)column;
+        return {};
+    }
     /// Ends chunk `granule` and appends its payload to `out`.
     virtual dstd::Result<void> finish_granule(std::uint64_t granule,
                                               ExtensionOut& out) = 0;
@@ -91,6 +109,9 @@ struct ExtensionLeaf {
     dstd::StringView path;
     bool any = false;
     ExtensionOp op = ExtensionOp::Eq;
+    /// The type of the column the leaf targets, or
+    /// @ref dataframe::TypeId::Unknown when the file's catalog does not say.
+    dataframe::TypeId type = dataframe::TypeId::Unknown;
     /// A scalar; the pattern as a String for Like through Icontains; unused
     /// for In and NotIn.
     ExtensionValue value;
@@ -127,6 +148,11 @@ class Extension {
 
     /// False when the extension judges no file payload.
     virtual bool has_file_check() const = 0;
+    /// The paths whose columns the extension takes (`*` for every path); empty
+    /// when it takes record lines only.
+    virtual dstd::Span<const dstd::String> columns() const { return {}; }
+    /// Whether the extension takes record lines.
+    virtual bool takes_lines() const { return true; }
 
     /// A builder for one file; on failure nothing is stored for the file.
     virtual dstd::Result<dstd::UniquePtr<ExtensionBuilder>> make_builder()
@@ -154,6 +180,8 @@ void unregister_extension(dstd::StringView name);
 dstd::Vector<ExtensionPtr> registered_extensions();
 ExtensionPtr find_extension(dstd::StringView name);
 
+class PluginColumns;
+
 /// One file's builders, one per extension, fed chunk by chunk.
 class ExtensionBuilders {
    public:
@@ -162,8 +190,22 @@ class ExtensionBuilders {
     ExtensionBuilders(const ExtensionBuilders&) = delete;
     ExtensionBuilders& operator=(const ExtensionBuilders&) = delete;
 
-    /// Record lines of chunk `granule`; a new granule ends the previous one.
-    void step(std::uint64_t granule, dstd::Span<const dstd::StringView> lines);
+    /// Record lines of chunk `granule` and the events they decoded to, with
+    /// `intern` resolving their ids; a new granule ends the previous one. The
+    /// events are read before the call returns.
+    void step(std::uint64_t granule, dstd::Span<const dstd::StringView> lines,
+              dstd::Span<const trace::views::detail::FoldEvent> events,
+              const dftracer::utils::dstd::StringIntern& intern);
+    /// The columns of chunk `granule` as a frame, for a reader that has no
+    /// line; a new granule ends the previous one. Each extension gets the
+    /// columns it asked for.
+    void step_frame(std::uint64_t granule, const dataframe::DataFrame& frame);
+    /// The record schema's never_index paths, which the index holds no value
+    /// of: an extension that asks for one by name has the chunk failed.
+    /// Borrowed until the last @ref step; call before the first.
+    void set_never_index(dstd::Span<const dstd::String> never);
+    /// Whether any extension takes record lines.
+    bool takes_lines() const;
     /// Ends the last chunk and the file.
     void finish();
     /// Writes each extension's data into `build`, which replaces the file's
@@ -179,10 +221,14 @@ class ExtensionBuilders {
         bool reported = false;
         dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>> granules;
         dstd::Optional<dstd::String> file;
+        dstd::UniquePtr<PluginColumns> columns;
     };
     void end_granule();
     static void report(Built& built, dstd::StringView callback,
                        const dstd::Error& error);
+    // Stores nothing for the chunk or the file, and logs once.
+    static void fail_chunk(Built& built, dstd::StringView callback,
+                           const dstd::Error& error);
 
     dstd::Vector<Built> built_;
     dstd::Optional<std::uint64_t> granule_;

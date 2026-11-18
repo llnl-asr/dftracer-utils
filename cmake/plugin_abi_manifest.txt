@@ -573,6 +573,7 @@ field dftu_gz_summary.lines offset 16 size 8
 field dftu_gz_summary.members offset 8 size 8
 field dftu_gz_summary.parts offset 0 size 8
 field dftu_gz_summary.uc_bytes offset 24 size 8
+field dftu_index_extension.columns offset 96 size 8
 field dftu_index_extension.compile offset 64 size 8
 field dftu_index_extension.destroy_builder offset 56 size 8
 field dftu_index_extension.file_may_match offset 80 size 8
@@ -584,12 +585,14 @@ field dftu_index_extension.may_match offset 72 size 8
 field dftu_index_extension.params_hash offset 8 size 8
 field dftu_index_extension.release offset 88 size 8
 field dftu_index_extension.step offset 32 size 8
+field dftu_index_extension.step_column offset 104 size 8
 field dftu_index_extension.struct_size offset 0 size 4
 field dftu_index_extension.version offset 4 size 4
 field dftu_index_leaf.any offset 12 size 4
 field dftu_index_leaf.op offset 16 size 4
 field dftu_index_leaf.path offset 0 size 8
 field dftu_index_leaf.path_len offset 8 size 4
+field dftu_index_leaf.type offset 32 size 4
 field dftu_index_leaf.value offset 24 size 8
 field dftu_index_out.append offset 16 size 8
 field dftu_index_out.self offset 8 size 8
@@ -857,6 +860,9 @@ field dftu_svc_fs.stat_batch offset 104 size 8
 field dftu_svc_fs.struct_size offset 0 size 4
 field dftu_svc_fs.write_at offset 32 size 8
 field dftu_svc_fs.write_file offset 16 size 8
+field dftu_svc_index.hash_series offset 32 size 8
+field dftu_svc_index.hash_value offset 24 size 8
+field dftu_svc_index.hash_version offset 16 size 4
 field dftu_svc_index.register_extension offset 8 size 8
 field dftu_svc_index.struct_size offset 0 size 4
 field dftu_svc_memory.alloc offset 8 size 8
@@ -1038,6 +1044,7 @@ fnptr dftu_index_extension.make_builder dftu_status (*)(dftu_ctx*, void*, void**
 fnptr dftu_index_extension.may_match int (*)(void*, const uint8_t*, uint64_t)
 fnptr dftu_index_extension.release void (*)(void*)
 fnptr dftu_index_extension.step dftu_status (*)(dftu_ctx*, void*, const dftu_bytes*, uint64_t)
+fnptr dftu_index_extension.step_column dftu_status (*)(dftu_ctx*, void*, const char*, uint32_t, const dftu_series*)
 fnptr dftu_index_out.append void (*)(void*, const void*, uint64_t)
 fnptr dftu_io.accept dftu_status (*)(dftu_ctx*, void*, int32_t, struct sockaddr*, socklen_t*, int32_t*, dftu_task**)
 fnptr dftu_io.bind dftu_status (*)(dftu_ctx*, void*, int32_t, const struct sockaddr*, socklen_t, dftu_task**)
@@ -1184,6 +1191,8 @@ fnptr dftu_svc_fs.remove dftu_status (*)(dftu_ctx*, void*, const char*, int32_t*
 fnptr dftu_svc_fs.stat_batch dftu_status (*)(dftu_ctx*, void*, const char* const*, uint64_t, dftu_fs_stat*, dftu_status*, dftu_task**)
 fnptr dftu_svc_fs.write_at dftu_status (*)(dftu_ctx*, void*, const char*, uint64_t, const void*, uint64_t, int64_t*, dftu_task**)
 fnptr dftu_svc_fs.write_file dftu_status (*)(dftu_ctx*, void*, const char*, const void*, uint64_t, dftu_task**)
+fnptr dftu_svc_index.hash_series dftu_status (*)(const dftu_series*, uint64_t*, uint64_t)
+fnptr dftu_svc_index.hash_value uint64_t (*)(const dftu_value*)
 fnptr dftu_svc_index.register_extension dftu_status (*)(dftu_ctx*, void*, const char*, const dftu_index_extension*, void*)
 fnptr dftu_svc_memory.alloc void* (*)(void*, uint64_t, uint32_t)
 fnptr dftu_svc_memory.free void (*)(void*, void*, uint64_t, uint32_t)
@@ -1312,8 +1321,8 @@ struct dftu_fs_stat size 40 align 8
 struct dftu_group_agg size 24 align 8
 struct dftu_gz_options size 24 align 8
 struct dftu_gz_summary size 40 align 8
-struct dftu_index_extension size 96 align 8
-struct dftu_index_leaf size 32 align 8
+struct dftu_index_extension size 112 align 8
+struct dftu_index_leaf size 40 align 8
 struct dftu_index_out size 24 align 8
 struct dftu_io size 360 align 8
 struct dftu_job_desc size 48 align 8
@@ -1346,7 +1355,7 @@ struct dftu_svc_file_formats size 24 align 8
 struct dftu_svc_fileio size 168 align 8
 struct dftu_svc_format size 144 align 8
 struct dftu_svc_fs size 112 align 8
-struct dftu_svc_index size 16 align 8
+struct dftu_svc_index size 40 align 8
 struct dftu_svc_memory size 72 align 8
 struct dftu_svc_nodes size 16 align 8
 struct dftu_svc_ops size 72 align 8

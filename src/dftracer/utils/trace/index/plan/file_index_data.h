@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_INDEX_PLAN_FILE_INDEX_DATA_H
 #define DFTRACER_UTILS_TRACE_INDEX_PLAN_FILE_INDEX_DATA_H
 
+#include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
@@ -87,6 +88,11 @@ struct FileIndexData {
     /// Whether `path` may hold strings, so a number literal on it is also
     /// probed by its text. True when the catalog does not say.
     bool may_hold_strings(dstd::StringView path);
+
+    /// The type of the column `path` is in the file's catalog (an integer
+    /// path is Int64, one with unsigned values above int64 Uint64), or
+    /// Unknown when the catalog does not say or the values have several types.
+    dataframe::TypeId path_type(dstd::StringView path);
 
     /// The file-level bloom of `path`; nullptr when there is none.
     const trace::index::extensions::ScalableBloomFilter* file_bloom(

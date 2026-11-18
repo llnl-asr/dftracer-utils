@@ -91,6 +91,8 @@ def _input_for(row):
         s = dft.Series(["a", " b ", None])
     elif row.name == "hex64_format":
         s = dft.Series([1, 255, None])
+    elif row.name.startswith("bitwise_"):
+        s = dft.Series([5, 6, None, -1]).astype("int32")
     elif row.name in {"dt_date", "dt_time"}:
         s = ext._series_retype(
             dft.Series([0, 86_400_000_001, None]).astype("int64"), int(DType.TIMESTAMP), 2, ""
@@ -197,14 +199,22 @@ def test_expr_methods_come_from_the_rows():
             assert node.spec.op == row.op
 
 
+def _nan_equal(a, b):
+    return len(a) == len(b) and all(
+        x == y or (x != x and y != y)
+        for x, y in zip(a, b)  # NaN is not equal to itself
+    )
+
+
 def test_the_expr_rows_evaluate_like_the_series_methods():
     s = dft.Series([1.0, 4.0, 4.0, 9.0], name="x")
     for row in (r for r in ROWS if r.on_expr and r.args == "NONE"):
         if row.name in {"is_unique", "is_duplicated", "is_nan", "is_finite", "is_infinite"}:
             continue
-        got = getattr(dft.col("x"), row.name)().apply(dft.DataFrame({"x": s}))
-        want = getattr(s, row.name)()
-        assert got.to_list() == want.to_list(), row.name
+        col_s = s.astype("int32") if row.name.startswith("bitwise_") else s
+        got = getattr(dft.col("x"), row.name)().apply(dft.DataFrame({"x": col_s}))
+        want = getattr(col_s, row.name)()
+        assert _nan_equal(got.to_list(), want.to_list()), row.name
 
 
 def test_committed_declarations_equal_the_generated_ones():

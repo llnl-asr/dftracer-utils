@@ -411,6 +411,12 @@ dstd::String agg_serialize(const AggState& st_in, bool compact) {
         for (std::int64_t k : st.apos_rank) put(s, k);
         for (std::uint8_t d : st.apos_dom) put(s, d);
     }
+    // As the position slots, the bitwise slots follow from the specs.
+    if (st.has_bw) {
+        for (TypeId t : st.bw_type) put(s, static_cast<std::uint8_t>(t));
+        for (std::uint64_t b : st.bw_acc) put(s, b);
+        for (std::uint8_t b : st.bw_seen) put(s, b);
+    }
     put(s, static_cast<std::uint8_t>(st.has_bitor ? 1 : 0));
     if (st.has_bitor)
         for (std::uint64_t b : st.bitor_acc) put(s, b);
@@ -907,6 +913,24 @@ dstd::Result<AggStatePtr> agg_deserialize(dstd::StringView blob, bool compact,
         for (std::size_t i = 0; i < sz; ++i) {
             st->apos_dom[i] = r.get<std::uint8_t>();
             if (st->apos_dom[i] > 3) return corrupt_blob();
+        }
+    }
+    if (st->has_bw) {
+        const std::size_t sz = static_cast<std::size_t>(ng) * st->n_bw;
+        if (!r.count(st->n_bw + sz * 9)) return corrupt_blob();
+        for (std::size_t i = 0; i < st->n_bw; ++i) {
+            const std::uint8_t t = r.get<std::uint8_t>();
+            if (t > static_cast<std::uint8_t>(TypeId::Map))
+                return corrupt_blob();
+            st->bw_type[i] = static_cast<TypeId>(t);
+        }
+        st->bw_acc.resize(sz);
+        st->bw_seen.resize(sz);
+        for (std::size_t i = 0; i < sz; ++i)
+            st->bw_acc[i] = r.get<std::uint64_t>();
+        for (std::size_t i = 0; i < sz; ++i) {
+            st->bw_seen[i] = r.get<std::uint8_t>();
+            if (st->bw_seen[i] > 1) return corrupt_blob();
         }
     }
     if (st->has_bitor != (r.get<std::uint8_t>() != 0)) return corrupt_blob();

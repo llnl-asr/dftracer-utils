@@ -720,3 +720,155 @@ TEST_CASE("ArgMaxPos refuses a text column") {
     dftu_utils_test::ok(dataframe::agg_accumulate(*st, keys, values));
     CHECK_FALSE(dataframe::agg_check(*st).has_value());
 }
+
+namespace {
+
+// The three bitwise reductions of one value column over the keys `k`.
+DataFrame bitwise_frame(const Series& k, const Series& v) {
+    dstd::Vector<AggSpec> specs{AggSpec{AggOp::BitwiseAnd, 0, "a"},
+                                AggSpec{AggOp::BitwiseOr, 0, "o"},
+                                AggSpec{AggOp::BitwiseXor, 0, "x"}};
+    auto st = dataframe::agg_new(specs);
+    dstd::Vector<const Series*> keys{&k};
+    dstd::Vector<const Series*> values{&v};
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st, keys, values));
+    dftu_utils_test::ok(dataframe::agg_check(*st));
+    return dataframe::agg_finalize(*st, "k");
+}
+
+}  // namespace
+
+TEST_CASE("bitwise aggregates keep the column type and null an empty group") {
+    // Group 0: 6, 3, -5 (as int8); group 1: 5 and a null; group 2: only nulls.
+    const std::int64_t k[6] = {0, 0, 1, 1, 2, 0};
+    const std::int8_t v[6] = {6, 3, 5, 0, 0, -5};
+    const std::uint8_t valid[1] = {0b0010'0111};
+    const DataFrame r = bitwise_frame(Series::flat_i64(k, 6),
+                                      Series::flat(TypeId::Int8, v, 6, valid));
+    REQUIRE(r.num_rows() == 3);
+    for (const char* name : {"a", "o", "x"})
+        CHECK(r.column(name).type() == TypeId::Int8);
+    const std::int64_t g0 = row_of(r, "k", 0);
+    const std::int64_t g1 = row_of(r, "k", 1);
+    const std::int64_t g2 = row_of(r, "k", 2);
+    CHECK(r.column("a").data<std::int8_t>()[g0] == (6 & 3 & -5));
+    CHECK(r.column("o").data<std::int8_t>()[g0] == (6 | 3 | -5));
+    CHECK(r.column("x").data<std::int8_t>()[g0] == (6 ^ 3 ^ -5));
+    CHECK(r.column("a").data<std::int8_t>()[g1] == 5);
+    CHECK(r.column("x").data<std::int8_t>()[g1] == 5);
+    for (const char* name : {"a", "o", "x"}) {
+        CHECK_FALSE(r.column(name).is_null(g0));
+        CHECK_FALSE(r.column(name).is_null(g1));
+        CHECK(r.column(name).is_null(g2));
+    }
+}
+
+TEST_CASE("bitwise aggregates read every width and a Bool as the column does") {
+    const std::int64_t k[3] = {0, 0, 0};
+    const std::uint64_t u64[3] = {0xF0F0F0F0F0F0F0F0ULL, 0xFF00FF00FF00FF00ULL,
+                                  0x8000000000000001ULL};
+    DataFrame r = bitwise_frame(Series::flat_i64(k, 3),
+                                Series::flat(TypeId::Uint64, u64, 3));
+    CHECK(r.column("a").type() == TypeId::Uint64);
+    CHECK(r.column("a").data<std::uint64_t>()[0] == (u64[0] & u64[1] & u64[2]));
+    CHECK(r.column("o").data<std::uint64_t>()[0] == (u64[0] | u64[1] | u64[2]));
+    CHECK(r.column("x").data<std::uint64_t>()[0] == (u64[0] ^ u64[1] ^ u64[2]));
+
+    const std::uint16_t u16[3] = {0xFFFF, 0x8001, 0x00FF};
+    r = bitwise_frame(Series::flat_i64(k, 3),
+                      Series::flat(TypeId::Uint16, u16, 3));
+    CHECK(r.column("a").type() == TypeId::Uint16);
+    CHECK(r.column("a").data<std::uint16_t>()[0] == 0x0001);
+    CHECK(r.column("o").data<std::uint16_t>()[0] == 0xFFFF);
+    CHECK(r.column("x").data<std::uint16_t>()[0] == (0xFFFF ^ 0x8001 ^ 0x00FF));
+
+    const std::int32_t i32[2] = {-1, std::numeric_limits<std::int32_t>::min()};
+    const std::int64_t k2[2] = {0, 0};
+    r = bitwise_frame(Series::flat_i64(k2, 2),
+                      Series::flat(TypeId::Int32, i32, 2));
+    CHECK(r.column("a").data<std::int32_t>()[0] ==
+          std::numeric_limits<std::int32_t>::min());
+
+    // Bool: rows 1, 0, 1 in group 0 and a lone 1 in group 1.
+    const std::int64_t kb[4] = {0, 0, 0, 1};
+    const std::uint8_t bits[1] = {0b0000'1101};
+    r = bitwise_frame(Series::flat_i64(kb, 4),
+                      Series::flat(TypeId::Bool, bits, 4));
+    CHECK(r.column("a").type() == TypeId::Bool);
+    const std::int64_t b0 = row_of(r, "k", 0);
+    const std::int64_t b1 = row_of(r, "k", 1);
+    auto bit = [&](dstd::StringView name, std::int64_t at) {
+        return ((r.column(name).data<std::uint8_t>()[at >> 3] >> (at & 7)) &
+                1) != 0;
+    };
+    CHECK_FALSE(bit("a", b0));
+    CHECK(bit("o", b0));
+    CHECK_FALSE(bit("x", b0));
+    CHECK(bit("a", b1));
+    CHECK(bit("x", b1));
+}
+
+TEST_CASE("bitwise aggregates merge in any order and round-trip") {
+    const std::int64_t k[8] = {0, 1, 0, 1, 0, 1, 0, 1};
+    const std::int64_t v[8] = {12, -4, 10, 7, 9, 5, 3, -1};
+    const Series sk = Series::flat_i64(k, 8);
+    const Series sv = Series::flat_i64(v, 8);
+    dstd::Vector<const Series*> keys{&sk};
+    dstd::Vector<const Series*> values{&sv};
+    auto specs = [] {
+        return dstd::Vector<AggSpec>{AggSpec{AggOp::BitwiseAnd, 0, "a"},
+                                     AggSpec{AggOp::BitwiseOr, 0, "o"},
+                                     AggSpec{AggOp::BitwiseXor, 0, "x"}};
+    };
+    auto whole = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*whole, keys, values));
+    const DataFrame want = dataframe::agg_finalize(*whole, "k");
+
+    check_same(want, dataframe::agg_finalize(
+                         *dftu_utils_test::ok(dataframe::agg_deserialize(
+                             dataframe::agg_serialize(*whole))),
+                         "k"));
+
+    auto lo = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*lo, keys, values, 0, 4));
+    auto hi = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*hi, keys, values, 4, 8));
+    dataframe::agg_merge(*hi, *lo);
+    check_same(want, dataframe::agg_finalize(*hi, "k"));
+
+    auto lo2 = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*lo2, keys, values, 0, 4));
+    auto hi2 = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*hi2, keys, values, 4, 8));
+    dataframe::agg_merge(*lo2, *hi2);
+    check_same(want, dataframe::agg_finalize(*lo2, "k"));
+}
+
+TEST_CASE("bitwise aggregates refuse a float and a text column") {
+    const std::int64_t k[2] = {0, 0};
+    const double f[2] = {1.0, 2.0};
+    const Series sk = Series::flat_i64(k, 2);
+    const Series sv = Series::flat_f64(f, 2);
+    dstd::Vector<const Series*> keys{&sk};
+    dstd::Vector<const Series*> values{&sv};
+    auto st = dataframe::agg_new({AggSpec{AggOp::BitwiseAnd, 0, "a"}});
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st, keys, values));
+    CHECK_FALSE(dataframe::agg_check(*st).has_value());
+}
+
+TEST_CASE(
+    "bitwise aggregates refuse an unsupported column even when it is null") {
+    const std::int64_t k[3] = {0, 0, 1};
+    const std::uint8_t none[1] = {0};
+    const double f[3] = {1.0, 2.0, 3.0};
+    const Series sk = Series::flat_i64(k, 3);
+    const Series sf = Series::flat(TypeId::Float64, f, 3, none);
+    dstd::Vector<const Series*> keys{&sk};
+    dstd::Vector<const Series*> values{&sf};
+    for (const AggOp op :
+         {AggOp::BitwiseAnd, AggOp::BitwiseOr, AggOp::BitwiseXor}) {
+        auto st = dataframe::agg_new({AggSpec{op, 0, "a"}});
+        dftu_utils_test::ok(dataframe::agg_accumulate(*st, keys, values));
+        CHECK_FALSE(dataframe::agg_check(*st).has_value());
+    }
+}

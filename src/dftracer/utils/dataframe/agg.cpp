@@ -89,6 +89,8 @@ std::size_t agg_approx_bytes(const AggState& st) {
         for (const dstd::String& v : st.arg_repr) total += v.size();
     }
     if (st.has_bitor) total += st.bitor_acc.size() * sizeof(std::uint64_t);
+    if (st.has_bw)
+        total += st.bw_acc.size() * sizeof(std::uint64_t) + st.bw_seen.size();
     if (st.has_prod) total += st.prod_acc.size() * sizeof(double);
     if (st.has_qv)
         for (const dstd::Vector<double>& v : st.qv)
@@ -265,6 +267,10 @@ DataType agg_output_type(AggOp op, const DataType& value, double param) {
             return scalar(TypeId::Int64);
         case AggOp::BitOr:
             return scalar(TypeId::Uint64);
+        case AggOp::BitwiseAnd:
+        case AggOp::BitwiseOr:
+        case AggOp::BitwiseXor:
+            return scalar(value_type);
         case AggOp::Hist:
             return list_of(
                 struct_of({Field{"lo", scalar(TypeId::Float64), true},

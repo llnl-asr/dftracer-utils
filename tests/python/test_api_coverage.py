@@ -59,12 +59,12 @@ def test_a_name_neither_ours_nor_excluded_fails(monkeypatch, tmp_path):
     kept = [
         line
         for line in cov.EXCLUDE.read_text(encoding="utf-8").splitlines()
-        if not line.startswith("polars Series.sin |")
+        if not line.startswith("polars Series.approx_n_unique |")
     ]
     _with_exclusions(monkeypatch, tmp_path, "\n".join(kept) + "\n")
     rows, errors, _ = cov.measure(["polars"])
     series = next(r for r in rows if r.cls == "Series")
-    assert series.missing == {"sin"}
+    assert series.missing == {"approx_n_unique"}
 
 
 def test_a_line_for_a_name_we_have_is_stale(monkeypatch, tmp_path):
@@ -80,12 +80,14 @@ def test_a_needs_kernel_line_that_points_to_a_method_we_have_is_an_error(monkeyp
     kept = [
         line
         for line in cov.EXCLUDE.read_text(encoding="utf-8").splitlines()
-        if not line.startswith("polars Series.sin |")
+        if not line.startswith("polars Series.approx_n_unique |")
     ]
-    kept.append("polars Series.sin | needs-kernel | no kernel; use floor for it")
+    kept.append("polars Series.approx_n_unique | needs-kernel | no kernel; use floor for it")
     _with_exclusions(monkeypatch, tmp_path, "\n".join(kept) + "\n")
     _, errors, _ = cov.measure(["polars"])
-    assert any("needs-kernel polars Series.sin" in e and "existing floor" in e for e in errors)
+    assert any(
+        "needs-kernel polars Series.approx_n_unique" in e and "existing floor" in e for e in errors
+    )
 
 
 @pytest.mark.parametrize(

@@ -151,6 +151,28 @@ inline std::size_t agg_param_k(double param, std::size_t fallback) {
     return param > 0.0 ? static_cast<std::size_t>(param) : fallback;
 }
 
+/// Whether `op` is one of the three bitwise reductions.
+inline bool agg_is_bitwise(AggOp op) {
+    return op == AggOp::BitwiseAnd || op == AggOp::BitwiseOr ||
+           op == AggOp::BitwiseXor;
+}
+
+/// Folds the present word `v` into a bitwise slot: the first value is taken
+/// as is, the next ones combine with the slot's operation.
+inline void bw_fold(AggOp op, std::uint64_t& acc, std::uint8_t& seen,
+                    std::uint64_t v, std::uint8_t v_seen) {
+    if (!v_seen) return;
+    if (!seen)
+        acc = v;
+    else if (op == AggOp::BitwiseAnd)
+        acc &= v;
+    else if (op == AggOp::BitwiseOr)
+        acc |= v;
+    else
+        acc ^= v;
+    seen = 1;
+}
+
 /// Which extremum an ArgMax/ArgMin slot tracks over its `by` column.
 enum class ArgDir { Min = 0, Max = 1 };
 
@@ -563,6 +585,20 @@ class AggState : public dstd::HeapObject {
     dstd::Vector<std::int64_t> apos_rank;   // groups * n_apos
     dstd::Vector<std::uint8_t> apos_dom;    // groups * n_apos
     bool apos_unordered = false;
+
+    // BitwiseAnd/Or/Xor: a slot per spec. `bw_acc` is the 64-bit word the
+    // present values fold into (an integer sign-extended, a Bool as 0 or 1) and
+    // `bw_seen` is 0 until a present value arrives; merge folds a seen other
+    // side with the slot's operation, so the order of the merge does not
+    // matter.
+    bool has_bw = false;
+    std::size_t n_bw = 0;
+    dstd::Vector<int> spec_bw;           // spec -> slot, or -1
+    dstd::Vector<std::int32_t> bw_col;   // slot -> value_col
+    dstd::Vector<AggOp> bw_op;           // slot -> operation
+    dstd::Vector<TypeId> bw_type;        // slot -> column type, once seen
+    dstd::Vector<std::uint64_t> bw_acc;  // groups * n_bw
+    dstd::Vector<std::uint8_t> bw_seen;  // groups * n_bw
 
     // BitOr: one slot per distinct value column; the accumulator is the u64 OR
     // (identity 0), so merge is an OR.
@@ -1090,8 +1126,8 @@ class AggState : public dstd::HeapObject {
             if (sp.op == AggOp::Count || sp.op == AggOp::BitOr ||
                 sp.op == AggOp::Prod || sp.op == AggOp::Udaf ||
                 sp.op == AggOp::ArgMaxPos || sp.op == AggOp::ArgMinPos ||
-                agg_uses_raw_value(sp.op) || agg_uses_by_col(sp.op) ||
-                sp.value_col < 0)
+                agg_is_bitwise(sp.op) || agg_uses_raw_value(sp.op) ||
+                agg_uses_by_col(sp.op) || sp.value_col < 0)
                 continue;
             auto it = seen.find(sp.value_col);
             if (it == seen.end()) {
@@ -1177,6 +1213,21 @@ class AggState : public dstd::HeapObject {
                                                          : ArgDir::Min);
         }
         has_apos = n_apos > 0;
+
+        spec_bw.assign(specs.size(), -1);
+        bw_col.clear();
+        bw_op.clear();
+        bw_type.clear();
+        n_bw = 0;
+        for (std::size_t s = 0; s < specs.size(); ++s) {
+            const AggSpec& sp = specs[s];
+            if (!agg_is_bitwise(sp.op)) continue;
+            spec_bw[s] = static_cast<int>(n_bw++);
+            bw_col.push_back(sp.value_col);
+            bw_op.push_back(sp.op);
+            bw_type.push_back(TypeId::Unknown);
+        }
+        has_bw = n_bw > 0;
 
         spec_bitor.assign(specs.size(), -1);
         bitor_val_col.clear();
@@ -1469,6 +1520,10 @@ class AggState : public dstd::HeapObject {
             apos_bits.resize(apos_bits.size() + n_apos, 0);
             apos_rank.resize(apos_rank.size() + n_apos, 0);
             apos_dom.resize(apos_dom.size() + n_apos, 0);
+        }
+        if (has_bw) {
+            bw_acc.resize(bw_acc.size() + n_bw, 0);
+            bw_seen.resize(bw_seen.size() + n_bw, 0);
         }
         if (has_bitor) bitor_acc.resize(bitor_acc.size() + n_bitor, 0);
         if (has_prod) prod_acc.resize(prod_acc.size() + n_prod, 1.0);
@@ -1829,6 +1884,13 @@ class AggState : public dstd::HeapObject {
                 apos_rank[da + slot] = other.apos_rank[sa + slot] + rows_before;
             }
         }
+        if (has_bw) {
+            const std::size_t dw = static_cast<std::size_t>(g) * n_bw;
+            const std::size_t sw = static_cast<std::size_t>(j) * n_bw;
+            for (std::size_t slot = 0; slot < n_bw; ++slot)
+                bw_fold(bw_op[slot], bw_acc[dw + slot], bw_seen[dw + slot],
+                        other.bw_acc[sw + slot], other.bw_seen[sw + slot]);
+        }
         if (has_bitor) {
             const std::size_t dbo = static_cast<std::size_t>(g) * n_bitor;
             const std::size_t sbo = static_cast<std::size_t>(j) * n_bitor;
@@ -1967,6 +2029,12 @@ class AggState : public dstd::HeapObject {
         spec_apos = other.spec_apos;
         apos_col = other.apos_col;
         apos_dir = other.apos_dir;
+        has_bw = other.has_bw;
+        n_bw = other.n_bw;
+        spec_bw = other.spec_bw;
+        bw_col = other.bw_col;
+        bw_op = other.bw_op;
+        bw_type = other.bw_type;
         has_bitor = other.has_bitor;
         n_bitor = other.n_bitor;
         spec_bitor = other.spec_bitor;

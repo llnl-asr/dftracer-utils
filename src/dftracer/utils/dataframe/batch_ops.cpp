@@ -1841,6 +1841,9 @@ bool reduce_broadcasts(Agg agg) noexcept {
         case Agg::RegrSlope:
         case Agg::RegrIntercept:
         case Agg::RegrR2:
+        case Agg::BitwiseAnd:
+        case Agg::BitwiseOr:
+        case Agg::BitwiseXor:
         case Agg::Udaf:
             return false;
     }

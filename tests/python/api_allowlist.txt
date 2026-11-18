@@ -230,7 +230,9 @@ Expr.arg_sort | expr-node:ColumnOpNode | -
 Expr.argmax | expr-node:Agg | -
 Expr.argmin | expr-node:Agg | -
 Expr.backward_fill | expr-node:ColumnOpNode | -
-Expr.bit_or | python-semantics | Python logic that does not build one node
+Expr.bitwise_and | python-semantics | Python logic that does not build one node
+Expr.bitwise_or | python-semantics | Python logic that does not build one node
+Expr.bitwise_xor | python-semantics | Python logic that does not build one node
 Expr.bottomk | expr-node:Agg | -
 Expr.busy | python-semantics | Python logic that does not build one node
 Expr.capitalize | expr-node:_StrMap | -
@@ -298,7 +300,6 @@ Expr.len_chars | expr-node:_StrLen | -
 Expr.like | expr-node:_StrPred | -
 Expr.list_sorted | expr-node:Agg | -
 Expr.ljust | python-semantics | built from other Expr methods (pad_end)
-Expr.log10 | python-semantics | Python logic that does not build one node
 Expr.lower | expr-node:_StrMap | -
 Expr.lstrip | expr-node:_StrMap | -
 Expr.lt | expr-node:Cmp | -

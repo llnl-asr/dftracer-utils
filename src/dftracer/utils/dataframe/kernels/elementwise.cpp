@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -1321,6 +1322,272 @@ dftu_series* dftu_series_expm1(const dftu_series* a) {
     double* p = reinterpret_cast<double*>(writable(out->data));
     for (std::int64_t i = 0; i < a->length; ++i) p[i] = std::expm1(p[i]);
     return out;
+}
+
+namespace {
+
+// A float column of the same length and validity as `a`: Float32 for a Float32
+// input, else Float64 (the values widened).
+template <class F>
+dftu_series* math_unary(const dftu_series* a, F f) {
+    using namespace dftracer::utils::dataframe;
+    if (a->encoding != Encoding::Flat || !is_numeric_dispatchable(a->type))
+        return nullptr;
+    if (a->type == TypeId::Float32) {
+        auto* out = new dftu_series();
+        out->type = TypeId::Float32;
+        out->encoding = Encoding::Flat;
+        out->length = a->length;
+        out->null_count = a->null_count;
+        out->validity = a->validity;
+        out->data = new_buffer(buffer_bytes(TypeId::Float32, a->length));
+        const auto* in = reinterpret_cast<const float*>(a->data.data());
+        auto* o = reinterpret_cast<float*>(writable(out->data));
+        for (std::int64_t i = 0; i < a->length; ++i) o[i] = f(in[i]);
+        return out;
+    }
+    dftu_series* out = widen_to_f64(a);
+    auto* p = reinterpret_cast<double*>(writable(out->data));
+    for (std::int64_t i = 0; i < a->length; ++i) p[i] = f(p[i]);
+    return out;
+}
+
+}  // namespace
+
+dftu_series* dftu_series_sin(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_sin(flat_a));
+    return math_unary(a, [](auto x) { return std::sin(x); });
+}
+
+dftu_series* dftu_series_cos(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_cos(flat_a));
+    return math_unary(a, [](auto x) { return std::cos(x); });
+}
+
+dftu_series* dftu_series_tan(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_tan(flat_a));
+    return math_unary(a, [](auto x) { return std::tan(x); });
+}
+
+dftu_series* dftu_series_cot(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_cot(flat_a));
+    return math_unary(
+        a, [](auto x) { return static_cast<decltype(x)>(1) / std::tan(x); });
+}
+
+dftu_series* dftu_series_arcsin(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arcsin(flat_a));
+    return math_unary(a, [](auto x) { return std::asin(x); });
+}
+
+dftu_series* dftu_series_arccos(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arccos(flat_a));
+    return math_unary(a, [](auto x) { return std::acos(x); });
+}
+
+dftu_series* dftu_series_arctan(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arctan(flat_a));
+    return math_unary(a, [](auto x) { return std::atan(x); });
+}
+
+dftu_series* dftu_series_sinh(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_sinh(flat_a));
+    return math_unary(a, [](auto x) { return std::sinh(x); });
+}
+
+dftu_series* dftu_series_cosh(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_cosh(flat_a));
+    return math_unary(a, [](auto x) { return std::cosh(x); });
+}
+
+dftu_series* dftu_series_tanh(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_tanh(flat_a));
+    return math_unary(a, [](auto x) { return std::tanh(x); });
+}
+
+dftu_series* dftu_series_arcsinh(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arcsinh(flat_a));
+    return math_unary(a, [](auto x) { return std::asinh(x); });
+}
+
+dftu_series* dftu_series_arccosh(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arccosh(flat_a));
+    return math_unary(a, [](auto x) { return std::acosh(x); });
+}
+
+dftu_series* dftu_series_arctanh(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arctanh(flat_a));
+    return math_unary(a, [](auto x) { return std::atanh(x); });
+}
+
+dftu_series* dftu_series_cbrt(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_cbrt(flat_a));
+    return math_unary(a, [](auto x) { return std::cbrt(x); });
+}
+
+dftu_series* dftu_series_log10(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_log10(flat_a));
+    return math_unary(a, [](auto x) { return std::log10(x); });
+}
+
+dftu_series* dftu_series_erf(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_erf(flat_a));
+    return math_unary(a, [](auto x) { return std::erf(x); });
+}
+
+dftu_series* dftu_series_erfc(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_erfc(flat_a));
+    return math_unary(a, [](auto x) { return std::erfc(x); });
+}
+
+namespace {
+
+enum class BitCount {
+    Ones,
+    Zeros,
+    LeadingOnes,
+    LeadingZeros,
+    TrailingOnes,
+    TrailingZeros
+};
+
+// One run over an integer column of type T; the unsigned twin of T gives the
+// width and the two's complement bits of a signed value.
+template <class T>
+void bit_count_run(BitCount k, const T* in, std::uint32_t* out,
+                   std::int64_t n) {
+    using U = std::make_unsigned_t<T>;
+    constexpr auto WIDTH = static_cast<std::uint32_t>(sizeof(U) * 8);
+    auto run = [&](auto f) {
+        for (std::int64_t i = 0; i < n; ++i)
+            out[i] = static_cast<std::uint32_t>(f(static_cast<U>(in[i])));
+    };
+    switch (k) {
+        case BitCount::Ones:
+            run([](U u) { return std::popcount(u); });
+            break;
+        case BitCount::Zeros:
+            run([](U u) { return WIDTH - std::popcount(u); });
+            break;
+        case BitCount::LeadingOnes:
+            run([](U u) { return std::countl_one(u); });
+            break;
+        case BitCount::LeadingZeros:
+            run([](U u) { return std::countl_zero(u); });
+            break;
+        case BitCount::TrailingOnes:
+            run([](U u) { return std::countr_one(u); });
+            break;
+        case BitCount::TrailingZeros:
+            run([](U u) { return std::countr_zero(u); });
+            break;
+    }
+}
+
+// A Bool is one bit: a count is the bit or its complement, and a run of one
+// bit is the same count.
+void bit_count_bool(BitCount k, const std::uint8_t* bits, std::uint32_t* out,
+                    std::int64_t n) {
+    const bool want_set = k == BitCount::Ones || k == BitCount::LeadingOnes ||
+                          k == BitCount::TrailingOnes;
+    for (std::int64_t i = 0; i < n; ++i) {
+        const bool bit = ((bits[i >> 3] >> (i & 7)) & 1) != 0;
+        out[i] = bit == want_set ? 1 : 0;
+    }
+}
+
+bool is_bit_count_type(dftracer::utils::dataframe::TypeId t) {
+    using dftracer::utils::dataframe::TypeId;
+    return t == TypeId::Bool ||
+           (dftracer::utils::dataframe::is_numeric_dispatchable(t) &&
+            t != TypeId::Float32 && t != TypeId::Float64);
+}
+
+dftu_series* bit_count_series(const dftu_series* a, BitCount k) {
+    using namespace dftracer::utils::dataframe;
+    if (a->encoding != Encoding::Flat || !is_bit_count_type(a->type))
+        return nullptr;
+    auto* out = new dftu_series();
+    out->type = TypeId::Uint32;
+    out->encoding = Encoding::Flat;
+    out->length = a->length;
+    out->null_count = a->null_count;
+    out->validity = a->validity;
+    out->data = new_buffer(buffer_bytes(TypeId::Uint32, a->length));
+    auto* o = reinterpret_cast<std::uint32_t*>(writable(out->data));
+    const void* in = a->data.data();
+    switch (a->type) {
+        case TypeId::Bool:
+            bit_count_bool(k, static_cast<const std::uint8_t*>(in), o,
+                           a->length);
+            break;
+        case TypeId::Int8:
+            bit_count_run(k, static_cast<const std::int8_t*>(in), o, a->length);
+            break;
+        case TypeId::Int16:
+            bit_count_run(k, static_cast<const std::int16_t*>(in), o,
+                          a->length);
+            break;
+        case TypeId::Int32:
+            bit_count_run(k, static_cast<const std::int32_t*>(in), o,
+                          a->length);
+            break;
+        case TypeId::Int64:
+            bit_count_run(k, static_cast<const std::int64_t*>(in), o,
+                          a->length);
+            break;
+        case TypeId::Uint8:
+            bit_count_run(k, static_cast<const std::uint8_t*>(in), o,
+                          a->length);
+            break;
+        case TypeId::Uint16:
+            bit_count_run(k, static_cast<const std::uint16_t*>(in), o,
+                          a->length);
+            break;
+        case TypeId::Uint32:
+            bit_count_run(k, static_cast<const std::uint32_t*>(in), o,
+                          a->length);
+            break;
+        case TypeId::Uint64:
+            bit_count_run(k, static_cast<const std::uint64_t*>(in), o,
+                          a->length);
+            break;
+        default:
+            break;
+    }
+    return out;
+}
+
+}  // namespace
+
+dftu_series* dftu_series_bitwise_count_ones(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_bitwise_count_ones(flat_a));
+    return bit_count_series(a, BitCount::Ones);
+}
+
+dftu_series* dftu_series_bitwise_count_zeros(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_bitwise_count_zeros(flat_a));
+    return bit_count_series(a, BitCount::Zeros);
+}
+
+dftu_series* dftu_series_bitwise_leading_ones(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_bitwise_leading_ones(flat_a));
+    return bit_count_series(a, BitCount::LeadingOnes);
+}
+
+dftu_series* dftu_series_bitwise_leading_zeros(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_bitwise_leading_zeros(flat_a));
+    return bit_count_series(a, BitCount::LeadingZeros);
+}
+
+dftu_series* dftu_series_bitwise_trailing_ones(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_bitwise_trailing_ones(flat_a));
+    return bit_count_series(a, BitCount::TrailingOnes);
+}
+
+dftu_series* dftu_series_bitwise_trailing_zeros(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_bitwise_trailing_zeros(flat_a));
+    return bit_count_series(a, BitCount::TrailingZeros);
 }
 
 #endif  // HWY_ONCE

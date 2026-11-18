@@ -3,7 +3,7 @@
 # DataFrame Library Tests
 # ##############################################################################
 
-set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
+set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_series_math_bitwise.cpp test_methods.cpp
                            test_types_compute.cpp test_large_types_compute.cpp
                            test_types_matrix.cpp test_types_tail.cpp
                            test_types_lazy.cpp

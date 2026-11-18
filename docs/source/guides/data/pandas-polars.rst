@@ -148,6 +148,18 @@ a List column of the first-seen distinct values, ``is_monotonic_increasing`` and
 .corrwith(other)`` correlates each column with the paired column of ``other``
 (rows pair by position, ``method="pearson"`` only).
 
+The polars math methods ``sin``, ``cos``, ``tan``, ``cot``, ``arcsin``,
+``arccos``, ``arctan``, ``sinh``, ``cosh``, ``tanh``, ``arcsinh``, ``arccosh``,
+``arctanh``, ``cbrt``, ``log10``, ``erf`` and ``erfc`` work on a ``Series`` and
+an ``Expr``. A Float32 column stays Float32 and any other numeric column gives
+Float64; a value outside the domain is NaN, as ``arcsin(2)``. The bitwise
+methods ``bitwise_count_ones``, ``bitwise_count_zeros``, ``bitwise_leading_ones``,
+``bitwise_leading_zeros``, ``bitwise_trailing_ones`` and
+``bitwise_trailing_zeros`` give a UInt32 column within the width of an integer
+or Bool column. ``bitwise_and``, ``bitwise_or`` and ``bitwise_xor`` reduce a
+column to a value of its own type (``None`` when no value is present) and, on an
+``Expr``, run per group in ``group_by().agg``.
+
 Removed: ``ColumnExpr`` and ``Field`` (use ``Expr`` and ``col``),
 ``TraceViewer.query`` and ``explain_query`` (use ``duql`` and ``explain_duql``),
 ``TraceViewer.limit`` (use ``head``; ``DataFrame.limit`` and

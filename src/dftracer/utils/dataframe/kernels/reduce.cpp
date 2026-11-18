@@ -164,6 +164,63 @@ void product_one(const dftu_series& v, dftu_scalar& out) {
     }
 }
 
+// The bitwise reduction `op` (0 AND, 1 OR, 2 XOR) over the valid values of an
+// integer column; a column with no valid value gives the NULL scalar. A signed
+// column gives I64 (sign-extended from its width), an unsigned one U64.
+template <class T>
+void bitwise_one(const dftu_series& v, int op, dftu_scalar& out) {
+    const T* p = reinterpret_cast<const T*>(v.data.data());
+    const bool has_null = static_cast<bool>(v.validity.block());
+    bool seen = false;
+    T acc{};
+    for (std::int64_t i = 0; i < v.length; ++i) {
+        if (has_null && !is_valid(v, i)) continue;
+        if (!seen) {
+            acc = p[i];
+            seen = true;
+        } else if (op == 0) {
+            acc = static_cast<T>(acc & p[i]);
+        } else if (op == 1) {
+            acc = static_cast<T>(acc | p[i]);
+        } else {
+            acc = static_cast<T>(acc ^ p[i]);
+        }
+    }
+    if (!seen) {
+        out.kind = DFTU_SCALAR_TAG_NULL;
+        out.value.i = 0;
+    } else if constexpr (std::is_unsigned_v<T>) {
+        out.kind = DFTU_SCALAR_TAG_U64;
+        out.value.u = static_cast<std::uint64_t>(acc);
+    } else {
+        out.kind = DFTU_SCALAR_TAG_I64;
+        out.value.i = static_cast<std::int64_t>(acc);
+    }
+}
+
+// The same over a bit-packed Bool column: an I64 scalar of 0 or 1.
+void bitwise_bool(const dftu_series& v, int op, dftu_scalar& out) {
+    const auto* bits = reinterpret_cast<const std::uint8_t*>(v.data.data());
+    const bool has_null = static_cast<bool>(v.validity.block());
+    bool seen = false;
+    bool acc = false;
+    for (std::int64_t i = 0; i < v.length; ++i) {
+        if (has_null && !is_valid(v, i)) continue;
+        const bool bit = ((bits[i >> 3] >> (i & 7)) & 1) != 0;
+        if (!seen)
+            acc = bit;
+        else if (op == 0)
+            acc = acc && bit;
+        else if (op == 1)
+            acc = acc || bit;
+        else
+            acc = acc != bit;
+        seen = true;
+    }
+    out.kind = seen ? DFTU_SCALAR_TAG_I64 : DFTU_SCALAR_TAG_NULL;
+    out.value.i = seen && acc ? 1 : 0;
+}
+
 template <class T>
 void argextreme_one(const dftu_series& v, bool is_min, std::int64_t& out_idx) {
     const T* p = reinterpret_cast<const T*>(v.data.data());
@@ -438,6 +495,66 @@ dftu_scalar dftu_series_product(const dftu_series* v) {
     DFTRACER_UTILS_NUMERIC_DISPATCH(v->type, product_one, *v, out)
     if (promoted) dftu_series_free(promoted);
     return out;
+}
+
+namespace {
+
+dftu_scalar bitwise_reduce(const dftu_series& v, int op,
+                           dftracer::utils::dstd::StringView name) {
+    using dftracer::utils::dataframe::TypeId;
+    dftu_scalar out{};
+    if (v.encoding == dftracer::utils::dataframe::Encoding::Flat) {
+        switch (v.type) {
+            case TypeId::Bool:
+                bitwise_bool(v, op, out);
+                return out;
+            case TypeId::Int8:
+                bitwise_one<std::int8_t>(v, op, out);
+                return out;
+            case TypeId::Int16:
+                bitwise_one<std::int16_t>(v, op, out);
+                return out;
+            case TypeId::Int32:
+                bitwise_one<std::int32_t>(v, op, out);
+                return out;
+            case TypeId::Int64:
+                bitwise_one<std::int64_t>(v, op, out);
+                return out;
+            case TypeId::Uint8:
+                bitwise_one<std::uint8_t>(v, op, out);
+                return out;
+            case TypeId::Uint16:
+                bitwise_one<std::uint16_t>(v, op, out);
+                return out;
+            case TypeId::Uint32:
+                bitwise_one<std::uint32_t>(v, op, out);
+                return out;
+            case TypeId::Uint64:
+                bitwise_one<std::uint64_t>(v, op, out);
+                return out;
+            default:
+                break;
+        }
+    }
+    return refuse(dftracer::utils::dstd::fmt<
+                  "{}: the column must be an integer or a bool">(name));
+}
+
+}  // namespace
+
+dftu_scalar dftu_series_bitwise_and(const dftu_series* v) {
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_bitwise_and(flat_v));
+    return bitwise_reduce(*v, 0, "bitwise_and");
+}
+
+dftu_scalar dftu_series_bitwise_or(const dftu_series* v) {
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_bitwise_or(flat_v));
+    return bitwise_reduce(*v, 1, "bitwise_or");
+}
+
+dftu_scalar dftu_series_bitwise_xor(const dftu_series* v) {
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_bitwise_xor(flat_v));
+    return bitwise_reduce(*v, 2, "bitwise_xor");
 }
 
 std::int32_t dftu_series_all(const dftu_series* v) {

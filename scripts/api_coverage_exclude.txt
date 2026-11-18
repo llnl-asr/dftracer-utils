@@ -137,12 +137,6 @@ polars DataFrame.write_ndjson | needs-kernel | writer of this format; the engine
 polars Series.append | python-semantics | in-place or growing mutation of a Series; Series are immutable (use concat, where, gather)
 polars Series.approx_n_unique | needs-kernel | approximate aggregates on a whole Series; the engine has sketch aggregates per group (sketch_quantile, distinct)
 polars Series.approx_quantile | needs-kernel | approximate aggregates on a whole Series; the engine has sketch aggregates per group (sketch_quantile, distinct)
-polars Series.arccos | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Series.arccosh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Series.arcsin | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Series.arcsinh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Series.arctan | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Series.arctanh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.arg_true | needs-kernel | row positions of true values or of first occurrences; the engine has no positions kernel (a gather of the non-zero row numbers)
 polars Series.arg_unique | needs-kernel | row positions of true values or of first occurrences; the engine has no positions kernel (a gather of the non-zero row numbers)
 polars Series.arr | needs-kernel | namespace over array, categorical, struct or extension columns; no accessor kernel for these dtypes
@@ -150,28 +144,13 @@ polars Series.bin | needs-kernel | interval binning into a categorical; the engi
 polars Series.bin_intervals | needs-kernel | interval binning into a categorical; the engine has no categorical dtype, its binning kernels give integer bin numbers
 polars Series.bin_quantiles | needs-kernel | interval binning into a categorical; the engine has no categorical dtype, its binning kernels give integer bin numbers
 polars Series.bin_ranks | needs-kernel | interval binning into a categorical; the engine has no categorical dtype, its binning kernels give integer bin numbers
-polars Series.bitwise_and | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
-polars Series.bitwise_count_ones | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
-polars Series.bitwise_count_zeros | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
-polars Series.bitwise_leading_ones | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
-polars Series.bitwise_leading_zeros | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
-polars Series.bitwise_or | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
-polars Series.bitwise_trailing_ones | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
-polars Series.bitwise_trailing_zeros | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
-polars Series.bitwise_xor | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
 polars Series.bottom_k_by | needs-kernel | by-column reductions and top-k; the argmax and topk aggregates give them per group
 polars Series.cat | needs-kernel | namespace over array, categorical, struct or extension columns; no accessor kernel for these dtypes
-polars Series.cbrt | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.chunk_lengths | python-semantics | memory layout of polars chunks; the engine manages its own chunked columns (see the memory budget)
-polars Series.cos | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Series.cosh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Series.cot | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.cumulative_eval | python-semantics | a Python callable per element or window; use apply with a traced function or an expression
 polars Series.drop_nans | needs-kernel | NaN handling as a kernel; DataFrame.fill_nan composes where over is_nan eagerly, the Series form has no kernel
 polars Series.entropy | needs-kernel | Shannon entropy of a Series; no kernel
 polars Series.eq_missing | needs-kernel | comparison that treats null equal to null; the compare kernel returns null on a null side
-polars Series.erf | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Series.erfc | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.estimated_size | python-semantics | memory layout of polars chunks; the engine manages its own chunked columns (see the memory budget)
 polars Series.ewm_mean_by | needs-kernel | exponential windows other than ewm_mean and ewm_std (sum, var and the time-based variants)
 polars Series.ewm_sum | needs-kernel | exponential windows other than ewm_mean and ewm_std (sum, var and the time-based variants)
@@ -192,7 +171,6 @@ polars Series.interpolate_by | needs-kernel | interpolation against a key column
 polars Series.is_close | needs-kernel | approximate float equality with tolerances; no kernel
 polars Series.is_first_distinct | needs-kernel | first/last occurrence masks; the engine has no first-occurrence kernel
 polars Series.is_last_distinct | needs-kernel | first/last occurrence masks; the engine has no first-occurrence kernel
-polars Series.log10 | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.lower_bound | needs-kernel | the minimum and maximum value of the dtype; read it from the dtype
 polars Series.map_elements | python-semantics | a Python callable per element or window; use apply with a traced function or an expression
 polars Series.max_by | needs-kernel | by-column reductions and top-k; the argmax and topk aggregates give them per group
@@ -232,12 +210,8 @@ polars Series.set_sorted | needs-kernel | sorted-flag metadata that the engine c
 polars Series.shrink_dtype | needs-kernel | downcast to the narrowest dtype that holds the values; needs a min/max range scan that picks the type
 polars Series.shrink_to_fit | python-semantics | memory layout of polars chunks; the engine manages its own chunked columns (see the memory budget)
 polars Series.shuffle | needs-kernel | random permutation with a seed; sample draws rows
-polars Series.sin | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Series.sinh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.sql | out-of-scope | SQL interface (D3b out-of-scope); use duql
 polars Series.struct | needs-kernel | namespace over array, categorical, struct or extension columns; no accessor kernel for these dtypes
-polars Series.tan | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Series.tanh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.to_dummies | needs-kernel | indicator columns of a Series; DataFrame.to_dummies and str.get_dummies exist
 polars Series.to_init_repr | python-semantics | source text of a constructor call; use repr
 polars Series.to_jax | out-of-scope | torch and jax export (D3b out-of-scope)
@@ -282,12 +256,6 @@ polars LazyFrame.update | needs-kernel | no plan step; DataFrame.update is eager
 polars Expr.all | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
 polars Expr.append | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
 polars Expr.approx_n_unique | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
-polars Expr.arccos | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Expr.arccosh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Expr.arcsin | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Expr.arcsinh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Expr.arctan | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Expr.arctanh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Expr.arg_true | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
 polars Expr.arg_unique | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
 polars Expr.arr | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
@@ -295,21 +263,8 @@ polars Expr.bin | needs-kernel | no expression form: Series kernel missing or no
 polars Expr.bin_intervals | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
 polars Expr.bin_quantiles | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
 polars Expr.bin_ranks | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
-polars Expr.bitwise_and | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
-polars Expr.bitwise_count_ones | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
-polars Expr.bitwise_count_zeros | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
-polars Expr.bitwise_leading_ones | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
-polars Expr.bitwise_leading_zeros | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
-polars Expr.bitwise_or | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
-polars Expr.bitwise_trailing_ones | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
-polars Expr.bitwise_trailing_zeros | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
-polars Expr.bitwise_xor | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
 polars Expr.bottom_k | needs-kernel | by-column selection or ordering; the topk/bottomk/argmax aggregates take a by column per group, there is no row-selecting node
 polars Expr.bottom_k_by | needs-kernel | by-column selection or ordering; the topk/bottomk/argmax aggregates take a by column per group, there is no row-selecting node
-polars Expr.cbrt | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Expr.cos | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Expr.cosh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Expr.cot | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Expr.cumulative_eval | python-semantics | a Python callable inside an expression; use a traced function through apply or the jit lane
 polars Expr.cut | needs-kernel | no expression form; Series.cut and qcut are eager
 polars Expr.deserialize | out-of-scope | expression serialization and introspection (D3b out-of-scope plan serialize)
@@ -318,8 +273,6 @@ polars Expr.drop_nans | needs-kernel | length-changing or positional column op w
 polars Expr.drop_nulls | needs-kernel | length-changing or positional column op with no expression node (the evaluator keeps the row count, except through a plan step)
 polars Expr.entropy | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
 polars Expr.eq_missing | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
-polars Expr.erf | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Expr.erfc | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Expr.ewm_mean_by | needs-kernel | exponential windows other than ewm_mean and ewm_std, and interpolation by a key
 polars Expr.ewm_sum | needs-kernel | exponential windows other than ewm_mean and ewm_std, and interpolation by a key
 polars Expr.ewm_sum_by | needs-kernel | exponential windows other than ewm_mean and ewm_std, and interpolation by a key
@@ -388,13 +341,9 @@ polars Expr.round_sig_figs | needs-kernel | no expression form; the Series kerne
 polars Expr.search_sorted | needs-kernel | length-changing or positional column op with no expression node (the evaluator keeps the row count, except through a plan step)
 polars Expr.set_sorted | needs-kernel | length-changing or positional column op with no expression node (the evaluator keeps the row count, except through a plan step)
 polars Expr.shuffle | needs-kernel | length-changing or positional column op with no expression node (the evaluator keeps the row count, except through a plan step)
-polars Expr.sin | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Expr.sinh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Expr.sort_by | needs-kernel | by-column selection or ordering; the topk/bottomk/argmax aggregates take a by column per group, there is no row-selecting node
 polars Expr.struct | needs-kernel | namespace for list (partial: Expr.list is absent), struct and extension dtypes; no accessor nodes
 polars Expr.tail | needs-kernel | length-changing or positional column op with no expression node (the evaluator keeps the row count, except through a plan step)
-polars Expr.tan | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Expr.tanh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Expr.to_physical | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
 polars Expr.top_k | needs-kernel | by-column selection or ordering; the topk/bottomk/argmax aggregates take a by column per group, there is no row-selecting node
 polars Expr.top_k_by | needs-kernel | by-column selection or ordering; the topk/bottomk/argmax aggregates take a by column per group, there is no row-selecting node

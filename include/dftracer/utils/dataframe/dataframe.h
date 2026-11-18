@@ -75,8 +75,12 @@ enum class Agg {
                    ///< state keeps every value (see AggOp::Quantile)
     ArgMaxPos,     ///< position in its group of the first greatest value of
                    ///< `column`, Int64 (see AggOp::ArgMaxPos)
-    ArgMinPos      ///< position in its group of the first least value of
+    ArgMinPos,     ///< position in its group of the first least value of
                    ///< `column`, Int64
+    BitwiseAnd,    ///< bitwise AND of the present values of `column`, in its
+                   ///< integer or Bool type (see AggOp::BitwiseAnd)
+    BitwiseOr,     ///< bitwise OR, as BitwiseAnd
+    BitwiseXor     ///< bitwise XOR, as BitwiseAnd
 };
 
 /// Canonical lowercase name of `agg` (the string the C ABI accepts).

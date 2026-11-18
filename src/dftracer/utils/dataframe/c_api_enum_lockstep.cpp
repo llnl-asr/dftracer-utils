@@ -33,6 +33,12 @@ static_assert(code(AggOp::ArgMaxPos) == DFTU_AGG_ARGMAX_POS);
 static_assert(code(AggOp::ArgMinPos) == DFTU_AGG_ARGMIN_POS);
 static_assert(code(Agg::ArgMaxPos) == DFTU_AGG_ARGMAX_POS);
 static_assert(code(Agg::ArgMinPos) == DFTU_AGG_ARGMIN_POS);
+static_assert(code(AggOp::BitwiseAnd) == DFTU_AGG_BITWISE_AND);
+static_assert(code(AggOp::BitwiseOr) == DFTU_AGG_BITWISE_OR);
+static_assert(code(AggOp::BitwiseXor) == DFTU_AGG_BITWISE_XOR);
+static_assert(code(Agg::BitwiseAnd) == DFTU_AGG_BITWISE_AND);
+static_assert(code(Agg::BitwiseOr) == DFTU_AGG_BITWISE_OR);
+static_assert(code(Agg::BitwiseXor) == DFTU_AGG_BITWISE_XOR);
 static_assert(code(Encoding::View) == 4);
 static_assert(code(Encoding::Chunked) == 5);
 

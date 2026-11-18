@@ -1034,6 +1034,53 @@ DFTU_EXPORT dftu_series* dftu_series_log(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_log1p(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_expm1(const dftu_series* v);
 
+/** Elementwise math over the values: sin, cos, tan, cot (1 / tan), arcsin,
+ * arccos, arctan, sinh, cosh, tanh, arcsinh, arccosh, arctanh, cbrt, log10, erf
+ * and erfc. A Float32 column gives Float32, any other numeric column gives
+ * Float64. Each value keeps its validity bit; a value outside the domain
+ * (arcsin of 2) is NaN, as libm gives. NULL for a nested, string, Bool or
+ * temporal column. Caller owns the result. */
+DFTU_EXPORT dftu_series* dftu_series_sin(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_cos(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_tan(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_cot(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_arcsin(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_arccos(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_arctan(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_sinh(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_cosh(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_tanh(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_arcsinh(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_arccosh(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_arctanh(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_cbrt(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_log10(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_erf(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_erfc(const dftu_series* v);
+
+/** Bit counts of an integer or Bool column, as a Uint32 column that keeps the
+ * input's validity: the set bits, the clear bits, the run of set or clear bits
+ * from the top, and the run from the bottom, within the column's own width
+ * (a Bool is one bit; a signed value is its two's complement bits). NULL for
+ * any other column. Caller owns the result. */
+DFTU_EXPORT dftu_series* dftu_series_bitwise_count_ones(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_bitwise_count_zeros(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_bitwise_leading_ones(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_bitwise_leading_zeros(
+    const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_bitwise_trailing_ones(
+    const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_bitwise_trailing_zeros(
+    const dftu_series* v);
+
+/** The bitwise AND, OR and XOR of the non-null values of an integer or Bool
+ * column: an I64 scalar for a signed integer or a Bool (0 or 1), a U64 scalar
+ * for an unsigned one, a NULL scalar for a column with no non-null value, an
+ * ERR scalar for any other column. */
+DFTU_EXPORT dftu_scalar dftu_series_bitwise_and(const dftu_series* v);
+DFTU_EXPORT dftu_scalar dftu_series_bitwise_or(const dftu_series* v);
+DFTU_EXPORT dftu_scalar dftu_series_bitwise_xor(const dftu_series* v);
+
 /** Predicate masks over a column, each a bit-packed Bool column that keeps
  * the input's validity (a null value has a null answer).
  * is_nan/is_finite/is_infinite test the IEEE class of a float column (Highway

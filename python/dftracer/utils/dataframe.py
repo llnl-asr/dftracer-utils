@@ -1492,7 +1492,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
     def reduce(self, agg: str) -> DataFrame:
         """One row: the engine aggregate named ``agg`` (``sum``, ``mean``,
         ``min``, ``max``, ``count_valid``, ``var``, ``std``, ``skew``,
-        ``kurt``, ``sumsq``, ``first``, ``last``, ``bit_or``, ``prod``) over every
+        ``kurt``, ``sumsq``, ``first``, ``last``, ``prod``) over every
         eligible column, each under its own name. The grouped form is
         :meth:`group_by` ``(keys).reduce(agg)``."""
         return self._like(_ext.DataFrame.reduce(self, agg))

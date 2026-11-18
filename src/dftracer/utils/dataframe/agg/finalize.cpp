@@ -635,6 +635,43 @@ static DataFrame finalize_impl(const AggState& st_in,
                                     static_cast<std::size_t>(ri)];
             }
             out.columns.push_back(Series::strings(v));
+        } else if (agg_is_bitwise(sp.op)) {
+            const int slot = st.spec_bw[s];
+            const TypeId t =
+                slot >= 0 && st.bw_type[static_cast<std::size_t>(slot)] !=
+                                 TypeId::Unknown
+                    ? st.bw_type[static_cast<std::size_t>(slot)]
+                    : TypeId::Int64;
+            std::size_t width = 8;
+            if (t == TypeId::Int8 || t == TypeId::Uint8) width = 1;
+            if (t == TypeId::Int16 || t == TypeId::Uint16) width = 2;
+            if (t == TypeId::Int32 || t == TypeId::Uint32) width = 4;
+            const auto n = static_cast<std::size_t>(ng);
+            dstd::Vector<std::uint8_t> bytes(
+                t == TypeId::Bool ? (n + 7) / 8 : n * width, 0);
+            dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0);
+            bool any_null = false;
+            for (std::size_t g = 0; g < n; ++g) {
+                const std::size_t at =
+                    g * st.n_bw + static_cast<std::size_t>(slot);
+                if (slot < 0 || !st.bw_seen[at]) {
+                    any_null = true;
+                    continue;
+                }
+                valid[g >> 3] |= static_cast<std::uint8_t>(1u << (g & 7));
+                const std::uint64_t word = st.bw_acc[at];
+                if (t == TypeId::Bool) {
+                    if (word & 1)
+                        bytes[g >> 3] |=
+                            static_cast<std::uint8_t>(1u << (g & 7));
+                } else {
+                    for (std::size_t k = 0; k < width; ++k)
+                        bytes[g * width + k] =
+                            static_cast<std::uint8_t>(word >> (8 * k));
+                }
+            }
+            out.columns.push_back(Series::flat(
+                t, bytes.data(), ng, any_null ? valid.data() : nullptr));
         } else if (sp.op == AggOp::BitOr) {
             const int slot = st.spec_bitor[s];
             dstd::Vector<std::uint64_t> v(static_cast<std::size_t>(ng), 0);

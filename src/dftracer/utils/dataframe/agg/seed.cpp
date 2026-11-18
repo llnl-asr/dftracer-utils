@@ -76,6 +76,10 @@ void agg_permute_groups(AggState& st, dstd::Span<const std::int64_t> perm) {
         permute_blocks(st.apos_rank, perm, st.n_apos);
         permute_blocks(st.apos_dom, perm, st.n_apos);
     }
+    if (st.has_bw) {
+        permute_blocks(st.bw_acc, perm, st.n_bw);
+        permute_blocks(st.bw_seen, perm, st.n_bw);
+    }
     if (st.has_bitor) permute_blocks(st.bitor_acc, perm, st.n_bitor);
     if (st.has_prod) permute_blocks(st.prod_acc, perm, st.n_prod);
     if (st.has_qv) permute_blocks(st.qv, perm, st.n_qv);
@@ -148,6 +152,7 @@ AggStatePtr agg_extract_groups(const AggState& st_in,
     out->nkey_cols.assign(out->nkeys, {});
     out->field_domain = st.field_domain;
     out->field_type = st.field_type;
+    out->bw_type = st.bw_type;
     out->field_time_unit = st.field_time_unit;
     out->field_timezone = st.field_timezone;
     out->field_is_str = st.field_is_str;
@@ -203,6 +208,13 @@ AggStatePtr agg_extract_groups(const AggState& st_in,
                 out->apos_rank[o * st.n_apos + slot] =
                     st.apos_rank[pbase + slot];
                 out->apos_dom[o * st.n_apos + slot] = st.apos_dom[pbase + slot];
+            }
+        }
+        if (st.has_bw) {
+            const std::size_t wbase = static_cast<std::size_t>(g) * st.n_bw;
+            for (std::size_t slot = 0; slot < st.n_bw; ++slot) {
+                out->bw_acc[o * st.n_bw + slot] = st.bw_acc[wbase + slot];
+                out->bw_seen[o * st.n_bw + slot] = st.bw_seen[wbase + slot];
             }
         }
         if (st.has_bitor) {
@@ -309,6 +321,9 @@ static bool agg_op_seedable(AggOp op) {
         case AggOp::ArgMaxPos:
         case AggOp::ArgMinPos:
         case AggOp::SetUnion:
+        case AggOp::BitwiseAnd:
+        case AggOp::BitwiseOr:
+        case AggOp::BitwiseXor:
         case AggOp::BitOr:
         case AggOp::Distinct:
         case AggOp::ListSorted:

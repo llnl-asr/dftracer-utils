@@ -136,6 +136,20 @@ def _case_group_arg_max() -> float:
     return _timed(lambda: df.group_by("k").agg(col("v").arg_max().alias("r")))
 
 
+def _case_series_sin() -> float:
+    from dftracer.utils import Series
+
+    s = Series([(v % 10_007) * 0.001 for v in range(ROWS)])
+    return _timed(s.sin)
+
+
+def _case_bitwise_count_ones() -> float:
+    from dftracer.utils import Series
+
+    s = Series([(v * 104729) % 1_000_003 for v in range(ROWS)]).astype("int64")
+    return _timed(s.bitwise_count_ones)
+
+
 def _double_op():
     from dftracer.utils import jit
 
@@ -178,6 +192,8 @@ CASES = {
     "dt_as_unit_1M_rows": _case_dt_as_unit,
     "dt_date_time_1M_rows": _case_dt_date_time,
     "group_arg_max_1M_rows": _case_group_arg_max,
+    "series_sin_1M_rows": _case_series_sin,
+    "bitwise_count_ones_1M_rows": _case_bitwise_count_ones,
 }
 
 

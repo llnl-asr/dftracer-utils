@@ -263,6 +263,44 @@ Series Series::exp() const { return derived(dftu_series_exp(handle_)); }
 Series Series::log() const { return derived(dftu_series_log(handle_)); }
 Series Series::log1p() const { return derived(dftu_series_log1p(handle_)); }
 Series Series::expm1() const { return derived(dftu_series_expm1(handle_)); }
+Series Series::sin() const { return derived(dftu_series_sin(handle_)); }
+Series Series::cos() const { return derived(dftu_series_cos(handle_)); }
+Series Series::tan() const { return derived(dftu_series_tan(handle_)); }
+Series Series::cot() const { return derived(dftu_series_cot(handle_)); }
+Series Series::arcsin() const { return derived(dftu_series_arcsin(handle_)); }
+Series Series::arccos() const { return derived(dftu_series_arccos(handle_)); }
+Series Series::arctan() const { return derived(dftu_series_arctan(handle_)); }
+Series Series::sinh() const { return derived(dftu_series_sinh(handle_)); }
+Series Series::cosh() const { return derived(dftu_series_cosh(handle_)); }
+Series Series::tanh() const { return derived(dftu_series_tanh(handle_)); }
+Series Series::arcsinh() const { return derived(dftu_series_arcsinh(handle_)); }
+Series Series::arccosh() const { return derived(dftu_series_arccosh(handle_)); }
+Series Series::arctanh() const { return derived(dftu_series_arctanh(handle_)); }
+Series Series::cbrt() const { return derived(dftu_series_cbrt(handle_)); }
+Series Series::log10() const { return derived(dftu_series_log10(handle_)); }
+Series Series::erf() const { return derived(dftu_series_erf(handle_)); }
+Series Series::erfc() const { return derived(dftu_series_erfc(handle_)); }
+Series Series::bitwise_count_ones() const {
+    return derived(dftu_series_bitwise_count_ones(handle_));
+}
+Series Series::bitwise_count_zeros() const {
+    return derived(dftu_series_bitwise_count_zeros(handle_));
+}
+Series Series::bitwise_leading_ones() const {
+    return derived(dftu_series_bitwise_leading_ones(handle_));
+}
+Series Series::bitwise_leading_zeros() const {
+    return derived(dftu_series_bitwise_leading_zeros(handle_));
+}
+Series Series::bitwise_trailing_ones() const {
+    return derived(dftu_series_bitwise_trailing_ones(handle_));
+}
+Series Series::bitwise_trailing_zeros() const {
+    return derived(dftu_series_bitwise_trailing_zeros(handle_));
+}
+Scalar Series::bitwise_and() const { return dftu_series_bitwise_and(handle_); }
+Scalar Series::bitwise_or() const { return dftu_series_bitwise_or(handle_); }
+Scalar Series::bitwise_xor() const { return dftu_series_bitwise_xor(handle_); }
 Series Series::unique(bool maintain_order) const {
     return derived(dftu_series_unique_nulls(handle_, maintain_order ? 1 : 0));
 }

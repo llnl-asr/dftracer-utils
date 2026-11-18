@@ -278,4 +278,34 @@ DFTU_SERIES_OP(dftu.series.dt_as_unit, dftu_series_dt_as_unit, SERIES, SERIES, I
 DFTU_SERIES_OP(dftu.series.dt_date, dftu_series_dt_date, SERIES, SERIES, NONE, NONE)
 DFTU_SERIES_OP(dftu.series.dt_time, dftu_series_dt_time, SERIES, SERIES, NONE, NONE)
 
+/* Bit counts (series -> UInt32 series) and bitwise reductions (series -> scalar). */
+DFTU_SERIES_OP(dftu.series.bitwise_count_ones, dftu_series_bitwise_count_ones, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.bitwise_count_zeros, dftu_series_bitwise_count_zeros, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.bitwise_leading_ones, dftu_series_bitwise_leading_ones, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.bitwise_leading_zeros, dftu_series_bitwise_leading_zeros, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.bitwise_trailing_ones, dftu_series_bitwise_trailing_ones, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.bitwise_trailing_zeros, dftu_series_bitwise_trailing_zeros, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.bitwise_and, dftu_series_bitwise_and, SCALAR, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.bitwise_or, dftu_series_bitwise_or, SCALAR, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.bitwise_xor, dftu_series_bitwise_xor, SCALAR, SERIES, NONE, NONE)
+
+/* Elementwise math (series -> float series). */
+DFTU_SERIES_OP(dftu.series.sin, dftu_series_sin, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.cos, dftu_series_cos, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.tan, dftu_series_tan, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.cot, dftu_series_cot, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.arcsin, dftu_series_arcsin, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.arccos, dftu_series_arccos, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.arctan, dftu_series_arctan, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.sinh, dftu_series_sinh, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.cosh, dftu_series_cosh, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.tanh, dftu_series_tanh, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.arcsinh, dftu_series_arcsinh, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.arccosh, dftu_series_arccosh, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.arctanh, dftu_series_arctanh, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.cbrt, dftu_series_cbrt, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.log10, dftu_series_log10, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.erf, dftu_series_erf, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.erfc, dftu_series_erfc, SERIES, SERIES, NONE, NONE)
+
 #undef DFTU_SERIES_OP

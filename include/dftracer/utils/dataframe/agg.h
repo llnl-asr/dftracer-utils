@@ -138,12 +138,23 @@ enum class AggOp {
     /// aggregation, whose files have no common row order.
     ArgMaxPos = 41,
     /// As ArgMaxPos for the least present value; a tie keeps the first row.
-    ArgMinPos = 42
+    ArgMinPos = 42,
+    /// The bitwise AND of the present values of `value_col`, in the column's
+    /// own type: an integer column of any width or a Bool column; another type
+    /// is refused by agg_accumulate. Null for a group with no present value.
+    /// The state is one 64-bit word and a flag per group, merged with the same
+    /// operation, so it is fixed size and the merge order does not matter.
+    BitwiseAnd = 43,
+    /// As BitwiseAnd for the bitwise OR (BitOr is the older form that reads
+    /// the column as u64 and gives 0 for a group with no value).
+    BitwiseOr = 44,
+    /// As BitwiseAnd for the bitwise XOR.
+    BitwiseXor = 45
 };
 
 /// The last row of agg_ops.def, which bounds every serialized op code. A row
 /// appended to the table moves it (c_api_enum_lockstep.cpp checks).
-inline constexpr AggOp AGG_OP_LAST = AggOp::ArgMinPos;
+inline constexpr AggOp AGG_OP_LAST = AggOp::BitwiseXor;
 
 /// Ops taking a second input through `by_col`: the extremum ArgMax/ArgMin
 /// maximize/minimize, the ordered list/top-k ops order by, the co-moment ops

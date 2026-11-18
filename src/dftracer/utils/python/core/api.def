@@ -87,6 +87,58 @@ PY_METHOD(Series, log1p, "dftu.series.log1p", NONE, FLOAT, KEEP, NO, "", "", "",
           "log(1 + x) -> Float64 Series, exact for a tiny x.")
 PY_METHOD(Series, expm1, "dftu.series.expm1", NONE, FLOAT, KEEP, NO, "", "", "",
           "exp(x) - 1 -> Float64 Series, exact for a tiny x.")
+PY_METHOD(Series, sin, "dftu.series.sin", NONE, FLOAT, KEEP, YES, "", "", "sin: the column must be a float or an integer",
+          "sin() -> Series of the sine, in radians of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, cos, "dftu.series.cos", NONE, FLOAT, KEEP, YES, "", "", "cos: the column must be a float or an integer",
+          "cos() -> Series of the cosine, in radians of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, tan, "dftu.series.tan", NONE, FLOAT, KEEP, YES, "", "", "tan: the column must be a float or an integer",
+          "tan() -> Series of the tangent, in radians of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, cot, "dftu.series.cot", NONE, FLOAT, KEEP, YES, "", "", "cot: the column must be a float or an integer",
+          "cot() -> Series of the cotangent, in radians of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, arcsin, "dftu.series.arcsin", NONE, FLOAT, KEEP, YES, "", "", "arcsin: the column must be a float or an integer",
+          "arcsin() -> Series of the inverse sine of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, arccos, "dftu.series.arccos", NONE, FLOAT, KEEP, YES, "", "", "arccos: the column must be a float or an integer",
+          "arccos() -> Series of the inverse cosine of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, arctan, "dftu.series.arctan", NONE, FLOAT, KEEP, YES, "", "", "arctan: the column must be a float or an integer",
+          "arctan() -> Series of the inverse tangent of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, sinh, "dftu.series.sinh", NONE, FLOAT, KEEP, YES, "", "", "sinh: the column must be a float or an integer",
+          "sinh() -> Series of the hyperbolic sine of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, cosh, "dftu.series.cosh", NONE, FLOAT, KEEP, YES, "", "", "cosh: the column must be a float or an integer",
+          "cosh() -> Series of the hyperbolic cosine of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, tanh, "dftu.series.tanh", NONE, FLOAT, KEEP, YES, "", "", "tanh: the column must be a float or an integer",
+          "tanh() -> Series of the hyperbolic tangent of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, arcsinh, "dftu.series.arcsinh", NONE, FLOAT, KEEP, YES, "", "", "arcsinh: the column must be a float or an integer",
+          "arcsinh() -> Series of the inverse hyperbolic sine of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, arccosh, "dftu.series.arccosh", NONE, FLOAT, KEEP, YES, "", "", "arccosh: the column must be a float or an integer",
+          "arccosh() -> Series of the inverse hyperbolic cosine of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, arctanh, "dftu.series.arctanh", NONE, FLOAT, KEEP, YES, "", "", "arctanh: the column must be a float or an integer",
+          "arctanh() -> Series of the inverse hyperbolic tangent of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, cbrt, "dftu.series.cbrt", NONE, FLOAT, KEEP, YES, "", "", "cbrt: the column must be a float or an integer",
+          "cbrt() -> Series of the cube root of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, log10, "dftu.series.log10", NONE, FLOAT, KEEP, YES, "", "", "log10: the column must be a float or an integer",
+          "log10() -> Series of the base-10 logarithm of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, erf, "dftu.series.erf", NONE, FLOAT, KEEP, YES, "", "", "erf: the column must be a float or an integer",
+          "erf() -> Series of the error function of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, erfc, "dftu.series.erfc", NONE, FLOAT, KEEP, YES, "", "", "erfc: the column must be a float or an integer",
+          "erfc() -> Series of the complementary error function of each value (Float32 stays Float32, others Float64).")
+PY_METHOD(Series, bitwise_count_ones, "dftu.series.bitwise_count_ones", NONE, INT, KEEP, YES, "", "", "bitwise_count_ones: the column must be an integer or a bool",
+          "bitwise_count_ones() -> UInt32 Series of the number of set bits of each value, within its width.")
+PY_METHOD(Series, bitwise_count_zeros, "dftu.series.bitwise_count_zeros", NONE, INT, KEEP, YES, "", "", "bitwise_count_zeros: the column must be an integer or a bool",
+          "bitwise_count_zeros() -> UInt32 Series of the number of clear bits of each value, within its width.")
+PY_METHOD(Series, bitwise_leading_ones, "dftu.series.bitwise_leading_ones", NONE, INT, KEEP, YES, "", "", "bitwise_leading_ones: the column must be an integer or a bool",
+          "bitwise_leading_ones() -> UInt32 Series of the number of leading set bits of each value, within its width.")
+PY_METHOD(Series, bitwise_leading_zeros, "dftu.series.bitwise_leading_zeros", NONE, INT, KEEP, YES, "", "", "bitwise_leading_zeros: the column must be an integer or a bool",
+          "bitwise_leading_zeros() -> UInt32 Series of the number of leading clear bits of each value, within its width.")
+PY_METHOD(Series, bitwise_trailing_ones, "dftu.series.bitwise_trailing_ones", NONE, INT, KEEP, YES, "", "", "bitwise_trailing_ones: the column must be an integer or a bool",
+          "bitwise_trailing_ones() -> UInt32 Series of the number of trailing set bits of each value, within its width.")
+PY_METHOD(Series, bitwise_trailing_zeros, "dftu.series.bitwise_trailing_zeros", NONE, INT, KEEP, YES, "", "", "bitwise_trailing_zeros: the column must be an integer or a bool",
+          "bitwise_trailing_zeros() -> UInt32 Series of the number of trailing clear bits of each value, within its width.")
+PY_METHOD(Series, bitwise_and, "dftu.series.bitwise_and", NONE, ELEMENT, KEEP, NO, "", "", "",
+          "bitwise_and() -> the bitwise AND of the non-null values, None when there is none.")
+PY_METHOD(Series, bitwise_or, "dftu.series.bitwise_or", NONE, ELEMENT, KEEP, NO, "", "", "",
+          "bitwise_or() -> the bitwise OR of the non-null values, None when there is none.")
+PY_METHOD(Series, bitwise_xor, "dftu.series.bitwise_xor", NONE, ELEMENT, KEEP, NO, "", "", "",
+          "bitwise_xor() -> the bitwise XOR of the non-null values, None when there is none.")
 PY_METHOD(Series, is_null, "dftu.series.null_mask", NONE, BOOL, KEEP, NO, "", "", "",
           "Bool mask: row is null.")
 PY_METHOD(Series, is_not_null, "dftu.series.valid_mask", NONE, BOOL, KEEP, NO, "", "", "",

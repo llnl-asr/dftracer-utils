@@ -9,6 +9,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add the Polars elementwise math methods `sin`, `cos`, `tan`, `cot`, `arcsin`, `arccos`, `arctan`, `sinh`, `cosh`, `tanh`, `arcsinh`, `arccosh`, `arctanh`, `cbrt`, `log10`, `erf` and `erfc` to `Series` and `Expr`, and the kernels `dftu_series_sin` to `dftu_series_erfc`.
+  A Float32 column stays Float32 and every other numeric column gives Float64; a value outside the domain is NaN (`arcsin(2)`), `cot` is `1 / tan`, nulls stay null, and a Bool or text column is refused.
+  `Expr.log10` is the `log10` kernel now, exact for a power of ten, where it was `log(x) / log(10)`.
+- Add the Polars bitwise methods `bitwise_count_ones`, `bitwise_count_zeros`, `bitwise_leading_ones`, `bitwise_leading_zeros`, `bitwise_trailing_ones` and `bitwise_trailing_zeros` (a UInt32 column within the column's own width, a signed value as its two's complement bits, a Bool as one bit) and the reductions `bitwise_and`, `bitwise_or` and `bitwise_xor` to `Series` and `Expr`, with the kernels `dftu_series_bitwise_*`.
+  The reductions give a scalar of the column's integer or Bool type, `None` for a column with no present value, and `Expr` forms run in `select`, `group_by().agg` and the lazy plan.
+  They are the aggregates `AggOp::BitwiseAnd`, `BitwiseOr` and `BitwiseXor` / `Agg::BitwiseAnd`, `BitwiseOr` and `BitwiseXor` / `DFTU_AGG_BITWISE_AND`, `DFTU_AGG_BITWISE_OR` and `DFTU_AGG_BITWISE_XOR` ("bitwise_and", "bitwise_or", "bitwise_xor"): the result keeps the value column's type and is null for a group with no present value, where the older `BitOr` reads the column as u64 and gives 0.
+  A float or text column is an error from `agg_accumulate`.
+  Remove the Python `Expr.bit_or`: `Expr.bitwise_or` replaces it. The `AggOp::BitOr` row stays (the C ABI, the JIT monoids and `DataFrame.reduce("bit_or")` use it).
+  A bitwise or math method on a column of another type raises `DFTUtilsValueError` with the type the method needs, and a bitwise aggregate on such a column is an `InvalidArgument` error, an all-null column included.
+  The state is a 64-bit word and a flag per group, so partial states merge in any order.
 - Index the files a plugin file format reads.
   `dftu_file_format_vt` gets `chunk_token`, an optional callback that names each chunk of a file by its bytes (a byte offset, a row group number); it is the last field, so a plugin built before it loads unchanged.
   `Indexer` indexes a file that a registered format claims, one granule of the zonemap, bloom, counts, postings and plugin column extensions per chunk, and records the format name, the summary settings and the chunk tokens per file (`core.format`); a file whose size, mtime, format or settings changed is indexed again, and no other file or folder under the index root is.

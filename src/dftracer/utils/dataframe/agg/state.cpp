@@ -37,6 +37,43 @@ namespace dftracer::utils::dataframe {
 // The column types ArgMaxPos/ArgMinPos order: the fixed-width numbers, bools
 // and temporal types, each read exactly in its own domain.
 namespace {
+bool bw_supported(TypeId t) {
+    switch (t) {
+        case TypeId::Bool:
+        case TypeId::Int8:
+        case TypeId::Int16:
+        case TypeId::Int32:
+        case TypeId::Int64:
+        case TypeId::Uint8:
+        case TypeId::Uint16:
+        case TypeId::Uint32:
+        case TypeId::Uint64:
+            return true;
+        default:
+            return false;
+    }
+}
+
+dstd::Error bw_refusal(AggOp op) {
+    switch (op) {
+        case AggOp::BitwiseAnd:
+            return common::make_error<
+                       "bitwise_and: the column must be an integer or a bool">(
+                       common::ErrorCode::InvalidArgument)
+                .error();
+        case AggOp::BitwiseOr:
+            return common::make_error<
+                       "bitwise_or: the column must be an integer or a bool">(
+                       common::ErrorCode::InvalidArgument)
+                .error();
+        default:
+            return common::make_error<
+                       "bitwise_xor: the column must be an integer or a bool">(
+                       common::ErrorCode::InvalidArgument)
+                .error();
+    }
+}
+
 bool apos_supported(TypeId t) {
     switch (t) {
         case TypeId::Bool:
@@ -450,9 +487,10 @@ bool plain_key(const Series& c, PlainKey& out) {
 bool plain_shape(const AggState& st, dstd::Span<const Series* const> keys,
                  dstd::Span<const Series* const> values,
                  dstd::Vector<PlainKey>& k, dstd::Vector<Plain8>& v) {
-    if (st.has_fl || st.has_arg || st.has_apos || st.has_bitor || st.has_prod ||
-        st.has_qv || st.has_msk || st.has_kmv || st.has_lst || st.has_ss ||
-        st.has_co || st.has_set || st.has_occ || st.has_dyn || st.has_udaf)
+    if (st.has_fl || st.has_arg || st.has_apos || st.has_bw || st.has_bitor ||
+        st.has_prod || st.has_qv || st.has_msk || st.has_kmv || st.has_lst ||
+        st.has_ss || st.has_co || st.has_set || st.has_occ || st.has_dyn ||
+        st.has_udaf)
         return false;
     k.resize(keys.size());
     for (std::size_t j = 0; j < keys.size(); ++j)
@@ -1296,6 +1334,15 @@ dstd::Result<void> agg_accumulate(AggState& st,
         st.field_time_unit.assign(st.nf, TimeUnit::Micro);
         st.field_timezone.assign(st.nf, dstd::String());
         st.field_is_str.resize(st.nf);
+        for (std::size_t slot = 0; slot < st.n_bw; ++slot) {
+            const TypeId t =
+                values[static_cast<std::size_t>(st.bw_col[slot])]->type();
+            if (bw_supported(t)) {
+                st.bw_type[slot] = t;
+            } else {
+                st.udaf_note(bw_refusal(st.bw_op[slot]));
+            }
+        }
         for (std::size_t fj = 0; fj < st.nf; ++fj) {
             const Series* vc =
                 values[static_cast<std::size_t>(st.field_vc[fj])];
@@ -1545,6 +1592,18 @@ dstd::Result<void> agg_accumulate(AggState& st,
                 st.apos_dom[ps] = dom;
                 st.apos_bits[ps] = bits;
                 st.apos_rank[ps] = st.counts[static_cast<std::size_t>(g)] - 1;
+            }
+        }
+        if (st.has_bw) {
+            const std::size_t wbase = static_cast<std::size_t>(g) * st.n_bw;
+            for (std::size_t slot = 0; slot < st.n_bw; ++slot) {
+                const Series* vc =
+                    values[static_cast<std::size_t>(st.bw_col[slot])];
+                if (vc->is_null(i)) continue;
+                if (!bw_supported(vc->type())) continue;
+                bw_fold(st.bw_op[slot], st.bw_acc[wbase + slot],
+                        st.bw_seen[wbase + slot],
+                        read_bits(*vc, i, col_domain(vc->type())), 1);
             }
         }
         if (st.has_bitor) {
@@ -1842,6 +1901,12 @@ void agg_merge(AggState& into, const AggState& other,
                 into.field_time_unit[j] = other.field_time_unit[j];
                 into.field_timezone[j] = other.field_timezone[j];
             }
+    }
+    if (into.inited) {
+        for (std::size_t slot = 0;
+             slot < std::min(into.bw_type.size(), other.bw_type.size()); ++slot)
+            if (into.bw_type[slot] == TypeId::Unknown)
+                into.bw_type[slot] = other.bw_type[slot];
     }
     if (!into.inited) {
         into.adopt_layout(other);

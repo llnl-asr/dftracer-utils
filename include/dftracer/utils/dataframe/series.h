@@ -531,6 +531,42 @@ class Series {
     /// log(1 + x) and exp(x) - 1, exact for a tiny x.
     Series log1p() const;
     Series expm1() const;
+    /// Elementwise math: a Float32 column stays Float32, any other numeric
+    /// column gives Float64; a value outside the domain is NaN. cot is
+    /// 1 / tan.
+    Series sin() const;
+    Series cos() const;
+    Series tan() const;
+    Series cot() const;
+    Series arcsin() const;
+    Series arccos() const;
+    Series arctan() const;
+    Series sinh() const;
+    Series cosh() const;
+    Series tanh() const;
+    Series arcsinh() const;
+    Series arccosh() const;
+    Series arctanh() const;
+    Series cbrt() const;
+    Series log10() const;
+    Series erf() const;
+    Series erfc() const;
+    /// Bit counts of an integer or Bool column as a Uint32 column, within the
+    /// column's own width; a signed value is read as its two's complement
+    /// bits. Another column type gives an invalid Series.
+    Series bitwise_count_ones() const;
+    Series bitwise_count_zeros() const;
+    Series bitwise_leading_ones() const;
+    Series bitwise_leading_zeros() const;
+    Series bitwise_trailing_ones() const;
+    Series bitwise_trailing_zeros() const;
+    /// The bitwise AND, OR and XOR of the non-null values of an integer or
+    /// Bool column: a signed integer or a Bool gives an I64 Scalar, an unsigned
+    /// integer a U64 one, a column with no non-null value a NULL one, another
+    /// column type an ERR one.
+    Scalar bitwise_and() const;
+    Scalar bitwise_or() const;
+    Scalar bitwise_xor() const;
     /// The distinct values, a null kept once; first-occurrence order when
     /// `maintain_order`, otherwise ascending with the null first.
     Series unique(bool maintain_order = false) const;

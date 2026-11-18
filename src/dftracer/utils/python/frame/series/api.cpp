@@ -185,8 +185,15 @@ PyObject* run_value_noargs(std::size_t id, PyObject* self) {
         }
         default: {
             auto fn = reinterpret_cast<dftu_scalar (*)(const dftu_series*)>(op);
-            return scalar_to_py(
-                without_gil(a->length(), [&] { return fn(a->handle()); }));
+            const dftu_scalar v =
+                without_gil(a->length(), [&] { return fn(a->handle()); });
+            // An element of a Bool column is a bool, as it is a bool in
+            // `to_list`.
+            if (ROWS[id].result == Result::Element &&
+                v.kind == DFTU_SCALAR_TAG_I64 &&
+                a->type() == dataframe::TypeId::Bool)
+                return PyBool_FromLong(v.value.i != 0);
+            return scalar_to_py(v);
         }
     }
 }

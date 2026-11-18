@@ -125,14 +125,27 @@ class GroupBy;                                     // below
 /// A named ordered set of columns (the RecordBatch / DataChunk analogue). The
 /// eager methods return a new DataFrame (move-only); projection ops share the
 /// underlying column buffers zero-copy, row ops build new columns.
+struct LabelCache;  // internal/label_cache.h
+
+/// The row index of a frame: the names of its index columns and the lookup
+/// hash of their labels. Copies of a frame share the hash.
+struct RowIndex {
+    dstd::Vector<dstd::SharedString> names;
+    /// Built on the first @ref DataFrame::locate; null in an index made by
+    /// hand, which then looks up without keeping a hash.
+    dstd::SharedPtr<LabelCache> cache;
+
+    /// An index over `names` with a fresh, empty hash.
+    static RowIndex make(dstd::Vector<dstd::SharedString> names);
+};
+
 struct DataFrame {
     dstd::Vector<dstd::SharedString> names;
     dstd::Vector<Series> columns;
-    /// The row-index column names (see @ref index_names); null when the frame
-    /// has no index, so an unindexed frame pays one pointer. Set it through
-    /// @ref with_index; the frame ops carry it by the rules in
-    /// frame_op_index_rules.def.
-    dstd::UniquePtr<dstd::Vector<dstd::SharedString>> row_index{};
+    /// The row index (see @ref index_names); null when the frame has no index,
+    /// so an unindexed frame pays one pointer. Set it through @ref with_index;
+    /// the frame ops carry it by the rules in frame_op_index_rules.def.
+    dstd::UniquePtr<RowIndex> row_index{};
 
     std::size_t num_columns() const noexcept { return columns.size(); }
     std::int64_t num_rows() const noexcept {
@@ -148,9 +161,18 @@ struct DataFrame {
     /// has none (the positional RangeIndex, nothing materialized). Every name
     /// is a column of this frame. The index columns are ordinary columns.
     dstd::Span<const dstd::SharedString> index_names() const noexcept {
-        return row_index ? dstd::Span<const dstd::SharedString>(*row_index)
-                         : dstd::Span<const dstd::SharedString>();
+        return row_index
+                   ? dstd::Span<const dstd::SharedString>(row_index->names)
+                   : dstd::Span<const dstd::SharedString>();
     }
+    /// The rows whose index labels equal `keys`; see @ref Series::locate, whose
+    /// rules apply with the index columns as the label levels. A frame with no
+    /// index has the positions 0 .. num_rows-1 as its one level. The lookup
+    /// hash is built on the first call and shared by every @ref share copy.
+    dstd::Result<Located> locate(dstd::Span<const Series> keys) const;
+    /// The rows between two index labels; see @ref Series::locate_range.
+    dstd::Result<LabelSpan> locate_range(dstd::Span<const Series> start,
+                                         dstd::Span<const Series> stop) const;
     /// A zero-copy copy of this frame whose row index is `names`. An empty
     /// span drops the index. A NotFound error for a name that is no column
     /// (naming it), an InvalidArgument error for a repeated name or for a

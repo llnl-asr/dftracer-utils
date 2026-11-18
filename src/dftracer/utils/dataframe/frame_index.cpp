@@ -2,6 +2,8 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/internal/frame_index.h>
+#include <dftracer/utils/dataframe/internal/label_cache.h>
+#include <dftracer/utils/dataframe/internal/label_index.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/shared_string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -19,10 +21,18 @@ void set_names(DataFrame& out, IndexNames names) {
         out.row_index.reset();
         return;
     }
-    out.row_index = dstd::make_unique<IndexNames>(std::move(names));
+    out.row_index =
+        dstd::make_unique<RowIndex>(RowIndex::make(std::move(names)));
 }
 
 }  // namespace
+
+RowIndex RowIndex::make(IndexNames names) {
+    RowIndex out;
+    out.names = std::move(names);
+    out.cache = dstd::make_shared<LabelCache>();
+    return out;
+}
 
 dstd::Optional<IndexRule> index_rule_of(dstd::StringView op) {
 #define DFTU_FRAME_INDEX_RULE(name, rule) \
@@ -47,8 +57,8 @@ void apply_index_keep(const DataFrame& in, DataFrame& out) {
         return;
     }
     IndexNames names;
-    names.reserve(in.row_index->size());
-    for (const dstd::SharedString& n : *in.row_index)
+    names.reserve(in.row_index->names.size());
+    for (const dstd::SharedString& n : in.row_index->names)
         if (out.column_index(n) >= 0) names.push_back(n);
     set_names(out, std::move(names));
 }
@@ -72,8 +82,8 @@ void apply_index_renamed(const DataFrame& in, DataFrame& out) {
         return;
     }
     IndexNames names;
-    names.reserve(in.row_index->size());
-    for (const dstd::SharedString& n : *in.row_index) {
+    names.reserve(in.row_index->names.size());
+    for (const dstd::SharedString& n : in.row_index->names) {
         const std::int64_t i = in.column_index(n);
         if (i >= 0 && static_cast<std::size_t>(i) < out.names.size())
             names.push_back(out.names[static_cast<std::size_t>(i)]);
@@ -121,8 +131,32 @@ DataFrame DataFrame::share() const {
     out.names = names;
     out.columns.reserve(columns.size());
     for (const Series& c : columns) out.columns.push_back(c.share());
-    if (row_index) out.row_index = dstd::make_unique<IndexNames>(*row_index);
+    if (row_index) out.row_index = dstd::make_unique<RowIndex>(*row_index);
     return out;
+}
+
+namespace {
+
+dstd::Vector<Series> index_levels(const DataFrame& frame) {
+    dstd::Vector<Series> levels;
+    for (const dstd::SharedString& name : frame.index_names())
+        levels.push_back(frame.column(name));
+    return levels;
+}
+
+}  // namespace
+
+dstd::Result<Located> DataFrame::locate(dstd::Span<const Series> keys) const {
+    const dstd::Vector<Series> levels = index_levels(*this);
+    return locate_labels(row_index ? row_index->cache.get() : nullptr, levels,
+                         num_rows(), keys);
+}
+
+dstd::Result<LabelSpan> DataFrame::locate_range(
+    dstd::Span<const Series> start, dstd::Span<const Series> stop) const {
+    const dstd::Vector<Series> levels = index_levels(*this);
+    return locate_label_range(row_index ? row_index->cache.get() : nullptr,
+                              levels, num_rows(), start, stop);
 }
 
 DataFrame DataFrame::without_index() const {

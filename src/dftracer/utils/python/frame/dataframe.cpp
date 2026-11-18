@@ -80,6 +80,10 @@ struct DataFrameObject {
     // The row index names, empty for none (DataFrame::index_names).
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::SharedString>
         index_names;
+    // The lookup hash of the index labels (RowIndex::cache), kept here because
+    // each call rebuilds a DataFrame view of this object.
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::dataframe::LabelCache>
+        label_cache;
 };
 
 PyTypeObject DataFrameType;
@@ -114,13 +118,19 @@ PyObject* make_dataframe(DataFrame&& b) {
             std::move(b.names));
     new (&self->index_names)
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::SharedString>();
-    if (b.row_index) self->index_names = std::move(*b.row_index);
+    new (&self->label_cache) dftracer::utils::dstd::SharedPtr<
+        dftracer::utils::dataframe::LabelCache>();
+    if (b.row_index) {
+        self->index_names = std::move(b.row_index->names);
+        self->label_cache = std::move(b.row_index->cache);
+    }
     return reinterpret_cast<PyObject*>(self);
 }
 
 void DataFrame_dealloc(DataFrameObject* self) {
     if (self->weaklist)
         PyObject_ClearWeakRefs(reinterpret_cast<PyObject*>(self));
+    self->label_cache.~SharedPtr();
     self->index_names.~vector();
     self->names.~vector();
     self->st.~Series();
@@ -142,10 +152,11 @@ DataFrame to_dataframe(const DataFrameObject* self) {
     b.columns.reserve(self->names.size());
     for (std::size_t i = 0; i < self->names.size(); ++i)
         b.columns.push_back(self->st.child(static_cast<std::int64_t>(i)));
-    if (!self->index_names.empty())
-        b.row_index = dftracer::utils::dstd::make_unique<
-            dftracer::utils::dstd::Vector<dftracer::utils::dstd::SharedString>>(
-            self->index_names);
+    if (!self->index_names.empty()) {
+        b.row_index = dftracer::utils::dstd::make_unique<dataframe::RowIndex>();
+        b.row_index->names = self->index_names;
+        b.row_index->cache = self->label_cache;
+    }
     return b;
 }
 
@@ -261,6 +272,7 @@ PyObject* DataFrame_replace(PyObject* self, PyObject* other) {
         Series st = Series::structs(f.names, std::move(f.columns));
         b->names = o->names;
         b->index_names = o->index_names;
+        b->label_cache = o->label_cache;
         b->st = std::move(st);
         Py_RETURN_NONE;
     });
@@ -516,6 +528,44 @@ PyObject* DataFrame_take(PyObject* self, PyObject* seq) {
         return nullptr;
     return run_batch_op(
         b, [&](const DataFrame& frame) { return frame.take(idx); });
+}
+
+// _locate(keys) -> (positions, missing): the rows whose index labels equal the
+// key columns, one per level (see DataFrame::locate).
+PyObject* DataFrame_locate(PyObject* self, PyObject* keys_obj) {
+    DataFrameObject* b = as_native<DataFrameObject>(self);
+    if (!b) return nullptr;
+    dstd::Vector<Series> keys;
+    if (!dftracer::utils::python::frame::series_list_from_py(
+            keys_obj, "_locate: keys must be Series", keys))
+        return nullptr;
+    return guard([&]() -> PyObject* {
+        const DataFrame frame = to_dataframe(b);
+        return dftracer::utils::python::frame::located_to_py(
+            without_gil(frame.num_rows(), [&] { return frame.locate(keys); }));
+    });
+}
+
+// _locate_range(start, stop) -> (offset, length): the rows between two index
+// label bounds (lists of one-row Series, empty for an open end).
+PyObject* DataFrame_locate_range(PyObject* self, PyObject* args) {
+    DataFrameObject* b = as_native<DataFrameObject>(self);
+    if (!b) return nullptr;
+    PyObject* start_obj = nullptr;
+    PyObject* stop_obj = nullptr;
+    if (!PyArg_ParseTuple(args, "OO", &start_obj, &stop_obj)) return nullptr;
+    dstd::Vector<Series> start;
+    dstd::Vector<Series> stop;
+    if (!dftracer::utils::python::frame::series_list_from_py(
+            start_obj, "_locate_range: bounds must be Series", start) ||
+        !dftracer::utils::python::frame::series_list_from_py(
+            stop_obj, "_locate_range: bounds must be Series", stop))
+        return nullptr;
+    return guard([&]() -> PyObject* {
+        const DataFrame frame = to_dataframe(b);
+        return dftracer::utils::python::frame::label_span_to_py(without_gil(
+            frame.num_rows(), [&] { return frame.locate_range(start, stop); }));
+    });
 }
 
 PyObject* DataFrame_tail(PyObject* self, PyObject* arg) {
@@ -1600,6 +1650,12 @@ PyMethodDef DataFrame_methods[] = {
      "rename({old: new}) -> DataFrame with columns renamed (zero-copy)."},
     {"with_column", DataFrame_with_column, METH_VARARGS,
      "with_column(name, Series) -> DataFrame adding/replacing a column."},
+    {"_locate", DataFrame_locate, METH_O,
+     "_locate(keys) -> (positions, missing): the rows whose index labels equal "
+     "the key Series (one per level), and the keys no label matches."},
+    {"_locate_range", DataFrame_locate_range, METH_VARARGS,
+     "_locate_range(start, stop) -> (offset, length): the rows between two "
+     "index label bounds (lists of one-row Series, empty for an open end)."},
     {"take", DataFrame_take, METH_O,
      "take(indices) -> DataFrame gathered at the given row indices."},
     {"column_index",

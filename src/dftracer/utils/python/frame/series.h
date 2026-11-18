@@ -4,11 +4,10 @@
 
 #include <Python.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/core/type_helpers.h>
-
-namespace dftracer::utils::dataframe {
-class Series;
-}
 
 namespace dftracer::utils::python::frame {
 
@@ -32,6 +31,21 @@ const dftracer::utils::dataframe::Series* unwrap_vec_column(PyObject* o);
 // dataframe::Series. Returns an invalid Series with a Python error set on
 // failure.
 dftracer::utils::dataframe::Series column_from_arrow(PyObject* arrow_array);
+
+// The Series of a sequence (as a list or tuple of Series), sharing their
+// buffers. False with a TypeError set when `seq` is no sequence or holds
+// another object.
+bool series_list_from_py(
+    PyObject* seq, const char* what,
+    dftracer::utils::dstd::Vector<dftracer::utils::dataframe::Series>& out);
+
+// The label lookup results as Python values: `(positions, missing)`, two lists
+// of ints; `(offset, length)`. A failed lookup sets the Python exception its
+// error maps to and returns nullptr.
+PyObject* located_to_py(
+    dftracer::utils::dstd::Result<dftracer::utils::dataframe::Located>&& r);
+PyObject* label_span_to_py(
+    dftracer::utils::dstd::Result<dftracer::utils::dataframe::LabelSpan>&& r);
 
 }  // namespace dftracer::utils::python::frame
 

@@ -381,8 +381,7 @@ dstd::Vector<DataFrame> frame_parts(const DataFrame& frame) {
             part.names = frame.names;
             if (frame.row_index)
                 part.row_index =
-                    dstd::make_unique<dstd::Vector<dstd::SharedString>>(
-                        *frame.row_index);
+                    dstd::make_unique<dataframe::RowIndex>(*frame.row_index);
             part.columns.reserve(ncolumns);
             for (std::size_t i = 0; per_chunk && i < ncolumns; ++i) {
                 part.columns.emplace_back(

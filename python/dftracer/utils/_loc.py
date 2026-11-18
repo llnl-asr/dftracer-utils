@@ -14,7 +14,9 @@ handle, the pandas 3 copy-on-write behaviour. A handle taken earlier
 from __future__ import annotations
 
 import builtins
-from typing import TYPE_CHECKING, Sequence
+import datetime
+import sys
+from typing import TYPE_CHECKING, Sequence, cast
 
 from . import dftracer_utils_ext as _ext
 from ._apply import Row
@@ -38,7 +40,7 @@ class Rows:
     ``all``, ``slice`` (offset, length), ``take`` (positions) or ``mask``
     (a Bool Series or an Expr)."""
 
-    __slots__ = ("kind", "offset", "length", "positions", "mask")
+    __slots__ = ("kind", "offset", "length", "positions", "mask", "one", "drop")
 
     def __init__(
         self,
@@ -47,12 +49,19 @@ class Rows:
         length: int = 0,
         positions: list[int] | None = None,
         mask: object = None,
+        one: bool = False,
+        drop: tuple[int, ...] = (),
     ) -> None:
         self.kind = kind
         self.offset = offset
         self.length = length
         self.positions = positions or []
         self.mask = mask
+        # A label lookup: whether the key was one whole label (not a list, a
+        # slice or a part of a MultiIndex label), and the index levels the
+        # result no longer has (the levels a partial key named).
+        self.one = one
+        self.drop = drop
 
     @classmethod
     def all(cls) -> Rows:
@@ -63,8 +72,8 @@ class Rows:
         return cls("slice", offset=offset, length=length)
 
     @classmethod
-    def take(cls, positions: list[int]) -> Rows:
-        return cls("take", positions=positions)
+    def take(cls, positions: list[int], one: bool = False, drop: tuple[int, ...] = ()) -> Rows:
+        return cls("take", positions=positions, one=one, drop=drop)
 
     @classmethod
     def masked(cls, mask: object) -> Rows:
@@ -125,14 +134,6 @@ def rows_by_position(n: int, key: object) -> tuple[Rows, bool]:
     raise TypeError(f"iloc: cannot select rows with {type(key).__name__}")
 
 
-def _label_eq(index: Series, value: object) -> Series:
-    if isinstance(value, str):
-        return index.str_eq(value)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError(f"loc: a label must be a number or a str, not {type(value).__name__}")
-    return index.eq(value)
-
-
 def _numeric_bounds(key: builtins.slice) -> tuple[float | None, float | None]:
     if key.step is not None:
         raise TypeError("loc: a label slice takes no step")
@@ -142,66 +143,283 @@ def _numeric_bounds(key: builtins.slice) -> tuple[float | None, float | None]:
     return key.start, key.stop
 
 
-def _label_range(index: Series, key: builtins.slice) -> Series:
-    lo, hi = _numeric_bounds(key)
-    if lo is not None and hi is not None:
-        return index.is_between(lo, hi)
-    if lo is not None:
-        return index >= lo
-    assert hi is not None
-    return index <= hi
+class Labels:
+    """The row labels of a frame or Series, looked up through the hash the
+    native object builds on its first lookup and keeps (see
+    ``Series._locate``). A frame or Series with no labels has the positions
+    ``0 .. n-1`` as its one level."""
+
+    __slots__ = ("frame", "series", "names")
+
+    def __init__(self, native: DataFrame | Series) -> None:
+        self.frame: DataFrame | None = None if isinstance(native, Series) else native
+        self.series: Series | None = native if isinstance(native, Series) else None
+        self.names: list[str] = native.index_names()
+
+    @property
+    def depth(self) -> int:
+        return max(len(self.names), 1)
+
+    def locate(self, keys: list[Series]) -> tuple[list[int], list[int]]:
+        if self.frame is not None:
+            return self.frame._locate(keys)
+        assert self.series is not None
+        return self.series._locate(keys)
+
+    def locate_range(self, start: list[Series], stop: list[Series]) -> tuple[int, int]:
+        if self.frame is not None:
+            return self.frame._locate_range(start, stop)
+        assert self.series is not None
+        return self.series._locate_range(start, stop)
+
+    def level(self, i: int) -> Series | None:
+        """Label column ``i``; None for positions."""
+        if not self.names:
+            return None
+        if self.frame is not None:
+            return _ext.DataFrame.__getitem__(self.frame, self.names[i])
+        assert self.series is not None
+        return self.series._index_level(i)
+
+    def dtype(self, i: int) -> DType:
+        level = self.level(i)
+        return DType.INT64 if level is None else level.dtype
 
 
-def _and(a: Series, b: Series) -> Series:
-    return a.logical(0, b)
+# Label dtypes whose key columns compare by value in the native lookup. The
+# others (dates, times, timestamps, durations, decimals) compare by their own
+# type, so a key is converted to the label's type first.
+_PLAIN = frozenset(d for d in DType if d.is_numeric) | {
+    DType.BOOL,
+    DType.FLOAT16,
+    DType.STRING,
+    DType.LARGE_STRING,
+    DType.BINARY,
+    DType.LARGE_BINARY,
+}
 
 
-def _or(a: Series, b: Series) -> Series:
-    return a.logical(1, b)
+class _Unkeyable(Exception):
+    """Label values that do not make one key column (mixed types, or a type
+    that cannot be the level's)."""
 
 
-def _label_tuple(levels: list[Series], key: tuple[object, ...]) -> Series:
-    """A label tuple matches the leading levels it names (pandas' partial
-    indexing on a MultiIndex)."""
-    if not key or len(key) > len(levels):
-        raise KeyError(f"loc: a label tuple names 1 to {len(levels)} index levels, got {len(key)}")
-    mask = _label_eq(levels[0], key[0])
-    for level, value in zip(levels[1:], key[1:]):
-        mask = _and(mask, _label_eq(level, value))
-    return mask
+_TEXT = frozenset({DType.STRING, DType.LARGE_STRING, DType.BINARY, DType.LARGE_BINARY})
+_NARROW_FLOATS = frozenset({DType.FLOAT16, DType.FLOAT32})
 
 
-def rows_by_label(levels: list[Series], key: object) -> Rows:
-    """``loc`` rows against the index levels (labels are inclusive on both
-    ends of a slice, as pandas). One level takes a value, a slice or a list;
-    several take a tuple (or a list of tuples) matching the leading levels,
-    or a bare value for the first level."""
+def _awareness_differs(values: list[object], tz: object) -> bool:
+    """Whether a datetime key is timezone aware where the level is not, or the
+    other way round (pandas raises ``KeyError`` for both)."""
+    return any(
+        isinstance(v, datetime.datetime) and (v.tzinfo is not None) != (tz is not None)
+        for v in values
+    )
 
-    index = levels[0]
-    if _is_all(key):
+
+def _key_series(labels: Labels, level: int, values: list[object], scalar: bool = False) -> Series:
+    """``values`` as the key column of index level ``level``."""
+    own = labels.dtype(level)
+    if own not in _TEXT and None in values:
+        # As pandas, a None key finds null labels of a text level only; a NaN
+        # key finds the NaN labels of a float level.
+        raise _Unkeyable
+    try:
+        series = Series.from_list(values)
+    except (TypeError, ValueError, OverflowError):
+        series = None
+    if series is not None and own in _PLAIN and series.dtype in _PLAIN:
+        if scalar and own in _NARROW_FLOATS and series.dtype.is_numeric:
+            # As pandas, one key is cast to the level's float type first (a
+            # list of keys is not).
+            series = series.astype(own)
+        return series
+    if own in _PLAIN:
+        raise _Unkeyable
+    lv = labels.level(level)
+    assert lv is not None
+    arrow_type = lv.slice(0, 0).to_arrow().type
+    if _awareness_differs(values, getattr(arrow_type, "tz", None)):
+        raise _Unkeyable
+    try:
+        return Series.from_list(values, dtype=arrow_type)
+    except Exception:
+        raise _Unkeyable from None
+
+
+def _key_columns(
+    labels: Labels, items: list[object], depth: int, tupled: bool, scalar: bool = False
+) -> list[Series]:
+    """The key columns of ``items``: labels of one level, or (``tupled``)
+    tuples naming the first ``depth`` levels."""
+    if not tupled:
+        return [_key_series(labels, 0, items, scalar)]
+    rows = [cast("tuple[object, ...]", item) for item in items]
+    return [_key_series(labels, i, [item[i] for item in rows], scalar) for i in range(depth)]
+
+
+def _locate_each(
+    labels: Labels, items: list[object], depth: int, tupled: bool
+) -> tuple[list[int], list[int]]:
+    """``locate`` one item at a time: for labels that make no one key column
+    (``[1, "a"]``), where an item of another type simply has no row."""
+    positions: list[int] = []
+    missing: list[int] = []
+    for i, item in enumerate(items):
+        try:
+            found, none = labels.locate(_key_columns(labels, [item], depth, tupled))
+        except _Unkeyable:
+            missing.append(i)
+            continue
+        positions.extend(found)
+        missing.extend([i] if none else [])
+    return positions, missing
+
+
+def _locate_items(
+    labels: Labels, items: list[object], depth: int, tupled: bool = False, scalar: bool = False
+) -> tuple[list[int], list[int]]:
+    if not items:
+        return [], []
+    try:
+        keys = _key_columns(labels, items, depth, tupled, scalar)
+    except _Unkeyable:
+        return _locate_each(labels, items, depth, tupled)
+    return labels.locate(keys)
+
+
+def _missing_error(items: list[object], missing: list[int], one: bool) -> KeyError:
+    if one:
+        return KeyError(items[0])
+    return KeyError(f"{[items[i] for i in missing]} not in index")
+
+
+def _is_labels_list(key: object) -> bool:
+    np = sys.modules.get("numpy")
+    return isinstance(key, (list, range, set, frozenset)) or (
+        np is not None and isinstance(key, np.ndarray)
+    )
+
+
+def _slice_bound(labels: Labels, bound: object) -> list[Series]:
+    if bound is None:
+        return []
+    tupled = isinstance(bound, tuple)
+    depth = len(bound) if tupled else 1  # type: ignore[arg-type]
+    if tupled and not 1 <= depth <= labels.depth:
+        raise KeyError(bound)
+    try:
+        return _key_columns(labels, [bound], depth, tupled, True)
+    except _Unkeyable:
+        raise TypeError(f"loc: cannot slice with the label {bound!r}") from None
+
+
+def _label_slice(labels: Labels, key: builtins.slice) -> Rows:
+    if key.step is not None:
+        raise TypeError("loc: a label slice takes no step")
+    start = _slice_bound(labels, key.start)
+    stop = _slice_bound(labels, key.stop)
+    try:
+        offset, length = labels.locate_range(start, stop)
+    except KeyError as e:
+        raise KeyError(f"{e}: {key.start!r}:{key.stop!r}") from None
+    except ValueError as e:
+        raise TypeError(f"loc: {e}") from None
+    return Rows.slice(offset, length)
+
+
+def _named(labels: Labels, depth: int) -> tuple[int, ...]:
+    """The levels a key of ``depth`` leading levels leaves out of the result:
+    none for a whole label, the leading ones for a part of it."""
+    return tuple(range(depth)) if depth < labels.depth else ()
+
+
+def rows_by_label(labels: Labels, key: object) -> Rows:
+    """``loc`` rows against the index of a frame or Series. A label (or a tuple
+    naming the leading levels of a MultiIndex) or a list of them selects the
+    rows that hold it, a list in its own order with a repeated label giving
+    its rows again; a label slice is inclusive on both ends (binary search on
+    a sorted index, else both bounds must be single labels); a Bool Series or
+    list is a mask. A label no row holds is a ``KeyError``."""
+
+    if isinstance(key, builtins.slice) and _is_all(key):
         return Rows.all()
-    if isinstance(key, Series):
-        return Rows.masked(key if _is_bool(key) else index.is_in(key))
     if isinstance(key, Expr):
         return Rows.masked(key)
-    if isinstance(key, tuple):
-        return Rows.masked(_label_tuple(levels, key))
+    if isinstance(key, Series):
+        if _is_bool(key):
+            return Rows.masked(key)
+        positions, missing = labels.locate([key])
+        if missing:
+            raise KeyError(f"{[key.to_list()[i] for i in missing]} not in index")
+        return Rows.take(positions, drop=_named(labels, 1))
     if isinstance(key, builtins.slice):
-        if len(levels) > 1:
-            raise TypeError("loc: a label slice needs a one-column index")
-        return Rows.masked(_label_range(index, key))
-    if isinstance(key, (list, range, set, frozenset)):
-        values = list(key)
+        return _label_slice(labels, key)
+    if _is_labels_list(key):
+        values = list(cast("Sequence[object]", key))
         if _bool_list(values):
             return Rows.masked(Series.from_list(values))
-        tuples = [v for v in values if isinstance(v, tuple)]
-        if tuples and len(tuples) == len(values):
-            mask = _label_tuple(levels, tuples[0])
-            for v in tuples[1:]:
-                mask = _or(mask, _label_tuple(levels, v))
-            return Rows.masked(mask)
-        return Rows.masked(index.is_in(values))
-    return Rows.masked(_label_eq(index, key))
+        tupled = (
+            bool(values)
+            and isinstance(values[0], tuple)
+            and all(isinstance(v, tuple) for v in values)
+        )
+        depth = 1
+        if tupled:
+            depth = len(cast("tuple[object, ...]", values[0]))
+            if not 1 <= depth <= labels.depth or any(
+                len(cast("tuple[object, ...]", v)) != depth for v in values
+            ):
+                raise KeyError(f"{values} do not name the same 1 to {labels.depth} index levels")
+        positions, missing = _locate_items(labels, values, depth, tupled)
+        if missing:
+            raise _missing_error(values, missing, False)
+        return Rows.take(positions, drop=_named(labels, depth))
+    if isinstance(key, tuple):
+        if not 1 <= len(key) <= labels.depth:
+            raise KeyError(key)
+        positions, missing = _locate_items(labels, [key], len(key), True, True)
+        depth = len(key)
+    else:
+        positions, missing = _locate_items(labels, [key], 1, False, True)
+        depth = 1
+    if missing:
+        raise KeyError(key)
+    return Rows.take(positions, one=depth == labels.depth, drop=_named(labels, depth))
+
+
+def rows_by_level(labels: Labels, level: object, key: object) -> Rows:
+    """The rows whose index level ``level`` (a position or a name) is ``key``
+    (pandas ``xs(key, level=level)``)."""
+    if not labels.names:
+        if level not in (0, None):
+            raise KeyError(f"Level {level!r} not found")
+        return rows_by_label(labels, key)
+    if isinstance(level, str):
+        if level not in labels.names:
+            raise KeyError(f"Level {level} not found")
+        at = labels.names.index(level)
+    else:
+        at = int(cast(int, level))
+        if not -len(labels.names) <= at < len(labels.names):
+            raise IndexError(f"Too many levels: Index has only {len(labels.names)} levels")
+        at %= len(labels.names)
+    lv = labels.level(at)
+    assert lv is not None
+    # The hash is over the leading levels, so another level looks up through
+    # a one-level view of the labels (built for this call).
+    if at == 0:
+        rows = rows_by_label(labels, key)
+        return Rows.take(rows.positions, drop=(0,))
+    if labels.frame is not None:
+        found = Labels(labels.frame.set_index(labels.names[at]))
+    else:
+        from ._series_index import with_levels
+
+        assert labels.series is not None
+        found = Labels(with_levels(labels.series, [labels.names[at]], [lv]))
+    rows = rows_by_label(found, key)
+    return Rows.take(rows.positions, drop=(at,))
 
 
 def columns_by_position(names: list[str], key: object) -> tuple[list[str], bool]:
@@ -463,6 +681,16 @@ class ILoc:
         assign_rows(df, rows, cols, value)
 
 
+def drop_index_levels(out: DataFrame, names: list[str], drop: tuple[int, ...]) -> DataFrame:
+    """``out`` without the index levels ``drop`` (positions in ``names``): the
+    columns leave the frame, the others stay its index."""
+    if not drop:
+        return out
+    gone = {names[i] for i in drop}
+    kept = [c for c in out._names() if c not in gone]
+    return out.select(*kept)
+
+
 class Loc:
     """``df.loc``: rows by index label (or a mask), columns by name."""
 
@@ -471,24 +699,24 @@ class Loc:
     def __init__(self, df: DataFrame) -> None:
         self._df = df
 
-    def _rows(self, key: object) -> tuple[Rows, object]:
+    def _rows(self, key: object) -> tuple[Rows, object, Labels]:
         df = self._df
-        levels = df.index_levels()
-        rk, ck = _split(key, len(levels), df.columns)
-        return rows_by_label(levels, rk), ck
+        labels = Labels(df)
+        rk, ck = _split(key, labels.depth, df.columns)
+        return rows_by_label(labels, rk), ck, labels
 
     def __getitem__(self, key: object) -> object:
         df = self._df
-        rows, ck = self._rows(key)
+        rows, ck, labels = self._rows(key)
         cols, one_col = columns_by_name(df.columns, ck)
-        out = _apply_rows(df, rows)
+        out = drop_index_levels(_apply_rows(df, rows), labels.names, rows.drop)
         if one_col:
             return out[cols[0]]
-        return out.select(*cols, *df.index_names()) if ck is not None else out
+        return out.select(*cols, *out.index_names()) if ck is not None else out
 
     def __setitem__(self, key: object, value: object) -> None:
         df = self._df
-        rows, ck = self._rows(key)
+        rows, ck, _ = self._rows(key)
         cols, _ = columns_by_name(df.columns, ck, new_ok=True)
         assign_rows(df, rows, cols, value)
 
@@ -510,7 +738,9 @@ class At:
             rows, _ = rows_by_position(len(self._df), rk)
             cols, _ = columns_by_position(self._df.columns, ck)
         else:
-            rows = rows_by_label(self._df.index_levels(), rk)
+            rows = rows_by_label(Labels(self._df), rk)
+            if not rows.one:
+                raise TypeError("at takes one whole row label")
             cols, _ = columns_by_name(self._df.columns, ck, new_ok=True)
         if len(cols) != 1:
             raise TypeError("at / iat name one column")
@@ -519,13 +749,66 @@ class At:
     def __getitem__(self, key: object) -> object:
         rows, name = self._cell(key)
         out = _apply_rows(self._df, rows)
-        if len(out) != 1:
-            raise KeyError(f"at: the row key matches {len(out)} rows, not one")
-        return out[name].item(0)
+        if self._by_position:
+            return out[name].item(0)
+        # As pandas: the value of the one row, the Series of the column over
+        # every row a repeated label has.
+        return out[name].item(0) if len(out) == 1 else out[name]
 
     def __setitem__(self, key: object, value: object) -> None:
         rows, name = self._cell(key)
         assign_rows(self._df, rows, [name], value)
+
+
+def series_by_label(
+    s: Series, key: object, level: object = None, drop_level: bool = True
+) -> object:
+    """``s.loc[key]`` for a Series: the value of the one row a whole label
+    names, else a Series of the rows (a labelled Series keeps its labels, a
+    positional one is labelled by the positions it keeps), a part of a MultiIndex
+    label leaving out the levels it names."""
+    from ._series_index import (
+        default_name,
+        levels_of,
+        names_of,
+        positions,
+        with_levels,
+    )
+
+    labels = Labels(s)
+    rows = rows_by_label(labels, key) if level is None else rows_by_level(labels, level, key)
+    if not drop_level:
+        rows.drop = ()
+    if rows.kind == "take" and rows.one and len(rows.positions) == 1:
+        return s.item(rows.positions[0])
+    if rows.kind == "all":
+        out = s
+    elif rows.kind == "slice":
+        out = s.slice(rows.offset, rows.length)
+    elif rows.kind == "take":
+        out = s.gather(rows.positions)
+    else:
+        mask = rows.mask
+        if not isinstance(mask, Series):
+            raise TypeError("loc on a Series takes labels, a slice or a Bool mask")
+        out = s.filter(mask)
+    if not labels.names:
+        # The rows keep their positions as labels, as pandas.
+        if rows.kind == "slice":
+            return with_levels(out, [default_name(0)], [positions(rows.length, rows.offset)])
+        if rows.kind == "take":
+            return with_levels(out, [default_name(0)], [Series.from_list(rows.positions)])
+        if rows.kind == "mask":
+            index = positions(len(s))
+            assert isinstance(rows.mask, Series)
+            return with_levels(out, [default_name(0)], [index.filter(rows.mask)])
+        return out
+    if rows.drop:
+        names = names_of(out)
+        levels = levels_of(out)
+        keep = [i for i in range(len(names)) if i not in rows.drop]
+        return with_levels(out, [names[i] for i in keep], [levels[i] for i in keep])
+    return out
 
 
 # ---- lazy ---------------------------------------------------------------------

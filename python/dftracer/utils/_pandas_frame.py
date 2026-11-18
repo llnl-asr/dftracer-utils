@@ -700,11 +700,27 @@ class FramePandasMixin(_ext.DataFrame):
             return s[0] if len(s) == 1 else s
         return self
 
-    def xs(self, key: object) -> DataFrame:
-        """Rows with index label ``key`` (:attr:`loc`)."""
+    def xs(
+        self, key: object, axis: int = 0, level: object = None, drop_level: bool = True
+    ) -> DataFrame:
+        """Rows with index label ``key`` (:attr:`loc`); with ``level`` the rows
+        whose index level of that name or position is ``key``, that level left
+        out unless ``drop_level`` is false. A part of a MultiIndex label leaves
+        out the levels it names."""
+        from ._loc import Labels, _apply_rows, drop_index_levels, rows_by_level
         from .dataframe import DataFrame
 
-        out = self._frame().loc[key]
+        if axis not in (0, "index"):
+            raise ValueError("xs: only the index axis is supported")
+        frame = self._frame()
+        if level is None:
+            out = frame.loc[key]
+        else:
+            labels = Labels(frame)
+            rows = rows_by_level(labels, level, key)
+            out = _apply_rows(frame, rows)
+            if drop_level:
+                out = drop_index_levels(out, labels.names, rows.drop)
         assert isinstance(out, DataFrame)
         return out
 

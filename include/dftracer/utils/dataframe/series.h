@@ -28,6 +28,24 @@ namespace dftracer::utils::dataframe {
 
 struct DataFrame;
 
+/// The rows that label keys select, from @ref Series::locate or
+/// @ref DataFrame::locate.
+struct Located {
+    /// The row positions in key order: every row of the first key that has
+    /// rows, then those of the next (a label held by several rows gives them
+    /// all, in row order; a label repeated in the keys is repeated).
+    dstd::Vector<std::int64_t> positions;
+    /// The key rows that no label matches, ascending; `positions` has nothing
+    /// for them.
+    dstd::Vector<std::int64_t> missing;
+};
+
+/// A run of rows, `length` rows from `offset`.
+struct LabelSpan {
+    std::int64_t offset = 0;
+    std::int64_t length = 0;
+};
+
 /// A typed column. Move-only owning wrapper over the C ABI handle; the buffers,
 /// encoding, and null handling live behind it. Typed accessors are inline
 /// (zero-cost) for in-tree callers; the C ABI is the stable cross-boundary
@@ -418,6 +436,34 @@ class Series {
     /// The label levels as a frame, one column per level in order, whose row
     /// index is all of them; an empty frame when there are none.
     DataFrame index_frame() const;
+    /// The rows whose labels equal `keys`, as pandas `loc` finds them. `keys`
+    /// holds one column per label level, the leading levels when it holds fewer
+    /// than this column has (a partial key of a MultiIndex), each as long as
+    /// the number of keys: row `r` of every column is key `r`. A positional
+    /// column has one level, the positions 0 .. length-1. Labels compare by
+    /// value: an integer key finds a float label of the same value, a null key
+    /// finds the null labels (and a NaN key, which is a null label), a string
+    /// key finds no number. A key of a type that has no label of that kind
+    /// finds nothing. The lookup hashes the labels once, on the first call, and
+    /// keeps the hash with the labels (shared by every copy of this column,
+    /// built once even when several threads call at once; a later call costs
+    /// the keys only). An InvalidArgument error for no keys, more key levels
+    /// than this column has labels, keys of different lengths or a List or
+    /// Struct key.
+    dstd::Result<Located> locate(dstd::Span<const Series> keys) const;
+    /// The rows between two label bounds, both ends included, as pandas
+    /// `loc[start:stop]`. `start` and `stop` are one-row columns per level,
+    /// leading levels as in @ref locate; an empty span is an open end. On a
+    /// monotonic index (increasing or decreasing, lexicographic across levels,
+    /// no null label) a bound need not be a label: the run is found by binary
+    /// search. On any other index a bound must be one label that no other row
+    /// has, and the run is the rows from the start row to the stop row (empty
+    /// when the stop row is first), and a MultiIndex that is not monotonic is
+    /// refused. A NotFound error naming the bound for a missing or repeated
+    /// bound, or the unsorted MultiIndex; an InvalidArgument error for bounds
+    /// of a type that does not compare with the labels.
+    dstd::Result<LabelSpan> locate_range(dstd::Span<const Series> start,
+                                         dstd::Span<const Series> stop) const;
 
     /// Whether this is a JSON column: String values of canonical JSON text.
     bool is_json() const noexcept { return dftu_series_is_json(handle_) != 0; }

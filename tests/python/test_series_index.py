@@ -354,31 +354,12 @@ def test_sort_index_of_a_positional_series_is_unchanged():
     assert s.sort_index(ascending=False).to_list() == [3.0, 2.0, 1.0]
 
 
-@pytest.mark.parametrize(
-    "use",
-    [
-        lambda s: s.loc[[0, 1]],
-        lambda s: s.loc[1],
-        lambda s: s.at[0],
-        lambda s: s[1],
-        lambda s: s.get(1),
-    ],
-    ids=["loc list", "loc", "at", "getitem", "get"],
-)
-def test_label_lookup_on_a_labelled_series_is_not_supported(use):
-    s = Series.from_pandas(PI)
-    with pytest.raises(NotImplementedError, match="label"):
-        use(s)
-    assert s.iloc[1] == 1.0
-    assert s.iat[1] == 1.0
-
-
 def test_positional_lookup_without_labels_keeps_working():
     s = Series([3.0, 1.0, 2.0])
     assert s.loc[1] == 1.0
     assert s.at[2] == 2.0
     assert s[0] == 3.0
-    assert s.loc[0:2].to_list() == [3.0, 1.0]
+    assert s.loc[0:1].to_list() == [3.0, 1.0]
 
 
 def test_where_and_mask_need_the_same_labels():

@@ -229,7 +229,7 @@ an index.
 .. code-block:: python
 
    df = DataFrame({"ts": [0, 1, 2], "v": [1.0, 2.0, 3.0]}).set_index("ts")
-   df.loc[1]              # the row(s) whose ts == 1
+   df.loc[1]              # the row(s) whose ts == 1 (a hash lookup, built once)
    df.iloc[0:2]           # the first two rows
    df.at[2, "v"]          # one cell by label
    df.loc[df["v"] > 1, "v"] = 0.0   # copy-on-write: rebinds df, never mutates
@@ -239,8 +239,66 @@ the name is rebound to a new frame, the old one is untouched, so a frame
 another variable holds never changes under it.
 
 Not there yet: label alignment in frame arithmetic (``df + other`` is
-positional), ``reindex`` / ``align``, label lookup by hash and a ``MultiIndex``
-type (several index columns stand for one).
+positional), ``reindex`` / ``align`` and a ``MultiIndex`` type (several index
+columns stand for one).
+
+Label lookup
+~~~~~~~~~~~~
+
+``loc``, ``at``, ``xs``, ``get`` and ``s[label]`` find rows by label through a
+hash the frame or Series builds natively on its first lookup and keeps: the
+hash is built once even when several threads look up at once, shared by every
+copy of the same data and freed with it. A lookup after the first costs the keys
+only. Without the hash, ``loc`` compared the whole index column for every
+label. Labels compare by value: ``1.0`` finds the label ``1`` (a label above
+``2**53`` is compared to an integer key exactly, not through a float), a NaN key
+finds the NaN labels of a float level, a ``None`` key finds the null labels of a
+text level only (on a number level it is a ``KeyError``, as pandas), a string
+finds no number, and a repeated label gives all its rows in row order. A bool
+is its own kind of label: ``True`` is not ``1`` (``KeyError`` either way). One
+float key on a ``float32`` level is cast to ``float32`` first, as pandas, so
+``s.loc[0.1]`` finds it; a list of keys is not cast. A date or timestamp key is
+converted to the type of the labels, and a timezone-naive key does not find a
+timezone-aware label nor the reverse (``KeyError``, as pandas).
+
+.. code-block:: python
+
+   s = DataFrame({"k": [30, 10, 20, 10], "v": [1.0, 2.0, 3.0, 4.0]}).set_index("k")["v"]
+   s.loc[30]            # 1.0: one row, so the value
+   s.loc[10]            # a Series of the two rows labelled 10
+   s.loc[[20, 30, 20]]  # in the order asked for, a label repeated gives its rows again
+   s.loc[[True, False, False, True]]   # a Bool mask
+   s.loc[20]            # KeyError: 20 (a missing label is a KeyError naming it)
+
+A label slice is inclusive on both ends. On a sorted index (increasing or
+decreasing; for a MultiIndex, sorted by its levels) a bound need not be a label:
+the run is found by binary search. On an unsorted index both bounds must be
+labels that no other row has, and the run is the rows from the first to the
+second (empty when the second comes first), a missing or repeated bound is a
+``KeyError``. A bound of a type that does not compare with the labels
+(``"a":"b"`` on integers) is a ``TypeError``, and a slice takes no step.
+
+On a MultiIndex a tuple names the leading levels: the whole tuple is one row,
+a shorter one is every row below it and drops the levels it names, as pandas;
+``xs(key, level=...)`` selects on any level and drops it unless
+``drop_level=False``. A list of tuples finds each in order.
+
+The result shapes follow pandas, with the frame rules above. A Series gives the
+value for a whole label of one row, a Series for a repeated label or a part of
+a MultiIndex label. A frame gives a one-row frame for a whole label (pandas
+gives a Series, which a frame of mixed types cannot be) and ``at`` the value,
+or the column Series for a repeated label. A Series with no labels has the
+positions as labels, so ``s.loc[1]`` is the second element and a result is
+labelled by the positions it keeps; ``loc`` on a frame with no index gives the
+result a default index, where pandas keeps the original positions. ``loc`` with a Series of labels takes them
+in the Series' order. ``s[label]`` follows pandas 3: an integer is a label on a
+Series with labels (pandas 2 fell back to the position when the labels are not
+integers); on a Series without labels ``s[i]`` stays positional, and a slice with
+integer bounds is positional (``s[1:3]``) as pandas does, any other bounds are
+labels. ``get`` gives its default for a missing label. Assignment by label
+(``df.loc[label, "c"] = v``) writes every row with that label; a label that is
+not there is a ``KeyError`` (no enlargement). A LazyFrame has no frame to hash:
+its ``loc`` still builds a mask over the index columns.
 
 A Series carries labels too
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -280,9 +338,8 @@ number raises ``ValueError`` (pandas would produce an all-NaN union). A missing
 side makes ``**`` null, where pandas gives ``1.0`` for ``1 ** NaN``. ``where``,
 ``mask`` and ``str.cat`` of two Series with labels need the same labels and
 raise ``ValueError`` otherwise. ``sort_index`` orders the rows by their labels,
-level by level. ``loc``, ``at``, ``get`` and ``s[label]`` on a Series with
-labels raise ``NotImplementedError`` until label lookup exists; use ``iloc``.
-``s[mask]`` keeps the rows where a Bool Series is true, a null counting as false. Comparing two
+level by level. ``loc``, ``at``, ``get``, ``xs`` and ``s[label]`` look rows up by
+label (see Label lookup). ``s[mask]`` keeps the rows where a Bool Series is true, a null counting as false. Comparing two
 Series whose labels differ raises ``ValueError``, as pandas. A group-by
 ``apply`` that returns a Series, and ``take``, keep the original labels of the
 rows; pandas also puts the group keys before them, which is not done here.

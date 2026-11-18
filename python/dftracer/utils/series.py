@@ -497,17 +497,35 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
     def __getitem__(self, key: builtins.slice) -> Self: ...
     @overload
     def __getitem__(self, key: Series[bool]) -> Self: ...
-    def __getitem__(self, key: int | builtins.slice | Series[bool]) -> Self | T_co | None:
-        """``s[i]`` returns the element as a Python scalar; ``s[a:b]`` returns a
-        Series (step-1 slices only); ``s[mask]`` keeps the rows where the Bool
-        Series ``mask`` is true (a null is false)."""
+    @overload
+    def __getitem__(self, key: builtins.list[object] | tuple[object, ...]) -> Self: ...
+    def __getitem__(
+        self, key: int | builtins.slice | Series[bool] | builtins.list[object] | tuple[object, ...]
+    ) -> Self | T_co | None:
+        """``s[label]`` is ``loc``: on a Series with row labels the label's value
+        (or the rows of a repeated label), on one without them the element at
+        that position. ``s[a:b]`` with integers (or none) is positional, any
+        other bounds are labels; ``s[[l1, l2]]`` takes labels as ``loc`` does and
+        ``s[mask]`` keeps the rows where the Bool Series ``mask`` is true (a null
+        is false). As pandas 3, an integer is never a position on a Series with
+        labels (pandas 2 fell back to the position when the labels are not
+        integers)."""
         if type(key) is int:
-            return super()._item_unlabelled(key + len(self) if key < 0 else key)
+            try:
+                return super()._item_unlabelled(key + len(self) if key < 0 else key)
+            except NotImplementedError:
+                return cast("Self | T_co | None", self.loc[key])
         if isinstance(key, Series):
             if key.dtype != DType.BOOL:
                 raise TypeError("a Series key must be a Bool Series")
             return self.filter(key)
         if isinstance(key, slice):
+            by_position = all(
+                b is None or (isinstance(b, int) and not isinstance(b, bool))
+                for b in (key.start, key.stop)
+            )
+            if not by_position:
+                return cast("Self | T_co | None", self.loc[key])
             start, stop, step = key.indices(len(self))
             if step != 1:
                 raise ValueError("Series slicing supports step 1 only")
@@ -516,8 +534,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
                 return self.slice(start, stop - start)
             except RuntimeError:
                 return super().take(list(range(start, stop)))
-        idx = key + len(self) if key < 0 else key
-        return super()._item_unlabelled(idx)
+        return cast("Self | T_co | None", self.loc[key])
 
     def item(self, i: int | None = None) -> T_co | None:
         """The element at row ``i``; with no ``i`` the only element of a

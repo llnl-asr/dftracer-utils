@@ -338,16 +338,16 @@ class SeriesPandasMixin:
     def keys(self) -> list[int]:
         return list(range(len(self._s())))
 
-    def get(self, key: int, default: object = None) -> object:
-        s = self._s()
-        if names_of(s):
-            raise NotImplementedError(
-                "get looks a row up by label, which a Series with row labels "
-                "does not support yet; use iloc"
-            )
-        if -len(s) <= key < len(s):
-            return s[key]
-        return default
+    def get(self, key: object, default: object = None) -> object:
+        """The value or rows ``loc`` finds for the label ``key``, ``default``
+        when no row has it (a Series without labels has the positions as
+        labels)."""
+        from ._loc import series_by_label
+
+        try:
+            return series_by_label(self._s(), key)
+        except (KeyError, IndexError, TypeError):
+            return default
 
     def copy(self, deep: bool = True) -> Series:
         """A new handle on the same immutable buffers (:meth:`share`)."""
@@ -622,9 +622,17 @@ class SeriesPandasMixin:
         n = s.count()
         return float("nan") if n == 0 else cast(float, s.std(ddof)) / math.sqrt(n)
 
-    def xs(self, key: int) -> object:
-        """The element at position ``key`` (a Series has one axis)."""
-        return self._s().item(key)
+    def xs(
+        self, key: object, axis: int = 0, level: object = None, drop_level: bool = True
+    ) -> object:
+        """The rows with the label ``key`` (:attr:`loc`); with ``level`` the rows
+        whose index level of that name or position is ``key``, that level left
+        out unless ``drop_level`` is false."""
+        from ._loc import series_by_label
+
+        if axis not in (0, "index"):
+            raise ValueError("xs: a Series has one axis")
+        return series_by_label(self._s(), key, level, drop_level)
 
     def sort_index(
         self, ascending: bool = True, na_position: Literal["first", "last"] = "last"
@@ -760,7 +768,7 @@ class SeriesPandasMixin:
 
         return DataFrame({"v": self._s()}).explode("v")["v"]
 
-    # -- accessors: iloc and iat are positional; loc and at wait for label lookup ----
+    # -- accessors: iloc and iat are positional; loc and at look labels up ----------
     @property
     def iloc(self) -> _SeriesILoc:
         return _SeriesILoc(self._s())
@@ -785,9 +793,8 @@ class SeriesPandasMixin:
 
 
 class _SeriesILoc:
-    """``s.iloc[i]`` / ``s.iloc[a:b]`` / ``s.iloc[[i, j]]`` / ``s.iloc[mask]``;
-    a Series without row labels has the positional index, so ``loc`` is the
-    same accessor there."""
+    """``s.iloc[i]`` / ``s.iloc[a:b]`` / ``s.iloc[[i, j]]`` / ``s.iloc[mask]``:
+    rows by position."""
 
     __slots__ = ("_s",)
 
@@ -823,18 +830,16 @@ class _SeriesILoc:
 
 
 class _SeriesLabelLoc(_SeriesILoc):
-    """``s.loc[...]`` and ``s.at[...]``: positional on a Series without row
-    labels; a Series with labels has no lookup by label yet."""
+    """``s.loc[...]`` and ``s.at[...]``: a label, a list of labels, a label
+    slice (both ends included) or a Bool mask, through the lookup the Series
+    keeps for its labels; a Series without labels has the positions as labels."""
 
     __slots__ = ()
 
     def __getitem__(self, key: object) -> object:
-        if names_of(self._s):
-            raise NotImplementedError(
-                "loc and at look rows up by label, which a Series with row labels "
-                "does not support yet; use iloc for positions"
-            )
-        return super().__getitem__(key)
+        from ._loc import series_by_label
+
+        return series_by_label(self._s, key)
 
 
 __all__ = ["SeriesPandasMixin", "_SeriesILoc", "_SeriesLabelLoc"]

@@ -350,6 +350,38 @@ PyObject* Series_with_index(PyObject* self, PyObject* args) {
     return result;
 }
 
+// _locate(keys) -> (positions, missing): the rows whose labels equal the key
+// columns, one per level (see Series::locate).
+PyObject* Series_locate(PyObject* self, PyObject* keys_obj) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    dstd::Vector<Series> keys;
+    if (!frame::series_list_from_py(keys_obj, "_locate: keys must be Series",
+                                    keys))
+        return nullptr;
+    return frame::located_to_py(
+        core::without_gil(a->length(), [&] { return a->locate(keys); }));
+}
+
+// _locate_range(start, stop) -> (offset, length): the rows between two label
+// bounds, each a list of one-row Series per level, empty for an open end.
+PyObject* Series_locate_range(PyObject* self, PyObject* args) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    PyObject* start_obj = nullptr;
+    PyObject* stop_obj = nullptr;
+    if (!PyArg_ParseTuple(args, "OO", &start_obj, &stop_obj)) return nullptr;
+    dstd::Vector<Series> start;
+    dstd::Vector<Series> stop;
+    if (!frame::series_list_from_py(
+            start_obj, "_locate_range: bounds must be Series", start) ||
+        !frame::series_list_from_py(
+            stop_obj, "_locate_range: bounds must be Series", stop))
+        return nullptr;
+    return frame::label_span_to_py(core::without_gil(
+        a->length(), [&] { return a->locate_range(start, stop); }));
+}
+
 // The name is the one thing a Series changes in place, as pandas and polars
 // do; the buffers stay shared.
 int Series_set_name(PyObject* self, PyObject* value, void*) {
@@ -609,6 +641,12 @@ PyMethodDef Series_methods[] = {
      "a positional Series."},
     {"_index_level", Series_index_level, METH_O,
      "_index_level(i) -> Series: the label column of level i."},
+    {"_locate", Series_locate, METH_O,
+     "_locate(keys) -> (positions, missing): the rows whose row labels equal "
+     "the key Series (one per level), and the keys no label matches."},
+    {"_locate_range", Series_locate_range, METH_VARARGS,
+     "_locate_range(start, stop) -> (offset, length): the rows between two "
+     "label bounds (lists of one-row Series, empty for an open end)."},
     {"_with_index", Series_with_index, METH_VARARGS,
      "_with_index(names, levels) -> Series sharing this column's buffers "
      "whose row labels are the level Series; empty lists drop them."},
@@ -881,6 +919,67 @@ const dftracer::utils::dataframe::Series* unwrap_vec_column(PyObject* o) {
 
 dftracer::utils::dataframe::Series column_from_arrow(PyObject* arrow_array) {
     return series_detail::import_arrow_column(arrow_array);
+}
+
+bool series_list_from_py(PyObject* seq, const char* what,
+                         dstd::Vector<dataframe::Series>& out) {
+    PyObject* fast = PySequence_Fast(seq, what);
+    if (!fast) return false;
+    const Py_ssize_t n = PySequence_Fast_GET_SIZE(fast);
+    out.reserve(static_cast<std::size_t>(n));
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        const dataframe::Series* s =
+            unwrap_vec_column(PySequence_Fast_GET_ITEM(fast, i));
+        if (!s) {
+            PyErr_SetString(PyExc_TypeError, what);
+            Py_DECREF(fast);
+            return false;
+        }
+        out.push_back(s->share());
+    }
+    Py_DECREF(fast);
+    return true;
+}
+
+namespace {
+
+PyObject* int_list(dstd::Span<const std::int64_t> v) {
+    PyObject* list = PyList_New(static_cast<Py_ssize_t>(v.size()));
+    if (!list) return nullptr;
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        PyObject* n = PyLong_FromLongLong(v[i]);
+        if (!n) {
+            Py_DECREF(list);
+            return nullptr;
+        }
+        PyList_SET_ITEM(list, static_cast<Py_ssize_t>(i), n);
+    }
+    return list;
+}
+
+}  // namespace
+
+PyObject* located_to_py(dstd::Result<dataframe::Located>&& r) {
+    if (!r) {
+        core::set_py_error(r.error());
+        return nullptr;
+    }
+    PyObject* positions = int_list(r->positions);
+    PyObject* missing = positions ? int_list(r->missing) : nullptr;
+    if (!missing) {
+        Py_XDECREF(positions);
+        return nullptr;
+    }
+    return Py_BuildValue("NN", positions, missing);
+}
+
+PyObject* label_span_to_py(dstd::Result<dataframe::LabelSpan>&& r) {
+    if (!r) {
+        core::set_py_error(r.error());
+        return nullptr;
+    }
+    return Py_BuildValue("LL", static_cast<long long>(r->offset),
+                         static_cast<long long>(r->length));
 }
 
 int init_series(PyObject* m) {

@@ -226,7 +226,8 @@ def test_series_surface_matches_pandas():
     with pytest.raises(ValueError):
         s.item()
     assert list(s.items())[:2] == [(0, 3), (1, 1)] and s.keys() == [0, 1, 2, 3, 4]
-    assert s.get(1) == 1 and s.get(-1) == 2 and s.get(9, "d") == "d"
+    # The positions are the labels, so -1 is no label, as pandas.
+    assert s.get(1) == 1 and s.get(-1) is None and s.get(9, "d") == "d"
     assert s.copy().to_list() == s.to_list() and s.pipe(len) == 5
     codes, uniques = s.factorize()
     assert uniques.to_list() == [1, 2, 3] and codes.to_list() == [2, 0, -1, 2, 1]

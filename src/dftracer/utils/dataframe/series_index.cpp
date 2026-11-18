@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
+#include <dftracer/utils/dataframe/internal/label_index.h>
 #include <dftracer/utils/dataframe/kernels/cast.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -282,6 +283,32 @@ DataFrame Series::index_frame() const {
     }
     if (n == 0) return f;
     return std::move(*f.with_index(views));
+}
+
+namespace {
+
+dstd::Vector<Series> label_levels(const Series& s) {
+    dstd::Vector<Series> levels;
+    const std::int32_t n = s.index_count();
+    levels.reserve(static_cast<std::size_t>(n));
+    for (std::int32_t i = 0; i < n; ++i) levels.push_back(s.index_level(i));
+    return levels;
+}
+
+}  // namespace
+
+dstd::Result<Located> Series::locate(dstd::Span<const Series> keys) const {
+    const dstd::Vector<Series> levels = label_levels(*this);
+    return locate_labels(handle_->labels ? &handle_->labels->cache : nullptr,
+                         levels, length(), keys);
+}
+
+dstd::Result<LabelSpan> Series::locate_range(
+    dstd::Span<const Series> start, dstd::Span<const Series> stop) const {
+    const dstd::Vector<Series> levels = label_levels(*this);
+    return locate_label_range(
+        handle_->labels ? &handle_->labels->cache : nullptr, levels, length(),
+        start, stop);
 }
 
 Series Series::derived(dftu_series* result) const {

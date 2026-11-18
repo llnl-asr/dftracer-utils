@@ -79,23 +79,29 @@ def test_loc_reads_default_index_and_set_index():
     assert d.loc[30:, "a"].to_list() == pk.loc[30:, "a"].tolist()
     assert _d(d.loc[[10, 40]])["a"] == pk.loc[[10, 40]]["a"].tolist()
     assert d.loc[col("a") >= 3, "s"].to_list() == ["z", "w"]
-    assert d.loc[Series([40, 10]), "a"].to_list() == [1, 4]
+    # A Series of labels is a list of labels: the rows come in its order.
+    assert d.loc[Series([40, 10]), "a"].to_list() == pk.loc[[40, 10], "a"].tolist() == [4, 1]
     assert d.at[30, "s"] == pk.at[30, "s"]
     with pytest.raises(KeyError):
         d.loc[:, "nope"]
     with pytest.raises(KeyError):
         df.set_index("nope")
-    with pytest.raises(TypeError):
-        d.loc[True]
+    with pytest.raises(KeyError):
+        d.loc[True]  # a bool is not a number label
     with pytest.raises(TypeError):
         d.loc["a":"b"]
-    with pytest.raises(KeyError, match="matches 0 rows"):
+    with pytest.raises(KeyError, match="99"):
         d.at[99, "s"]
 
     # A string index.
     s = df.set_index("s")
     assert s.loc["y"]["a"].to_list() == [2]
-    assert s.loc[["w", "x"], "a"].to_list() == [1, 4]
+    # The rows come in the order of the labels asked for, as pandas.
+    assert (
+        s.loc[["w", "x"], "a"].to_list()
+        == pdf.set_index("s").loc[["w", "x"], "a"].tolist()
+        == [4, 1]
+    )
     assert s.at["z", "k"] == 30
 
     # The index name follows the frame through ops that keep the column, and
@@ -314,8 +320,9 @@ def test_several_index_columns_match_pandas_multiindex():
     assert d.loc[[(1, 11), (2, 12)], "v"].to_list() == [2.0, 5.0]
     assert _d(d.loc[[1]])["v"] == [1.0, 2.0]
     assert d.at[(2, 10), "v"] == pm.at[(2, 10), "v"]
-    with pytest.raises(TypeError, match="one-column"):
-        d.loc[1:2]
+    # A slice on a MultiIndex sorted by its levels: both ends included.
+    assert _d(d.loc[1:2])["v"] == pm.loc[1:2, "v"].tolist()
+    assert _d(d.loc[(1, 11) : (2, 11)])["v"] == pm.loc[(1, 11) : (2, 11), "v"].tolist()
     with pytest.raises((KeyError, TypeError)):
         d.loc[(1, 10, 99)]
     with pytest.raises(KeyError, match="levels"):

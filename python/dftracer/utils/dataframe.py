@@ -334,14 +334,14 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         ``df[mask] = value`` writes every column where the mask holds. The
         frame's columns are immutable: the handle is rebound to a new frame
         that shares every untouched column."""
-        from ._loc import Rows, assign_rows, rows_by_label
+        from ._loc import Labels, Rows, assign_rows, rows_by_label
 
         if isinstance(key, str):
             assign_rows(self, Rows.all(), [key], value)
         elif isinstance(key, (list, tuple)):
             assign_rows(self, Rows.all(), [str(k) for k in key], value)
         elif isinstance(key, Series):
-            assign_rows(self, rows_by_label(self.index_levels(), key), self.columns, value)
+            assign_rows(self, rows_by_label(Labels(self), key), self.columns, value)
         else:
             raise TypeError("assign to a column name, a list of names or a Bool mask")
 

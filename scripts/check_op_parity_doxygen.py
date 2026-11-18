@@ -126,6 +126,8 @@ ALLOWLIST = {
         "without_index",
         "with_index_of",
         "index_frame",
+        "locate",
+        "locate_range",
         "from_arrow",
         "from_borrowed",
         "to_arrow",
@@ -143,6 +145,8 @@ ALLOWLIST = {
         "index_names",
         "with_index",
         "without_index",
+        "locate",
+        "locate_range",
         "share",
     },
     "LazyFrame": {

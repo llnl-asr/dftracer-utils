@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/buffers.h>
+#include <dftracer/utils/dataframe/internal/label_cache.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -50,6 +51,10 @@ struct dftu_nested {
 /// series. Shared by every handle that copies the series; never modified.
 struct dftu_labels {
     dftracer::utils::dstd::Vector<dftu_nested> levels;
+    /// The hash of the labels for loc, built on the first lookup (see
+    /// dftracer::utils::dataframe::LabelCache); shared by every copy of the
+    /// series, as the labels are.
+    mutable dftracer::utils::dataframe::LabelCache cache;
 };
 
 /// Takes ownership of @p p, freed with dftu_series_free.

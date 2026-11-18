@@ -1437,8 +1437,8 @@ dstd::Result<void> PluginFold::step(const FoldBatch& batch) {
         // An empty projection is build_row_frame's "every column", which for
         // a batch with many arg keys is a Series per key.
         df = trace::views::detail::build_row_frame(
-            col_scratch_, *intern_, projection, 1.0,
-            col_scratch_.front().by_path);
+            dstd::Span<const trace::views::detail::FoldEvent>(col_scratch_),
+            *intern_, projection, 1.0, col_scratch_.front().by_path);
     }
     if (df.num_rows() == 0) return {};
 

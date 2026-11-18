@@ -44,7 +44,7 @@ dstd::String padded(dstd::String s) {
     return s;
 }
 
-dstd::Vector<FoldEvent> fold_events_of(const dstd::Vector<dstd::String>& lines,
+dstd::Vector<FoldEvent> fold_events_of(dstd::Span<const dstd::String> lines,
                                        dstd::StringIntern& intern) {
     dstd::Vector<FoldEvent> out;
     simdjson::dom::parser parser;
@@ -71,8 +71,7 @@ dstd::Vector<dstd::String> trace_lines() {
     };
 }
 
-dstd::String write_trace(TestEnvironment& env,
-                         const dstd::Vector<dstd::String>& lines,
+dstd::String write_trace(TestEnvironment& env, dstd::Vector<dstd::String> lines,
                          bool build = true) {
     const dstd::String pfw = env.dir() + "/rows.pfw";
     {

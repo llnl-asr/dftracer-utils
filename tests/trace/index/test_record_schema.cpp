@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
@@ -31,7 +32,7 @@ const char* OPS[] = {"read", "write", "open", "close"};
 
 // Generic NDJSON over small gzip members: `op` is constant for runs of 400
 // records, so chunks hold disjoint ops; `io.off` grows with the record.
-dstd::String write_ndjson(const dstd::String& dir, int records) {
+dstd::String write_ndjson(dstd::CStringView dir, int records) {
     dstd::String out;
     for (int i = 0; i < records; ++i)
         dstd::fmt_append<
@@ -39,7 +40,7 @@ dstd::String write_ndjson(const dstd::String& dir, int records) {
             "\"hosts\":[\"h1\",\"h2\"],\"ok\":{}}\n">(
             out, i % 3, i % 17, OPS[(i / 400) % 4], i,
             (i % 2 ? "true" : "false"));
-    const auto plain = dir + "/generic.ndjson";
+    const auto plain = dstd::String(dir) + "/generic.ndjson";
     {
         dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
@@ -50,8 +51,8 @@ dstd::String write_ndjson(const dstd::String& dir, int records) {
     return gz;
 }
 
-std::size_t count_rows(const dstd::String& trace, const dstd::String& index_dir,
-                       const dstd::String& query, bool skip_pruning) {
+std::size_t count_rows(dstd::CStringView trace, dstd::CStringView index_dir,
+                       dstd::StringView query, bool skip_pruning) {
     auto run = [&]() -> coro::CoroTask<std::size_t> {
         trace::reader::TraceReader reader(
             {.file_path = dstd::String(trace),
@@ -71,7 +72,7 @@ std::size_t count_rows(const dstd::String& trace, const dstd::String& index_dir,
     return dftu_utils_test::ok(run().get());
 }
 
-trace::index::IndexerOptions options(const dstd::String& dir,
+trace::index::IndexerOptions options(dstd::CStringView dir,
                                      dstd::String schema = "") {
     trace::index::IndexerOptions o;
     o.index_dir = dir;
@@ -160,7 +161,7 @@ TEST_SUITE("Schemas") {
             CHECK(cat.at("ok").type == trace::index::store::PathType::Bool);
             const auto blooms = dftu_utils_test::ok(trace::index::paths(
                 snapshot, *file, trace::index::store::IndexExtension::Bloom));
-            const auto has = [&](const char* name) {
+            const auto has = [&](dstd::StringView name) {
                 return std::any_of(
                     blooms.begin(), blooms.end(), [&](const auto& b) {
                         return dstd::StringView(b.data(), b.size()) == name;

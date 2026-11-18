@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -16,7 +17,7 @@
 namespace dftracer::utils::trace::index::extensions::kinds {
 
 namespace {
-bool parse(const dstd::String& text, std::uint64_t& out) {
+bool parse(dstd::StringView text, std::uint64_t& out) {
     const auto* end = text.data() + text.size();
     auto [ptr, ec] = dstd::from_chars(text, out);
     return ec == std::errc() && ptr == end;
@@ -103,7 +104,7 @@ chunk_value_ranges(const trace::index::Snapshot& snapshot,
     if (!trace::index::extension_current(
             snapshot, file, trace::index::store::IndexExtension::Zonemap))
         return out;
-    auto number = [](const dstd::String& text, double& v) {
+    auto number = [](dstd::CStringView text, double& v) {
         char* end = nullptr;
         v = std::strtod(text.c_str(), &end);
         return !text.empty() && end == text.c_str() + text.size();

@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/result_join.h>
@@ -436,8 +437,8 @@ TEST_SUITE("View") {
         auto run_both_bucket =
             [&](const dstd::Function<views::detail::scan::ScanPlan(
                     views::detail::scan::ScanPlan)>& bucket_of,
-                const dstd::Vector<GroupKey>& extra_gks,
-                const dstd::Vector<dstd::String>& extra_key_cols,
+                dstd::Vector<GroupKey> extra_gks,
+                dstd::Vector<dstd::String> extra_key_cols,
                 std::uint64_t mem_budget) {
                 auto build = [&] {
                     views::detail::scan::ScanPlan v =
@@ -1020,7 +1021,7 @@ TEST_SUITE("View") {
         using Groups = dstd::Map<Key, std::int64_t>;
         const dstd::NullOpt null = dstd::nullopt;
         auto groups = [](const dataframe::DataFrame& f,
-                         const dstd::Vector<dstd::String>& keys) {
+                         dstd::Vector<dstd::String> keys) {
             Groups g;
             for (std::int64_t r = 0; r < f.num_rows(); ++r) {
                 Key k;
@@ -1105,8 +1106,8 @@ TEST_SUITE("View") {
             for (const Probe& p : probes) {
                 const auto part = dftu_utils_test::ok(
                     view(p.gb).aggregate_partial().collect().get());
-                CHECK(groups(dftu_utils_test::ok(
-                                 view(p.gb).merge_partials({part})),
+                CHECK(groups(dftu_utils_test::ok(view(p.gb).merge_partials(
+                                 partial_views(part))),
                              p.cols) == p.want);
             }
         }

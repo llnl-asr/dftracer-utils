@@ -150,8 +150,8 @@ coro::CoroTask<dstd::Result<dstd::Vector<ScanUnit>>> gather_units(
 coro::CoroTask<dstd::Result<ExportStats>> for_each_scanned_batch(
     const ViewPlan& plan, const ViewDefinition& vdef, std::size_t slot_count,
     std::uint64_t limit,
-    const dstd::Function<void(std::size_t,
-                              const dstd::Vector<dstd::StringView>&)>& on_batch,
+    const dstd::Function<void(std::size_t, dstd::Span<const dstd::StringView>)>&
+        on_batch,
     dstd::Span<Fold* const> folds = {},
     dftracer::utils::dstd::StringIntern* intern = nullptr);
 

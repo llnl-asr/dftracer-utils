@@ -2,10 +2,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -39,7 +41,7 @@ namespace {
 // `events` events over small gzip members. Each event carries a few of
 // `paths` distinct args keys (numbers and strings), names from a small set,
 // and a time jump halfway, so chunks differ in every kind.
-dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
+dstd::String write_trace(dstd::CStringView dir, dstd::StringView name,
                          int events, int paths,
                          std::size_t member_bytes = 16 * 1024) {
     dstd::String out;
@@ -64,7 +66,7 @@ dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
         out += "}}\n";
     }
     out += "]\n";
-    const auto plain = dir + "/" + name + ".pfw";
+    const auto plain = dstd::String(dir) + "/" + dstd::String(name) + ".pfw";
     {
         dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
@@ -76,7 +78,7 @@ dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
 }
 
 trace::index::build::IndexBuildBatchResult run_build(
-    const dstd::Vector<dstd::String>& files, const dstd::String& index_dir,
+    dstd::Vector<dstd::String> files, dstd::CStringView index_dir,
     std::uint64_t memory_budget, std::size_t path_budget = 0,
     std::size_t parallelism = 4) {
     trace::index::build::IndexBuildBatchResult out;
@@ -101,11 +103,11 @@ trace::index::build::IndexBuildBatchResult run_build(
 
 // Every live record of every family, in order.
 dstd::Vector<dftu_utils_test::IndexRecord> contents(
-    const dstd::String& index_path) {
+    dstd::CStringView index_path) {
     return dftu_utils_test::dump_index(index_path);
 }
 
-dstd::String index_of(const dstd::String& trace, const dstd::String& dir) {
+dstd::String index_of(dstd::CStringView trace, dstd::CStringView dir) {
     return dstd::String(trace::internal::determine_index_path(trace, dir));
 }
 

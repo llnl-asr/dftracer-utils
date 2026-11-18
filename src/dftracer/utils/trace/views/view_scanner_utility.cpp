@@ -80,7 +80,9 @@ bool in_window(simdjson::dom::element root, const ViewDefinition& view) {
 
 // The length of the record on a line: without trailing blanks and the comma
 // a JSON-array trace ends records with; 0 for the array's "[" and "]" lines.
-std::size_t record_size(const char* line, std::size_t len) {
+std::size_t record_size(dstd::StringView text) {
+    const char* const line = text.data();
+    std::size_t len = text.size();
     while (len > 0 && (line[len - 1] == ' ' || line[len - 1] == '\t' ||
                        line[len - 1] == '\r'))
         --len;
@@ -220,16 +222,15 @@ struct LineScan {
     dftracer::utils::json::RecordParser& parser;
 };
 
-void emit_event(LineScan& ls, const char* line_start, std::size_t json_size) {
-    ls.batch.events.emplace_back(line_start, json_size);
+void emit_event(LineScan& ls, dstd::StringView line) {
+    ls.batch.events.emplace_back(line);
 }
 
 // Without a query or args, the decode's own walk reads ph, ts and dur, so the
 // phase and the window are checked on the decoded event. A ts of 0 or a missing
 // dur may be a value the decode does not keep, such as a fraction, so those
 // lines check the window on the text.
-void scan_decoded(LineScan& ls, json::Value& event, const char* line_start,
-                  std::size_t json_size) {
+void scan_decoded(LineScan& ls, json::Value& event, dstd::StringView line) {
     const ViewScannerInput& input = ls.input;
     const ViewDefinition& view = input.view;
     ViewScannerBatch& batch = ls.batch;
@@ -260,16 +261,16 @@ void scan_decoded(LineScan& ls, json::Value& event, const char* line_start,
         return;
     }
     batch.values_unconverted += ev.unconverted;
-    if (input.fold_keep_raw) emit_event(ls, line_start, json_size);
+    if (input.fold_keep_raw) emit_event(ls, line);
     batch.events_matched++;
 }
 
 // One line read on demand: the window, the query and the fold decode all
 // read the same parse, which a syntax error in a part they reach drops.
-void scan_line(LineScan& ls, const char* line_start, std::size_t json_size) {
+void scan_line(LineScan& ls, dstd::StringView line) {
     const ViewScannerInput& input = ls.input;
     ViewScannerBatch& batch = ls.batch;
-    auto parsed = ls.document.parse(dstd::StringView(line_start, json_size));
+    auto parsed = ls.document.parse(line);
     if (!parsed || parsed->type() != json::Value::Type::Object) {
         ++batch.lines_invalid;
         return;
@@ -278,7 +279,7 @@ void scan_line(LineScan& ls, const char* line_start, std::size_t json_size) {
     if (input.fold_intern && !input.fold_needs_args && !ls.use_query &&
         !input.view.by_path && input.view.time_path.empty() &&
         !input.fold_capture_schema) {
-        scan_decoded(ls, event, line_start, json_size);
+        scan_decoded(ls, event, line);
         return;
     }
     const RecordPhase phase =
@@ -311,23 +312,22 @@ void scan_line(LineScan& ls, const char* line_start, std::size_t json_size) {
             return;
         }
         batch.values_unconverted += ls.pool.back().unconverted;
-        if (input.fold_keep_raw) emit_event(ls, line_start, json_size);
+        if (input.fold_keep_raw) emit_event(ls, line);
     } else {
-        emit_event(ls, line_start, json_size);
+        emit_event(ls, line);
     }
     batch.events_matched++;
 }
 
 // One line read through the DOM, for a dftracer fold that captures schema. A
 // line the DOM parser refuses goes to scan_line.
-void scan_dom_line(LineScan& ls, const char* line_start,
-                   std::size_t json_size) {
+void scan_dom_line(LineScan& ls, dstd::StringView line) {
     const ViewScannerInput& input = ls.input;
     ViewScannerBatch& batch = ls.batch;
-    auto result = ls.parser.parse(line_start, json_size);
+    auto result = ls.parser.parse(line.data(), line.size());
     if (result.error()) {
         // A line the DOM parser refuses is read on demand.
-        scan_line(ls, line_start, json_size);
+        scan_line(ls, line);
         return;
     }
     if (!result.value_unsafe().is_object()) {
@@ -358,7 +358,7 @@ void scan_dom_line(LineScan& ls, const char* line_start,
     decode_into(ls.pool.append(), root, input,
                 !metadata && input.fold_capture_schema, ls.hints);
     batch.values_unconverted += ls.pool.back().unconverted;
-    if (input.fold_keep_raw) emit_event(ls, line_start, json_size);
+    if (input.fold_keep_raw) emit_event(ls, line);
     batch.events_matched++;
 }
 
@@ -371,12 +371,12 @@ void ScanCounts::add_to(ExportStats& st) const {
     st.values_unconverted += values_unconverted;
 }
 
-ViewScannerInput& ViewScannerInput::with_file_path(const dstd::String& path) {
+ViewScannerInput& ViewScannerInput::with_file_path(dstd::StringView path) {
     file_path = path;
     return *this;
 }
 
-ViewScannerInput& ViewScannerInput::with_index_path(const dstd::String& path) {
+ViewScannerInput& ViewScannerInput::with_index_path(dstd::StringView path) {
     index_path = path;
     return *this;
 }
@@ -426,8 +426,10 @@ struct EventProbe {
     double dur = 0;
 };
 
-static EventProbe probe_event(const char* data, std::size_t n,
+static EventProbe probe_event(dstd::StringView text,
                               const ViewDefinition& view) {
+    const char* const data = text.data();
+    const std::size_t n = text.size();
     thread_local simdjson::ondemand::parser parser;
     thread_local dstd::String padbuf;
     padbuf.assign(data, n);
@@ -565,9 +567,10 @@ ViewScannerUtility::operator()(const ViewScannerInput& input) {
             // are the file's last line, which has none.
             if (!newline) newline = data + bytes_read;
             std::size_t line_size = newline - line_start;
+            const dstd::StringView raw(line_start, line_size);
 
             if (whole_lines) {
-                const std::size_t record = record_size(line_start, line_size);
+                const std::size_t record = record_size(raw);
                 if (record > 0 && !trace::reader::internal::is_whole_record(
                                       whole_parser, whole_document,
                                       dstd::StringView(line_start, record))) {
@@ -586,14 +589,13 @@ ViewScannerUtility::operator()(const ViewScannerInput& input) {
                 const char* e = line_start + line_size;
                 while (s < e && (*s == ' ' || *s == '\t')) ++s;
                 if (s < e && *s == '{') {
-                    const EventProbe p =
-                        probe_event(line_start, line_size, input.view);
+                    const EventProbe p = probe_event(raw, input.view);
                     if (input.view.by_path ||
                         p.phase != RecordPhase::Metadata) {
                         batch.events_scanned++;
                         if (in_window(p.has_ts, p.ts, p.dur, input.view)) {
                             batch.events.emplace_back(
-                                line_start, record_size(line_start, line_size));
+                                raw.substr(0, record_size(raw)));
                             batch.events_matched++;
                         }
                     }
@@ -602,19 +604,18 @@ ViewScannerUtility::operator()(const ViewScannerInput& input) {
                 continue;
             }
 
-            if (line_size > 0 && gate &&
-                !gate->may_match(dstd::StringView(line_start, line_size))) {
+            if (line_size > 0 && gate && !gate->may_match(raw)) {
                 batch.events_scanned++;
                 pos = (newline - data) + 1;
                 continue;
             }
 
-            const std::size_t json_size = record_size(line_start, line_size);
+            const std::size_t json_size = record_size(raw);
             if (json_size > 0) {
                 if (dom_decode)
-                    scan_dom_line(scan, line_start, json_size);
+                    scan_dom_line(scan, raw.substr(0, json_size));
                 else
-                    scan_line(scan, line_start, json_size);
+                    scan_line(scan, raw.substr(0, json_size));
             }
 
             pos = (newline - data) + 1;

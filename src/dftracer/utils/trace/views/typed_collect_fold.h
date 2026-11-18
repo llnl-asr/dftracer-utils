@@ -132,7 +132,7 @@ class TypedCollectFold : public Fold {
             };
             // A record without a numeric dur has no duration (null row), as
             // a row-frame dur column reports it.
-            auto dur_cell_validity = [](const dstd::Vector<std::uint8_t>& has) {
+            auto dur_cell_validity = [](dstd::Span<const std::uint8_t> has) {
                 dstd::Vector<std::uint8_t> v((has.size() + 7) / 8, 0);
                 bool any_missing = false;
                 for (std::size_t r = 0; r < has.size(); ++r) {

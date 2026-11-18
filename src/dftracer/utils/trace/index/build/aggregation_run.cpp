@@ -58,7 +58,7 @@ dstd::Result<void> finish_aggregation(AggRun& run,
         batch.agg_outputs, *target);
 }
 
-dstd::Result<void> clear_aggregation(const dstd::String& index_path) {
+dstd::Result<void> clear_aggregation(dstd::StringView index_path) {
     DFTRACER_UTILS_LOG_INFO("Clearing the aggregation tier of {}", index_path);
     auto target = trace::index::Index::open(
         trace::index::normalize_index_root(index_path));
@@ -67,7 +67,7 @@ dstd::Result<void> clear_aggregation(const dstd::String& index_path) {
 }
 
 dstd::Result<void> clear_aggregation_files(
-    const dstd::String& index_path, const dstd::Vector<dstd::String>& files) {
+    dstd::StringView index_path, dstd::Span<const dstd::String> files) {
     DFTRACER_UTILS_LOG_INFO("Clearing the aggregation rows of {} files in {}",
                             files.size(), index_path);
     auto target = trace::index::Index::open(

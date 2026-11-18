@@ -103,21 +103,21 @@ Status Applier::stage(const duql::PipelineCallTree&) {
     return {};
 }
 
-void Applier::row_index(const dstd::String& name) {
+void Applier::row_index(dstd::StringView name) {
     v_ = v_.with_lazy(v_.lazy().with_row_index(std_str(name)));
     cols_.insert(cols_.begin(),
-                 {name, dataframe::scalar(dataframe::TypeId::Int64), false});
+                 {dstd::String(name),
+                  dataframe::scalar(dataframe::TypeId::Int64), false});
 }
 
-dstd::Optional<std::size_t> Applier::field_index(
-    const dstd::String& field) const {
+dstd::Optional<std::size_t> Applier::field_index(dstd::StringView field) const {
     if (auto i = index(field)) return i;
     return arg_index(field);
 }
 
-void Applier::window_op(const dstd::Vector<dstd::String>& part,
-                        const dstd::String& order,
-                        const dstd::Vector<WinSpec>& specs) {
+void Applier::window_op(dstd::Span<const dstd::String> part,
+                        dstd::CStringView order,
+                        dstd::Span<const WinSpec> specs) {
     if (specs.empty()) return;
     dstd::Vector<const char*> keys;
     for (const auto& k : part) keys.push_back(k.c_str());
@@ -163,9 +163,9 @@ void Applier::window_op(const dstd::Vector<dstd::String>& part,
 }
 
 Status Applier::partition_aggs(
-    const dstd::Vector<dstd::Pair<const duql::PipelineWinCall*, dstd::String>>&
+    dstd::Span<const dstd::Pair<const duql::PipelineWinCall*, dstd::String>>
         calls,
-    const dstd::String& pid) {
+    dstd::StringView pid) {
     dstd::Vector<dataframe::GroupAgg> specs;
     dstd::Vector<dstd::String> quantiles;
     dstd::Vector<dataframe::query::VectorColumn> next = cols_;
@@ -238,12 +238,12 @@ Status Applier::partition_aggs(
     return {};
 }
 
-dataframe::DataType Applier::type_of(const dstd::String& column) const {
+dataframe::DataType Applier::type_of(dstd::StringView column) const {
     return cols_[*index(column)].type;
 }
 
-dstd::Result<dataframe::DataType> Applier::sum_type(const dstd::String& in,
-                                                    const dstd::String& text) {
+dstd::Result<dataframe::DataType> Applier::sum_type(dstd::StringView in,
+                                                    dstd::StringView text) {
     const dataframe::TypeId t = type_of(in).id;
     if (t != dataframe::TypeId::Unknown && !is_number(t))
         return refuse<"'{}' in a window needs numbers">(text);
@@ -251,7 +251,7 @@ dstd::Result<dataframe::DataType> Applier::sum_type(const dstd::String& in,
                                            : dataframe::TypeId::Float64);
 }
 
-dataframe::Expr Applier::differs(const dstd::String& a, const dstd::String& b) {
+dataframe::Expr Applier::differs(dstd::StringView a, dstd::StringView b) {
     const dataframe::Expr na = dataframe::expr_is_null(col(a));
     const dataframe::Expr nb = dataframe::expr_is_null(col(b));
     return dataframe::expr_select(
@@ -309,10 +309,10 @@ dstd::Result<dstd::String> Applier::window_input(const duql::PipelineWinCall& c,
 }
 
 Status Applier::window_arg(WindowPasses& p, const duql::PipelineWinCall& c,
-                           std::size_t i, const dstd::String& in) {
+                           std::size_t i, dstd::StringView in) {
     WinSpec s{c.fn == duql::WinFn::Argmax ? DFTU_WINDOW_FRAME_ARG_MAX
                                           : DFTU_WINDOW_FRAME_ARG_MIN,
-              in, dstd::String(c.column), type_of(in)};
+              dstd::String(in), dstd::String(c.column), type_of(in)};
     auto by = source({"", c.by, c.text}, dstd::fmt<"__duql_by_{}">(i));
     if (!by) return by.error();
     s.by = std::move(*by);

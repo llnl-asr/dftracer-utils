@@ -3,10 +3,12 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -317,11 +319,11 @@ TEST_SUITE("View") {
         const dstd::String idx_b =
             dstd::String(determine_index_path(out_bgz, ""));
 
-        auto run = [](const dstd::String& f, const dstd::String& ix,
-                      const char* q) {
+        auto run = [](dstd::StringView f, dstd::StringView ix,
+                      dstd::StringView q) {
             StringSink s;
             View v = View::from_file(dstd::String(f), dstd::String(ix));
-            if (q != nullptr) v = v.duql(q);
+            if (!q.empty()) v = v.duql(q);
             dftu_utils_test::ok(v.sink_json(s).get());
             auto ls = s.lines();
             std::sort(ls.begin(), ls.end());
@@ -329,7 +331,7 @@ TEST_SUITE("View") {
         };
 
         // Full scan and pruned queries: fused (A) must equal lazy (B).
-        CHECK(run(out_agz, idx_a, nullptr) == run(out_bgz, idx_b, nullptr));
+        CHECK(run(out_agz, idx_a, {}) == run(out_bgz, idx_b, {}));
         CHECK(run(out_agz, idx_a, R"(cat == "POSIX")") ==
               run(out_bgz, idx_b, R"(cat == "POSIX")"));
         CHECK(run(out_agz, idx_a, R"(cat == "STDIO")") ==
@@ -339,7 +341,7 @@ TEST_SUITE("View") {
         CHECK(run(out_agz, idx_a, R"(name == "does_not_exist")").empty());
         CHECK(run(out_bgz, idx_b, R"(name == "does_not_exist")").empty());
         // Fused full scan returns every written event.
-        CHECK(run(out_agz, idx_a, nullptr).size() == st.events_matched);
+        CHECK(run(out_agz, idx_a, {}).size() == st.events_matched);
     }
 
     // Parts are folded and compressed on parallel workers, so the member
@@ -389,7 +391,7 @@ TEST_SUITE("View") {
                       matched_b = 0;
         dstd::Vector<dstd::String> cols_a, cols_b;
         for (std::size_t i = 0; i < parts_a.size(); ++i) {
-            auto q = [&](const dstd::String& f, const dstd::String& ix,
+            auto q = [&](dstd::StringView f, dstd::StringView ix,
                          std::uint64_t& sc, std::uint64_t& mt,
                          dstd::Vector<dstd::String>& cols) {
                 StringSink sink;
@@ -581,7 +583,7 @@ TEST_SUITE("View") {
         dstd::Vector<dstd::String> declared = v.lazy().schema();
         std::sort(collected.begin(), collected.end());
         std::sort(declared.begin(), declared.end());
-        auto joined = [](const dstd::Vector<dstd::String>& xs) {
+        auto joined = [](dstd::Span<const dstd::String> xs) {
             dstd::String out;
             for (const auto& x : xs) out += x + ",";
             return out;
@@ -881,16 +883,16 @@ TEST_SUITE("View") {
 
         // Distinct cat + pid per file so the grouped counts unambiguously
         // report which files (and how many events) the scan actually read.
-        auto write_trace = [](const dstd::String& gz, const dstd::String& cat,
+        auto write_trace = [](dstd::CStringView gz, dstd::StringView cat,
                               int pid, int n) {
-            dstd::String pfw = gz.substr(0, gz.size() - 3);  // drop ".gz"
+            dstd::String pfw(gz.view().substr(0, gz.size() - 3));  // drop ".gz"
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < n; ++i)
                 ofs << R"({"ph":"X","name":"read","cat":")" << cat
                     << R"(","pid":)" << pid << R"(,"tid":1,"ts":)" << (1000 + i)
                     << R"(,"dur":5,"args":{}})" << "\n";
             ofs.close();
-            dftu_utils_test::compress_file_to_gzip(pfw, gz);
+            dftu_utils_test::compress_file_to_gzip(pfw, dstd::String(gz));
             dstd::fs::remove(pfw).discard();
         };
         write_trace(dir + "/a.pfw.gz", "AAA", 1, 10);
@@ -1010,7 +1012,7 @@ TEST_SUITE("View scan string columns") {
     TEST_CASE("filter, group and sort read string values") {
         TestEnvironment env(10);
         const View v = dict_trace(env);
-        auto q = [&](const char* text) {
+        auto q = [&](dstd::StringView text) {
             return test_view_common::run(v.duql(text).collect());
         };
 

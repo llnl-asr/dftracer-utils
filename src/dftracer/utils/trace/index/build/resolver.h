@@ -111,7 +111,7 @@ struct ResolverResult {
 dstd::Vector<runtime::fs::FoundFile> scanned_entries(
     const ResolverResult& result);
 dstd::Vector<runtime::fs::FoundFile> scanned_entries(
-    const ResolverResult& result, const dstd::Vector<FileWorkItem>& items);
+    const ResolverResult& result, dstd::Span<const FileWorkItem> items);
 
 class Resolver {
    public:

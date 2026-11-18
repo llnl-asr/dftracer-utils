@@ -103,14 +103,14 @@ coro::CoroTask<dstd::Result<dataframe::DataFrame>> run_collect_rows(
 /// field or arg the distinct scan can key from the event. False for a computed
 /// or token column (io_cat, acc_pat, window, clip, list, agg-engine tokens).
 bool distinct_keyable(const ViewPlan& plan,
-                      const dstd::Vector<std::int64_t>& key_idx);
+                      dstd::Span<const std::int64_t> key_idx);
 
 /// Row-query collect with the distinct pushed into the scan: each worker keeps
 /// the first row of each key and the rows come out in first-occurrence order,
 /// matching the host unique(). Assumes is_row_query(plan) and
 /// distinct_keyable(plan, key_idx).
 coro::CoroTask<dstd::Result<dataframe::DataFrame>> run_collect_rows_distinct(
-    const ViewPlan& plan, const dstd::Vector<std::int64_t>& key_idx);
+    const ViewPlan& plan, dstd::Vector<std::int64_t> key_idx);
 
 /// Scan, buffer the lean containment tuples in a ContainmentFold, then build
 /// the call-tree / flamegraph frame. `partition` names the lane keys;
@@ -151,7 +151,7 @@ coro::CoroTask<dstd::Result<ExportStats>> run_materialize(
 // Distributed materialize: reduce rank-local partials (from aggregate_partial)
 // app-side and persist the rollup, without re-scanning.
 coro::CoroTask<dstd::Result<void>> run_materialize_partials(
-    const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials);
+    const ViewPlan& plan, dstd::Vector<dstd::StringView> partials);
 
 // Read the aggregation index's three record families (regular events,
 // aggregated records, counters) from shard range [shard_begin, shard_end).
@@ -179,10 +179,10 @@ coro::CoroTask<dstd::Result<dstd::String>> run_aggregate_partial(
 /// An Aggregation error for a partial that is empty or has a foreign wire tag,
 /// and the error of decoding it.
 dstd::Result<ExportStats> merge_counters_partials(
-    const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials,
+    const ViewPlan& plan, dstd::Span<const dstd::StringView> partials,
     ExportSink& sink);
 dstd::Result<dataframe::DataFrame> merge_partials_to_table(
-    const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials);
+    const ViewPlan& plan, dstd::Span<const dstd::StringView> partials);
 
 // Drive the plan's index-pruned parallel scan; invoke `on_batch(slot, events)`
 // per decoded batch on worker slots in [0, slot_count), stopping at `limit`
@@ -190,8 +190,8 @@ dstd::Result<dataframe::DataFrame> merge_partials_to_table(
 coro::CoroTask<dstd::Result<ExportStats>> run_scan_batches(
     const dstd::SharedPtr<const ViewPlan>& plan, std::size_t slot_count,
     std::uint64_t limit,
-    const dstd::Function<
-        void(std::size_t, const dstd::Vector<dstd::StringView>&)>& on_batch);
+    const dstd::Function<void(std::size_t, dstd::Span<const dstd::StringView>)>&
+        on_batch);
 
 // The fused-session engine behind ViewSession; internal to the executor.
 struct ViewSessionState;

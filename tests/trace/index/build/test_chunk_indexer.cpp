@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -16,8 +17,8 @@ using namespace dftracer::utils::trace::index::build;
 // Helper to create a test trace file (plain text), then compress to gzip.
 // Returns the .gz path and the uncompressed size.
 static dstd::Pair<dstd::String, std::size_t> create_test_trace_gz(
-    const dstd::String& dir, int event_count) {
-    dstd::String plain_path = dir + "/test_index.trace";
+    dstd::CStringView dir, int event_count) {
+    dstd::String plain_path = dstd::String(dir) + "/test_index.trace";
     {
         dftu_utils_test::FileOut ofs(plain_path);
 

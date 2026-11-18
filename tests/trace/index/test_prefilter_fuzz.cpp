@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
@@ -33,34 +34,36 @@ const dstd::Vector<dstd::String> OPS = {"rd", "wr", "seek"};
 
 // Optional args that are null, a bool, an empty or one-element array, or
 // absent.
-dstd::String extra_args(std::mt19937& rng, const char* c, const char* s) {
+dstd::String extra_args(std::mt19937& rng, dstd::StringView c,
+                        dstd::StringView s) {
     dstd::String out;
     switch (rng() % 4) {
         case 0:
-            out += dstd::String(s) + "\"retry\"" + c + "null";
+            out += dstd::String(s) + "\"retry\"" + dstd::String(c) + "null";
             break;
         case 1:
-            out +=
-                dstd::String(s) + "\"retry\"" + c + dstd::to_string(rng() % 3);
+            out += dstd::String(s) + "\"retry\"" + dstd::String(c) +
+                   dstd::to_string(rng() % 3);
             break;
         default:
             break;
     }
     switch (rng() % 4) {
         case 0:
-            out += dstd::String(s) + "\"tags\"" + c + "[]";
+            out += dstd::String(s) + "\"tags\"" + dstd::String(c) + "[]";
             break;
         case 1:
-            out += dstd::String(s) + "\"tags\"" + c + "[\"x\"]";
+            out += dstd::String(s) + "\"tags\"" + dstd::String(c) + "[\"x\"]";
             break;
         case 2:
-            out += dstd::String(s) + "\"tags\"" + c + "null";
+            out += dstd::String(s) + "\"tags\"" + dstd::String(c) + "null";
             break;
         default:
             break;
     }
     if (rng() % 2)
-        out += dstd::String(s) + "\"ok\"" + c + (rng() % 2 ? "true" : "false");
+        out += dstd::String(s) + "\"ok\"" + dstd::String(c) +
+               (rng() % 2 ? "true" : "false");
     return out;
 }
 
@@ -189,7 +192,7 @@ struct ViewCounts {
     std::uint64_t plain = 0;
 };
 
-ViewCounts view_counts(const dstd::String& gz, const duql::Query& q) {
+ViewCounts view_counts(dstd::CStringView gz, const duql::Query& q) {
     trace::views::detail::ViewPlan vp;
     vp.files.push_back(
         {dstd::String(gz),
@@ -223,7 +226,7 @@ ViewCounts view_counts(const dstd::String& gz, const duql::Query& q) {
     return dftu_utils_test::ok(run().get());
 }
 
-std::size_t reader_count(dstd::StringView gz, const dstd::String& text) {
+std::size_t reader_count(dstd::CStringView gz, dstd::StringView text) {
     auto run = [&]() -> dftracer::utils::coro::CoroTask<std::size_t> {
         trace::reader::TraceReader r({.file_path = dstd::String(gz)});
         trace::reader::ReadConfig cfg;

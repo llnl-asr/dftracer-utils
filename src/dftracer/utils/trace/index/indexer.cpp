@@ -162,8 +162,8 @@ dstd::Unexpected<dstd::Error> failed(dstd::StringView what,
 
 /// Clears plugin extension `name` of every file in `traces`.
 coro::CoroTask<dstd::Result<void>> drop_plugin_extension(
-    const dstd::String& index_path, const dstd::String& name,
-    const dstd::Vector<const dstd::String*>& traces) {
+    dstd::String index_path, dstd::String name,
+    dstd::Vector<const dstd::String*> traces) {
     auto opened = Index::open(normalize_index_root(index_path));
     if (!opened)
         co_return failed(dstd::fmt<"drop extension {}">(name), opened.error());
@@ -182,7 +182,7 @@ coro::CoroTask<dstd::Result<void>> drop_plugin_extension(
     co_return dstd::Result<void>{};
 }
 
-dstd::Result<store::IndexExtension> tier_extension(const dstd::String& name) {
+dstd::Result<store::IndexExtension> tier_extension(dstd::StringView name) {
     if (extensions::find_extension(name)) return store::IndexExtension::Plugin;
     auto ext = store::parse_extension(name);
     if (!ext || !(store::PRUNING_EXTENSIONS.has(*ext) ||
@@ -196,7 +196,7 @@ dstd::Result<store::IndexExtension> tier_extension(const dstd::String& name) {
 }
 
 template <class T, class Fn>
-dstd::Result<T> block_on(Runtime& rt, const char* name, Fn fn) {
+dstd::Result<T> block_on(Runtime& rt, dstd::StringView name, Fn fn) {
     return rt.block_on(coro::named(
         name, coro::with_scope([&](coro::Scope& scope) { return fn(scope); })));
 }
@@ -633,7 +633,7 @@ void append_string(dstd::String& out, dstd::StringView s) {
     out.push_back('"');
 }
 
-void append_chunks(dstd::String& out, const dstd::Vector<std::uint64_t>& v) {
+void append_chunks(dstd::String& out, dstd::Span<const std::uint64_t> v) {
     out.push_back('[');
     for (std::size_t i = 0; i < v.size(); ++i) {
         if (i) out.push_back(',');
@@ -646,7 +646,7 @@ const char* json_bool(bool b) { return b ? "true" : "false"; }
 
 }  // namespace
 
-dstd::String to_json(const dstd::Vector<FileManifest>& manifest) {
+dstd::String to_json(dstd::Span<const FileManifest> manifest) {
     dstd::String out = "[";
     for (std::size_t i = 0; i < manifest.size(); ++i) {
         const auto& m = manifest[i];
@@ -676,7 +676,7 @@ dstd::String to_json(const dstd::Vector<FileManifest>& manifest) {
     return dstd::String(out);
 }
 
-dstd::String to_json(const dstd::Vector<FileExplain>& explain) {
+dstd::String to_json(dstd::Span<const FileExplain> explain) {
     dstd::String out = "[";
     for (std::size_t i = 0; i < explain.size(); ++i) {
         const auto& f = explain[i];

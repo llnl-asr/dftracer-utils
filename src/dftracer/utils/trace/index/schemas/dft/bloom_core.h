@@ -152,7 +152,7 @@ class BloomCore {
     /// source-specific.
     static void init_chunk_state(ChunkState& chunk,
                                  const ChunkIndexerConfig& config,
-                                 const dstd::Vector<dstd::String>& extra_dims);
+                                 dstd::Span<const dstd::String> extra_dims);
     static void observe_data(ChunkState& chunk, EventCache& cache,
                              std::uint32_t name_id, std::uint32_t cat_id,
                              dstd::StringView name, dstd::StringView cat,
@@ -262,7 +262,7 @@ class BloomCore {
     static void write_chunk(trace::index::FileBuild& build,
                             std::uint64_t checkpoint_idx,
                             const ChunkState& chunk,
-                            const dstd::Vector<dstd::String>& extra_dims,
+                            dstd::Span<const dstd::String> extra_dims,
                             const ChunkIndexerConfig& config,
                             FileAccumulator& acc);
 
@@ -279,7 +279,7 @@ class BloomCore {
     static ChunkStatistics finish_file(
         trace::index::FileBuild& build, FileAccumulator& acc,
         const ChunkIndexerConfig& config,
-        const dstd::Vector<dstd::String>& extra_dims, const Catalog& catalog);
+        dstd::Span<const dstd::String> extra_dims, const Catalog& catalog);
 };
 
 }  // namespace dftracer::utils::trace::index::schemas::dft

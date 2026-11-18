@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/internal/frame_native.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/span.h>
@@ -82,7 +83,7 @@ dstd::String create_bloom_trace(TestEnvironment& env, int n,
 
 // A FileBuild for the indexed file `logical_path` of the index at `index_path`.
 dftracer::utils::trace::index::FileBuild rebuild_file(
-    const dstd::String& index_path, dstd::StringView logical_path) {
+    dstd::CStringView index_path, dstd::StringView logical_path) {
     auto index = dftracer::utils::trace::index::Index::open(
         dftracer::utils::trace::index::normalize_index_root(index_path));
     REQUIRE(index);
@@ -140,7 +141,7 @@ dstd::String stored_path(
 // Members copy, and starts the build the fold writes into. The build must
 // exist before the fold spills: its commit publishes the record the tier
 // hangs off.
-dftracer::utils::trace::index::FileBuild start_build(const dstd::String& root) {
+dftracer::utils::trace::index::FileBuild start_build(dstd::CStringView root) {
     auto index = dftracer::utils::trace::index::Index::open(
         dftracer::utils::trace::index::normalize_index_root(root));
     REQUIRE(index);
@@ -151,7 +152,7 @@ dftracer::utils::trace::index::FileBuild start_build(const dstd::String& root) {
     return std::move(*build);
 }
 
-dstd::Vector<FoldEvent> events_of(const dstd::Vector<dstd::String>& lines,
+dstd::Vector<FoldEvent> events_of(dstd::Span<const dstd::String> lines,
                                   dstd::StringIntern& intern) {
     dstd::Vector<FoldEvent> out;
     out.reserve(lines.size());
@@ -240,9 +241,9 @@ TEST_SUITE("BloomFold") {
             dftu_utils_test::ok(fold.write(build));
             REQUIRE(build.commit().get());
         }
-        auto chunks = [](const dstd::String& path) {
-            const auto snapshot =
-                dftu_utils_test::index_snapshot(path + "/.dftindex");
+        auto chunks = [](dstd::CStringView path) {
+            const auto snapshot = dftu_utils_test::index_snapshot(
+                dstd::String(path) + "/.dftindex");
             const auto file = snapshot.file("f.pfw.gz");
             REQUIRE(file.has_value());
             return dftu_utils_test::index_take(
@@ -455,10 +456,10 @@ TEST_SUITE("BloomFold") {
                             dstd::String(dstd::StringView(index_path)));
         // Split mid-way (lands inside the "read" line) to force reassembly.
         std::size_t half = text.size() / 2;
-        dftu_utils_test::ok(drv.on_chunk(text.data(), half, /*cp=*/0).get());
         dftu_utils_test::ok(
-            drv.on_chunk(text.data() + half, text.size() - half, /*cp=*/0)
-                .get());
+            drv.on_chunk(dstd::StringView(text.data(), half), /*cp=*/0).get());
+        dftu_utils_test::ok(
+            drv.on_chunk(dstd::StringView(text).substr(half), /*cp=*/0).get());
         drv.seal();
 
         {
@@ -516,7 +517,7 @@ TEST_SUITE("BloomFold") {
 
         View v = View::from_file(dstd::String(gz), dstd::String(index_path));
         auto cols = dftu_utils_test::ok(v.columns());
-        auto has = [&](const dstd::String& c) {
+        auto has = [&](dstd::StringView c) {
             return std::find(cols.begin(), cols.end(), dstd::String(c)) !=
                    cols.end();
         };
@@ -578,8 +579,9 @@ TEST_SUITE("BloomCore") {
     TEST_CASE("an extra dimension keeps min and max in its own type") {
         trace::index::schemas::dft::BloomCore::ChunkIndexerConfig config;
         trace::index::schemas::dft::BloomCore::ChunkState c;
-        trace::index::schemas::dft::BloomCore::init_chunk_state(
-            c, config, {"size", "mode", "mix"});
+        const dstd::String dims[] = {"size", "mode", "mix"};
+        trace::index::schemas::dft::BloomCore::init_chunk_state(c, config,
+                                                                dims);
         trace::index::schemas::dft::BloomCore::observe_extra(c, 0,
                                                              std::int64_t{9});
         trace::index::schemas::dft::BloomCore::observe_extra(c, 0,
@@ -615,9 +617,10 @@ TEST_SUITE("BloomCore") {
     TEST_CASE("merging an extra dimension joins its types") {
         trace::index::schemas::dft::BloomCore::ChunkIndexerConfig config;
         trace::index::schemas::dft::BloomCore::ChunkState a, b, c;
+        const dstd::String dims[] = {"n"};
         for (auto* s : {&a, &b, &c})
             trace::index::schemas::dft::BloomCore::init_chunk_state(*s, config,
-                                                                    {"n"});
+                                                                    dims);
         trace::index::schemas::dft::BloomCore::observe_extra(a, 0,
                                                              std::int64_t{9});
         trace::index::schemas::dft::BloomCore::observe_extra(b, 0,

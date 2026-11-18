@@ -2,8 +2,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -32,17 +34,19 @@ namespace {
 
 constexpr int MEMBER_EVENTS = 400;
 
-dstd::String events(int first, int n, const char* cat, const char* name) {
+dstd::String events(int first, int n, dstd::StringView cat,
+                    dstd::StringView name) {
     dstd::String text;
     for (int i = first; i < first + n; ++i) {
-        text += R"({"id":)" + dstd::to_string(i) + R"(,"name":")" + name +
-                R"(","cat":")" + cat + R"(","pid":1,"tid":1,"ts":)" +
-                dstd::to_string(1000 + i) + R"(,"dur":5,"ph":"X"})" + "\n";
+        text += R"({"id":)" + dstd::to_string(i) + R"(,"name":")" +
+                dstd::String(name) + R"(","cat":")" + dstd::String(cat) +
+                R"(","pid":1,"tid":1,"ts":)" + dstd::to_string(1000 + i) +
+                R"(,"dur":5,"ph":"X"})" + "\n";
     }
     return text;
 }
 
-dstd::String read_bytes(const dstd::String& path) {
+dstd::String read_bytes(dstd::CStringView path) {
     auto file = dstd::File::open(dstd::PathView(path), {});
     REQUIRE(file.has_value());
     const std::uint64_t size = file->size().value();
@@ -53,8 +57,8 @@ dstd::String read_bytes(const dstd::String& path) {
     return bytes;
 }
 
-void write_at(const dstd::String& path, std::uint64_t offset,
-              const dstd::String& bytes) {
+void write_at(dstd::CStringView path, std::uint64_t offset,
+              dstd::StringView bytes) {
     dstd::OpenOptions options;
     options.access = dstd::Access::Write;
     options.creation = dstd::Creation::IfNeeded;
@@ -65,14 +69,14 @@ void write_at(const dstd::String& path, std::uint64_t offset,
             .has_value());
 }
 
-void append_bytes(const dstd::String& path, const dstd::String& bytes) {
+void append_bytes(dstd::CStringView path, dstd::StringView bytes) {
     const auto size = dstd::fs::file_size(dstd::PathView(path));
     write_at(path, size ? *size : 0, bytes);
 }
 
-dstd::String member(const dstd::String& dir, const dstd::String& text) {
-    const dstd::String plain = dir + "/member.txt";
-    const dstd::String gz = dir + "/member.txt.gz";
+dstd::String member(dstd::CStringView dir, dstd::StringView text) {
+    const dstd::String plain = dstd::String(dir) + "/member.txt";
+    const dstd::String gz = dstd::String(dir) + "/member.txt.gz";
     {
         dftu_utils_test::FileOut ofs(plain);
         ofs << text;
@@ -84,7 +88,7 @@ dstd::String member(const dstd::String& dir, const dstd::String& text) {
     return bytes;
 }
 
-std::uint32_t crc32_of(const dstd::String& text) {
+std::uint32_t crc32_of(dstd::StringView text) {
     std::uint32_t crc = 0xFFFFFFFFu;
     for (const char c : text) {
         crc ^= static_cast<unsigned char>(c);
@@ -100,7 +104,7 @@ void put_u32_le(dstd::String& out, std::uint32_t value) {
 }
 
 // One stored deflate block, so the text shows in the file as it is.
-dstd::String stored_member(const dstd::String& text) {
+dstd::String stored_member(dstd::StringView text) {
     REQUIRE(text.size() < 0xFFFFu);
     dstd::String out("\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff", 10);
     const auto len = static_cast<std::uint16_t>(text.size());
@@ -116,8 +120,8 @@ dstd::String stored_member(const dstd::String& text) {
     return out;
 }
 
-void start_trace(const dstd::String& dir, const dstd::String& gz, int n,
-                 const char* cat, const char* name) {
+void start_trace(dstd::CStringView dir, dstd::CStringView gz, int n,
+                 dstd::StringView cat, dstd::StringView name) {
     append_bytes(gz,
                  member(dir, dstd::String("[\n") + events(0, n, cat, name)));
 }
@@ -155,16 +159,16 @@ coro::CoroTask<trace::index::build::ResolverResult> resolve_file(
     co_return co_await resolve_entries(std::move(in));
 }
 
-View dir_view(const dstd::String& dir) {
+View dir_view(dstd::CStringView dir) {
     return run(View::from_directory(dstd::String(dir), dstd::String("")));
 }
 
-std::size_t rows(const dstd::String& dir, const dstd::String& q) {
+std::size_t rows(dstd::CStringView dir, dstd::StringView q) {
     return dftu_utils_test::ok(dir_view(dir).duql(q).collect().get())
         .num_rows();
 }
 
-std::int64_t count_of(const dstd::String& dir, const dstd::String& cat) {
+std::int64_t count_of(dstd::CStringView dir, dstd::StringView cat) {
     const auto df = dftu_utils_test::ok(dir_view(dir)
                                             .group_by({GroupKey::cat()})
                                             .agg({{AggOp::Count, "", "n"}})
@@ -195,7 +199,7 @@ struct LineSink : ExportSink {
 };
 
 // Every event of the view, in a fixed order.
-dstd::Vector<dstd::String> all_lines(const dstd::String& dir) {
+dstd::Vector<dstd::String> all_lines(dstd::CStringView dir) {
     LineSink sink;
     (void)dir_view(dir).sink_json(sink).get();
     dstd::Vector<dstd::String> lines;
@@ -215,7 +219,7 @@ dstd::Vector<dstd::String> all_lines(const dstd::String& dir) {
 struct Rebuilt {
     TestEnvironment env{10};
     dstd::String dir;
-    explicit Rebuilt(const dstd::String& grown) {
+    explicit Rebuilt(dstd::CStringView grown) {
         REQUIRE(env.is_valid());
         dir = env.dir();
         const dstd::String gz = dir + "/t.pfw.gz";
@@ -224,8 +228,8 @@ struct Rebuilt {
     }
 };
 
-bool grows_in_place(const dstd::String& gz) {
-    const auto result = run(resolve_file(gz));
+bool grows_in_place(dstd::CStringView gz) {
+    const auto result = run(resolve_file(dstd::String(gz)));
     return !result.stale_detected && result.needs_checkpoint.size() == 1;
 }
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
@@ -69,7 +70,7 @@ dstd::Map<std::int64_t, std::int64_t> bucket_counts(const View& v) {
     return out;
 }
 
-void put(const dstd::String& path, const dstd::String& bytes) {
+void put(dstd::CStringView path, dstd::StringView bytes) {
     REQUIRE(dstd::fs::write_file(path, bytes).has_value());
 }
 

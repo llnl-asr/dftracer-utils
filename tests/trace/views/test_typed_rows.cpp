@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -43,7 +44,7 @@ struct Event {
 
 // Record i: op read on even i, lat i, io.off 10*i on multiples of 3, tags on
 // multiples of 5, and hosts on multiples of 7.
-dstd::String write_access(TestEnvironment& env, const dstd::String& extra) {
+dstd::String write_access(TestEnvironment& env, dstd::StringView extra) {
     const dstd::String plain = env.dir() + "/access.ndjson";
     {
         dftu_utils_test::FileOut out(plain);
@@ -76,7 +77,7 @@ struct Wide {
     trace::index::Field<dstd::Optional<trace::index::Json>, "j"> j;
 };
 
-View view_of(const dstd::String& gz) {
+View view_of(dstd::CStringView gz) {
     return View::from_file(
         dstd::String(gz),
         dstd::String(dstd::String(determine_index_path(gz, ""))));

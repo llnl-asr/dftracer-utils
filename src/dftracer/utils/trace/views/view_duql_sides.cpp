@@ -45,7 +45,7 @@ struct LookupCaps {
         return n_rows > rows || n_bytes > bytes;
     }
 
-    Status check_rows(const dstd::String& name, std::uint64_t n) const {
+    Status check_rows(dstd::StringView name, std::uint64_t n) const {
         if (n > rows)
             return refuse<
                 "'{}' gives {} rows or more, over DUQL_LOOKUP_MAX_ROWS ({}); "
@@ -54,7 +54,7 @@ struct LookupCaps {
         return {};
     }
 
-    Status check_bytes(const dstd::String& name, std::uint64_t n) const {
+    Status check_bytes(dstd::StringView name, std::uint64_t n) const {
         if (n > bytes)
             return refuse<
                 "'{}' holds {} bytes, over DUQL_LOOKUP_MAX_BYTES ({}); a "
@@ -78,7 +78,7 @@ dstd::Optional<dataframe::DataFrame> cached_rows(const CacheKey& key) {
 }
 
 dstd::Result<dstd::String> native_bytes(
-    const dstd::Vector<dataframe::DataFrame>& parts) {
+    dstd::Span<const dataframe::DataFrame> parts) {
     if (parts.size() == 1) return dataframe::frame_to_native(parts.front());
     dstd::Vector<const dataframe::DataFrame*> ptrs;
     for (const auto& p : parts) ptrs.push_back(&p);
@@ -89,7 +89,7 @@ dstd::Result<dstd::String> native_bytes(
 
 // Stores a side's rows in the lookup cache; a store that fails keeps none.
 void persist(const CacheKey& key,
-             const dstd::Vector<dataframe::DataFrame>& parts) {
+             dstd::Span<const dataframe::DataFrame> parts) {
     if (parts.empty()) return;
     const auto db = trace::index::cache::open_lookup_db(
         key.path, trace::index::cache::CacheStore::Mode::ReadWrite);

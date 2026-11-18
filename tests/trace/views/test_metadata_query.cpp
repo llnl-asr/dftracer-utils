@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/fileio/file_helpers.h>
@@ -57,7 +58,7 @@ dstd::String create_metadata_trace(TestEnvironment& env, bool numeric_ph) {
 
 // Build the index once (a metadata-phase query is not bootstrap-eligible, so an
 // index must already exist).
-void prime_index(const dstd::String& gz, const dstd::String& idx) {
+void prime_index(dstd::CStringView gz, dstd::CStringView idx) {
     StringSink sink;
     dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
                             .sink_json(sink)
@@ -65,8 +66,7 @@ void prime_index(const dstd::String& gz, const dstd::String& idx) {
 }
 
 // Rows whose top-level name column equals `name`.
-std::int64_t rows_named(const dataframe::DataFrame& df,
-                        const dstd::String& name) {
+std::int64_t rows_named(const dataframe::DataFrame& df, dstd::StringView name) {
     if (!bhas(df, "name")) return 0;
     std::int64_t n = 0;
     for (std::int64_t i = 0; i < df.num_rows(); ++i)
@@ -318,7 +318,7 @@ TEST_SUITE("View - metadata under pruning") {
     TEST_CASE("the trace reader keeps metadata lines its query matches") {
         TestEnvironment env(200);
         const dstd::String gz = create_threaded_trace(env);
-        auto count_with = [&](const dstd::String& text, bool skip) {
+        auto count_with = [&](dstd::StringView text, bool skip) {
             auto run = [&]() -> coro::CoroTask<std::size_t> {
                 dftracer::utils::trace::reader::TraceReader reader(
                     {.file_path = dstd::String(gz)});
@@ -336,10 +336,8 @@ TEST_SUITE("View - metadata under pruning") {
             };
             return run().get();
         };
-        auto count = [&](const dstd::String& t) {
-            return count_with(t, false);
-        };
-        auto count_all = [&](const dstd::String& t) {
+        auto count = [&](dstd::StringView t) { return count_with(t, false); };
+        auto count_all = [&](dstd::StringView t) {
             return count_with(t, true);
         };
         CHECK(dftu_utils_test::ok(count("")) == 2044);
@@ -353,7 +351,7 @@ TEST_SUITE("View - metadata under pruning") {
     TEST_CASE("metadata evidence prunes chunks no record can match") {
         TestEnvironment env(200);
         const dstd::String gz = create_threaded_trace(env);
-        auto chunks = [&](const dstd::String& text,
+        auto chunks = [&](dstd::StringView text,
                           trace::index::plan::MetadataUse use) {
             const auto q = dftu_utils_test::ok(
                 dftracer::utils::duql::Query::from_string(text));

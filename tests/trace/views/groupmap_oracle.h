@@ -333,30 +333,29 @@ struct HarvestMaps {
         rank;   // pid -> rank
     dftracer::utils::dstd::String resolve(
         dftracer::utils::trace::views::GroupKey::Kind kind,
-        const dftracer::utils::dstd::String& v) const {
+        dftracer::utils::dstd::StringView v) const {
+        using dftracer::utils::dstd::String;
+        using dftracer::utils::dstd::StringView;
         if (kind == dftracer::utils::trace::views::GroupKey::Kind::FilePath) {
             auto it = fpath.find(v);
-            return it != fpath.end() ? it->second : v;
+            return it != fpath.end() ? it->second : String(v);
         }
         if (kind == dftracer::utils::trace::views::GroupKey::Kind::FileName) {
             auto it = fpath.find(v);
-            const dftracer::utils::dstd::String& p =
-                it != fpath.end() ? it->second : v;
+            const StringView p = it != fpath.end() ? StringView(it->second) : v;
             const std::size_t slash = p.find_last_of('/');
-            return slash == dftracer::utils::dstd::String::npos
-                       ? p
-                       : p.substr(slash + 1);
+            return String(slash == StringView::npos ? p : p.substr(slash + 1));
         }
         if (kind == dftracer::utils::trace::views::GroupKey::Kind::HostName) {
             auto it = host.find(v);
-            return it != host.end() ? it->second : v;
+            return it != host.end() ? it->second : String(v);
         }
         if (kind == dftracer::utils::trace::views::GroupKey::Kind::Rank) {
             auto it = rank.find(
                 dftracer::utils::dstd::from_chars<std::uint64_t>(v).value());
-            return it != rank.end() ? it->second : v;
+            return it != rank.end() ? it->second : String(v);
         }
-        return v;
+        return String(v);
     }
 };
 
@@ -743,38 +742,36 @@ inline dftracer::utils::dataframe::DataFrame to_batch(
                 const dftracer::utils::dstd::StringView>(views),
             vbits.data()));
     }
-    auto build_value_column =
-        [&](const dftracer::utils::dstd::Vector<
-            dftracer::utils::dataframe::FieldNum>& cells) {
-            dftracer::utils::dataframe::FieldStatDomain dom =
-                cells.empty() ? dftracer::utils::dataframe::FieldStatDomain::F64
-                              : cells[0].domain;
-            for (const auto& c : cells)
-                if (c.domain != dom) {
-                    dom = dftracer::utils::dataframe::FieldStatDomain::F64;
-                    break;
-                }
-            if (dom == dftracer::utils::dataframe::FieldStatDomain::I64) {
-                dftracer::utils::dstd::Vector<std::int64_t> v;
-                v.reserve(cells.size());
-                for (const auto& c : cells) v.push_back(c.i);
-                return dftracer::utils::dataframe::Series::flat(
-                    dftracer::utils::dataframe::TypeId::Int64, v.data(), nrows);
+    auto build_value_column = [&](dftracer::utils::dstd::Span<
+                                  const dftracer::utils::dataframe::FieldNum>
+                                      cells) {
+        dftracer::utils::dataframe::FieldStatDomain dom =
+            cells.empty() ? dftracer::utils::dataframe::FieldStatDomain::F64
+                          : cells[0].domain;
+        for (const auto& c : cells)
+            if (c.domain != dom) {
+                dom = dftracer::utils::dataframe::FieldStatDomain::F64;
+                break;
             }
-            if (dom == dftracer::utils::dataframe::FieldStatDomain::U64) {
-                dftracer::utils::dstd::Vector<std::uint64_t> v;
-                v.reserve(cells.size());
-                for (const auto& c : cells) v.push_back(c.u);
-                return dftracer::utils::dataframe::Series::flat(
-                    dftracer::utils::dataframe::TypeId::Uint64, v.data(),
-                    nrows);
-            }
-            dftracer::utils::dstd::Vector<double> v;
+        if (dom == dftracer::utils::dataframe::FieldStatDomain::I64) {
+            dftracer::utils::dstd::Vector<std::int64_t> v;
             v.reserve(cells.size());
-            for (const auto& c : cells) v.push_back(c.as_double());
-            return dftracer::utils::dataframe::Series::flat_f64(v.data(),
-                                                                nrows);
-        };
+            for (const auto& c : cells) v.push_back(c.i);
+            return dftracer::utils::dataframe::Series::flat(
+                dftracer::utils::dataframe::TypeId::Int64, v.data(), nrows);
+        }
+        if (dom == dftracer::utils::dataframe::FieldStatDomain::U64) {
+            dftracer::utils::dstd::Vector<std::uint64_t> v;
+            v.reserve(cells.size());
+            for (const auto& c : cells) v.push_back(c.u);
+            return dftracer::utils::dataframe::Series::flat(
+                dftracer::utils::dataframe::TypeId::Uint64, v.data(), nrows);
+        }
+        dftracer::utils::dstd::Vector<double> v;
+        v.reserve(cells.size());
+        for (const auto& c : cells) v.push_back(c.as_double());
+        return dftracer::utils::dataframe::Series::flat_f64(v.data(), nrows);
+    };
     for (std::size_t i = 0; i < value_cols.size(); ++i) {
         batch.names.push_back(
             dftracer::utils::dstd::SharedString{value_cols[i]});

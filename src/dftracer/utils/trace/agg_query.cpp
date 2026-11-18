@@ -154,8 +154,8 @@ class Runner {
         AggQueryResult::SumRows sums;
         /// One list per file, so an append under the lock moves no moments.
         dstd::Vector<dstd::Vector<Moments>> moments;
-        void add(const dstd::Vector<Row*>& part);
-        void add_sums(const dstd::Vector<Row*>& part);
+        void add(dstd::Span<Row* const> part);
+        void add_sums(dstd::Span<Row* const> part);
         void drain(bool offset);
     };
     static std::size_t stripe_of(const AggKey& key) {
@@ -207,15 +207,15 @@ class Task {
     /// Fills `jobs` with the chunks to re-read, in chunk order, and `spans`
     /// with the chunk table of the file.
     coro::CoroTask<dstd::Result<void>> scan_file(
-        const dstd::String& path, dstd::Vector<ChunkJob>& jobs,
+        dstd::String path, dstd::Vector<ChunkJob>& jobs,
         dstd::Vector<trace::index::gzip::ChunkSpan>& spans);
 
     coro::CoroTask<dstd::Result<void>> trace_jobs(
-        const dstd::String& path, dstd::Vector<ChunkJob>& jobs,
+        dstd::String path, dstd::Vector<ChunkJob>& jobs,
         dstd::Vector<trace::index::gzip::ChunkSpan>& spans);
 
     coro::CoroTask<dstd::Result<void>> read_chunk(
-        const dstd::String& path, const trace::index::gzip::ChunkSpan& span,
+        dstd::String path, const trace::index::gzip::ChunkSpan& span,
         const ChunkJob& job, const trace::index::gzip::ChunkSpan* spans);
 
    private:
@@ -288,18 +288,18 @@ class Task {
                    AggKey key);
 
     coro::CoroTask<dstd::Result<void>> whole_file_chunks(
-        const dstd::String& path, const trace::index::FileRef* file,
+        dstd::String path, const trace::index::FileRef* file,
         std::size_t chunk_count, dstd::Vector<ChunkJob>& jobs);
 
     // The head of a line that a member boundary cut: the bytes before `chunk`
     // that follow the last newline.
     coro::CoroTask<dstd::Result<dstd::String>> tail_before(
-        const dstd::String& path, std::uint32_t chunk,
+        dstd::String path, std::uint32_t chunk,
         const trace::index::gzip::ChunkSpan* spans);
 
     coro::CoroTask<
         dstd::Result<dstd::SharedPtr<trace::reader::internal::Reader>>>
-    open_reader(const dstd::String& path);
+    open_reader(dstd::String path);
 
     void parse_lines_of(dstd::String& pending, std::uint32_t chunk,
                         const dstd::HashSet<AggGroup, AggGroupHash>* wanted);
@@ -338,7 +338,7 @@ void trim_row(trace::index::schemas::dft::agg::AggPartial& p,
     }
 }
 
-void Runner::Stripe::add(const dstd::Vector<Row*>& part) {
+void Runner::Stripe::add(dstd::Span<Row* const> part) {
     for (Row* row : part) {
         auto it = rows.find(row->first);
         if (it == rows.end())
@@ -348,7 +348,7 @@ void Runner::Stripe::add(const dstd::Vector<Row*>& part) {
     }
 }
 
-void Runner::Stripe::add_sums(const dstd::Vector<Row*>& part) {
+void Runner::Stripe::add_sums(dstd::Span<Row* const> part) {
     for (Row* row : part) {
         const trace::index::schemas::dft::agg::AggPartial& p = row->second;
         AggSums one{p.count, p.duration, p.size};
@@ -600,7 +600,7 @@ coro::CoroTask<void> Runner::chunk_task(
 }
 
 coro::CoroTask<dstd::Result<void>> Task::scan_file(
-    const dstd::String& path, dstd::Vector<ChunkJob>& jobs,
+    dstd::String path, dstd::Vector<ChunkJob>& jobs,
     dstd::Vector<trace::index::gzip::ChunkSpan>& spans) {
     if (!src_.snapshot)
         co_return common::make_error<
@@ -688,7 +688,8 @@ coro::CoroTask<dstd::Result<void>> Task::scan_file(
             ++stats.unanswered;
             co_return dstd::Result<void>{};
         }
-        co_return co_await whole_file_chunks(path, &*file, spans.size(), jobs);
+        co_return co_await whole_file_chunks(std::move(path), &*file,
+                                             spans.size(), jobs);
     }
 
     for (std::size_t i = 0; i < rereads_.size();) {
@@ -709,7 +710,7 @@ coro::CoroTask<dstd::Result<void>> Task::scan_file(
 }
 
 coro::CoroTask<dstd::Result<void>> Task::trace_jobs(
-    const dstd::String& path, dstd::Vector<ChunkJob>& jobs,
+    dstd::String path, dstd::Vector<ChunkJob>& jobs,
     dstd::Vector<trace::index::gzip::ChunkSpan>& spans) {
     ++stats.files;
     dstd::Optional<trace::index::FileRef> file;
@@ -730,11 +731,12 @@ coro::CoroTask<dstd::Result<void>> Task::trace_jobs(
         co_return dstd::Result<void>{};
     }
     const trace::index::FileRef* held = file ? &*file : nullptr;
-    co_return co_await whole_file_chunks(path, held, spans.size(), jobs);
+    co_return co_await whole_file_chunks(std::move(path), held, spans.size(),
+                                         jobs);
 }
 
 coro::CoroTask<dstd::Result<void>> Task::whole_file_chunks(
-    const dstd::String& path, const trace::index::FileRef* file,
+    dstd::String path, const trace::index::FileRef* file,
     std::size_t chunk_count, dstd::Vector<ChunkJob>& jobs) {
     dstd::Vector<std::uint64_t> chunks;
     bool pruned_to_list = false;
@@ -930,7 +932,7 @@ void Task::take_bins(const trace::index::schemas::dft::agg::AggPartial& p,
 }
 
 coro::CoroTask<dstd::Result<dstd::SharedPtr<trace::reader::internal::Reader>>>
-Task::open_reader(const dstd::String& path) {
+Task::open_reader(dstd::String path) {
     auto input =
         trace::reader::IndexedReadInput::from_file(path).with_index(src_.path);
     trace::reader::IndexedFileReaderUtility utility;
@@ -939,9 +941,9 @@ Task::open_reader(const dstd::String& path) {
 }
 
 coro::CoroTask<dstd::Result<dstd::String>> Task::tail_before(
-    const dstd::String& path, std::uint32_t chunk,
+    dstd::String path, std::uint32_t chunk,
     const trace::index::gzip::ChunkSpan* spans) {
-    auto opened = co_await open_reader(path);
+    auto opened = co_await open_reader(std::move(path));
     if (!opened) co_return opened.error();
     auto reader = std::move(*opened);
     dstd::String tail;
@@ -1019,7 +1021,7 @@ void Task::parse_lines_of(dstd::String& pending, std::uint32_t chunk,
 }
 
 coro::CoroTask<dstd::Result<void>> Task::read_chunk(
-    const dstd::String& path, const trace::index::gzip::ChunkSpan& span,
+    dstd::String path, const trace::index::gzip::ChunkSpan& span,
     const ChunkJob& job, const trace::index::gzip::ChunkSpan* spans) {
     ++stats.chunks_reread;
     dstd::HashSet<AggGroup, AggGroupHash> wanted;

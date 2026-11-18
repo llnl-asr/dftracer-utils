@@ -460,7 +460,8 @@ inline String describe(const FoldEvent& ev, const StringIntern& intern) {
         ev.has_dur ? dftracer::utils::dstd::fmt<"{}">(ev.dur) : String("-"),
         text(ev.cat_id), text(ev.name_id), text(ev.fhash_id),
         text(ev.hhash_id));
-    const auto list = [&](const char* label, const auto& args) {
+    const auto list = [&](dftracer::utils::dstd::StringView label,
+                          const auto& args) {
         dftracer::utils::dstd::fmt_append<" {}{">(out, label);
         bool first = true;
         for (const auto& [key, value] : args) {
@@ -590,7 +591,8 @@ index:
 
 /// One way to call a path reader.
 struct PathOptions {
-    explicit PathOptions(const char* label) : name(label) {}
+    explicit PathOptions(dftracer::utils::dstd::CStringView label)
+        : name(label.c_str()) {}
 
     const char* name;
     bool capture_schema = true;
@@ -786,13 +788,13 @@ inline bool read_dom_path(
 /// The DOM reader on `line`, as read_dom, with `names` captured.
 inline bool read_dom_captures(
     StringView line, FoldEvent& ev, StringIntern& intern, bool needs_args,
-    const dftracer::utils::dstd::Vector<String>& names) {
+    const dftracer::utils::dstd::Vector<String>* names) {
     static thread_local dftracer::utils::json::RecordParser parser;
     const simdjson::padded_string padded(line.data(), line.size());
     simdjson::dom::element root;
     if (parser.parse(padded).get(root)) return false;
     dftracer::utils::trace::views::detail::extract_fold_event_into(
-        ev, root, intern, needs_args, &names);
+        ev, root, intern, needs_args, names);
     return true;
 }
 

@@ -133,7 +133,7 @@ class StreamCounter {
         trace::strip_array_delimiters(work_.data(), total);
         work_.resize(total + simdjson::SIMDJSON_PADDING, '\0');
         trace::parse_lines(
-            parser_, work_.data(), total,
+            parser_, dstd::StringView(work_.data(), total),
             [&](simdjson::dom::element root, dstd::StringView) {
                 if (path_decoder_ ? root.is_object()
                                   : trace::views::detail::counts_as_event(root))

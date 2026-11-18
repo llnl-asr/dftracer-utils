@@ -709,7 +709,8 @@ static coro::CoroTask<dstd::Result<void>> process_file_detailed(
             files{{dstd::String(dstd::StringView(file_path)),
                    dstd::String(dstd::StringView(index_path))}};
         auto resolve_hashes = [&](const GroupResolver::Column& column) {
-            const GroupResolver r(files, {column});
+            const GroupResolver r(
+                files, dstd::Span<const GroupResolver::Column>(&column, 1));
             const auto* values = r.column(column.name);
             if (!values) return;
             auto add = [&](const auto& grouped) {

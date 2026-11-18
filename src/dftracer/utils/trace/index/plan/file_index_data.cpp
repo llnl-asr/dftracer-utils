@@ -53,7 +53,7 @@ bool FileIndexData::fixed_field(dstd::StringView path) const {
 }
 
 const dstd::Optional<dstd::String>& FileIndexData::evidence_name(
-    const dstd::String& path) {
+    dstd::StringView path) {
     auto it = evidence_names_.find(path);
     if (it != evidence_names_.end()) return it->second;
     dstd::Optional<dstd::String> name;
@@ -75,7 +75,7 @@ const dstd::Optional<dstd::String>& FileIndexData::evidence_name(
     return evidence_names_.emplace(path, std::move(name)).first->second;
 }
 
-const FileIndexData::Zones& FileIndexData::zones(const dstd::String& path) {
+const FileIndexData::Zones& FileIndexData::zones(dstd::StringView path) {
     auto it = zones_.find(path);
     if (it != zones_.end()) return it->second;
     auto& out = zones_[path];
@@ -94,7 +94,7 @@ const FileIndexData::Zones& FileIndexData::zones(const dstd::String& path) {
     return out;
 }
 
-const FileIndexData::Counts& FileIndexData::counts(const dstd::String& path) {
+const FileIndexData::Counts& FileIndexData::counts(dstd::StringView path) {
     auto it = counts_.find(path);
     if (it != counts_.end()) return it->second;
     auto& out = counts_[path];
@@ -117,7 +117,7 @@ const FileIndexData::Counts& FileIndexData::counts(const dstd::String& path) {
     return out;
 }
 
-const FileIndexData::Blooms& FileIndexData::blooms(const dstd::String& path) {
+const FileIndexData::Blooms& FileIndexData::blooms(dstd::StringView path) {
     auto it = blooms_.find(path);
     if (it != blooms_.end()) return it->second;
     auto& out = blooms_[path];
@@ -138,7 +138,7 @@ const FileIndexData::Blooms& FileIndexData::blooms(const dstd::String& path) {
 }
 
 const trace::index::extensions::ScalableBloomFilter* FileIndexData::file_bloom(
-    const dstd::String& path) {
+    dstd::StringView path) {
     auto it = file_blooms_.find(path);
     if (it == file_blooms_.end()) {
         dstd::Optional<trace::index::extensions::ScalableBloomFilter> bloom;
@@ -156,9 +156,22 @@ const trace::index::extensions::ScalableBloomFilter* FileIndexData::file_bloom(
     return it->second ? &*it->second : nullptr;
 }
 
+namespace {
+
+dstd::String posting_key(dstd::StringView path, dstd::StringView val) {
+    dstd::String key;
+    key.reserve(path.size() + 1 + val.size());
+    key.append(path);
+    key.push_back('\0');
+    key.append(val);
+    return key;
+}
+
+}  // namespace
+
 const dstd::Set<std::uint64_t>& FileIndexData::posting_chunks(
-    const dstd::String& path, const dstd::String& val) {
-    auto key = path + '\0' + val;
+    dstd::StringView path, dstd::StringView val) {
+    auto key = posting_key(path, val);
     auto it = posting_chunks_.find(key);
     if (it != posting_chunks_.end()) return it->second;
     auto& out = posting_chunks_[key];
@@ -176,8 +189,8 @@ const dstd::Set<std::uint64_t>& FileIndexData::posting_chunks(
     return out;
 }
 
-dstd::Optional<bool> FileIndexData::posting_contains(const dstd::String& path,
-                                                     const dstd::String& val) {
+dstd::Optional<bool> FileIndexData::posting_contains(dstd::StringView path,
+                                                     dstd::StringView val) {
     const auto& name = evidence_name(path);
     if (!name || !current(IndexExtension::Postings)) return dstd::nullopt;
     auto has = has_postings_.find(path);
@@ -190,7 +203,7 @@ dstd::Optional<bool> FileIndexData::posting_contains(const dstd::String& path,
         has = has_postings_.emplace(path, *found).first;
     }
     if (!has->second) return dstd::nullopt;
-    auto key = path + '\0' + val;
+    auto key = posting_key(path, val);
     auto it = posting_membership_.find(key);
     if (it != posting_membership_.end()) return it->second;
     const auto present = trace::index::has_posting(

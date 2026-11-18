@@ -4,6 +4,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -41,9 +42,10 @@ namespace {
 constexpr dstd::StringView SENTINEL = "agg_extension.sentinel";
 
 // `n` POSIX reads of 100 us each, one per millisecond from `start_us`.
-dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
-                         int n, std::uint64_t start_us, bool system = false) {
-    const dstd::String pfw = dir + "/" + name + ".pfw";
+dstd::String write_trace(dstd::CStringView dir, dstd::StringView name, int n,
+                         std::uint64_t start_us, bool system = false) {
+    const dstd::String pfw =
+        dstd::String(dir) + "/" + dstd::String(name) + ".pfw";
     {
         dstd::String out;
         for (int i = 0; i < n; ++i)
@@ -73,11 +75,11 @@ IndexerOptions with_aggregation(std::uint64_t interval_us) {
     return o;
 }
 
-dstd::String index_of(const dstd::String& trace) {
+dstd::String index_of(dstd::CStringView trace) {
     return dstd::String(trace::internal::determine_index_path(trace, ""));
 }
 
-dataframe::DataFrame counters_of(const dstd::Vector<dstd::String>& traces) {
+dataframe::DataFrame counters_of(dstd::Vector<dstd::String> traces) {
     dstd::Vector<trace::views::ViewFile> files;
     for (const auto& t : traces)
         files.push_back({dstd::String(t), dstd::String(index_of(t))});
@@ -111,7 +113,7 @@ bool same_counters(const dataframe::DataFrame& a,
 
 // A bloom granule no build writes: it survives only while the file's bloom
 // data is not rewritten, so the rewrite keeps everything the file holds.
-void plant_sentinel(const dstd::String& trace) {
+void plant_sentinel(dstd::CStringView trace) {
     const auto opened = dftu_utils_test::open_test_index(index_of(trace));
     const auto snapshot = dftu_utils_test::index_take(opened.snapshot());
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
@@ -144,7 +146,7 @@ void plant_sentinel(const dstd::String& trace) {
     dftu_utils_test::commit_test_build(build);
 }
 
-bool has_sentinel(const dstd::String& trace) {
+bool has_sentinel(dstd::CStringView trace) {
     const auto snapshot = dftu_utils_test::index_snapshot(index_of(trace));
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     return !dftu_utils_test::index_take(
@@ -155,7 +157,7 @@ bool has_sentinel(const dstd::String& trace) {
 }
 
 dstd::Optional<trace::index::ExtensionEntry> agg_entry(
-    const Indexer& ix, const dstd::String& trace) {
+    const Indexer& ix, dstd::CStringView trace) {
     const auto manifest = dftu_utils_test::ok(ix.manifest());
     for (const auto& f : manifest)
         if (dstd::StringView(f.path) == dstd::StringView(trace))
@@ -164,7 +166,7 @@ dstd::Optional<trace::index::ExtensionEntry> agg_entry(
     return dstd::nullopt;
 }
 
-double count_reads(const dstd::Vector<dstd::String>& traces) {
+double count_reads(dstd::Vector<dstd::String> traces) {
     dstd::Vector<trace::views::ViewFile> files;
     for (const auto& t : traces)
         files.push_back({dstd::String(t), dstd::String(index_of(t))});

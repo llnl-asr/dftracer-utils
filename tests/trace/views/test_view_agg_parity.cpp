@@ -19,7 +19,7 @@ TEST_SUITE("View") {
         REQUIRE(parity_env().is_valid());
         const dstd::String gz = write_agg_engine_trace(parity_sub("base"));
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        auto run_both = [&](const GroupKey& gk, const dstd::String& key_col,
+        auto run_both = [&](const GroupKey& gk, dstd::StringView key_col,
                             std::uint64_t mem_budget) {
             run_both_file(gz, idx, gk, key_col, mem_budget);
         };

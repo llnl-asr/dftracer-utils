@@ -257,7 +257,7 @@ dstd::String ChunkStatistics::name_category_json() const {
 }
 
 dstd::StringViewMap<dstd::String> ChunkStatistics::parse_string_map_json(
-    const dstd::String& json) {
+    dstd::StringView json) {
     dstd::StringViewMap<dstd::String> result;
 
     dftracer::utils::json::RecordParser parser;
@@ -364,7 +364,7 @@ dstd::Vector<std::uint8_t> ChunkStatistics::serialize_sketch_map(
 }
 
 dstd::StringViewMap<double> ChunkStatistics::parse_double_map_json(
-    const dstd::String& json) {
+    dstd::StringView json) {
     dstd::StringViewMap<double> result;
 
     dftracer::utils::json::RecordParser parser;
@@ -397,7 +397,7 @@ dstd::StringViewMap<double> ChunkStatistics::parse_double_map_json(
 }
 
 dstd::StringViewMap<dataframe::Log2Histogram>
-ChunkStatistics::parse_histogram_map_json(const dstd::String& json) {
+ChunkStatistics::parse_histogram_map_json(dstd::StringView json) {
     dstd::StringViewMap<dataframe::Log2Histogram> result;
 
     dftracer::utils::json::RecordParser parser;

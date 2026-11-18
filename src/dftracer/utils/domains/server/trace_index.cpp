@@ -1096,9 +1096,11 @@ dstd::String TraceIndex::resolve(dstd::StringView rowset, dstd::StringView key,
         for (const auto& f : files_)
             files.push_back({dstd::String(dstd::StringView(f.path)),
                              dstd::String(dstd::StringView(f.index_path))});
-        dftracer::utils::trace::index::plan::GroupResolver r(
-            files, {{"v", dstd::String(rowset), dstd::String(key),
-                     dstd::String(value)}});
+        using dftracer::utils::trace::index::plan::GroupResolver;
+        const GroupResolver::Column rowset_column{
+            "v", dstd::String(rowset), dstd::String(key), dstd::String(value)};
+        GroupResolver r(
+            files, dstd::Span<const GroupResolver::Column>(&rowset_column, 1));
         dstd::HashMap<dstd::String, dstd::String> values;
         if (const auto* c = r.column("v"))
             for (const auto& [kk, vv] : *c)

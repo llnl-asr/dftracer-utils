@@ -39,7 +39,7 @@ class ShardedView {
     /// result when the manifest is absent or unreadable, and an
     /// InvalidArgument one when it was built with a schema version this build
     /// cannot read.
-    static dstd::Result<ShardedView> from_manifest(const dstd::String& root);
+    static dstd::Result<ShardedView> from_manifest(dstd::StringView root);
 
     /// Use an explicit set of shard index directories, bypassing the manifest.
     static ShardedView from_shard_dirs(dstd::Vector<dstd::String> shard_dirs);
@@ -63,7 +63,7 @@ class ShardedView {
         : shard_dirs_(std::move(shard_dirs)) {}
 
     dstd::Result<dstd::Vector<ViewFile>> shard_view_files(
-        const dstd::String& shard_dir) const;
+        dstd::StringView shard_dir) const;
     dstd::Result<dstd::Vector<View>> shards(const Configure& configure) const;
 
     dstd::Vector<dstd::String> shard_dirs_;
@@ -76,8 +76,8 @@ class ShardedView {
 /// absolute. Overwrites any existing manifest atomically. A later
 /// `ShardedView::from_manifest(root)` reads the set back. The error of a shard
 /// that cannot be opened, or of the manifest write, is the result.
-dstd::Result<void> write_shard_set(
-    const dstd::String& root, const dstd::Vector<dstd::String>& shard_dirs);
+dstd::Result<void> write_shard_set(dstd::StringView root,
+                                   dstd::Span<const dstd::String> shard_dirs);
 
 /// Merge the shards the root's `shards.json` names into the root's own store,
 /// by moving each shard's data files, and return the number of trace files the
@@ -89,7 +89,7 @@ dstd::Result<void> write_shard_set(
 /// with the manifest and the shard directories, so a later call retries the
 /// merge without a rebuild. Releases the handles of the root and of every
 /// shard.
-dstd::Result<std::size_t> consolidate_shard_set(const dstd::String& root);
+dstd::Result<std::size_t> consolidate_shard_set(dstd::StringView root);
 
 /// Merge a shard set's aggregation tiers into one consolidated tier index at
 /// `out_root` WITHOUT re-reading traces. Each shard's tier is re-keyed into a
@@ -97,8 +97,8 @@ dstd::Result<std::size_t> consolidate_shard_set(const dstd::String& root);
 /// answers tier-covered queries from one index, while the shards stay in place.
 /// Returns the number of files cataloged, or the error of the manifest, a shard
 /// or the write.
-dstd::Result<std::size_t> merge_shard_set(const dstd::String& root,
-                                          const dstd::String& out_root);
+dstd::Result<std::size_t> merge_shard_set(dstd::StringView root,
+                                          dstd::StringView out_root);
 
 }  // namespace dftracer::utils::trace::views
 

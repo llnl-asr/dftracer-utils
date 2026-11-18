@@ -18,14 +18,14 @@ using namespace dftracer::utils::trace;
 
 namespace {
 
-std::size_t col(const dataframe::DataFrame& b, const dstd::String& name) {
+std::size_t col(const dataframe::DataFrame& b, dstd::CStringView name) {
     for (std::size_t i = 0; i < b.names.size(); ++i)
         if (b.names[i] == name) return i;
     dstd::fatal("no column", name.c_str());
 }
 
 // Row index whose group-key (column 0) string equals `cat`.
-std::int64_t row_of(const dataframe::DataFrame& b, const dstd::String& cat) {
+std::int64_t row_of(const dataframe::DataFrame& b, dstd::StringView cat) {
     for (std::int64_t i = 0; i < b.num_rows(); ++i)
         if (b.columns[0].string_at(i) == cat) return i;
     return -1;

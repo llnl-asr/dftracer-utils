@@ -47,10 +47,11 @@ dftu_indexer_report to_c(const IndexStatus& s) {
                                s.truncated.size()};
 }
 
-char* copy_c_string(const dstd::String& s) {
+char* copy_c_string(dstd::StringView s) {
     char* out = static_cast<char*>(std::malloc(s.size() + 1));
     if (!out) dstd::fatal("out of memory copying a result string");
-    std::memcpy(out, s.c_str(), s.size() + 1);
+    std::memcpy(out, s.data(), s.size());
+    out[s.size()] = '\0';
     return out;
 }
 

@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/intern_cache.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/thread.h>
@@ -232,7 +233,8 @@ OnDemandRead read_on_demand(json::Document& doc, StringView line,
 // on-demand reader drops as broken when it reaches the bad part, which the
 // walk with args always does; without args, a bad part inside args is not
 // reached.
-void check_line(json::Document& doc, StringView line, const char* expected) {
+void check_line(json::Document& doc, StringView line,
+                dstd::StringView expected) {
     CAPTURE(line);
     for (const bool needs_args : {true, false}) {
         for (const bool with_cache : {false, true}) {
@@ -250,7 +252,8 @@ void check_line(json::Document& doc, StringView line, const char* expected) {
             if (dom_ok) {
                 CHECK_FALSE(got.broken);
                 CHECK(got.text == describe(dom_ev, dom_intern));
-                if (needs_args && expected) CHECK(got.text == expected);
+                if (needs_args && !expected.empty())
+                    CHECK(got.text == expected);
             } else {
                 if (needs_args) CHECK(got.broken);
                 if (got.broken) CHECK(got.text == describe_reset());
@@ -340,7 +343,7 @@ PathRead read_path_on_demand(json::Document& doc, StringView line,
 // there are any. The count of unconverted values is left out then, since the
 // reference counts the ones outside `paths` too.
 String describe_under_paths(const FoldEvent& ev, const StringIntern& intern,
-                            const dstd::Vector<String>& paths) {
+                            dstd::Span<const String> paths) {
     if (paths.empty()) return describe_path(ev, intern);
     const auto wanted = [&](std::uint32_t id) {
         const StringView key = intern.resolve(id);
@@ -369,7 +372,7 @@ String describe_under_paths(const FoldEvent& ev, const StringIntern& intern,
 // and without an intern cache. Hints and the intern table live across the
 // lines of a run, as in a scan. A line the DOM parser rejects is not compared:
 // the explicit shapes below pin what the on-demand reader does with those.
-void check_path_lines(const dstd::Vector<StringView>& lines) {
+void check_path_lines(dstd::Span<const StringView> lines) {
     for (const PathOptions& o : path_option_sets()) {
         for (const bool with_cache : {false, true}) {
             CAPTURE(o.name);
@@ -404,7 +407,7 @@ void check_path_lines(const dstd::Vector<StringView>& lines) {
     }
 }
 
-dstd::Vector<StringView> views_of(const dstd::Vector<String>& lines) {
+dstd::Vector<StringView> views_of(dstd::Span<const String> lines) {
     dstd::Vector<StringView> out;
     for (const String& line : lines) out.emplace_back(line);
     return out;
@@ -421,7 +424,7 @@ dstd::Vector<String> capture_names(std::size_t from, std::size_t count) {
 // The captures of the DOM form and the on-demand form agree on `line` for the
 // given names, with and without args.
 void check_captures(json::Document& doc, StringView line,
-                    const dstd::Vector<String>& names) {
+                    dstd::Vector<String> names) {
     for (const bool needs_args : {true, false}) {
         for (const bool with_cache : {false, true}) {
             CAPTURE(line);
@@ -430,7 +433,7 @@ void check_captures(json::Document& doc, StringView line,
             StringIntern dom_intern;
             FoldEvent dom_ev;
             const bool dom_ok =
-                read_dom_captures(line, dom_ev, dom_intern, needs_args, names);
+                read_dom_captures(line, dom_ev, dom_intern, needs_args, &names);
             auto value = doc.parse(line);
             if (!value) {
                 CHECK_FALSE(dom_ok);
@@ -483,7 +486,7 @@ const char* const SCHEMA_LINES[] = {
 // The DOM reader and the on-demand reader give the same event, schema leaves
 // in the same order, for every way to call them. The hints and the intern
 // table live across the lines of a run, as in a scan.
-void check_schema_lines(const dstd::Vector<StringView>& lines) {
+void check_schema_lines(dstd::Span<const StringView> lines) {
     for (const bool needs_args : {true, false}) {
         for (const bool with_hints : {false, true}) {
             for (const bool with_cache : {false, true}) {
@@ -528,7 +531,7 @@ void check_schema_lines(const dstd::Vector<StringView>& lines) {
 }
 
 // append_dftracer_record in its two forms keeps the same events.
-void check_append_lines(const dstd::Vector<StringView>& lines) {
+void check_append_lines(dstd::Span<const StringView> lines) {
     for (const bool needs_args : {true, false}) {
         for (const bool capture_schema : {true, false}) {
             CAPTURE(needs_args);
@@ -570,7 +573,7 @@ void check_append_lines(const dstd::Vector<StringView>& lines) {
     }
 }
 
-dstd::Vector<StringView> schema_corpus(const dstd::Vector<String>& generated) {
+dstd::Vector<StringView> schema_corpus(dstd::Span<const String> generated) {
     dstd::Vector<StringView> lines;
     for (const char* line : SCHEMA_LINES) lines.emplace_back(line);
     for (const Shape& shape : SHAPES) lines.emplace_back(shape.line);
@@ -586,13 +589,15 @@ TEST_SUITE("FoldOnDemand") {
         json::Document doc;
         for (const Shape& shape : SHAPES) {
             CAPTURE(shape.name);
-            check_line(doc, shape.line, shape.expected);
+            check_line(
+                doc, shape.line,
+                shape.expected ? StringView(shape.expected) : StringView());
         }
     }
 
     TEST_CASE("the on-demand reader equals the DOM reader on the corpus") {
         json::Document doc;
-        for (const char* line : EVENTS) check_line(doc, line, nullptr);
+        for (const char* line : EVENTS) check_line(doc, line, StringView());
     }
 
     TEST_CASE("whitespace after a value matches the DOM reader") {
@@ -605,13 +610,13 @@ TEST_SUITE("FoldOnDemand") {
             "{\"ph\":\"X\"   }",
             "{\"ph\":1,\"args\":{\"esc\":\"a\\\"b\"  ,\"tail\":\"c\\\\\" }}",
         };
-        for (const char* line : lines) check_line(doc, line, nullptr);
+        for (const char* line : lines) check_line(doc, line, StringView());
     }
 
     TEST_CASE("the on-demand reader equals the DOM reader on trace lines") {
         json::Document doc;
         for (const String& line : generated_lines(3000))
-            check_line(doc, line, nullptr);
+            check_line(doc, line, StringView());
     }
 
     TEST_CASE("a part that is not reached is not checked") {
@@ -1035,10 +1040,10 @@ TEST_SUITE("FoldOnDemand") {
             bool dom_reads;
         };
         // A path event has the Complete phase and no fixed fields.
-        const auto event = [](const char* tail) {
+        const auto event = [](dstd::StringView tail) {
             return String(
                        "ph=1 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- ") +
-                   tail + " unc=0 bp=1";
+                   String(tail) + " unc=0 bp=1";
         };
         const Odd shapes[] = {
             {"plus_overflow", R"j({"k":1,"x":1e400})j",

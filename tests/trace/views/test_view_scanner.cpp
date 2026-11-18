@@ -348,7 +348,7 @@ TEST_SUITE("ViewScanner") {
         ViewScannerUtility reader;
         auto output = collect_view_output(reader, input);
 
-        auto has = [&](const dstd::String& needle) {
+        auto has = [&](dstd::StringView needle) {
             for (const auto& e : output.events)
                 if (e.find(needle) != dstd::String::npos) return true;
             return false;

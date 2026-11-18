@@ -10,7 +10,7 @@ namespace dftracer::utils::trace::index::build {
 
 /// Serializes index writers per index path. Every lazy writer that rides along
 /// a scan takes this first.
-std::mutex& index_write_mutex(const dstd::String& index_path);
+std::mutex& index_write_mutex(dstd::StringView index_path);
 
 }  // namespace dftracer::utils::trace::index::build
 

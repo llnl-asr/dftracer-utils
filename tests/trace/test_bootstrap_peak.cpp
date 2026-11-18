@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -60,11 +61,11 @@ dstd::String big_trace_text() {
 
 // Every file has the same text, so a run spends its time in the bootstrap and
 // not in making the input.
-dstd::String write_big_trace(const dstd::String& dir, int n) {
+dstd::String write_big_trace(dstd::CStringView dir, int n) {
     static const dstd::String text = big_trace_text();
     char name[32];
     std::snprintf(name, sizeof(name), "/b%04d.pfw.gz", n);
-    return dftu_utils_test::write_gz_trace(dir + name, text);
+    return dftu_utils_test::write_gz_trace(dstd::String(dir) + name, text);
 }
 
 // The most live bytes above the start that the memory manager reports each

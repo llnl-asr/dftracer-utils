@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/string.h>
@@ -24,9 +25,9 @@ using namespace test_view_common;
 
 namespace {
 
-dstd::String write_records(TestEnvironment& env, const dstd::String& name,
-                           const dstd::Vector<dstd::String>& lines) {
-    const dstd::String plain = env.dir() + "/" + name + ".ndjson";
+dstd::String write_records(TestEnvironment& env, dstd::StringView name,
+                           dstd::Vector<dstd::String> lines) {
+    const dstd::String plain = env.dir() + "/" + dstd::String(name) + ".ndjson";
     {
         dftu_utils_test::FileOut o(plain);
         for (const auto& l : lines) o << l << "\n";
@@ -41,7 +42,7 @@ dstd::String write_records(TestEnvironment& env, const dstd::String& name,
     return gz;
 }
 
-View view_of(const dstd::String& gz) {
+View view_of(dstd::CStringView gz) {
     return View::from_file(
         dstd::String(gz),
         dstd::String(dstd::String(determine_index_path(gz, ""))));
@@ -72,17 +73,17 @@ dstd::Vector<dstd::String> column(const dataframe::DataFrame& f,
     return out;
 }
 
-dstd::String meta(const dstd::String& name, const dstd::String& value,
-                  const dstd::String& key) {
-    return R"({"ph":"M","name":")" + name +
-           R"(","pid":1,"tid":1,"args":{"name":")" + key + R"(","value":")" +
-           value + R"("}})";
+dstd::String meta(dstd::StringView name, dstd::StringView value,
+                  dstd::StringView key) {
+    return R"({"ph":"M","name":")" + dstd::String(name) +
+           R"(","pid":1,"tid":1,"args":{"name":")" + dstd::String(key) +
+           R"(","value":")" + dstd::String(value) + R"("}})";
 }
 
-dstd::String event(int ts, const dstd::String& args, int dur = 10) {
+dstd::String event(int ts, dstd::StringView args, int dur = 10) {
     return R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
            dstd::to_string(ts) + R"(,"dur":)" + dstd::to_string(dur) +
-           R"(,"args":{)" + args + "}}";
+           R"(,"args":{)" + dstd::String(args) + "}}";
 }
 
 dstd::Vector<dstd::String> dftracer_lines() {

@@ -7,6 +7,7 @@
 // DFTRACER_UTILS_PRUNE_ORACLE_RECORD=<path> to write a new recording instead.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
@@ -81,7 +82,7 @@ struct Lcg {
 // large members, so its name dictionaries overflow and postings and blooms have
 // to answer; every trace jumps in time mid-run so the ts histogram prunes where
 // min/max cannot.
-dstd::String write_trace(const dstd::String& dir, int seed, int events) {
+dstd::String write_trace(dstd::CStringView dir, int seed, int events) {
     Lcg rng{static_cast<std::uint64_t>(seed) * 7919};
     dstd::String out;
     out += "[\n";
@@ -137,7 +138,8 @@ dstd::String write_trace(const dstd::String& dir, int seed, int events) {
             HHASH[host], SHASH[pid % 2]);
     }
     out += "]\n";
-    const auto plain = dir + "/trace" + dstd::to_string(seed) + ".pfw";
+    const auto plain =
+        dstd::String(dir) + "/trace" + dstd::to_string(seed) + ".pfw";
     dstd::fs::write_file(dstd::PathView(plain), out).discard();
     const auto gz = plain + ".gz";
     const std::size_t member = seed == 3 ? LARGE_MEMBER_BYTES : MEMBER_BYTES;
@@ -231,7 +233,7 @@ struct Corpus {
                                     dftu_utils_test::dstd_paths(traces), opts))
                 .build());
     }
-    dstd::String index_of(const dstd::String& trace) const {
+    dstd::String index_of(dstd::CStringView trace) const {
         return dstd::String(
             trace::internal::determine_index_path(trace, index_dir));
     }
@@ -313,8 +315,8 @@ dstd::String recording_path() {
                             .str());
 }
 
-std::size_t count_json(const dstd::String& trace, const dstd::String& index_dir,
-                       const dstd::String& text, bool skip_pruning) {
+std::size_t count_json(dstd::CStringView trace, dstd::CStringView index_dir,
+                       dstd::StringView text, bool skip_pruning) {
     auto run = [&]() -> coro::CoroTask<std::size_t> {
         trace::reader::TraceReader reader(
             {.file_path = dstd::String(trace),
@@ -351,9 +353,8 @@ coro::CoroTask<std::uint64_t> scan_unit(
     co_return n;
 }
 
-std::uint64_t count_view(const dstd::String& trace,
-                         const dstd::String& index_path,
-                         const dstd::String& text) {
+std::uint64_t count_view(dstd::CStringView trace, dstd::CStringView index_path,
+                         dstd::StringView text) {
     trace::views::detail::ViewPlan vp;
     vp.files.push_back(
         {dstd::String(trace), dstd::String(index_path), 0, 0, 0});
@@ -372,9 +373,9 @@ std::uint64_t count_view(const dstd::String& trace,
 }
 
 // The View scan without pruning: the whole file as one unit.
-std::uint64_t count_view_unpruned(const dstd::String& trace,
-                                  const dstd::String& index_path,
-                                  const dstd::String& text) {
+std::uint64_t count_view_unpruned(dstd::CStringView trace,
+                                  dstd::CStringView index_path,
+                                  dstd::StringView text) {
     trace::views::detail::ViewPlan vp;
     vp.query = dftu_utils_test::ok(duql::Query::from_string(text));
     const auto vdef =
@@ -445,9 +446,9 @@ TEST_CASE("pruning never drops a matching event") {
 
 namespace {
 
-dstd::Vector<std::uint64_t> view_chunks(const dstd::String& trace,
-                                        const dstd::String& index_path,
-                                        const dstd::String& text) {
+dstd::Vector<std::uint64_t> view_chunks(dstd::CStringView trace,
+                                        dstd::CStringView index_path,
+                                        dstd::StringView text) {
     const auto snapshot = dftu_utils_test::index_snapshot(index_path);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     trace::views::detail::ViewPlan vp;
@@ -472,8 +473,7 @@ dstd::Vector<std::uint64_t> view_chunks(const dstd::String& trace,
 
 using Manifest = dstd::Map<dstd::String, trace::index::ExtensionEntry>;
 
-Manifest manifest_of(const trace::index::Indexer& ix,
-                     const dstd::String& trace) {
+Manifest manifest_of(const trace::index::Indexer& ix, dstd::CStringView trace) {
     Manifest out;
     for (const auto& f : dftu_utils_test::ok(ix.manifest()))
         if (dstd::StringView(f.path) == dstd::StringView(trace))
@@ -609,7 +609,7 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     // The aggregation tier keys its rows by interned string ids that follow the
     // build's file order, and a memory budget changes that order. Its bytes may
     // differ, its answers may not.
-    auto contents = [](const dstd::String& index_path) {
+    auto contents = [](dstd::CStringView index_path) {
         dstd::Vector<dftu_utils_test::IndexRecord> out;
         for (auto& record : dftu_utils_test::dump_index(index_path))
             if (record.name != "dftu.idx.dftracer.agg")
@@ -624,7 +624,7 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     CHECK(a.size() == b.size());
     CHECK(a == b);
 
-    const auto summary = [&](const dstd::String& index_path) {
+    const auto summary = [&](dstd::CStringView index_path) {
         const auto df = dftu_utils_test::ok(
             trace::views::View::from_files(
                 {{dstd::String(trace), dstd::String(index_path)}})
@@ -707,12 +707,12 @@ TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
             .build());
     const auto index_path = dstd::String(
         trace::internal::determine_index_path(traces[0], index_dir));
-    const auto rows = trace::index::plan::stored_rowset(
-        {{dstd::String(dstd::StringView(traces[0])),
-          dstd::String(dstd::StringView(index_path))},
-         {dstd::String(dstd::StringView(traces[1])),
-          dstd::String(dstd::StringView(index_path))}},
-        "files");
+    const trace::index::plan::RowSetFile rowset_files[] = {
+        {dstd::String(dstd::StringView(traces[0])),
+         dstd::String(dstd::StringView(index_path))},
+        {dstd::String(dstd::StringView(traces[1])),
+         dstd::String(dstd::StringView(index_path))}};
+    const auto rows = trace::index::plan::stored_rowset(rowset_files, "files");
     REQUIRE(rows);
     CHECK(rows->num_rows() == 2);
     for (const auto& trace : traces) {

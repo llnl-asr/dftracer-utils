@@ -151,13 +151,14 @@ namespace {
 /// The result goes in its own directory: a gzip trace sitting directly in
 /// the temp root would pick up any .dftindex another test left there and be
 /// read through an index that does not list it.
-dstd::String gzip_fixture(const dstd::String& plain_path) {
+dstd::String gzip_fixture(dstd::StringView plain_path) {
     const dstd::Path dir = make_unique_test_path("trace_fixture");
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     const dstd::String gz_path(
         (dir / (dstd::String(dstd::PathView(plain_path).filename()) + ".gz"))
             .str());
-    REQUIRE(dftu_utils_test::compress_file_to_gzip(plain_path, gz_path));
+    REQUIRE(dftu_utils_test::compress_file_to_gzip(dstd::String(plain_path),
+                                                   gz_path));
     dstd::fs::remove(plain_path).discard();
     return gz_path;
 }
@@ -1227,8 +1228,8 @@ namespace {
 
 // Lines written to a gzip trace, read back through read_json with and without
 // an index. Returns the line count the reader keeps.
-std::size_t read_kept(const dstd::Vector<dstd::String>& lines,
-                      const dstd::String& query, bool indexed) {
+std::size_t read_kept(dstd::Span<const dstd::String> lines,
+                      dstd::StringView query, bool indexed) {
     dstd::String content;
     for (const auto& l : lines) content += l + "\n";
     const dstd::Path dir = make_unique_test_path("malformed_reader");
@@ -1329,9 +1330,9 @@ TEST_SUITE("TraceReader malformed lines") {
             R"(lower(name) == "read" and dur > 1)",
         };
         std::size_t shapes = 0;
-        const auto check = [&](const dstd::Vector<dstd::String>& lines,
+        const auto check = [&](dstd::Vector<dstd::String> lines,
                                std::size_t good_lines, std::size_t extra,
-                               const char* query) {
+                               dstd::StringView query) {
             const auto plain = read_kept(lines, query, false);
             const auto indexed = read_kept(lines, query, true);
             CAPTURE(query);
@@ -1543,7 +1544,7 @@ static CoroTask<void> collect_odd_json(AsyncGenerator<JsonLine> gen,
     }
 }
 
-dstd::String write_odd_trace(const dstd::Vector<dstd::String>& lines,
+dstd::String write_odd_trace(dstd::Span<const dstd::String> lines,
                              bool indexed) {
     dstd::String content;
     for (const auto& l : lines) content += l + "\n";

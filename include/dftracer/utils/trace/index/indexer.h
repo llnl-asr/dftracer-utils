@@ -143,8 +143,8 @@ struct FileExplain {
 /// The manifest or explanation as a JSON array of objects whose keys are the
 /// field names above; params_hash is a 16-digit hex string, since a JSON
 /// number may not hold 64 bits.
-dstd::String to_json(const dstd::Vector<FileManifest>& manifest);
-dstd::String to_json(const dstd::Vector<FileExplain>& explain);
+dstd::String to_json(dstd::Span<const FileManifest> manifest);
+dstd::String to_json(dstd::Span<const FileExplain> explain);
 
 class Indexer;
 

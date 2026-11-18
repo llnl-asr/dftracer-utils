@@ -52,7 +52,9 @@ std::uint64_t bloom_bytes(std::size_t values, double false_positive_rate) {
 
 namespace {
 
-dstd::String capture_path(const dstd::String& dim) { return "args." + dim; }
+dstd::String capture_path(dstd::StringView dim) {
+    return dstd::fmt<"args.{}">(dim);
+}
 
 }  // namespace
 
@@ -81,7 +83,7 @@ BloomFold::BloomFold(
     dur_key_ = intern_->get_or_insert("dur");
 }
 
-BloomFold::Catalog BloomFold::file_catalog(const dstd::String& file) {
+BloomFold::Catalog BloomFold::file_catalog(dstd::StringView file) {
     auto it = files_.find(file);
     if (it == files_.end()) return {};
     flush_shapes(it->second);
@@ -250,7 +252,7 @@ BloomFold::AutoKeys BloomFold::select_auto_keys(
 }
 
 BloomFold::ChunkState BloomFold::assemble_chunk(
-    FileState& fs, std::uint64_t cp, const dstd::Vector<dstd::String>& dims,
+    FileState& fs, std::uint64_t cp, dstd::Span<const dstd::String> dims,
     const AutoKeys& keys) {
     ChunkState out;
     if (auto base = fs.chunks.find(cp); base != fs.chunks.end()) {

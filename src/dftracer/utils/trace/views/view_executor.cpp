@@ -133,7 +133,7 @@ bool export_bootstrap_eligible(const ViewPlan& plan) {
 // runs on pooled coroutine threads.
 static dstd::String project_event(simdjson::dom::parser& parser,
                                   dstd::StringView ev,
-                                  const dstd::Vector<dstd::String>& select,
+                                  dstd::Span<const dstd::String> select,
                                   bool args_fallback) {
     simdjson::padded_string padded(ev);
     simdjson::dom::element doc;
@@ -367,10 +367,9 @@ class SinkWriterVisitor
     coro::CoroTask<dstd::Result<void>> on_checkpoint(std::size_t) override {
         co_return dstd::Result<void>{};
     }
-    coro::CoroTask<dstd::Result<void>> on_chunk(const char* data,
-                                                std::size_t len,
+    coro::CoroTask<dstd::Result<void>> on_chunk(dstd::StringView data,
                                                 std::size_t) override {
-        buf_.append(data, len);
+        buf_.append(data);
         const std::size_t last_nl = buf_.rfind('\n');
         if (last_nl == dstd::String::npos) co_return dstd::Result<void>{};
         if (!drop_metadata_) {
@@ -561,7 +560,7 @@ coro::CoroTask<dstd::Result<ExportStats>> run_export(const ViewPlan& base_plan,
     dftracer::utils::json::RecordParser proj_parser;
     auto scanned = co_await for_each_scanned_batch(
         plan, vdef, /*slot_count=*/0, cap,
-        [&](std::size_t, const dstd::Vector<dstd::StringView>& events) {
+        [&](std::size_t, dstd::Span<const dstd::StringView> events) {
             std::lock_guard<std::mutex> lk(sink_mtx);
             for (const auto& ev : events) {
                 if (seen++ < plan.offset) continue;
@@ -1599,7 +1598,7 @@ class DistinctRowFold : public Fold {
 }  // namespace
 
 bool distinct_keyable(const ViewPlan& plan,
-                      const dstd::Vector<std::int64_t>& key_idx) {
+                      dstd::Span<const std::int64_t> key_idx) {
     const bool by_path = plan_by_path(plan);
     for (std::int64_t at : key_idx) {
         if (at < 0 || static_cast<std::size_t>(at) >= plan.select.size())
@@ -1654,7 +1653,7 @@ coro::CoroTask<dstd::Result<dataframe::DataFrame>> run_collect_rows(
 }
 
 coro::CoroTask<dstd::Result<dataframe::DataFrame>> run_collect_rows_distinct(
-    const ViewPlan& plan, const dstd::Vector<std::int64_t>& key_idx) {
+    const ViewPlan& plan, dstd::Vector<std::int64_t> key_idx) {
     auto made = make_vdef(plan, /*for_aggregation=*/false);
     if (!made) co_return made.error();
     ViewDefinition vdef = std::move(*made);
@@ -1779,7 +1778,7 @@ dstd::String encode_agg_partial(const dataframe::AggState& st) {
 // Merge every partial into one AggState. An empty or unknown-tagged blob is
 // rejected, not misparsed.
 dstd::Result<dataframe::AggStatePtr> decode_partials(
-    const dstd::Vector<dstd::StringView>& partials) {
+    dstd::Span<const dstd::StringView> partials) {
     dataframe::AggStatePtr state;
     for (dstd::StringView p : partials) {
         if (p.empty())
@@ -1825,7 +1824,7 @@ dstd::Result<dataframe::AggStatePtr> empty_engine_state(const ViewPlan& plan) {
 // Distributed materialize: combine the rank-local partials and persist the
 // merged rollup.
 coro::CoroTask<dstd::Result<void>> run_materialize_partials(
-    const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials) {
+    const ViewPlan& plan, dstd::Vector<dstd::StringView> partials) {
     if (auto resolved = resolve_record_schema(plan); !resolved)
         co_return resolved.error();
     ensure_schema(plan);
@@ -1865,8 +1864,8 @@ dstd::Result<dstd::Optional<dataframe::DataFrame>> run_reconstruct_if_cached(
 coro::CoroTask<dstd::Result<ExportStats>> run_scan_batches(
     const dstd::SharedPtr<const ViewPlan>& plan_ptr, std::size_t slot_count,
     std::uint64_t limit,
-    const dstd::Function<
-        void(std::size_t, const dstd::Vector<dstd::StringView>&)>& on_batch) {
+    const dstd::Function<void(std::size_t, dstd::Span<const dstd::StringView>)>&
+        on_batch) {
     bool from_mv = false;
     auto redirected = redirect_reads(*plan_ptr, &from_mv);
     if (!redirected) co_return redirected.error();
@@ -2432,7 +2431,7 @@ coro::CoroTask<dstd::Result<dstd::String>> run_aggregate_partial(
 
 // Merge partials and emit each combined group as a ph="C" counter event.
 dstd::Result<ExportStats> merge_counters_partials(
-    const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials,
+    const ViewPlan& plan, dstd::Span<const dstd::StringView> partials,
     ExportSink& sink) {
     if (auto resolved = resolve_record_schema(plan); !resolved)
         return resolved.error();
@@ -2453,7 +2452,7 @@ dstd::Result<ExportStats> merge_counters_partials(
 
 // Merge partials into a materialized DataFrame (distributed collect()).
 dstd::Result<dataframe::DataFrame> merge_partials_to_table(
-    const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials) {
+    const ViewPlan& plan, dstd::Span<const dstd::StringView> partials) {
     if (auto resolved = resolve_record_schema(plan); !resolved)
         return resolved.error();
     const ViewPlan p = resolve_bucket_origin(plan);

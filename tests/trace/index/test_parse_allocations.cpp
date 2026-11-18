@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -22,7 +23,7 @@ constexpr int EVENTS = 4000;
 constexpr double MAX_PER_EVENT = 8.0;
 constexpr double MAX_PER_FILE = 3900.0;
 
-dstd::String write_trace(const dstd::String& dir, int n, int events = EVENTS) {
+dstd::String write_trace(dstd::CStringView dir, int n, int events = EVENTS) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < events; ++i)
@@ -34,7 +35,8 @@ dstd::String write_trace(const dstd::String& dir, int n, int events = EVENTS) {
                                 i % 4096, i % 3);
     out += "]\n";
     return dftu_utils_test::write_gz_trace(
-        dir + "/t" + dstd::String(dstd::to_string(n)) + ".pfw.gz", out);
+        dstd::String(dir) + "/t" + dstd::String(dstd::to_string(n)) + ".pfw.gz",
+        out);
 }
 
 }  // namespace

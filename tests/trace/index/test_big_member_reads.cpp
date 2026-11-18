@@ -2,11 +2,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -96,7 +98,7 @@ Trace short_lines(std::size_t bytes, std::uint32_t seed) {
     return t;
 }
 
-dstd::Vector<std::uint8_t> member(const dstd::String& text) {
+dstd::Vector<std::uint8_t> member(dstd::StringView text) {
     fileio::compress::GzipMemberCompressor c;
     dstd::Vector<std::uint8_t> out(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), out.data(), out.size());
@@ -105,13 +107,12 @@ dstd::Vector<std::uint8_t> member(const dstd::String& text) {
     return out;
 }
 
-void append(dstd::Vector<std::uint8_t>& to, const dstd::String& text) {
+void append(dstd::Vector<std::uint8_t>& to, dstd::StringView text) {
     const auto m = member(text);
     to.insert(to.end(), m.begin(), m.end());
 }
 
-void write_file(const dstd::String& path,
-                const dstd::Vector<std::uint8_t>& bytes) {
+void write_file(dstd::CStringView path, dstd::Span<const std::uint8_t> bytes) {
     dstd::fs::write_file(
         dstd::PathView(path),
         dstd::StringView(reinterpret_cast<const char*>(bytes.data()),
@@ -167,8 +168,10 @@ struct Files {
     dstd::String big;   // a small member, then one big member
     dstd::String many;  // the same lines in small members
     Trace trace;
-    explicit Files(std::size_t bytes, std::uint32_t seed, const char* tag) {
-        dir = dstd::String("/tmp/dftu_bigmember_") + tag + "_XXXXXX";
+    explicit Files(std::size_t bytes, std::uint32_t seed,
+                   dstd::StringView tag) {
+        dir = dstd::String("/tmp/dftu_bigmember_") + dstd::String(tag) +
+              "_XXXXXX";
         REQUIRE(::mkdtemp(dir.data()) != nullptr);
         trace = make_trace(bytes, seed);
         big = dir + "/big.pfw.gz";
@@ -180,7 +183,7 @@ struct Files {
 };
 
 std::size_t inflate_mismatches(
-    const dstd::String& path, const dstd::String& expected,
+    dstd::CStringView path, dstd::StringView expected,
     trace::reader::internal::MemberDecodeCache* cache = nullptr,
     const dstd::Vector<std::uint64_t>* heads = nullptr) {
     auto fd_file = dstd::File::open(path, {});
@@ -214,7 +217,7 @@ std::size_t inflate_mismatches(
     return bad + (at == expected.size() ? 0 : 1);
 }
 
-std::size_t members_lines(const dstd::String& path) {
+std::size_t members_lines(dstd::CStringView path) {
     auto fd_file = dstd::File::open(path, {});
     REQUIRE(fd_file);
     const int fd = fd_file->native_handle();
@@ -235,7 +238,7 @@ std::size_t members_lines(const dstd::String& path) {
 
 struct Indexed {
     dstd::SharedPtr<trace::index::gzip::GzipIndexer> indexer;
-    Indexed(const dstd::String& path, const dstd::String& index_path,
+    Indexed(dstd::CStringView path, dstd::CStringView index_path,
             std::uint64_t ckpt = CKPT) {
         indexer = dstd::make_shared<trace::index::gzip::GzipIndexer>(
             dstd::String(dstd::StringView(path)),
@@ -268,7 +271,7 @@ std::uint64_t bytes_read_by_process() {
         .value_or(0);
 }
 
-std::size_t newlines_before(const dstd::String& text, std::size_t at);
+std::size_t newlines_before(dstd::StringView text, std::size_t at);
 
 dstd::String read_line_bytes(
     const dstd::SharedPtr<trace::index::gzip::GzipIndexer>& indexer,
@@ -293,23 +296,24 @@ dstd::String read_line_bytes(
     return out;
 }
 
-dstd::String lines_of(const dstd::String& text, std::size_t first,
+dstd::String lines_of(dstd::StringView text, std::size_t first,
                       std::size_t last) {
     std::size_t at = 0;
     for (std::size_t i = 1; i < first; ++i) at = text.find('\n', at) + 1;
     std::size_t end = at;
     for (std::size_t i = first; i <= last; ++i) end = text.find('\n', end) + 1;
-    return text.substr(at, end - at);
+    return dstd::String(text.substr(at, end - at));
 }
 
-std::size_t newlines_before(const dstd::String& text, std::size_t at) {
+std::size_t newlines_before(dstd::StringView text, std::size_t at) {
     return static_cast<std::size_t>(
         std::count(text.begin(), text.begin() + static_cast<long>(at), '\n'));
 }
 
-trace::views::ViewFile view_file(const dstd::String& gz_path,
-                                 const dstd::String& dir) {
-    REQUIRE(dftu_utils_test::build_index(gz_path, dir, CKPT));
+trace::views::ViewFile view_file(dstd::CStringView gz_path,
+                                 dstd::CStringView dir) {
+    REQUIRE(dftu_utils_test::build_index(dstd::String(gz_path),
+                                         dstd::String(dir), CKPT));
     trace::views::ViewFile f;
     f.file_path = gz_path;
     f.index_path = trace::internal::determine_index_path(gz_path, dir);
@@ -463,7 +467,7 @@ TEST_SUITE("BigMemberReads") {
     TEST_CASE("the unindexed line reader streams a big member") {
         Files small(SMALL_BYTES, 4, "f");
         Files big(BIG_BYTES, 4, "g");
-        auto count = [](const dstd::String& path) {
+        auto count = [](dstd::CStringView path) {
             std::size_t n = 0;
             dftu_utils_test::run_coro(
                 [&](coro::Scope&) -> coro::CoroTask<void> {

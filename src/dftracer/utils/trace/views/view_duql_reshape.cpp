@@ -44,17 +44,16 @@ dftu_scalar Applier::plugin_scalar(const duql::LiteralValue& v) {
     return s;
 }
 
-dstd::Unexpected<dstd::Error> Applier::plugin_refusal(const dstd::String& what,
+dstd::Unexpected<dstd::Error> Applier::plugin_refusal(dstd::StringView what,
                                                       const dftu_op_desc* op,
-                                                      const char* why) {
+                                                      dstd::StringView why) {
     return refuse<"{} for '{}'; it takes {}">(
-        dstd::StringView(why), what,
-        dstd::StringView(dftu_op_signature(op->sig)));
+        why, what, dstd::StringView(dftu_op_signature(op->sig)));
 }
 
 dstd::Result<dataframe::DataFrame> Applier::run_column_op(
-    dataframe::DataFrame f, const dstd::String& name, const dftu_op_desc* op,
-    const dstd::String& second, dftu_scalar a, dftu_scalar b,
+    dataframe::DataFrame f, dstd::CStringView name, const dftu_op_desc* op,
+    dstd::CStringView second, dftu_scalar a, dftu_scalar b,
     const dstd::Optional<dstd::String>& str) {
     dftu_dataframe* in = dataframe::dataframe_handle_wrap(std::move(f));
     dftu_dataframe* out = dftu_dataframe_column_op(
@@ -313,7 +312,7 @@ Status Applier::stage(const duql::PipelineExpand& e) {
             : dataframe::scalar(dataframe::TypeId::String);
     const bool is_struct = elem.id == dataframe::TypeId::Struct;
     const bool json = list && cols_[*li].json;
-    auto replaced = [&](const dstd::String& n) {
+    auto replaced = [&](dstd::StringView n) {
         return n == dstd::String(e.name) || n == dstd::String(e.index) ||
                (is_struct && n.starts_with(e.name + "."));
     };
@@ -418,7 +417,7 @@ Status Applier::stage(const duql::PipelineExpand& e) {
     return {};
 }
 
-duql::PipelineItem Applier::column_item(const dstd::String& name) {
+duql::PipelineItem Applier::column_item(dstd::StringView name) {
     duql::TField f;
     f.base = dstd::String(name);
     f.steps.push_back({dstd::String(name), false, dstd::nullopt});
@@ -506,7 +505,7 @@ Status Applier::stage(const duql::PipelinePivot& p) {
 
 dstd::Result<dataframe::DataFrame> Applier::spread(
     dataframe::DataFrame f, std::size_t n_keys,
-    const dstd::Vector<dstd::String>& aggs, dstd::Vector<dstd::String> values,
+    dstd::Span<const dstd::String> aggs, dstd::Vector<dstd::String> values,
     bool open, std::uint64_t limit) {
     const std::int64_t n = f.num_rows();
     auto text = [](const dataframe::Series& s, std::int64_t r) -> dstd::String {

@@ -63,8 +63,7 @@ dstd::Vector<BaseId> plan_bases(const trace::views::detail::ViewPlan& plan) {
 
 bool allowed(char c) { return dstd::is_ascii_alnum(c) || c == '_' || c == '-'; }
 
-void replace_all(dstd::String& s, const dstd::String& from,
-                 const dstd::String& to) {
+void replace_all(dstd::String& s, dstd::StringView from, dstd::StringView to) {
     std::size_t pos = 0;
     while ((pos = s.find(from, pos)) != dstd::String::npos) {
         s.replace(pos, from.size(), to);
@@ -360,7 +359,7 @@ void evict_views(dstd::StringView root, dstd::StringView keep) {
 }
 
 // Trace files inside an MV directory (its own index is a subdir, skipped).
-dstd::Vector<dstd::String> view_trace_files(const dstd::String& dir) {
+dstd::Vector<dstd::String> view_trace_files(dstd::StringView dir) {
     dstd::Vector<dstd::String> out;
     for (const dstd::Path& path : list_kind(dir, dstd::fs::FileKind::File)) {
         const dstd::StringView name = path.view().filename();
@@ -374,8 +373,8 @@ dstd::Vector<dstd::String> view_trace_files(const dstd::String& dir) {
     return out;
 }
 
-trace::views::ViewFile view_file(const dstd::String& file,
-                                 const dstd::String& index) {
+trace::views::ViewFile view_file(dstd::StringView file,
+                                 dstd::StringView index) {
     trace::views::ViewFile out;
     out.file_path.assign(file.data(), file.size());
     out.index_path.assign(index.data(), index.size());
@@ -386,8 +385,7 @@ trace::views::ViewFile view_file(const dstd::String& file,
 // used. Parts directly under parts/ use the view root. A distributed
 // materialize puts each rank's parts in a subdir of parts/, which resolves to
 // the same view root inside the index root and to its own root elsewhere.
-dstd::Vector<trace::views::ViewFile> gather_view_files(
-    const dstd::String& dir) {
+dstd::Vector<trace::views::ViewFile> gather_view_files(dstd::CStringView dir) {
     dstd::Vector<trace::views::ViewFile> out;
     const dstd::String view_idx =
         trace::internal::determine_index_path(dir, "");
@@ -405,7 +403,7 @@ dstd::Vector<trace::views::ViewFile> gather_view_files(
     return out;
 }
 
-std::uint64_t total_size(const dstd::Vector<trace::views::ViewFile>& files) {
+std::uint64_t total_size(dstd::Span<const trace::views::ViewFile> files) {
     std::uint64_t sum = 0;
     for (const auto& f : files) {
         dftracer::utils::common::InputFileStat st;
@@ -420,7 +418,7 @@ std::uint64_t total_size(const dstd::Vector<trace::views::ViewFile>& files) {
 // its predicate subsumes the query's.
 bool manifest_matches(const Manifest& m,
                       const trace::views::detail::ViewPlan& plan,
-                      const dstd::Vector<BaseId>& q_bases) {
+                      dstd::Span<const BaseId> q_bases) {
     if (!m.schema || *m.schema != plan.record_schema->params_hash())
         return false;
     if (m.bases.size() != q_bases.size()) return false;

@@ -4,6 +4,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
@@ -48,8 +49,8 @@ constexpr std::size_t CHECKPOINT_SIZE = 2048;
 // an integer, and every third event is a pre-aggregated counter, which the
 // counters skip. App counters and plain events share the trace and are not
 // counters at all.
-dstd::String write_trace(const dstd::String& dir) {
-    const dstd::String pfw = dir + "/counters.pfw";
+dstd::String write_trace(dstd::CStringView dir) {
+    const dstd::String pfw = dstd::String(dir) + "/counters.pfw";
     {
         dstd::String out;
         for (int i = 0; i < 24; ++i) {
@@ -88,7 +89,7 @@ dstd::String write_trace(const dstd::String& dir) {
     return gz;
 }
 
-IndexerOptions with_aggregation(const dstd::String& index_dir) {
+IndexerOptions with_aggregation(dstd::CStringView index_dir) {
     IndexerOptions o;
     o.index_dir = index_dir;
     o.checkpoint_size = CHECKPOINT_SIZE;
@@ -135,7 +136,7 @@ Expected expected_groups() {
 }
 
 dstd::Vector<dstd::String> string_column(const dataframe::DataFrame& df,
-                                         const dstd::String& name) {
+                                         dstd::StringView name) {
     dstd::Vector<dstd::String> out;
     for (std::size_t i = 0; i < df.names.size(); ++i)
         if (dstd::StringView(df.names[i]) == dstd::StringView(name)) {
@@ -147,7 +148,7 @@ dstd::Vector<dstd::String> string_column(const dataframe::DataFrame& df,
 }
 
 dstd::Vector<double> f64_column(const dataframe::DataFrame& df,
-                                const dstd::String& name) {
+                                dstd::StringView name) {
     dstd::Vector<double> out;
     for (std::size_t i = 0; i < df.names.size(); ++i)
         if (dstd::StringView(df.names[i]) == dstd::StringView(name)) {
@@ -224,7 +225,7 @@ struct Blocks {
     std::size_t other_rows = 0;
 };
 
-Blocks blocks_of(const dstd::String& gz, const dstd::String& idx) {
+Blocks blocks_of(dstd::CStringView gz, dstd::CStringView idx) {
     Blocks out;
     const auto index_path =
         dstd::String(trace::internal::determine_index_path(gz, idx));

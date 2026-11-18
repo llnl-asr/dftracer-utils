@@ -71,7 +71,7 @@ TEST_SUITE("View unified F filter") {
                                     {dstd::String(dstd::StringView(gz))}))
                 .build());
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        auto count = [&](Phase ph, const char* q) {
+        auto count = [&](Phase ph, dstd::StringView q) {
             return run(View::from_file(dstd::String(gz), dstd::String(idx))
                            .phase(ph)
                            .duql(q)

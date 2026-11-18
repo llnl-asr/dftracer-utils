@@ -58,7 +58,7 @@ thread_local dftracer::utils::json::RecordParser t_parser;
 /// that was never compressed fails at the reader instead of silently taking
 /// a path with no index, no pruning and no random access.
 dstd::Result<void> reject_unless_gzip(common::ArchiveFormat format,
-                                      const dstd::String& file_path) {
+                                      dstd::StringView file_path) {
     if (format == common::ArchiveFormat::Gzip) return {};
     return reader_error<ReaderErrorType::InvalidArgument,
                         "Not a gzip trace: {} (dftracer traces must be "
@@ -743,8 +743,8 @@ coro::AsyncGenerator<dstd::Result<JsonLine>> TraceReader::read_json(
             if (trimmed.empty()) continue;
             simdjson::padded_string padded(trimmed);
 
-            internal::PaddedLines docs(bulk_parser, padded.data(),
-                                       padded.size());
+            internal::PaddedLines docs(
+                bulk_parser, dstd::StringView(padded.data(), padded.size()));
             simdjson::ondemand::document_reference doc;
             dstd::StringView src;
             dstd::StringView text;

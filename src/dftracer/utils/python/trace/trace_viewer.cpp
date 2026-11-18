@@ -1025,7 +1025,8 @@ PyObject* tv_materialize_partials(PyObject* self, PyObject* args,
     if (!rt) return nullptr;
     if (!run_blocking([&] {
             dftracer::utils::python::core::py_unwrap(
-                rt->submit(tv_of(self).materialize_partials(parts)).get());
+                rt->submit(tv_of(self).materialize_partials(std::move(parts)))
+                    .get());
         }))
         return nullptr;
     Py_RETURN_NONE;

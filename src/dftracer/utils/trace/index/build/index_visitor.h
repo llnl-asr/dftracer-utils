@@ -33,7 +33,7 @@ class IndexVisitor {
     /// straddle a chunk boundary, so a consumer that needs whole lines carries
     /// the partial tail across calls.
     virtual coro::CoroTask<dstd::Result<void>> on_chunk(
-        const char* data, std::size_t len, std::size_t checkpoint_idx) = 0;
+        dstd::StringView chunk, std::size_t checkpoint_idx) = 0;
 
     /// The chunks so far end in a line that no later chunk completes, since
     /// the member they came from is damaged there. A consumer that carries a

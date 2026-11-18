@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -33,7 +35,7 @@ struct Fixture {
     dstd::Vector<std::size_t> order;
 
     Fixture() {
-        auto id = [&](const char* p) { return intern.get_or_insert(p); };
+        auto id = [&](dstd::StringView p) { return intern.get_or_insert(p); };
         shapes = {
             {{id("args.size"), INT}, {id("args.io.off"), INT}},
             {{id("args.size"), INT}, {id("args.io.off"), STR}},
@@ -76,14 +78,14 @@ struct Fixture {
 };
 
 void feed(extensions::BloomFold& fold,
-          const dstd::Vector<trace::views::detail::FoldEvent>& events,
+          dstd::Span<const trace::views::detail::FoldEvent> events,
           const trace::views::detail::ScanUnit& unit) {
     dftu_utils_test::ok(
         fold.step(trace::views::detail::FoldBatch{events, unit}));
 }
 
 dstd::Map<dstd::String, trace::index::store::PathStat> catalog_of(
-    extensions::BloomFold& fold, const dstd::String& file) {
+    extensions::BloomFold& fold, dstd::CStringView file) {
     dstd::Map<dstd::String, trace::index::store::PathStat> out;
     for (const auto& [path, stat] : fold.file_catalog(file))
         out.emplace(dstd::String(path), stat);

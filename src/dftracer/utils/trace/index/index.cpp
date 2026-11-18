@@ -49,7 +49,7 @@ dftracer::utils::store::Namespace read_ns(Ext ext) {
 
 bool builtin(Ext ext) { return ext != Ext::Plugin; }
 
-bool has_name(const dstd::Vector<dftracer::utils::store::Namespace>& list,
+bool has_name(dstd::Span<const dftracer::utils::store::Namespace> list,
               const dftracer::utils::store::Namespace& ns) {
     for (const dftracer::utils::store::Namespace& known : list)
         if (known.spec.name == ns.spec.name) return true;
@@ -590,7 +590,7 @@ constexpr std::size_t INDEX_ROOTS_RETAINED = 64;
 
 class RetainedRoots {
    public:
-    Index find_or_add(const dstd::String& root, Index made) {
+    Index find_or_add(dstd::StringView root, Index made) {
         memory::detail::Scope general(memory::detail::Manager::get().general());
         std::lock_guard<std::mutex> lock(mutex_);
         const auto known =
@@ -611,7 +611,7 @@ class RetainedRoots {
         dropped.swap(roots_);
     }
 
-    void forget(const dstd::String& root) {
+    void forget(dstd::StringView root) {
         Held dropped;
         std::lock_guard<std::mutex> lock(mutex_);
         const auto known =

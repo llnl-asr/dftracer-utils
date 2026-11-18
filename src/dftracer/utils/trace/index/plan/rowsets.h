@@ -38,17 +38,17 @@ struct RowSetFile {
 /// InvalidArgument error when files with records differ, and the errors of
 /// reading an index or a trace head.
 dstd::Result<const RecordSchema*> files_schema(
-    const dstd::Vector<RowSetFile>& files);
+    dstd::Span<const RowSetFile> files);
 
 /// Row set `name` as the index build stored it, the files' rows in file
 /// order; nullopt when a file's index is missing, stale or holds no rows
 /// for it, or the files' frames cannot be joined. Reports no error.
 dstd::Optional<dataframe::DataFrame> stored_rowset(
-    const dstd::Vector<RowSetFile>& files, dstd::StringView name);
+    dstd::Span<const RowSetFile> files, dstd::StringView name);
 
 /// Whether every file's index is fresh and holds its row sets, read from
 /// the manifests only.
-bool has_stored_rowsets(const dstd::Vector<RowSetFile>& files);
+bool has_stored_rowsets(dstd::Span<const RowSetFile> files);
 
 }  // namespace dftracer::utils::trace::index::plan
 

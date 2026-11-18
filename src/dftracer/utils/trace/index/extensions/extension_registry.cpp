@@ -100,7 +100,7 @@ ExtensionBuilders::ExtensionBuilders(dstd::Vector<ExtensionPtr> extensions) {
 
 ExtensionBuilders::~ExtensionBuilders() = default;
 
-void ExtensionBuilders::report(Built& built, const char* callback,
+void ExtensionBuilders::report(Built& built, dstd::StringView callback,
                                const dstd::Error& error) {
     if (built.reported) return;
     built.reported = true;

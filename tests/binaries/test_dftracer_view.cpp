@@ -471,8 +471,9 @@ TEST_SUITE("DFTracerView") {
         dstd::String sb = build_aggregated_shard(
             env, "sb", 40,
             dstd::String(dftracer::utils::trace::index::shard_root(root, 1)));
+        const dstd::String shard_dirs[] = {sa, sb};
         dftu_utils_test::ok(dftracer::utils::trace::views::write_shard_set(
-            dstd::String(root), {dstd::String(sa), dstd::String(sb)}));
+            dstd::String(root), shard_dirs));
 
         // A flat directory with the same two traces for the baseline query.
         dstd::String both = env.dir() + "/both";

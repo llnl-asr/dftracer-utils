@@ -81,9 +81,9 @@ dstd::Vector<dstd::Tuple<dstd::String, double, double>> row_key_set(
 }
 
 // 40 events whose args carry exactly `keys`, in a trace named `name`.
-dstd::String create_args_trace(TestEnvironment& env, const dstd::String& name,
-                               const dstd::Vector<dstd::String>& keys) {
-    const dstd::String pfw = env.dir() + "/" + name + ".pfw";
+dstd::String create_args_trace(TestEnvironment& env, dstd::StringView name,
+                               dstd::Vector<dstd::String> keys) {
+    const dstd::String pfw = env.dir() + "/" + dstd::String(name) + ".pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < 40; ++i) {
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
@@ -126,7 +126,7 @@ dstd::String distinct_metric(int i) {
 // into many small gzip members and indexed with a tiny checkpoint size, so the
 // scan has many units and first occurrences land in different ones.
 dstd::String create_distinct_trace(TestEnvironment& env,
-                                   const dstd::String& idx_dir) {
+                                   dstd::StringView idx_dir) {
     dstd::String pfw = env.dir() + "/distinct.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < DISTINCT_EVENTS; ++i) {
@@ -140,7 +140,7 @@ dstd::String create_distinct_trace(TestEnvironment& env,
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 512);
     dstd::fs::remove(pfw).has_value();
-    REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
+    REQUIRE(dftu_utils_test::build_index(gz, dstd::String(idx_dir),
                                          /*checkpoint_size=*/256));
     return gz;
 }

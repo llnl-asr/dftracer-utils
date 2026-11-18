@@ -301,7 +301,7 @@ constexpr std::uint64_t MAX_ZERO_GAP = 32;
 // Not every real member start is a candidate (the scanner rejects some
 // writers' headers), so only zeros are skipped.
 static dftracer::utils::coro::CoroTask<std::uint64_t> next_member_start(
-    int fd, const dstd::Vector<GzipMember>& candidates, std::uint64_t end,
+    int fd, dstd::Span<const GzipMember> candidates, std::uint64_t end,
     std::uint64_t range_c_end) {
     if (end >= range_c_end) co_return end;
     const auto it = std::lower_bound(
@@ -924,7 +924,7 @@ struct InflateRange {
 // least its compressed size, so a garbage ISIZE or a member above 4 GiB still
 // ends its range.
 static dstd::Vector<InflateRange> plan_ranges(
-    const dstd::Vector<GzipMember>& members, std::uint64_t slice_c_end,
+    dstd::Span<const GzipMember> members, std::uint64_t slice_c_end,
     std::uint64_t target) {
     dstd::Vector<InflateRange> ranges;
     std::uint64_t acc = 0;
@@ -1154,10 +1154,10 @@ static dftracer::utils::coro::CoroTask<dstd::Result<bool>> parallel_dispatcher(
         }
 
         if (has_visitors && data_size > 0) {
-            const char* data = reinterpret_cast<const char*>(msg.data->data());
+            const dstd::StringView data(
+                reinterpret_cast<const char*>(msg.data->data()), data_size);
             for (auto& v : visitors) {
-                auto seen =
-                    co_await v.get().on_chunk(data, data_size, member_idx);
+                auto seen = co_await v.get().on_chunk(data, member_idx);
                 if (!seen) co_return seen;
             }
         }
@@ -1612,7 +1612,7 @@ void persist_gzip_index_artifacts(trace::index::FileBuild& build,
     build.finish(trace::index::store::IndexExtension::Members, 0);
 }
 
-dstd::Result<void> GzipIndexer::check_arguments(const dstd::String& gz_path,
+dstd::Result<void> GzipIndexer::check_arguments(dstd::CStringView gz_path,
                                                 std::uint64_t ckpt_size) {
     if (gz_path.empty()) {
         return trace::index::store::indexer_error(
@@ -1632,11 +1632,10 @@ dstd::Result<void> GzipIndexer::check_arguments(const dstd::String& gz_path,
     return {};
 }
 
-GzipIndexer::GzipIndexer(const dstd::String& gz_path,
-                         const dstd::String& idx_path, std::uint64_t ckpt_size,
-                         bool force_rebuild)
-    : gz_path_(gz_path),
-      gz_path_logical_path_(fileio::get_logical_path(gz_path)),
+GzipIndexer::GzipIndexer(dstd::String gz_path, dstd::String idx_path,
+                         std::uint64_t ckpt_size, bool force_rebuild)
+    : gz_path_(std::move(gz_path)),
+      gz_path_logical_path_(fileio::get_logical_path(gz_path_)),
       index_path_(trace::index::normalize_index_root(idx_path)),
       ckpt_size_(ckpt_size),
       force_rebuild_(force_rebuild),

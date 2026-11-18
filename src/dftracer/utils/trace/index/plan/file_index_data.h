@@ -74,11 +74,11 @@ struct FileIndexData {
     /// record may hold at its top level, where the evaluator looks first
     /// and the args evidence does not, has none. The accessors below take
     /// query paths and map them through this.
-    const dstd::Optional<dstd::String>& evidence_name(const dstd::String& path);
+    const dstd::Optional<dstd::String>& evidence_name(dstd::StringView path);
 
-    const Zones& zones(const dstd::String& path);
-    const Counts& counts(const dstd::String& path);
-    const Blooms& blooms(const dstd::String& path);
+    const Zones& zones(dstd::StringView path);
+    const Counts& counts(dstd::StringView path);
+    const Blooms& blooms(dstd::StringView path);
     using Catalog =
         dstd::Vector<dstd::Pair<dstd::String, trace::index::store::PathStat>>;
     /// The file's path catalog; empty when it is not current.
@@ -86,16 +86,16 @@ struct FileIndexData {
 
     /// The file-level bloom of `path`; nullptr when there is none.
     const trace::index::extensions::ScalableBloomFilter* file_bloom(
-        const dstd::String& path);
+        dstd::StringView path);
 
     /// Chunks holding `val` of `path` per its postings; empty when the
     /// postings name none.
-    const dstd::Set<std::uint64_t>& posting_chunks(const dstd::String& path,
-                                                   const dstd::String& val);
+    const dstd::Set<std::uint64_t>& posting_chunks(dstd::StringView path,
+                                                   dstd::StringView val);
     /// Whether the file holds `val` of `path` per its postings; nullopt when
     /// the file has no postings for the path.
-    dstd::Optional<bool> posting_contains(const dstd::String& path,
-                                          const dstd::String& val);
+    dstd::Optional<bool> posting_contains(dstd::StringView path,
+                                          dstd::StringView val);
 
    private:
     bool current(IndexExtension ext);

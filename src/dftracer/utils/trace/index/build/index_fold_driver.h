@@ -229,21 +229,21 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
         std::size_t checkpoint_idx) override {
         if (partial_.empty()) co_return dstd::Result<void>{};
         static constexpr char NEWLINE = '\n';
-        auto parsed = co_await on_chunk(&NEWLINE, 1, checkpoint_idx);
+        auto parsed =
+            co_await on_chunk(dstd::StringView(&NEWLINE, 1), checkpoint_idx);
         plain_offset_ -= 1;
         co_return parsed;
     }
 
     coro::CoroTask<dstd::Result<void>> on_chunk(
-        const char* data, std::size_t len,
-        std::size_t checkpoint_idx) override {
+        dstd::StringView chunk, std::size_t checkpoint_idx) override {
         const std::size_t chunk_begin = plain_offset_;
-        plain_offset_ += len;
+        plain_offset_ += chunk.size();
         // A line straddling this chunk's end is carried into the next chunk, so
         // it is parsed once and attributed to the chunk where it completes.
-        const std::size_t cut = dstd::StringView(data, len).rfind('\n');
+        const std::size_t cut = chunk.rfind('\n');
         if (cut == dstd::StringView::npos) {
-            partial_.append(data, len);
+            partial_.append(chunk);
             co_return dstd::Result<void>{};
         }
         const std::size_t whole = cut + 1;
@@ -254,7 +254,7 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
                 co_await drain_all();
                 co_return *error_;
             }
-            const std::size_t end = piece_end(data, off, whole);
+            const std::size_t end = piece_end(chunk, off, whole);
             Admit admit;
             if (dynamic)
                 admit = co_await admit_piece(end - off + partial_.size());
@@ -267,7 +267,7 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
             piece->buf->reserve(partial_.size() + (end - off) +
                                 simdjson::SIMDJSON_PADDING);
             piece->buf->append(partial_);
-            piece->buf->append(data + off, end - off);
+            piece->buf->append(chunk.substr(off, end - off));
             piece->held = std::move(admit.mem);
             if (admit.extra) piece->extra = gate_;
             piece->alive = &alive_;
@@ -299,7 +299,7 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
                     return parse_task(std::move(cfg), std::move(piece), gate);
                 }));
         }
-        partial_.assign(data + whole, len - whole);
+        partial_.assign(chunk.data() + whole, chunk.size() - whole);
         if (error_) {
             co_await drain_all();
             co_return *error_;
@@ -400,14 +400,14 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
         ~SlotGuard() { release(); }
     };
 
-    static std::size_t piece_end(const char* data, std::size_t off,
+    static std::size_t piece_end(dstd::StringView data, std::size_t off,
                                  std::size_t whole) {
         const std::size_t limit = std::min(whole, off + PARSE_PIECE_BYTES);
         std::size_t end = off;
         std::size_t lines = 0;
         while (end < limit && lines < PARSE_PIECE_LINES) {
-            const void* nl = std::memchr(data + end, '\n', whole - end);
-            end = static_cast<const char*>(nl) - data + 1;
+            const void* nl = std::memchr(data.data() + end, '\n', whole - end);
+            end = static_cast<const char*>(nl) - data.data() + 1;
             ++lines;
         }
         return end;
@@ -540,7 +540,7 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
         dftracer::utils::dstd::InternCache cache(intern);
         if (cfg.decoder == trace::index::Decoder::Path) {
             trace::parse_lines(
-                parser, c.buf->data(), total,
+                parser, dstd::StringView(c.buf->data(), total),
                 [&](simdjson::dom::element root, dstd::StringView line) {
                     if (!root.is_object()) return;
                     if (cfg.keep_lines) c.lines.push_back(line);
@@ -574,7 +574,7 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
         } else {
             trace::views::detail::DecodeHints refused_hints;
             trace::parse_lines(
-                parser, c.buf->data(), total,
+                parser, dstd::StringView(c.buf->data(), total),
                 [&](simdjson::dom::element root, dstd::StringView line) {
                     if (!trace::views::detail::append_dftracer_record(
                             *c.batch, root, intern, cfg.needs_args,

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -49,7 +50,7 @@ using namespace dftracer::utils::trace::index::extensions;
 
 namespace {
 
-ViewPlan count_plan(const dstd::String& gz, const dstd::String& idx) {
+ViewPlan count_plan(dstd::CStringView gz, dstd::CStringView idx) {
     ViewPlan plan;
     ViewFile f;
     f.file_path = gz;
@@ -513,9 +514,9 @@ class RecordingFold final : public Fold {
 
 // `members` gzip members of `events` events each; every fifth member ends
 // inside a line that the next member finishes.
-dstd::String write_multi_member(const dstd::String& dir, int members = 40,
+dstd::String write_multi_member(dstd::CStringView dir, int members = 40,
                                 int events = 300) {
-    const dstd::String path = dir + "/multi.pfw.gz";
+    const dstd::String path = dstd::String(dir) + "/multi.pfw.gz";
     dstd::String carry;
     int ts = 0;
     for (int m = 0; m < members; ++m) {
@@ -546,8 +547,8 @@ dstd::String write_multi_member(const dstd::String& dir, int members = 40,
     return path;
 }
 
-dstd::Vector<dstd::String> record_index_pass(const dstd::String& gz,
-                                             const dstd::String& idx,
+dstd::Vector<dstd::String> record_index_pass(dstd::CStringView gz,
+                                             dstd::CStringView idx,
                                              std::size_t workers) {
     dstd::StringIntern intern;
     RecordingFold rec(intern);
@@ -578,7 +579,7 @@ dstd::Vector<dstd::String> record_index_pass(const dstd::String& gz,
 
 // Every live record of every family of an index, in order.
 static dstd::Vector<dftu_utils_test::IndexRecord> index_contents(
-    const dstd::String& index_path) {
+    dstd::CStringView index_path) {
     return dftu_utils_test::dump_index(index_path);
 }
 
@@ -586,7 +587,7 @@ TEST_CASE("a first-touch query under a small budget spills the same index") {
     TestEnvironment env(10);
     REQUIRE(env.is_valid());
     const dstd::String gz = write_multi_member(env.dir());
-    auto count = [&](const dstd::String& idx, std::uint64_t budget) {
+    auto count = [&](dstd::CStringView idx, std::uint64_t budget) {
         return dftu_utils_test::ok(
                    View::from_file(dstd::String(gz), dstd::String(idx))
                        .memory_budget(budget)

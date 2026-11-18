@@ -415,8 +415,6 @@ class EventRows {
    public:
     EventRows(dstd::Span<const FoldEvent> all)
         : base_(all.data()), n_(all.size()) {}
-    EventRows(const dstd::Vector<FoldEvent>& all)
-        : base_(all.data()), n_(all.size()) {}
     EventRows(dstd::Span<const FoldEvent> all,
               dstd::Span<const std::uint32_t> pick)
         : base_(all.data()), pick_(pick.data()), n_(pick.size()) {}
@@ -560,7 +558,7 @@ void flatten_container(FoldEvent& ev, dstd::String path,
 /// everything else to `args`. No-op when the path is absent.
 inline void capture_extra_field(FoldEvent& ev, simdjson::dom::element root,
                                 dftracer::utils::dstd::StringIntern& intern,
-                                const dstd::String& name) {
+                                dstd::StringView name) {
     bool ok = false;
     simdjson::dom::element v = resolve_json_path(root, name, ok);
     const bool schema_field = !is_nested_path(name) && is_schema_field(name);
@@ -578,7 +576,7 @@ inline void capture_extra_field(FoldEvent& ev, simdjson::dom::element root,
     for (const auto& s : ev.specials)
         if (s.key == key_id && s.top == schema_field) return;
     if (!schema_field && (v.is_array() || v.is_object()))
-        flatten_container(ev, name, v, intern);
+        flatten_container(ev, dstd::String(name), v, intern);
     else
         append_scalar_arg(into, ev.specials, key_id, v, intern, schema_field);
 }

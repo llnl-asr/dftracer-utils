@@ -52,7 +52,7 @@ namespace {
 // False when the inflate pass left a gap between the records, so a member after
 // the gap is not proven to follow the ones before it.
 bool covers_every_byte(
-    const dstd::Vector<trace::index::gzip::GzipMemberRecord>& members,
+    dstd::Span<const trace::index::gzip::GzipMemberRecord> members,
     std::uint64_t from, std::uint64_t to) {
     std::uint64_t at = from;
     for (const auto& member : members) {
@@ -91,8 +91,8 @@ struct ParsedBloomJob {
     const trace::index::RecordSchema* schema = nullptr;
 };
 
-PreparedFile prepare_file(std::size_t i, const dstd::String& file_path,
-                          const dstd::String& index_path) {
+PreparedFile prepare_file(std::size_t i, dstd::StringView file_path,
+                          dstd::StringView index_path) {
     PreparedFile pf;
     pf.index = i;
     pf.file_path = file_path;
@@ -144,9 +144,10 @@ struct BatchWriteState {
     IndexBuildBatchConfig::ProgressFn progress;
 };
 
-static dstd::String basename_of(const dstd::String& path) {
+static dstd::String basename_of(dstd::StringView path) {
     auto pos = path.find_last_of('/');
-    return pos == dstd::String::npos ? path : path.substr(pos + 1);
+    return dstd::String(pos == dstd::StringView::npos ? path
+                                                      : path.substr(pos + 1));
 }
 
 struct BlockWriter {

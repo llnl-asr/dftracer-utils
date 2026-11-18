@@ -70,7 +70,7 @@ static dstd::Result<const RecordSchema*> detect_trace_schema(
     return detection->chosen;
 }
 
-static bool trace_exists(const dstd::String& path) {
+static bool trace_exists(dstd::CStringView path) {
     common::InputFileStat st;
     return common::stat_input(path, st);
 }
@@ -126,7 +126,7 @@ void for_each_index(std::size_t n, Fn&& fn) {
 }  // namespace
 
 dstd::Result<const RecordSchema*> files_schema(
-    const dstd::Vector<RowSetFile>& files) {
+    dstd::Span<const RowSetFile> files) {
     // A missing trace with no recorded schema is read as dftracer here, and
     // the scan reports the missing trace.
     dstd::Map<dstd::String, dstd::Optional<Snapshot>> snapshots;
@@ -237,7 +237,7 @@ dstd::Result<const RecordSchema*> files_schema(
 }
 
 dstd::Optional<dataframe::DataFrame> stored_rowset(
-    const dstd::Vector<RowSetFile>& files, dstd::StringView name) {
+    dstd::Span<const RowSetFile> files, dstd::StringView name) {
     if (files.empty()) return dstd::nullopt;
     dstd::Map<dstd::String, dstd::Optional<Snapshot>, std::less<>> snapshots;
     dstd::Vector<dataframe::DataFrame> parts;
@@ -266,7 +266,7 @@ dstd::Optional<dataframe::DataFrame> stored_rowset(
     return std::move(*joined);
 }
 
-bool has_stored_rowsets(const dstd::Vector<RowSetFile>& files) {
+bool has_stored_rowsets(dstd::Span<const RowSetFile> files) {
     if (files.empty()) return false;
     dstd::Map<dstd::String, dstd::Optional<Snapshot>, std::less<>> snapshots;
     for (const auto& f : files) {

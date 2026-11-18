@@ -99,13 +99,13 @@ static dstd::String read_gzip_fname(const dstd::File& file) {
 }
 
 // Estimate compression ratio based on file extension
-static double guess_text_ratio_from_ext(const dstd::String& fname) {
+static double guess_text_ratio_from_ext(dstd::StringView fname) {
     dstd::String s;
     s.reserve(fname.size());
     for (char c : fname) s.push_back(dstd::to_ascii_lower(c));
-    auto has = [&](const char* ext) {
+    auto has = [&](dstd::StringView ext) {
         auto p = s.rfind(ext);
-        return p != dstd::String::npos && p + std::strlen(ext) == s.size();
+        return p != dstd::String::npos && p + ext.size() == s.size();
     };
     if (has(".pfw") || has(".json") || has(".jsonl") || has(".ndjson") ||
         has(".txt") || has(".csv"))

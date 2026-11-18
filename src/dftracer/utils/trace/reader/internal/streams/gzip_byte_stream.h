@@ -23,7 +23,7 @@ class GzipByteStream : public GzipStream {
 
     using GzipStream::read_async;
 
-    void initialize(const dstd::String &gz_path, std::size_t start_bytes,
+    void initialize(dstd::StringView gz_path, std::size_t start_bytes,
                     std::size_t end_bytes,
                     dftracer::utils::trace::index::gzip::CheckpointIndexer
                         &indexer) override {

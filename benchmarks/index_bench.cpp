@@ -439,7 +439,7 @@ Result measure(const Options& opt, const dstd::String& input,
     r.decode_s = timed(
         [&] {
             ExportStats s = run(view.for_each_batch(
-                [](std::size_t, const dstd::Vector<dstd::StringView>&) {}, 1));
+                [](std::size_t, dstd::Span<const dstd::StringView>) {}, 1));
             r.events = s.events_scanned;
         },
         opt.warmups, opt.runs);

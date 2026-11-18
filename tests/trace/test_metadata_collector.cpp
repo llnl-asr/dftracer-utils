@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/archive_format.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -25,9 +26,9 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::trace;
 
 // Helper to create a test trace file
-static dstd::String create_test_trace_file(const dstd::String& dir,
+static dstd::String create_test_trace_file(dstd::CStringView dir,
                                            int event_count) {
-    dstd::String file_path = dir + "/test.trace.gz";
+    dstd::String file_path = dstd::String(dir) + "/test.trace.gz";
     dftu_utils_test::TextOut ofs;
 
     const char* io_names[] = {"pread", "pwrite", "read",
@@ -332,7 +333,7 @@ TEST_SUITE("MetadataCollectorRoot") {
             REQUIRE(dstd::fs::create_directories(sub).has_value());
             files.push_back(create_test_trace_file(sub, 20 + i));
         }
-        auto collect = [&](const dstd::String& file) {
+        auto collect = [&](dstd::CStringView file) {
             MetadataCollectorUtility collector;
             return collector(MetadataCollectorUtilityInput::from_file(
                                  dstd::String(file))

@@ -40,7 +40,7 @@ namespace {
 // slower.
 coro::CoroTask<dstd::Result<dstd::Vector<ResolverResult::Failure>>> build_tier(
     dstd::Vector<dstd::String> files, const ResolveAndBuildInput& input,
-    trace::index::store::ExtensionMask tier, const dstd::String& schema,
+    trace::index::store::ExtensionMask tier, dstd::String schema,
     std::size_t parallelism) {
     auto config = dstd::make_shared<IndexBuildBatchConfig>();
     config->file_paths = std::move(files);
@@ -49,7 +49,7 @@ coro::CoroTask<dstd::Result<dstd::Vector<ResolverResult::Failure>>> build_tier(
     config->parallelism = parallelism;
     config->tier_only = true;
     config->memory_budget = input.memory_budget;
-    config->schema = schema;
+    config->schema = std::move(schema);
     config->bloom_config = input.bloom_config;
     config->bloom_config.extensions = tier;
     DFTRACER_UTILS_LOG_INFO("Building the index tier for {} files",
@@ -65,9 +65,8 @@ coro::CoroTask<dstd::Result<dstd::Vector<ResolverResult::Failure>>> build_tier(
 // Aggregates files whose members are current, leaving every other extension.
 coro::CoroTask<dstd::Result<dstd::Vector<ResolverResult::Failure>>>
 build_aggregation(dstd::Vector<dstd::String> files,
-                  const ResolveAndBuildInput& input,
-                  const dstd::String& index_path, const dstd::String& schema,
-                  std::size_t parallelism) {
+                  const ResolveAndBuildInput& input, dstd::String index_path,
+                  dstd::String schema, std::size_t parallelism) {
     auto started = start_aggregation(index_path, input.aggregation_config);
     if (!started) co_return started.error();
     AggRun run = std::move(*started);
@@ -79,7 +78,7 @@ build_aggregation(dstd::Vector<dstd::String> files,
     config->tier_only = true;
     config->build_bloom = false;
     config->memory_budget = input.memory_budget;
-    config->schema = schema;
+    config->schema = std::move(schema);
     config->agg_fold_factory = std::move(run.factory);
     DFTRACER_UTILS_LOG_INFO("Aggregating {} files", config->file_paths.size());
     auto batch = co_await BatchBuilder::process(std::move(config));

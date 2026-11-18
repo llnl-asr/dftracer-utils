@@ -2,8 +2,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/versions.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -34,11 +36,11 @@ using namespace dftracer::utils::trace;
 namespace {
 
 // A ph="X" trace in its own subdir, so each shard's sidecar index is distinct.
-dstd::String make_x_trace(TestEnvironment& env, const dstd::String& tag,
+dstd::String make_x_trace(TestEnvironment& env, dstd::StringView tag,
                           int posix_n, int stdio_n) {
-    dstd::String dir = env.dir() + "/" + tag;
+    dstd::String dir = env.dir() + "/" + dstd::String(tag);
     REQUIRE(dstd::fs::create_directories(dir).has_value());
-    dstd::String pfw = dir + "/" + tag + ".pfw";
+    dstd::String pfw = dir + "/" + dstd::String(tag) + ".pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < posix_n; ++i)
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
@@ -59,9 +61,9 @@ dstd::String make_x_trace(TestEnvironment& env, const dstd::String& tag,
 // aggregator does, so the chunk partials can answer without a scan. `index_dir`
 // names the index root to build into, such as a shard root.
 void build_shard_index(
-    const dstd::String& gz,
+    dstd::CStringView gz,
     const trace::index::schemas::dft::agg::AggregationConfig& config = {},
-    const dstd::String& index_dir = "") {
+    dstd::CStringView index_dir = "") {
     dftracer::utils::trace::index::IndexerOptions options;
     options.aggregation = config;
     options.index_dir = index_dir;
@@ -72,8 +74,8 @@ void build_shard_index(
 }
 
 // The trace files the root's store holds a current index for.
-dstd::Vector<dstd::String> indexed_files(
-    const dstd::String& root, const dstd::Vector<dstd::String>& files) {
+dstd::Vector<dstd::String> indexed_files(dstd::CStringView root,
+                                         dstd::Span<const dstd::String> files) {
     dftracer::utils::trace::index::IndexerOptions options;
     options.index_dir = dstd::String(dstd::StringView(root));
     options.aggregation = trace::index::schemas::dft::agg::AggregationConfig{};
@@ -148,20 +150,21 @@ QueryOut run_query(const dftracer::utils::trace::AggQuery& q) {
 }
 
 void check_merged_partials(
-    const dstd::String& tag,
+    dstd::StringView tag,
     const trace::index::schemas::dft::agg::AggregationConfig& config) {
     TestEnvironment env(200);
     REQUIRE(env.is_valid());
-    dstd::String a = make_x_trace(env, tag + "alpha", 30, 20);
-    dstd::String b = make_x_trace(env, tag + "beta", 10, 40);
+    dstd::String a = make_x_trace(env, dstd::String(tag) + "alpha", 30, 20);
+    dstd::String b = make_x_trace(env, dstd::String(tag) + "beta", 10, 40);
     dstd::String ia = dstd::String(determine_index_path(a, ""));
     dstd::String ib = dstd::String(determine_index_path(b, ""));
     build_shard_index(a, config);
     build_shard_index(b, config);
 
     dstd::String root = env.dir() + "/set";
-    dftu_utils_test::ok(views::write_shard_set(
-        dstd::String(root), {dstd::String(ia), dstd::String(ib)}));
+    const dstd::String shard_indexes[] = {ia, ib};
+    dftu_utils_test::ok(
+        views::write_shard_set(dstd::String(root), shard_indexes));
     dstd::String out = env.dir() + "/merged";
     dftu_utils_test::ok(
         views::merge_shard_set(dstd::String(root), dstd::String(out)));
@@ -354,8 +357,9 @@ TEST_SUITE("ShardedView") {
         build_shard_index(b);
 
         dstd::String root = env.dir() + "/set";
-        dftu_utils_test::ok(views::write_shard_set(
-            dstd::String(root), {dstd::String(ia), dstd::String(ib)}));
+        const dstd::String shard_indexes[] = {ia, ib};
+        dftu_utils_test::ok(
+            views::write_shard_set(dstd::String(root), shard_indexes));
 
         auto manifest =
             dftu_utils_test::ok(trace::index::store::read_shard_manifest(root));
@@ -591,8 +595,9 @@ TEST_SUITE("ShardedView") {
         build_shard_index(b);
 
         dstd::String root = env.dir() + "/set";
-        dftu_utils_test::ok(views::write_shard_set(
-            dstd::String(root), {dstd::String(ia), dstd::String(ib)}));
+        const dstd::String shard_indexes[] = {ia, ib};
+        dftu_utils_test::ok(
+            views::write_shard_set(dstd::String(root), shard_indexes));
 
         auto configure = [](View v) -> View {
             return v.group_by({GroupKey::cat()})

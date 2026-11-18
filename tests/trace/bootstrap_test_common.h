@@ -3,7 +3,9 @@
 #define DFTRACER_UTILS_TESTS_TRACE_BOOTSTRAP_COMMON_H
 
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -28,8 +30,8 @@ counts(const dftracer::utils::dataframe::DataFrame& df) {
 
 inline dftracer::utils::dstd::Vector<dftracer::utils::trace::views::ViewFile>
 view_files_of(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& files,
-    const dftracer::utils::dstd::String& index_dir) {
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> files,
+    dftracer::utils::dstd::CStringView index_dir) {
     dftracer::utils::dstd::Vector<dftracer::utils::trace::views::ViewFile>
         view_files;
     for (const auto& f : files) {
@@ -43,8 +45,8 @@ view_files_of(
 }
 
 inline dftracer::utils::dataframe::DataFrame count_by_name(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& files,
-    const dftracer::utils::dstd::String& index_dir) {
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> files,
+    dftracer::utils::dstd::CStringView index_dir) {
     const auto view =
         dftracer::utils::trace::views::View::from_files(
             view_files_of(files, index_dir))

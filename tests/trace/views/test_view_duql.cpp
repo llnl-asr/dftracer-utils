@@ -4,10 +4,12 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -176,8 +178,7 @@ dstd::String failure_of(const dstd::Function<View()>& make) {
     return {};
 }
 
-dataframe::DataFrame pipe(const dstd::String& text,
-                          const duql::Params& p = {}) {
+dataframe::DataFrame pipe(dstd::StringView text, const duql::Params& p = {}) {
     return frame(base().duql(text, p));
 }
 
@@ -236,7 +237,7 @@ dstd::String text(const dataframe::DataFrame& f) {
     return out;
 }
 
-bool fails_with(const dstd::String& q, dstd::Vector<dstd::String> words) {
+bool fails_with(dstd::StringView q, dstd::Vector<dstd::String> words) {
     const dstd::String what = failure_of([&] { return base().duql(q); });
     if (what.empty()) return false;
     for (const auto& w : words)
@@ -247,16 +248,15 @@ bool fails_with(const dstd::String& q, dstd::Vector<dstd::String> words) {
     return true;
 }
 
-dstd::String event(int ts, const dstd::String& args, int dur = 10) {
+dstd::String event(int ts, dstd::StringView args, int dur = 10) {
     return R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":)" +
            dstd::to_string(ts) + R"(,"dur":)" + dstd::to_string(dur) +
-           R"(,"args":{)" + args + "}}";
+           R"(,"args":{)" + dstd::String(args) + "}}";
 }
 
-View view_of_lines(TestEnvironment& env,
-                   const dstd::Vector<dstd::String>& lines,
-                   const dstd::String& name = "lines.pfw") {
-    const dstd::String pfw = env.dir() + "/" + name;
+View view_of_lines(TestEnvironment& env, dstd::Vector<dstd::String> lines,
+                   dstd::StringView name = "lines.pfw") {
+    const dstd::String pfw = env.dir() + "/" + dstd::String(name);
     {
         dftu_utils_test::FileOut o(pfw);
         for (const auto& l : lines) o << l << "\n";
@@ -566,8 +566,8 @@ TEST_SUITE("View duql pipeline") {
 
     TEST_CASE("parse adds a String column per named group") {
         TestEnvironment env(10);
-        const auto named = [](int ts, const dstd::String& name) {
-            return dstd::String(R"({"ph":"X","name":")") + name +
+        const auto named = [](int ts, dstd::StringView name) {
+            return dstd::String(R"({"ph":"X","name":")") + dstd::String(name) +
                    R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" +
                    dstd::to_string(ts) + R"(,"dur":10})";
         };
@@ -575,8 +575,8 @@ TEST_SUITE("View duql pipeline") {
             env,
             {named(1, "open64_17"), named(2, "read"), named(3, "close"),
              R"({"ph":"X","cat":"POSIX","pid":1,"tid":1,"ts":4,"dur":10})"});
-        const auto run_parse = [&](const dstd::String& q) {
-            return frame(v.duql(q + " | sort ts"));
+        const auto run_parse = [&](dstd::StringView q) {
+            return frame(v.duql(dstd::String(q) + " | sort ts"));
         };
 
         dataframe::DataFrame f = run_parse(
@@ -792,7 +792,7 @@ TEST_SUITE("View duql pipeline") {
 
     TEST_CASE("explain lists the reshaping steps") {
         const View v = base();
-        auto has = [](dstd::StringView plan, const char* line) {
+        auto has = [](dstd::StringView plan, dstd::StringView line) {
             INFO(dstd::String(plan));
             CHECK(plan.find(line) != dstd::StringView::npos);
         };
@@ -1005,7 +1005,7 @@ TEST_SUITE("View duql aggregation") {
     TEST_CASE("a record without dur has no duration on either plan") {
         TestEnvironment env(10);
         const View v = view_of_lines(env, null_dur_lines());
-        const auto agree = [&v](const dstd::String& stage, bool trace_plan) {
+        const auto agree = [&v](dstd::StringView stage, bool trace_plan) {
             INFO(stage);
             const dstd::String plan =
                 dftu_utils_test::ok(v.explain_duql(stage));
@@ -1255,11 +1255,11 @@ TEST_SUITE("View duql aggregation") {
         const View v = view_of_lines(env, lines);
         const dstd::String tail =
             " | group grp { m = mean(args.v), n = count() }";
-        const auto run_q = [&](const dstd::String& q) {
-            return frame(v.duql("derive grp = args.g | " + q + tail));
+        const auto run_q = [&](dstd::StringView q) {
+            return frame(
+                v.duql("derive grp = args.g | " + dstd::String(q) + tail));
         };
-        const auto find = [](const dataframe::DataFrame& f,
-                             const dstd::String& g,
+        const auto find = [](const dataframe::DataFrame& f, dstd::StringView g,
                              int bucket) -> std::int64_t {
             for (std::int64_t r = 0; r < f.num_rows(); ++r)
                 if (bstr(f, r, "grp") == g &&
@@ -1267,23 +1267,23 @@ TEST_SUITE("View duql aggregation") {
                     return r;
             return -1;
         };
-        const auto real = [&](const dstd::String& g,
+        const auto real = [&](dstd::StringView g,
                               int b) -> dstd::Optional<Cell> {
             for (const auto& c : data)
                 if (c.g == g && c.bucket == b) return c;
             return dstd::nullopt;
         };
-        const auto present = [&](const dstd::String& g,
+        const auto present = [&](dstd::StringView g,
                                  int b) -> dstd::Optional<double> {
             const auto c = real(g, b);
             return c ? c->v : dstd::nullopt;
         };
-        const auto before = [&](const dstd::String& g, int b) {
+        const auto before = [&](dstd::StringView g, int b) {
             for (int i = b - 1; i >= 0; --i)
                 if (present(g, i)) return i;
             return -1;
         };
-        const auto after = [&](const dstd::String& g, int b) {
+        const auto after = [&](dstd::StringView g, int b) {
             for (int i = b + 1; i <= 6; ++i)
                 if (present(g, i)) return i;
             return -1;
@@ -1374,7 +1374,7 @@ TEST_SUITE("View duql aggregation") {
 
     // Brute force: each window start T + k * E that holds the time.
     static dstd::Map<dstd::Pair<std::int64_t, dstd::String>, HopCell>
-    hop_reference(const dstd::Vector<HopRow>& rows, int W, int E, int T) {
+    hop_reference(dstd::Span<const HopRow> rows, int W, int E, int T) {
         dstd::Map<dstd::Pair<std::int64_t, dstd::String>, HopCell> out;
         for (const auto& r : rows)
             for (int k = -200; k <= 200; ++k) {
@@ -1388,8 +1388,7 @@ TEST_SUITE("View duql aggregation") {
         return out;
     }
 
-    static dstd::Vector<dstd::String> hop_lines(
-        const dstd::Vector<HopRow>& rows) {
+    static dstd::Vector<dstd::String> hop_lines(dstd::Span<const HopRow> rows) {
         dstd::Vector<dstd::String> lines;
         for (const auto& r : rows)
             lines.push_back(event(r.t,
@@ -1661,16 +1660,16 @@ dstd::String sorted(const dataframe::DataFrame& f) {
     return text;
 }
 
-dstd::String line(const dstd::String& cat, int ts, const dstd::String& args) {
-    return R"({"ph":"X","name":"op","cat":")" + cat +
+dstd::String line(dstd::StringView cat, int ts, dstd::StringView args) {
+    return R"({"ph":"X","name":"op","cat":")" + dstd::String(cat) +
            R"(","pid":1,"tid":1,"ts":)" + dstd::to_string(ts) +
-           R"(,"dur":10,"args":{)" + args + "}}";
+           R"(,"dur":10,"args":{)" + dstd::String(args) + "}}";
 }
 
 // `where` as the scan filter and as a stage after the scan.
-dstd::Vector<dstd::String> both(const dstd::String& cond) {
-    return {"where " + cond + " | select ts",
-            "derive z = 1 | where " + cond + " | select ts"};
+dstd::Vector<dstd::String> both(dstd::StringView cond) {
+    return {"where " + dstd::String(cond) + " | select ts",
+            "derive z = 1 | where " + dstd::String(cond) + " | select ts"};
 }
 
 }  // namespace
@@ -1808,9 +1807,9 @@ TEST_SUITE("View duql window") {
             env, {event(1, R"("g":"a","x":3)"), event(2, R"("g":"a")"),
                   event(3, R"("g":"b","x":5)"), event(4, R"("g":"a","x":3)"),
                   event(5, R"("g":"b","x":1)")});
-        const auto run_q = [&](const dstd::String& entry) {
-            return rows(frame(
-                v.duql("window g sort -x { v = " + entry + " } | select v")));
+        const auto run_q = [&](dstd::StringView entry) {
+            return rows(frame(v.duql("window g sort -x { v = " +
+                                     dstd::String(entry) + " } | select v")));
         };
         // Order within a by -x (nulls last): rows 1, 4, 2; within b: 3, 5.
         CHECK(run_q("row_number()") == "1;3;1;2;2");
@@ -1831,14 +1830,15 @@ TEST_SUITE("View duql window") {
         CHECK(run_q("last(x)") == "3;3;1;3;1");
         CHECK(run_q("var(x)") == "0;0;8;0;8");
         // The rest equal `group` on each partition, on every row in order.
-        const auto by_group = [&](const dstd::String& agg) {
-            const dataframe::DataFrame g =
-                frame(v.duql("group g { v = " + agg + " } | select g, v"));
+        const auto by_group = [&](dstd::StringView agg) {
+            const dataframe::DataFrame g = frame(v.duql(
+                "group g { v = " + dstd::String(agg) + " } | select g, v"));
             dstd::Map<dstd::String, dstd::String> value;
             for (std::int64_t r = 0; r < g.num_rows(); ++r)
                 value[cell(g.columns[0], r)] = cell(g.columns[1], r);
-            const dataframe::DataFrame w = frame(
-                v.duql("window g sort -x { v = " + agg + " } | select g, v"));
+            const dataframe::DataFrame w =
+                frame(v.duql("window g sort -x { v = " + dstd::String(agg) +
+                             " } | select g, v"));
             dstd::String out;
             for (std::int64_t r = 0; r < w.num_rows(); ++r) {
                 CHECK(cell(w.columns[1], r) == value[cell(w.columns[0], r)]);
@@ -1872,8 +1872,8 @@ TEST_SUITE("View duql window") {
         return dstd::to_string(*v);
     }
 
-    static dstd::String aggregated(const dstd::String& fn,
-                                   const dstd::Vector<double>& in) {
+    static dstd::String aggregated(dstd::StringView fn,
+                                   dstd::Span<const double> in) {
         if (fn == "count") return dstd::to_string(in.size());
         if (in.empty()) return "null";
         double sum = 0;
@@ -1884,7 +1884,7 @@ TEST_SUITE("View duql window") {
                                  : *std::max_element(in.begin(), in.end()));
     }
 
-    static View points_view(TestEnvironment & env, const dstd::Vector<Pt>& pts,
+    static View points_view(TestEnvironment & env, dstd::Span<const Pt> pts,
                             bool key_in_ts) {
         dstd::Vector<dstd::String> lines;
         for (const auto& p : pts) {
@@ -1901,7 +1901,7 @@ TEST_SUITE("View duql window") {
 
     // `fn(x)` per row over the rows `in_frame(i, j)` selects.
     template <class InFrame>
-    dstd::String framed_ref(const dstd::Vector<Pt>& pts, const dstd::String& fn,
+    dstd::String framed_ref(dstd::Span<const Pt> pts, dstd::StringView fn,
                             InFrame in_frame) {
         dstd::String out;
         for (std::size_t i = 0; i < pts.size(); ++i) {
@@ -2039,14 +2039,14 @@ TEST_SUITE("View duql window") {
                 text += (i ? ";" : "") + out[i];
             return text;
         };
-        const auto x_at = [&](const dstd::Vector<std::size_t>& idx,
+        const auto x_at = [&](dstd::Span<const std::size_t> idx,
                               std::size_t p) -> dstd::Optional<double> {
             if (pts[idx[p]].x) return static_cast<double>(*pts[idx[p]].x);
             return dstd::nullopt;
         };
-        const auto run_q = [&](const dstd::String& entry) {
-            return rows(frame(
-                v.duql("window g sort k { v = " + entry + " } | select v")));
+        const auto run_q = [&](dstd::StringView entry) {
+            return rows(frame(v.duql("window g sort k { v = " +
+                                     dstd::String(entry) + " } | select v")));
         };
         const auto running = [&](bool mean, int which) {
             return per_row([&](const auto& idx, std::size_t p) {
@@ -2122,9 +2122,9 @@ TEST_SUITE("View duql window") {
 
     TEST_CASE("count_distinct and arg_max over a frame") {
         TestEnvironment env;
-        const auto at = [](int ts, const dstd::String& f, int dur) {
+        const auto at = [](int ts, dstd::StringView f, int dur) {
             return event(ts,
-                         R"("g":"a","f":")" + f + R"(","n":"r)" +
+                         R"("g":"a","f":")" + dstd::String(f) + R"(","n":"r)" +
                              dstd::to_string(ts) + R"(")",
                          dur);
         };
@@ -2150,11 +2150,11 @@ TEST_SUITE("View duql window") {
 
     TEST_CASE("count_if and collect over a partition and a frame") {
         TestEnvironment env;
-        const auto at = [](int ts, const dstd::String& g, const dstd::String& x,
+        const auto at = [](int ts, dstd::StringView g, dstd::StringView x,
                            int dur) {
             return event(ts,
-                         R"("g":")" + g + R"(","n":"r)" + dstd::to_string(ts) +
-                             R"(")" + x,
+                         R"("g":")" + dstd::String(g) + R"(","n":"r)" +
+                             dstd::to_string(ts) + R"(")" + dstd::String(x),
                          dur);
         };
         const View v = view_of_lines(
@@ -2200,7 +2200,7 @@ TEST_SUITE("View duql window") {
             lines.push_back(event(static_cast<int>(ts[i]), R"("g":"a")",
                                   static_cast<int>(dur[i])));
         const View v = view_of_lines(env, lines);
-        const auto stats = [&](const dstd::Vector<std::size_t>& in) {
+        const auto stats = [&](dstd::Span<const std::size_t> in) {
             dstd::Vector<double> x;
             for (const auto j : in) x.push_back(static_cast<double>(dur[j]));
             std::sort(x.begin(), x.end());
@@ -2701,10 +2701,11 @@ TEST_SUITE("View duql array and object functions") {
 
 TEST_SUITE("View duql array indexes and lists") {
     static View arrays_view(TestEnvironment & env) {
-        auto line = [](int ts, const char* name, const dstd::String& args) {
+        auto line = [](int ts, dstd::StringView name, dstd::StringView args) {
             return R"({"ph":"X","name":")" + dstd::String(name) +
                    R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" +
-                   dstd::to_string(ts) + R"(,"dur":10,"args":{)" + args + "}}";
+                   dstd::to_string(ts) + R"(,"dur":10,"args":{)" +
+                   dstd::String(args) + "}}";
         };
         return view_of_lines(
             env, {line(1, "read",
@@ -2715,10 +2716,11 @@ TEST_SUITE("View duql array indexes and lists") {
 
     TEST_CASE("an array holding a number too large for a double is a list") {
         TestEnvironment env(10);
-        auto line = [](int ts, const char* name, const dstd::String& args) {
+        auto line = [](int ts, dstd::StringView name, dstd::StringView args) {
             return R"({"ph":"X","name":")" + dstd::String(name) +
                    R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" +
-                   dstd::to_string(ts) + R"(,"dur":10,"args":{)" + args + "}}";
+                   dstd::to_string(ts) + R"(,"dur":10,"args":{)" +
+                   dstd::String(args) + "}}";
         };
         const View v =
             view_of_lines(env, {line(1, "read", R"("xs":[10,20,30])"),
@@ -2899,8 +2901,7 @@ TEST_SUITE("View duql session") {
     // `events` as a dftracer trace, one event per (pid, tid, ts, dur), in
     // the order given, gzip members of about `member_bytes`.
     static dstd::String session_trace(
-        TestEnvironment & env,
-        const dstd::Vector<std::array<std::int64_t, 4>>& events,
+        TestEnvironment & env, dstd::Vector<std::array<std::int64_t, 4>> events,
         std::size_t member_bytes = 4096) {
         const dstd::String pfw = env.dir() + "/sess.pfw";
         {
@@ -2921,7 +2922,7 @@ TEST_SUITE("View duql session") {
         return gz;
     }
 
-    static View view_of(const dstd::String& gz) {
+    static View view_of(dstd::CStringView gz) {
         return View::from_file(
             dstd::String(gz),
             dstd::String(dstd::String(determine_index_path(gz, ""))));

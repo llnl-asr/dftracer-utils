@@ -147,7 +147,7 @@ void put_dimension(Tier& t, std::uint64_t checkpoint_idx,
 
 void write_chunk_to(Tier& t, std::uint64_t checkpoint_idx,
                     const BloomCore::ChunkState& chunk,
-                    const dstd::Vector<dstd::String>& extra_dims,
+                    dstd::Span<const dstd::String> extra_dims,
                     const BloomCore::ChunkIndexerConfig& config,
                     BloomCore::FileAccumulator& acc) {
     const auto& m = config.extensions;
@@ -235,7 +235,7 @@ void write_absent_extra_to(Tier& t, std::uint64_t checkpoint_idx,
 BloomCore::ChunkStatistics finish_file_to(
     Tier& t, BloomCore::FileAccumulator& acc,
     const BloomCore::ChunkIndexerConfig& config,
-    const dstd::Vector<dstd::String>& extra_dims,
+    dstd::Span<const dstd::String> extra_dims,
     const BloomCore::Catalog& catalog) {
     const auto& m = config.extensions;
     const bool blooms = m.has(IndexExtension::Bloom);
@@ -368,7 +368,7 @@ BloomCore::FileAccumulator::ExtraBloom& BloomCore::FileAccumulator::extra(
 void BloomCore::write_chunk(trace::index::FileBuild& build,
                             std::uint64_t checkpoint_idx,
                             const ChunkState& chunk,
-                            const dstd::Vector<dstd::String>& extra_dims,
+                            dstd::Span<const dstd::String> extra_dims,
                             const ChunkIndexerConfig& config,
                             FileAccumulator& acc) {
     Tier tier(build);
@@ -385,8 +385,8 @@ void BloomCore::write_absent_extra(trace::index::FileBuild& build,
 
 BloomCore::ChunkStatistics BloomCore::finish_file(
     trace::index::FileBuild& build, FileAccumulator& acc,
-    const ChunkIndexerConfig& config,
-    const dstd::Vector<dstd::String>& extra_dims, const Catalog& catalog) {
+    const ChunkIndexerConfig& config, dstd::Span<const dstd::String> extra_dims,
+    const Catalog& catalog) {
     Tier tier(build);
     return finish_file_to(tier, acc, config, extra_dims, catalog);
 }
@@ -396,10 +396,10 @@ BloomCore::ChunkState::ChunkState() = default;
 namespace {
 
 // The type of a dimension holding values of both types; "" is no value yet.
-dstd::String join_value_types(const dstd::String& a, const dstd::String& b) {
-    if (a.empty() || a == b) return b;
-    if (b.empty()) return a;
-    if (a == "mixed" || b == "mixed") return "mixed";
+dstd::String join_value_types(dstd::StringView a, dstd::StringView b) {
+    if (a.empty() || a == b) return dstd::String(b);
+    if (b.empty()) return dstd::String(a);
+    if (a == "mixed" || b == "mixed") return dstd::String("mixed");
     const bool num_a = a == "int" || a == "uint" || a == "double";
     const bool num_b = b == "int" || b == "uint" || b == "double";
     return num_a && num_b ? "double" : "mixed";
@@ -408,7 +408,7 @@ dstd::String join_value_types(const dstd::String& a, const dstd::String& b) {
 // Counts a value of `type` and joins its type in; false when the dimension
 // is mixed and keeps no bounds.
 bool observe_type(trace::index::extensions::ChunkDimensionStats& ds,
-                  const char* type) {
+                  dstd::StringView type) {
     ++ds.present;
     // The value types start with distinct letters, so the first byte tells them
     // apart.
@@ -437,7 +437,7 @@ void observe_bounds(trace::index::extensions::ChunkDimensionStats& ds,
 }
 
 void observe_stats(trace::index::extensions::ChunkDimensionStats& ds,
-                   dstd::StringView text, const char* type) {
+                   dstd::StringView text, dstd::StringView type) {
     if (observe_type(ds, type)) observe_bounds(ds, text);
 }
 
@@ -452,7 +452,7 @@ dstd::String number_text(double v) {
 // bound as a number is never formatted; one that does is checked as text.
 template <class T>
 void observe_number(trace::index::extensions::ChunkDimensionStats& ds,
-                    BloomCore::NumericBounds& b, T v, const char* type) {
+                    BloomCore::NumericBounds& b, T v, dstd::StringView type) {
     if (!observe_type(ds, type)) {
         b.valid = false;
         return;
@@ -561,7 +561,7 @@ void BloomCore::observe_extra(ChunkState& chunk, std::size_t e,
 
 void BloomCore::init_chunk_state(ChunkState& chunk,
                                  const ChunkIndexerConfig& config,
-                                 const dstd::Vector<dstd::String>& extra_dims) {
+                                 dstd::Span<const dstd::String> extra_dims) {
     for (std::size_t b = 0; b < BfCount; ++b) {
         chunk.fixed_blooms[b] = ScalableBloomFilter(
             config.expected_entries_per_chunk, config.false_positive_rate);

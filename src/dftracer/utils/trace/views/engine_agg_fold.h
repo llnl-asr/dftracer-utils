@@ -118,7 +118,7 @@ class EngineAggFold : public Fold {
     }
 
    private:
-    static bool arg_free_field(const dstd::String& f) {
+    static bool arg_free_field(dstd::StringView f) {
         return f.empty() || f == "ts" || f == "dur" || f == "te" ||
                f == "cat" || f == "name" || f == "pid" || f == "tid" ||
                f == "fhash" || f == "hhash";

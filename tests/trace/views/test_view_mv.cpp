@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -22,13 +24,13 @@ using namespace test_view_common;
 
 namespace {
 
-dstd::String views_root_of(const dstd::String& gz) {
+dstd::String views_root_of(dstd::CStringView gz) {
     return dstd::String(dftracer::utils::trace::index::views_dir(
         dstd::String(determine_index_path(gz, ""))));
 }
 
 // Every part file of the single MV, including the rank subdirs below parts/.
-void collect_parts(const dstd::String& dir, dstd::Vector<dstd::String>& parts) {
+void collect_parts(dstd::CStringView dir, dstd::Vector<dstd::String>& parts) {
     for (const auto& e : dftu_utils_test::list_dir(dir)) {
         if (e.kind == dstd::fs::FileKind::Directory) {
             collect_parts(dstd::String(e.path.str()), parts);
@@ -42,7 +44,7 @@ void collect_parts(const dstd::String& dir, dstd::Vector<dstd::String>& parts) {
 }
 
 // The part files inside the single MV directory under the views root.
-dstd::Vector<dstd::String> mv_parts(const dstd::String& gz) {
+dstd::Vector<dstd::String> mv_parts(dstd::CStringView gz) {
     dstd::Vector<dstd::String> parts;
     const dstd::String root = views_root_of(gz);
     for (const auto& e : dftu_utils_test::list_dir(root)) {
@@ -57,7 +59,7 @@ dstd::Vector<dstd::String> mv_parts(const dstd::String& gz) {
 }
 
 // The one MV directory (slug dir) under the views root.
-dstd::String mv_root(const dstd::String& gz) {
+dstd::String mv_root(dstd::CStringView gz) {
     for (const auto& e : dftu_utils_test::list_dir(views_root_of(gz)))
         if (e.kind == dstd::fs::FileKind::Directory)
             return dstd::String(e.path.str());
@@ -66,7 +68,7 @@ dstd::String mv_root(const dstd::String& gz) {
 
 // Size and time of every part file, to tell a rebuild from a reuse.
 dstd::Map<dstd::String, dstd::String> part_stamps(
-    const dstd::Vector<dstd::String>& parts) {
+    dstd::Span<const dstd::String> parts) {
     dstd::Map<dstd::String, dstd::String> out;
     for (const auto& p : parts) {
         const auto stamp = dstd::fs::mtime_ns(p).value();
@@ -77,7 +79,7 @@ dstd::Map<dstd::String, dstd::String> part_stamps(
 }
 
 // Data files in the store of one index root.
-std::size_t store_files(const dstd::String& root) {
+std::size_t store_files(dstd::CStringView root) {
     std::size_t n = 0;
     for (const auto& e : dftu_utils_test::walk_dir(
              dftracer::utils::trace::index::store_dir(root)))
@@ -92,7 +94,7 @@ dstd::Vector<dstd::String> sorted_lines(StringSink& s) {
 }
 
 // Number of MV directories (slug dirs) under the views root.
-std::size_t mv_dir_count(const dstd::String& gz) {
+std::size_t mv_dir_count(dstd::CStringView gz) {
     std::size_t n = 0;
     for (const auto& e : dftu_utils_test::list_dir(views_root_of(gz)))
         if (e.kind == dstd::fs::FileKind::Directory) ++n;
@@ -238,8 +240,8 @@ TEST_SUITE("ViewMV") {
         REQUIRE(env.is_valid());
         // Two files in their own dirs (so each gets its own index), each with
         // 30 read + 20 fwrite events at a distinct ts range.
-        auto write_mixed = [&](const char* sub, int ts0) {
-            dstd::String d = env.dir() + "/" + sub;
+        auto write_mixed = [&](dstd::StringView sub, int ts0) {
+            dstd::String d = env.dir() + "/" + dstd::String(sub);
             REQUIRE(dstd::fs::create_directories(d).has_value());
             dstd::String pfw = d + "/trace.pfw";
             dftu_utils_test::FileOut ofs(pfw);

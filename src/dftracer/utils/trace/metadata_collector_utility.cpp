@@ -67,7 +67,7 @@ namespace {
 // The index record of `file` when the index holds it unchanged since the stat
 // the caller read, or a prefix of it. Only a file that grew is opened again.
 dstd::Optional<internal::IndexedFile> fresh_index_record(
-    const dstd::String& index_path, const dstd::String& file,
+    dstd::StringView index_path, dstd::StringView file,
     const dftracer::utils::common::InputFileStat& st, bool& is_prefix) {
     auto snapshot = trace::index::plan::open_snapshot(index_path);
     if (!snapshot) {

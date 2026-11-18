@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
@@ -42,10 +43,10 @@ namespace {
 constexpr std::size_t CHECKPOINT_SIZE = 4096;
 constexpr int RECORDS = 120;
 
-schemas::dft::agg::ChunkColumn column_of(
-    std::uint32_t path, schemas::dft::agg::ColumnKind kind,
-    const dstd::Vector<std::uint64_t>& rows,
-    const dstd::Vector<std::uint64_t>& bits) {
+schemas::dft::agg::ChunkColumn column_of(std::uint32_t path,
+                                         schemas::dft::agg::ColumnKind kind,
+                                         dstd::Vector<std::uint64_t> rows,
+                                         dstd::Vector<std::uint64_t> bits) {
     schemas::dft::agg::ChunkColumn column;
     column.path = path;
     column.kind = kind;
@@ -111,15 +112,15 @@ std::uint64_t double_bits_of(double v) {
     return bits;
 }
 
-bool same(const dstd::Vector<std::uint64_t>& got,
-          const dstd::Vector<std::uint64_t>& want) {
+bool same(dstd::Span<const std::uint64_t> got,
+          dstd::Span<const std::uint64_t> want) {
     return got.size() == want.size() &&
            std::equal(got.begin(), got.end(), want.begin());
 }
 
 schemas::dft::agg::ChunkColumn roundtrip_column(
-    schemas::dft::agg::ColumnKind kind, const dstd::Vector<std::uint64_t>& bits,
-    const dstd::Vector<std::uint64_t>& rows, std::size_t block_rows) {
+    schemas::dft::agg::ColumnKind kind, dstd::Vector<std::uint64_t> bits,
+    dstd::Vector<std::uint64_t> rows, std::size_t block_rows) {
     auto block = core_block(block_rows);
     CHECK(rows.size() == bits.size());
     block.columns.push_back(column_of(1, kind, rows, bits));
@@ -177,20 +178,19 @@ struct Row {
     dstd::Map<dstd::String, Num, std::less<>> args;
 };
 
-dstd::StringView quoted(const dstd::String& text, dstd::StringView key) {
+dstd::StringView quoted(dstd::CStringView text, dstd::StringView key) {
     const dstd::String pattern = "\"" + dstd::String(key) + "\":\"";
-    const auto at = text.find(pattern);
+    const auto at = text.view().find(pattern);
     if (at == dstd::String::npos) return {};
     const auto from = at + pattern.size();
-    const auto to = text.find('"', from);
+    const auto to = text.view().find('"', from);
     if (to == dstd::String::npos) return {};
     return dstd::StringView(text).substr(from, to - from);
 }
 
-bool number(const dstd::String& text, dstd::StringView key,
-            std::uint64_t& out) {
+bool number(dstd::CStringView text, dstd::StringView key, std::uint64_t& out) {
     const dstd::String pattern = "\"" + dstd::String(key) + "\":";
-    const auto at = text.find(pattern);
+    const auto at = text.view().find(pattern);
     if (at == dstd::String::npos) return false;
     const char* from = text.c_str() + at + pattern.size();
     char* end = nullptr;
@@ -208,12 +208,12 @@ std::uint8_t phase_of(dstd::StringView letter) {
     return 0;
 }
 
-Num classify(const dstd::String& text) {
+Num classify(dstd::CStringView text) {
     Num n;
-    if (text.find_first_of(".eE") != dstd::String::npos) {
+    if (text.view().find_first_of(".eE") != dstd::String::npos) {
         n.kind = NumKind::Double;
         n.d = std::strtod(text.c_str(), nullptr);
-    } else if (!text.empty() && text[0] == '-') {
+    } else if (!text.empty() && text.view()[0] == '-') {
         n.kind = NumKind::Int64;
         n.i = std::strtoll(text.c_str(), nullptr, 10);
     } else {
@@ -231,17 +231,17 @@ Num classify(const dstd::String& text) {
     return n;
 }
 
-dstd::String trimmed(const dstd::String& text) {
+dstd::String trimmed(dstd::StringView text) {
     std::size_t begin = 0;
     std::size_t end = text.size();
     while (begin < end && dstd::is_ascii_space(text[begin])) ++begin;
     while (end > begin && dstd::is_ascii_space(text[end - 1])) --end;
-    return text.substr(begin, end - begin);
+    return dstd::String(text.substr(begin, end - begin));
 }
 
-Row parse_row(const dstd::String& line) {
+Row parse_row(dstd::StringView line) {
     Row row;
-    dstd::String head = line;
+    dstd::String head(line);
     dstd::String args;
     const auto args_at = head.find("\"args\":{");
     if (args_at != dstd::String::npos) {
@@ -283,7 +283,7 @@ Row parse_row(const dstd::String& line) {
     return row;
 }
 
-dstd::Vector<Row> parse_trace(const dstd::String& text) {
+dstd::Vector<Row> parse_trace(dstd::StringView text) {
     dstd::Vector<Row> rows;
     dstd::StringView rest = text;
     while (!rest.empty()) {
@@ -301,7 +301,7 @@ dstd::Vector<Row> parse_trace(const dstd::String& text) {
 }
 
 // The only rows an index keeps in its column blocks.
-dstd::Vector<Row> system_counters(const dstd::Vector<Row>& rows) {
+dstd::Vector<Row> system_counters(dstd::Span<const Row> rows) {
     dstd::Vector<Row> out;
     for (const Row& row : rows)
         if (row.phase == 2 && row.cat == "sys") out.push_back(row);
@@ -362,19 +362,19 @@ dstd::String make_trace(int n) {
     return text;
 }
 
-dstd::String write_gzip(const dstd::String& dir, const dstd::String& name,
-                        const dstd::String& text);
+dstd::String write_gzip(dstd::CStringView dir, dstd::StringView name,
+                        dstd::StringView text);
 
 // Each trace gets its own name, so each sidecar index is distinct.
-dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
+dstd::String write_trace(dstd::CStringView dir, dstd::StringView name,
                          dstd::String& text) {
     text = make_trace(RECORDS);
     return write_gzip(dir, name, text);
 }
 
-dstd::String write_gzip(const dstd::String& dir, const dstd::String& name,
-                        const dstd::String& text) {
-    const dstd::String sub = dir + "/" + name;
+dstd::String write_gzip(dstd::CStringView dir, dstd::StringView name,
+                        dstd::StringView text) {
+    const dstd::String sub = dstd::String(dir) + "/" + dstd::String(name);
     REQUIRE(dstd::fs::create_directories(sub).has_value());
     const dstd::String pfw = sub + "/trace.pfw";
     {
@@ -387,7 +387,7 @@ dstd::String write_gzip(const dstd::String& dir, const dstd::String& name,
     return gz;
 }
 
-IndexerOptions options(const dstd::String& index_dir) {
+IndexerOptions options(dstd::CStringView index_dir) {
     IndexerOptions o;
     o.index_dir = index_dir;
     o.checkpoint_size = CHECKPOINT_SIZE;
@@ -398,8 +398,7 @@ IndexerOptions options(const dstd::String& index_dir) {
     return o;
 }
 
-void build(const dstd::Vector<dstd::String>& files,
-           const dstd::String& index_dir) {
+void build(dstd::Vector<dstd::String> files, dstd::CStringView index_dir) {
     dstd::Vector<dstd::String> paths;
     for (const auto& file : files) paths.emplace_back(file);
     dftu_utils_test::ok(
@@ -457,7 +456,7 @@ void check_row_args(const schemas::dft::agg::ChunkColumns& block, std::size_t r,
 }
 
 void check_columns_against(const schemas::dft::agg::ChunkColumns& block,
-                           const dstd::Vector<Row>& rows, std::size_t at) {
+                           dstd::Span<const Row> rows, std::size_t at) {
     for (const schemas::dft::agg::ChunkColumn& column : block.columns) {
         const auto& path = block.texts[column.path];
         CHECK_FALSE(path.empty());
@@ -484,7 +483,7 @@ struct Decoded {
 
 Decoded read_and_check(const trace::index::Snapshot& snapshot,
                        const trace::index::FileRef& file,
-                       const dstd::Vector<Row>& rows) {
+                       dstd::Span<const Row> rows) {
     Decoded out;
     std::size_t at = 0;
     auto scanned = trace::index::for_each_agg_chunk_columns(
@@ -516,14 +515,14 @@ Decoded read_and_check(const trace::index::Snapshot& snapshot,
     return out;
 }
 
-trace::index::Snapshot open_index(const dstd::String& index_path) {
+trace::index::Snapshot open_index(dstd::CStringView index_path) {
     auto snapshot = trace::index::plan::open_snapshot(index_path);
     REQUIRE_MESSAGE(snapshot.has_value(), "the index opens");
     return std::move(*snapshot);
 }
 
 trace::index::FileRef file_of(const trace::index::Snapshot& snapshot,
-                              const dstd::String& path) {
+                              dstd::CStringView path) {
     auto file = snapshot.file(fileio::get_logical_path(path));
     REQUIRE_MESSAGE(file.has_value(), "the file is in the index");
     return std::move(*file);
@@ -980,8 +979,8 @@ TEST_SUITE("ChunkColumns") {
             CHECK_FALSE(columns.empty());
 
         const dstd::String root = env.dir() + "/set";
-        REQUIRE(trace::views::write_shard_set(
-                    dstd::String(root), {dstd::String(ia), dstd::String(ib)})
+        const dstd::String shard_indexes[] = {ia, ib};
+        REQUIRE(trace::views::write_shard_set(dstd::String(root), shard_indexes)
                     .has_value());
         const dstd::String out = env.dir() + "/merged";
         CHECK(dftu_utils_test::ok(trace::views::merge_shard_set(

@@ -123,7 +123,7 @@ duql::Roles duql_roles(const RecordSchema& s) {
     r.schema = s.id;
     if (const FieldSpec* t = s.field_at(s.roles.time))
         r.time_text = t->type == FieldType::String;
-    auto add = [&](const dstd::String& key, std::int64_t ns) {
+    auto add = [&](dstd::StringView key, std::int64_t ns) {
         if (!key.empty()) r.fields.emplace(key, ns);
     };
     add(s.roles.time, ns_per(s.roles.time_unit));

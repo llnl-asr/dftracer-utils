@@ -9,6 +9,7 @@
 #include <dftracer/utils/domains/analysis/comparator/comparison_aggregation.h>
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -217,8 +218,8 @@ dstd::Vector<Ev> make_events(std::uint64_t seed) {
 
 // With `cut_mid_line` the gzip members are cut every CHECKPOINT_SIZE bytes of
 // text wherever that falls, so most members end inside a line.
-dstd::String write_trace(const dstd::String& dir, int n,
-                         const dstd::Vector<Ev>& events, bool cut_mid_line) {
+dstd::String write_trace(dstd::CStringView dir, int n, dstd::Vector<Ev> events,
+                         bool cut_mid_line) {
     dftu_utils_test::TextOut out;
     out << "[\n";
     int id = 0;
@@ -238,7 +239,8 @@ dstd::String write_trace(const dstd::String& dir, int n,
         out << "}}\n";
     }
     out << "]\n";
-    const dstd::String pfw = dir + "/t" + dstd::to_string(n) + ".pfw";
+    const dstd::String pfw =
+        dstd::String(dir) + "/t" + dstd::to_string(n) + ".pfw";
     {
         dftu_utils_test::FileOut file(pfw);
         file << out.str();
@@ -324,7 +326,7 @@ struct Truth {
 
 // A per-event aggregator, one state per group key of the query.
 dstd::Map<Key, Truth> reference(
-    const dstd::Vector<Ev>& events, const Ask& ask,
+    dstd::Span<const Ev> events, const Ask& ask,
     const trace::index::schemas::dft::agg::AggregationConfig& cfg) {
     dstd::Map<Key, Truth> out;
     for (const Ev& e : events) {
@@ -362,7 +364,7 @@ bool near(double a, double b, double scale, double tol) {
 }
 
 void check_stat(const dataframe::FieldStat& a, const dataframe::FieldStat& b,
-                const char* what) {
+                dstd::StringView what) {
     INFO("field: ", what);
     REQUIRE(a.n == b.n);
     if (a.n == 0) return;
@@ -377,7 +379,8 @@ void check_stat(const dataframe::FieldStat& a, const dataframe::FieldStat& b,
                std::max(std::abs(a.moment_mean()), 1.0), MOMENT_TOL));
 }
 
-double exact_rule(dstd::Vector<double> v, double q) {
+double exact_rule(dstd::Span<const double> values, double q) {
+    dstd::Vector<double> v(values.begin(), values.end());
     std::sort(v.begin(), v.end());
     const std::size_t n = v.size();
     if (q <= 0.0) return v.front();
@@ -390,14 +393,14 @@ double exact_rule(dstd::Vector<double> v, double q) {
 }
 
 void check_quantiles(const trace::index::schemas::dft::agg::QuantileStore& q,
-                     const dstd::Vector<double>& truth, const char* what) {
+                     dstd::Span<const double> truth, dstd::StringView what) {
     INFO("quantiles of ", what);
     REQUIRE(q.count() == truth.size());
     if (truth.empty()) return;
     CHECK(q.is_exact() ==
           (truth.size() <=
            trace::index::schemas::dft::agg::QuantileStore::EXACT_CAPACITY));
-    dstd::Vector<double> sorted = truth;
+    dstd::Vector<double> sorted(truth.begin(), truth.end());
     std::sort(sorted.begin(), sorted.end());
     const std::size_t last = sorted.size() - 1;
     for (double p : {0.1, 0.5, 0.9, 0.99}) {
@@ -466,8 +469,7 @@ struct Fixture {
     dstd::String index_path;
 };
 
-dstd::UniquePtr<Fixture> build(std::uint64_t interval_us,
-                               const dstd::String& tag,
+dstd::UniquePtr<Fixture> build(std::uint64_t interval_us, dstd::StringView tag,
                                bool cut_mid_line = false,
                                bool reversed = false) {
     auto fx = dstd::make_unique<Fixture>();
@@ -478,7 +480,7 @@ dstd::UniquePtr<Fixture> build(std::uint64_t interval_us,
             write_trace(fx->env.dir(), i, events, cut_mid_line));
         fx->events.insert(fx->events.end(), events.begin(), events.end());
     }
-    fx->index_dir = fx->env.dir() + "/idx_" + tag;
+    fx->index_dir = fx->env.dir() + "/idx_" + dstd::String(tag);
     trace::index::IndexerOptions o;
     o.index_dir = fx->index_dir;
     o.checkpoint_size = CHECKPOINT_SIZE;
@@ -539,7 +541,7 @@ AggQueryResult run(const AggQuery& q) {
 // Compares every row with the per-event aggregator. Returns the result so a
 // case can assert how it was answered.
 AggQueryResult check(const Fixture& fx, const Ask& ask,
-                     std::uint64_t interval_us, const char* what,
+                     std::uint64_t interval_us, dstd::StringView what,
                      std::size_t workers = 0) {
     INFO("case: ", what);
     AggQuery q = make_query(fx, ask, interval_us);
@@ -673,7 +675,7 @@ dstd::String mixed_trace() {
 // same events, but the chunk tasks merge in their own order, and a sum of
 // doubles that outgrows its mantissa may differ in its last bits.
 void check_same_stat(const dataframe::FieldStat& a,
-                     const dataframe::FieldStat& b, const char* what) {
+                     const dataframe::FieldStat& b, dstd::StringView what) {
     INFO("field: ", what);
     REQUIRE(a.n == b.n);
     if (a.n == 0) return;
@@ -814,7 +816,7 @@ TEST_SUITE("AggQuery") {
 
     TEST_CASE("dropped parts leave the kept parts of the rows unchanged") {
         auto fx = build(FIVE_SECONDS_US, "five");
-        const auto check_keep = [&](const Ask& ask, const char* what) {
+        const auto check_keep = [&](const Ask& ask, dstd::StringView what) {
             INFO("case: ", what);
             AggQuery full = make_query(*fx, ask, FIVE_SECONDS_US);
             AggQuery trimmed = full;
@@ -1270,8 +1272,8 @@ TEST_SUITE("AggQuery") {
         auto fx = dstd::make_unique<Fixture>();
         dftu_utils_test::TextOut text;
         text << "[\n";
-        const auto line = [&](int pid, const char* name,
-                              const dstd::String& args, int dur) {
+        const auto line = [&](int pid, dstd::StringView name,
+                              dstd::StringView args, int dur) {
             text << R"({"id":)" << pid << R"(,"name":")" << name
                  << R"(","cat":"app","pid":)" << pid << R"(,"tid":1,)"
                  << R"("ph":"X","ts":)" << BASE_TS + std::uint64_t{1000} * pid
@@ -1327,7 +1329,7 @@ TEST_SUITE("AggQuery") {
             sums[key] += p.duration.sum;
             counts[key] += p.count;
         }
-        const auto sum_of = [&](const char* name, std::uint64_t pid) {
+        const auto sum_of = [&](dstd::StringView name, std::uint64_t pid) {
             return sums[dstd::Pair<dstd::String, std::uint64_t>(name, pid)];
         };
         CHECK(counts.size() == 3 + 6);

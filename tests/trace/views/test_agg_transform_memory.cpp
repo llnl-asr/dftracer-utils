@@ -7,6 +7,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -49,8 +50,8 @@ constexpr int EVENTS = static_cast<int>((2 * MAX_EXTRA) / KEY_PAD);
 
 dstd::String g_self;
 
-dstd::String write_trace(const dstd::String& dir) {
-    const dstd::String pfw = dir + "/transform_memory.pfw";
+dstd::String write_trace(dstd::CStringView dir) {
+    const dstd::String pfw = dstd::String(dir) + "/transform_memory.pfw";
     const dstd::String pad = KEY_PAD ? "_" + dstd::String(KEY_PAD, 'x') : "";
     {
         dftu_utils_test::FileOut ofs(pfw);
@@ -65,7 +66,7 @@ dstd::String write_trace(const dstd::String& dir) {
     return gz;
 }
 
-int child_main(const dstd::String& mode, const dstd::String& gz) {
+int child_main(dstd::StringView mode, dstd::CStringView gz) {
     const dstd::String idx = dstd::String(determine_index_path(gz, ""));
     GroupKey key = GroupKey::cat();
     if (mode == "transform") {
@@ -104,7 +105,7 @@ int child_main(const dstd::String& mode, const dstd::String& gz) {
     return 0;
 }
 
-pid_t start_child(const dstd::String& mode, const dstd::String& gz) {
+pid_t start_child(dstd::CStringView mode, dstd::CStringView gz) {
     const pid_t pid = ::fork();
     REQUIRE(pid >= 0);
     if (pid == 0) {

@@ -81,7 +81,7 @@ struct ChunkExplanation {
 /// Explains the pruning of `file_path` for `query`. An error when the index
 /// cannot be read or holds corrupt evidence, as @ref ChunkPruner returns one.
 dstd::Result<ChunkExplanation> explain_file_chunks(
-    const trace::index::Snapshot& snapshot, const dstd::String& file_path,
+    const trace::index::Snapshot& snapshot, dstd::StringView file_path,
     const Query& query);
 
 /// Chunk pruner over the index's pruning kinds (bloom, postings, counts,

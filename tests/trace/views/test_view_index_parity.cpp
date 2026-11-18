@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -78,10 +79,9 @@ void write_trace(dftu_utils_test::FileOut& o, int i) {
     const dstd::String own =
         dstd::String(R"("fhash":")") + OWN_HASHES[i] + R"(")";
     const dstd::String data = dstd::String(R"("fhash":")") + DATA_HASH + R"(")";
-    auto rec = [&](const char* ph, const dstd::String& name,
-                   const dstd::String& cat, const dstd::String& tid,
-                   std::uint64_t ts, const dstd::String& dur,
-                   const dstd::String& args) {
+    auto rec = [&](dstd::StringView ph, dstd::StringView name,
+                   dstd::StringView cat, dstd::StringView tid, std::uint64_t ts,
+                   dstd::StringView dur, dstd::StringView args) {
         o << R"({"ph":")" << ph << R"(","name":")" << name << R"(","cat":")"
           << cat << R"(","pid":)" << pid << R"(,"tid":)" << tid << R"(,"ts":)"
           << ts << dur << R"(,"args":{)" << args << "}}\n";
@@ -265,7 +265,7 @@ dstd::String format_double(double v) {
 }
 
 const dataframe::Series* column_of(const dataframe::DataFrame& f,
-                                   const dstd::String& name) {
+                                   dstd::StringView name) {
     const std::int64_t c = bcol(f, name);
     return c < 0 ? nullptr : &f.columns[static_cast<std::size_t>(c)];
 }
@@ -298,7 +298,7 @@ dstd::String cell_text(const dataframe::Series& column, std::int64_t row) {
 using Cells = dstd::Map<dstd::String, dstd::String>;
 
 dstd::String key_of(const dataframe::DataFrame& f, std::int64_t row,
-                    const dstd::Vector<dstd::String>& keys) {
+                    dstd::Span<const dstd::String> keys) {
     dstd::String k;
     for (const auto& name : keys) {
         const dataframe::Series* c = column_of(f, name);
@@ -309,8 +309,7 @@ dstd::String key_of(const dataframe::DataFrame& f, std::int64_t row,
 }
 
 Cells cells_of(const dataframe::DataFrame& f,
-               const dstd::Vector<dstd::String>& keys,
-               const dstd::String& column) {
+               dstd::Span<const dstd::String> keys, dstd::StringView column) {
     Cells out;
     const dataframe::Series* c = column_of(f, column);
     if (c == nullptr) return out;
@@ -319,7 +318,7 @@ Cells cells_of(const dataframe::DataFrame& f,
     return out;
 }
 
-bool parse_number(const dstd::String& s, double& out) {
+bool parse_number(dstd::CStringView s, double& out) {
     char* end = nullptr;
     const double v = std::strtod(s.c_str(), &end);
     if (end == s.c_str() || *end != '\0') return false;
@@ -327,7 +326,7 @@ bool parse_number(const dstd::String& s, double& out) {
     return true;
 }
 
-bool same_cell(const dstd::String& index_text, const dstd::String& scan_text,
+bool same_cell(dstd::CStringView index_text, dstd::CStringView scan_text,
                double tolerance) {
     if (index_text == "null" || scan_text == "null")
         return index_text == scan_text;
@@ -352,7 +351,7 @@ struct Line {
 // The cells the View declines and must keep declining: a SetUnion key on every
 // shape, and every aggregate of the name + 1 s window shape, whose time bucket
 // an untyped plan cannot answer from the partials.
-bool expected_declined(const dstd::String& shape, const dstd::String& agg) {
+bool expected_declined(dstd::StringView shape, dstd::StringView agg) {
     return agg == "distinct_pid" || agg == "distinct_tid" || shape == "name+1s";
 }
 
@@ -362,7 +361,7 @@ dstd::String first_line(dstd::String s) {
     return s;
 }
 
-dstd::String join(const dstd::Vector<dstd::String>& parts) {
+dstd::String join(dstd::Span<const dstd::String> parts) {
     dstd::String out;
     for (const auto& p : parts) {
         if (!out.empty()) out += "; ";
@@ -371,10 +370,8 @@ dstd::String join(const dstd::Vector<dstd::String>& parts) {
     return out;
 }
 
-Cells view_cells(const dstd::Vector<ViewFile>& files,
-                 const dstd::Vector<GroupKey>& keys,
-                 const dstd::Vector<dstd::String>& columns,
-                 const AggSpec& spec) {
+Cells view_cells(dstd::Vector<ViewFile> files, dstd::Vector<GroupKey> keys,
+                 dstd::Vector<dstd::String> columns, const AggSpec& spec) {
     View v = View::from_files(files);
     if (!keys.empty()) v = v.group_by(keys);
     return cells_of(dftu_utils_test::ok(v.agg({spec}).collect().get()), columns,

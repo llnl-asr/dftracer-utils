@@ -3,10 +3,12 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -618,7 +620,7 @@ TEST_SUITE("View - streamed batches") {
 
 namespace {
 
-std::int32_t column_at(const View& t, const dstd::String& name) {
+std::int32_t column_at(const View& t, dstd::StringView name) {
     const dstd::Vector<dstd::String> names = t.schema();
     for (std::size_t i = 0; i < names.size(); ++i)
         if (names[i] == name) return static_cast<std::int32_t>(i);
@@ -764,8 +766,8 @@ struct NestedTrace {
     NestedTrace() {
         const dstd::String pfw = env.dir() + "/nested.pfw";
         dftu_utils_test::FileOut ofs(pfw);
-        auto ev = [&](const char* name, const char* cat, int tid, int ts,
-                      int dur) {
+        auto ev = [&](dstd::StringView name, dstd::StringView cat, int tid,
+                      int ts, int dur) {
             ofs << R"({"ph":"X","name":")" << name << R"(","cat":")" << cat
                 << R"(","pid":1,"tid":)" << tid << R"(,"ts":)" << ts
                 << R"(,"dur":)" << dur << R"(,"args":{}})"
@@ -816,7 +818,7 @@ View nested_viewer() {
 // The rows of `f` over `cols`, one string each, in sorted order: containment
 // ids depend on scan order, so frames compare by content.
 dstd::Vector<dstd::String> rows_of(const dataframe::DataFrame& f,
-                                   const dstd::Vector<dstd::String>& cols) {
+                                   dstd::Vector<dstd::String> cols) {
     dstd::Vector<dstd::String> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r) {
         dstd::String row;
@@ -1311,13 +1313,13 @@ TEST_SUITE("View - low-level scans") {
         View t = nested_viewer().duql(R"(cat == "POSIX")");
         std::atomic<std::int64_t> n{0};
         test_view_common::run(t.for_each_batch(
-            [&](std::size_t, const dstd::Vector<dstd::StringView>& events) {
+            [&](std::size_t, dstd::Span<const dstd::StringView> events) {
                 n += static_cast<std::int64_t>(events.size());
             },
             4));
         CHECK(n == 16);
         auto counted = test_view_common::run(t.map_batches<std::int64_t>(
-            [](std::int64_t& acc, const dstd::Vector<dstd::StringView>& ev) {
+            [](std::int64_t& acc, dstd::Span<const dstd::StringView> ev) {
                 acc += static_cast<std::int64_t>(ev.size());
             },
             [](std::int64_t&& a, std::int64_t&& b) { return a + b; }, 3));
@@ -1328,7 +1330,7 @@ TEST_SUITE("View - low-level scans") {
         View t = nested_viewer();
         std::atomic<std::int64_t> n{0};
         test_view_common::run(t.head(5).for_each_batch(
-            [&](std::size_t, const dstd::Vector<dstd::StringView>& events) {
+            [&](std::size_t, dstd::Span<const dstd::StringView> events) {
                 n += static_cast<std::int64_t>(events.size());
             },
             1));
@@ -1342,8 +1344,7 @@ TEST_SUITE("View - low-level scans") {
         test_view_common::expect_refused(
             dftracer::utils::default_runtime()
                 .submit(t.slice(2, 5).for_each_batch(
-                    [](std::size_t, const dstd::Vector<dstd::StringView>&) {},
-                    1))
+                    [](std::size_t, dstd::Span<const dstd::StringView>) {}, 1))
                 .get(),
             "head");
         test_view_common::expect_refused(t.head(5).flamegraph(), "slice");
@@ -1409,7 +1410,7 @@ dstd::String write_args_trace(TestEnvironment& env) {
 }
 
 dstd::Vector<dstd::String> cells(const dataframe::DataFrame& df,
-                                 const dstd::String& name) {
+                                 dstd::StringView name) {
     const dftracer::utils::dataframe::Series c = df.column(name).materialize();
     dstd::Vector<dstd::String> out;
     for (std::int64_t i = 0; i < c.length(); ++i)
@@ -1466,7 +1467,7 @@ TEST_SUITE("View - computed columns over a trace scan") {
                 views::detail::scan::ordered(views::detail::scan::from_file(
                     dstd::String(gz), determine_index_path(gz, ""))));
             const dstd::Vector<dstd::String> names = lf.schema();
-            const auto at = [&](const char* n) {
+            const auto at = [&](dstd::StringView n) {
                 return static_cast<std::int32_t>(
                     std::find(names.begin(), names.end(), n) - names.begin());
             };
@@ -1625,7 +1626,7 @@ struct BadPartTrace {
     BadPartTrace() {
         const dstd::String pfw = env.dir() + "/badpart.pfw";
         dftu_utils_test::FileOut ofs(pfw);
-        auto ev = [&](int ts, const char* tail) {
+        auto ev = [&](int ts, dstd::StringView tail) {
             ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
                 << R"("ts":)" << ts << R"(,"dur":10,"args":{})" << tail
                 << "}\n";
@@ -1673,8 +1674,7 @@ constexpr int BATCH_PER_MEMBER = 400;
 
 // BATCH_FILES gzip files of BATCH_MEMBERS members each, so a scan has many
 // units to hand out of order.
-View batch_viewer(const dstd::String& dir,
-                  dstd::SharedPtr<ScanCounter> counter) {
+View batch_viewer(dstd::CStringView dir, dstd::SharedPtr<ScanCounter> counter) {
     dstd::Vector<ViewFile> files;
     const char* names[] = {"read", "write", "open", "close"};
     for (int f = 0; f < BATCH_FILES; ++f) {
@@ -1703,8 +1703,9 @@ View batch_viewer(const dstd::String& dir,
             bytes.insert(bytes.end(), buf.begin(), buf.begin() + *len);
         }
         ViewFile vf;
-        vf.file_path = dir + "/b" + dstd::to_string(f) + ".pfw.gz";
-        vf.index_path = dir + "/b" + dstd::to_string(f) + ".idx";
+        vf.file_path =
+            dstd::String(dir) + "/b" + dstd::to_string(f) + ".pfw.gz";
+        vf.index_path = dstd::String(dir) + "/b" + dstd::to_string(f) + ".idx";
         {
             dftu_utils_test::FileOut out(vf.file_path);
             out.write(reinterpret_cast<const char*>(bytes.data()),

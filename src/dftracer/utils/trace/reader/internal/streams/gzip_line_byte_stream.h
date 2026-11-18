@@ -44,7 +44,7 @@ class GzipLineByteStream : public GzipStream {
     /// line to the next one return every line once.
     void set_open_at_earlier_piece(bool v) { open_at_earlier_piece_ = v; }
 
-    void initialize(const dstd::String &gz_path, std::size_t start_bytes,
+    void initialize(dstd::StringView gz_path, std::size_t start_bytes,
                     std::size_t end_bytes,
                     dftracer::utils::trace::index::gzip::CheckpointIndexer
                         &indexer) override {
@@ -259,7 +259,8 @@ class GzipLineByteStream : public GzipStream {
             apply_range_and_boundary_limits(buffer_.data(), total_data_size);
 
         // Update partial buffer with any incomplete line data
-        update_partial_buffer(buffer_.data(), adjusted_size, total_data_size);
+        update_partial_buffer(dstd::StringView(buffer_.data(), total_data_size),
+                              adjusted_size);
 
         if (adjusted_size == 0) {
             DFTRACER_UTILS_LOG_DEBUG(
@@ -320,13 +321,13 @@ class GzipLineByteStream : public GzipStream {
         buffer_.resize(size);
     }
 
-    void update_partial_buffer(const char *buffer, std::size_t adjusted_size,
-                               std::size_t total_data_size) {
-        if (adjusted_size < total_data_size) {
-            std::size_t remaining_size = total_data_size - adjusted_size;
+    void update_partial_buffer(dstd::StringView data,
+                               std::size_t adjusted_size) {
+        if (adjusted_size < data.size()) {
+            std::size_t remaining_size = data.size() - adjusted_size;
             partial_line_buffer_.resize(remaining_size);
-            std::memcpy(partial_line_buffer_.data(), buffer + adjusted_size,
-                        remaining_size);
+            std::memcpy(partial_line_buffer_.data(),
+                        data.data() + adjusted_size, remaining_size);
         } else {
             partial_line_buffer_.clear();
         }

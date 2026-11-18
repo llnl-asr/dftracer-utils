@@ -108,7 +108,7 @@ Status Applier::stage(const duql::PipelineLookup& l) {
     const bool nest = into != nullptr;
     dstd::Vector<dataframe::query::VectorColumn> next = cols_;
     dstd::Vector<dstd::String> added;
-    auto shown = [&](const dstd::String& n) {
+    auto shown = [&](dstd::StringView n) {
         return index(n) &&
                std::find(extras_.begin(), extras_.end(), n) == extras_.end();
     };
@@ -194,7 +194,7 @@ Status Applier::stage(const duql::PipelineLookup& l) {
 }
 
 dstd::Result<dataframe::DataType> Applier::asof_type(
-    const dstd::String& what, const dstd::String& side,
+    dstd::StringView what, dstd::StringView side,
     const dataframe::DataType& rows, const dataframe::DataType& other) {
     if (rows.id == dataframe::TypeId::Unknown &&
         other.id == dataframe::TypeId::Unknown)
@@ -214,13 +214,13 @@ dstd::Result<dataframe::DataType> Applier::asof_type(
 }
 
 dstd::Result<Applier::SideValues> Applier::side_values(
-    const duql::PipelineLookup& l, const char* clause,
-    const dstd::Vector<std::size_t>& keys, std::size_t consumed,
+    const duql::PipelineLookup& l, dstd::StringView clause,
+    dstd::Span<const std::size_t> keys, std::size_t consumed,
     std::size_t consumed2) const {
     const auto& side_cols = ctx_.sides->columns[l.side];
     SideValues out;
     out.names.resize(side_cols.size());
-    auto shown = [&](const dstd::String& n) {
+    auto shown = [&](dstd::StringView n) {
         return index(n) &&
                std::find(extras_.begin(), extras_.end(), n) == extras_.end();
     };
@@ -257,8 +257,8 @@ dstd::Result<Applier::SideValues> Applier::side_values(
 
 Status Applier::asof_lookup(
     const duql::PipelineLookup& l, const duql::PipelineAsof& a,
-    const dstd::Vector<dstd::String>& left,
-    const dstd::Vector<dstd::String>& right, const dstd::String& keys_text,
+    dstd::Span<const dstd::String> left, dstd::Span<const dstd::String> right,
+    dstd::StringView keys_text,
     const dstd::Function<dstd::Optional<std::size_t>(dstd::StringView)>&
         side_index) {
     const auto& side_cols = ctx_.sides->columns[l.side];
@@ -379,8 +379,8 @@ Status Applier::asof_lookup(
 
 Status Applier::overlap_lookup(
     const duql::PipelineLookup& l, const duql::PipelineOverlap& o,
-    const dstd::Vector<dstd::String>& left,
-    const dstd::Vector<dstd::String>& right, const dstd::String& keys_text,
+    dstd::Span<const dstd::String> left, dstd::Span<const dstd::String> right,
+    dstd::StringView keys_text,
     const dstd::Function<dstd::Optional<std::size_t>(dstd::StringView)>&
         side_index) {
     const auto& side_cols = ctx_.sides->columns[l.side];
@@ -442,6 +442,7 @@ Status Applier::overlap_lookup(
         return out;
     }();
     const dstd::Vector<dstd::String> value_names = values.names;
+    const dstd::Vector<dstd::String> left_names(left.begin(), left.end());
     dstd::SharedPtr<Sides> strong = main_ ? ctx_.sides : nullptr;
     dstd::WeakPtr<Sides> weak = ctx_.sides;
     finish(
@@ -461,14 +462,14 @@ Status Applier::overlap_lookup(
             side = dataframe::query::flat_frame(std::move(side));
             rows = dataframe::query::flat_frame(std::move(rows));
             auto find = [](const dataframe::DataFrame& f,
-                           const dstd::String& n) -> const dataframe::Series* {
+                           dstd::StringView n) -> const dataframe::Series* {
                 for (std::size_t i = 0; i < f.names.size(); ++i)
                     if (dstd::StringView(f.names[i]) == n) return &f.columns[i];
                 return nullptr;
             };
             auto take =
                 [&](const dataframe::DataFrame& f,
-                    const dstd::String& n) -> dstd::Result<dataframe::Series> {
+                    dstd::StringView n) -> dstd::Result<dataframe::Series> {
                 const dataframe::Series* s = find(f, n);
                 if (!s)
                     return common::make_error<"overlap: no column {}">(
@@ -477,7 +478,7 @@ Status Applier::overlap_lookup(
             };
             dataframe::query::OverlapColumns mine;
             dataframe::query::OverlapColumns theirs;
-            for (const auto& n : left) {
+            for (const auto& n : left_names) {
                 auto s = take(rows, n);
                 if (!s) return s.error();
                 mine.keys.push_back(std::move(*s));
@@ -560,7 +561,7 @@ Status Applier::overlap_lookup(
     return keep(std::move(keep_names));
 }
 
-dstd::Result<dataframe::DataType> Applier::unify(const dstd::String& name,
+dstd::Result<dataframe::DataType> Applier::unify(dstd::StringView name,
                                                  const dataframe::DataType& a,
                                                  const dataframe::DataType& b) {
     if (a.id == dataframe::TypeId::Unknown) return b;
@@ -577,9 +578,9 @@ dstd::Result<dataframe::DataType> Applier::unify(const dstd::String& name,
 }
 
 View Applier::align(View v,
-                    const dstd::Vector<dataframe::query::VectorColumn>& cols,
-                    const dstd::Vector<dataframe::query::VectorColumn>& want) {
-    auto at = [&](const dstd::String& n) -> dstd::Optional<std::size_t> {
+                    dstd::Span<const dataframe::query::VectorColumn> cols,
+                    dstd::Span<const dataframe::query::VectorColumn> want) {
+    auto at = [&](dstd::StringView n) -> dstd::Optional<std::size_t> {
         for (std::size_t i = 0; i < cols.size(); ++i)
             if (cols[i].name == n) return i;
         return dstd::nullopt;

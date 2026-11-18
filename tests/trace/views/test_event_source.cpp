@@ -38,8 +38,8 @@ dstd::String padded(dstd::String s) {
 }
 
 simdjson::dom::element parse(simdjson::dom::parser& p, dstd::String& buf,
-                             const char* json) {
-    buf = padded(json);
+                             dstd::StringView json) {
+    buf = padded(dstd::String(json));
     return p.parse(buf.data(), buf.size() - simdjson::SIMDJSON_PADDING, false)
         .value_unsafe();
 }
@@ -73,7 +73,7 @@ dstd::Optional<double> to_number_ref(simdjson::dom::element e) {
 }
 
 dstd::String top_or_args_str(simdjson::dom::element root,
-                             const dstd::String& key) {
+                             dstd::StringView key) {
     auto r = root[key];
     if (!r.error()) return to_str_ref(r.value_unsafe());
     auto args = root["args"];
@@ -85,7 +85,7 @@ dstd::String top_or_args_str(simdjson::dom::element root,
 }
 
 dstd::Optional<double> agg_field(simdjson::dom::element root,
-                                 const dstd::String& field) {
+                                 dstd::StringView field) {
     auto r = root[field];
     if (!r.error()) return to_number_ref(r.value_unsafe());
     auto args = root["args"];

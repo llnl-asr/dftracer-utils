@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -34,7 +36,7 @@ struct NullSink : ExportSink {
 // Sets an environment variable for one scope.
 struct ScopedEnv {
     dstd::String name;
-    ScopedEnv(dstd::String n, const dstd::String& v) : name(std::move(n)) {
+    ScopedEnv(dstd::String n, dstd::CStringView v) : name(std::move(n)) {
         setenv(name.c_str(), v.c_str(), 1);
     }
     ~ScopedEnv() { unsetenv(name.c_str()); }
@@ -42,12 +44,12 @@ struct ScopedEnv {
 
 // `lines` as an indexed NDJSON trace; `member_bytes` > 0 frames it into
 // gzip members of about that size, so the index holds several chunks.
-dstd::String write_records(TestEnvironment& env, const dstd::String& name,
-                           const dstd::Vector<dstd::String>& lines,
+dstd::String write_records(TestEnvironment& env, dstd::StringView name,
+                           dstd::Vector<dstd::String> lines,
                            std::size_t member_bytes = 0,
                            std::size_t checkpoint_size = 0,
                            dstd::Vector<dstd::String> extensions = {}) {
-    const dstd::String plain = env.dir() + "/" + name + ".ndjson";
+    const dstd::String plain = env.dir() + "/" + dstd::String(name) + ".ndjson";
     {
         dftu_utils_test::FileOut o(plain);
         for (const auto& l : lines) o << l << "\n";
@@ -73,7 +75,7 @@ dstd::String write_records(TestEnvironment& env, const dstd::String& name,
     return gz;
 }
 
-View view_of(const dstd::String& gz) {
+View view_of(dstd::CStringView gz) {
     return View::from_file(
         dstd::String(gz),
         dstd::String(dstd::String(determine_index_path(gz, ""))));
@@ -592,14 +594,14 @@ TEST_SUITE("View duql joins") {
     // Samples `{"type":"s","k":..,"t":..,"v":..}` and events
     // `{"type":"ev","i":..,"k":..,"ts":..}` with equal times, missing keys
     // and missing times; `expect` is the nested-loop answer per event.
-    static dstd::String text_of(const dstd::Vector<dstd::String>& v) {
+    static dstd::String text_of(dstd::Span<const dstd::String> v) {
         dstd::String out;
         for (const auto& x : v) out += x + ",";
         return out;
     }
 
-    static dstd::String first_diff(const dstd::Vector<dstd::String>& got,
-                                   const dstd::Vector<dstd::String>& want) {
+    static dstd::String first_diff(dstd::Span<const dstd::String> got,
+                                   dstd::Span<const dstd::String> want) {
         for (std::size_t r = 0; r < std::min(got.size(), want.size()); ++r)
             if (got[r] != want[r])
                 return "row " + dstd::to_string(r) + ": got " + got[r] +
@@ -711,16 +713,16 @@ TEST_SUITE("View duql joins") {
         TestEnvironment env(10);
         const AsofData d = asof_data(300, 80, 11);
         const View v = view_of(write_records(env, "w", d.lines, 4096, 4096));
-        auto query_with = [&](const dstd::String& within,
+        auto query_with = [&](dstd::StringView within,
                               const duql::Params& p = {}) {
             return v.duql(
                 "let s = where type == \"s\" | select k, t, v; "
                 "where type == \"ev\" | lookup s on k asof ts "
                 "== t within " +
-                    within + " | select i, v",
+                    dstd::String(within) + " | select i, v",
                 p);
         };
-        auto run_with = [&](const dstd::String& within,
+        auto run_with = [&](dstd::StringView within,
                             const duql::Params& p = {}) {
             return column(frame(query_with(within, p)), "v");
         };
@@ -816,8 +818,8 @@ TEST_SUITE("View duql joins") {
         dstd::Vector<Span> ph;
         dstd::Vector<Span> cl;
         OverlapData d;
-        auto line = [&](const char* name, int id, const Span& s) {
-            return dstd::String(R"({"ph":"X","name":")") + name +
+        auto line = [&](dstd::StringView name, int id, const Span& s) {
+            return dstd::String(R"({"ph":"X","name":")") + dstd::String(name) +
                    R"(","cat":"c","pid":)" + dstd::to_string(s.pid) +
                    R"(,"tid":)" + dstd::to_string(id) + R"(,"ts":)" +
                    dstd::to_string(s.ts) + R"(,"dur":)" +
@@ -1234,8 +1236,8 @@ TEST_SUITE("View duql joins") {
     };
 
     static dstd::Vector<CorrelatedCase> correlated_cases(
-        const CorrelatedData& d, const dstd::String& where,
-        const dstd::String& empty_sum) {
+        const CorrelatedData& d, dstd::StringView where,
+        dstd::StringView empty_sum) {
         const auto& rs = d.recs;
         auto count = [](double v) {
             return dstd::to_string(static_cast<long long>(v));
@@ -1249,7 +1251,7 @@ TEST_SUITE("View duql joins") {
                     sum[static_cast<std::size_t>(r.name)] += r.dur;
                     ++cnt[static_cast<std::size_t>(r.name)];
                 }
-            CorrelatedCase c{"where " + where +
+            CorrelatedCase c{"where " + dstd::String(where) +
                                  " | where dur > (from data | where name == "
                                  "^.name | agg { m = mean(dur) }) | select i",
                              "i",
@@ -1262,7 +1264,7 @@ TEST_SUITE("View duql joins") {
             out.push_back(std::move(c));
         }
         {
-            CorrelatedCase c{"where " + where +
+            CorrelatedCase c{"where " + dstd::String(where) +
                                  " | derive n = (from data | where run == "
                                  "^.run | agg { c = count() }) | select i, n",
                              "n",
@@ -1277,7 +1279,7 @@ TEST_SUITE("View duql joins") {
         }
         for (const bool negated : {false, true}) {
             CorrelatedCase c{
-                "where " + where + " | where g " +
+                "where " + dstd::String(where) + " | where g " +
                     dstd::String(negated ? "not " : "") +
                     "in (from data | where run == ^.run and dur > 50 | "
                     "select g) | select i",
@@ -1295,7 +1297,7 @@ TEST_SUITE("View duql joins") {
         }
         {
             CorrelatedCase c{
-                "where " + where +
+                "where " + dstd::String(where) +
                     " | derive t = (from data | where name == ^.name and run "
                     "== ^.run | agg { t = sum(dur) }) | select i, t",
                 "t",
@@ -1315,7 +1317,7 @@ TEST_SUITE("View duql joins") {
                         }
                 // A sum over rows with no dur is null; over no rows it is
                 // `empty_sum`.
-                c.want.push_back(any ? "null" : empty_sum);
+                c.want.emplace_back(any ? dstd::StringView("null") : empty_sum);
                 if (with_dur) {
                     char buf[32];
                     std::snprintf(buf, sizeof buf, "%g", t);
@@ -1325,7 +1327,7 @@ TEST_SUITE("View duql joins") {
             out.push_back(std::move(c));
         }
         {
-            CorrelatedCase c{"where " + where +
+            CorrelatedCase c{"where " + dstd::String(where) +
                                  " | derive x = (from data | where i == ^.i | "
                                  "select dur) | select i, x",
                              "x",
@@ -1338,7 +1340,7 @@ TEST_SUITE("View duql joins") {
             out.push_back(std::move(c));
         }
         {
-            CorrelatedCase c{"where " + where +
+            CorrelatedCase c{"where " + dstd::String(where) +
                                  " | derive c = (from data | where dur * 2 == "
                                  "^.dur * 2 | agg { c = count() }) | select "
                                  "i, c",
@@ -1357,7 +1359,7 @@ TEST_SUITE("View duql joins") {
 
     // Column `name` of `f` in the order of column `i`; `i` itself sorted.
     static dstd::Vector<dstd::String> by_i(const dataframe::DataFrame& f,
-                                           const dstd::String& name) {
+                                           dstd::StringView name) {
         dstd::Vector<dstd::Pair<long, dstd::String>> rows;
         const auto ids = column(f, "i");
         const auto vals = column(f, name);
@@ -1370,8 +1372,8 @@ TEST_SUITE("View duql joins") {
         return out;
     }
 
-    static dstd::String as_number_text(const dstd::String& s) {
-        if (s == "null" || s.empty()) return s;
+    static dstd::String as_number_text(dstd::CStringView s) {
+        if (s == "null" || s.empty()) return dstd::String(s);
         char* end = nullptr;
         const double v = std::strtod(s.c_str(), &end);
         char buf[32];
@@ -1381,7 +1383,7 @@ TEST_SUITE("View duql joins") {
 
     // Checks every query of `cases` against its per-row reference.
     static void check_cases(const View& v,
-                            const dstd::Vector<CorrelatedCase>& cases) {
+                            dstd::Span<const CorrelatedCase> cases) {
         for (const auto& c : cases) {
             CAPTURE(c.query);
             const auto f = frame(v.duql(c.query));
@@ -1429,17 +1431,20 @@ TEST_SUITE("View duql joins") {
 
     // Range sub-queries over `where` with the per-row nested-loop answer.
     static dstd::Vector<CorrelatedCase> range_cases(const CorrelatedData& d,
-                                                    const dstd::String& where) {
+                                                    dstd::StringView where) {
         const auto& rs = d.recs;
         dstd::Vector<CorrelatedCase> out;
-        auto add = [&](const dstd::String& body, const dstd::String& column,
+        auto add = [&](dstd::StringView body, dstd::StringView column,
                        auto&& per_row) {
-            CorrelatedCase c{"where " + where + " | " + body, column, {}};
+            CorrelatedCase c{
+                "where " + dstd::String(where) + " | " + dstd::String(body),
+                dstd::String(column),
+                {}};
             for (const Rec& r : rs) c.want.push_back(per_row(r));
             out.push_back(std::move(c));
         };
         // Aggregates of `dur` over the rows `in`: null over none with dur.
-        auto agg = [&](const Rec& r, auto&& in, const char* fn) {
+        auto agg = [&](const Rec& r, auto&& in, dstd::StringView fn) {
             double best = 0;
             double sum = 0;
             int n = 0;
@@ -1539,7 +1544,8 @@ TEST_SUITE("View duql joins") {
         for (const char* tail : {"select g", "group g {}"})
             for (const bool negated : {false, true}) {
                 CorrelatedCase c{
-                    "where " + where + " | where g " + (negated ? "not " : "") +
+                    "where " + dstd::String(where) + " | where g " +
+                        (negated ? "not " : "") +
                         "in (from data | where name == \"a\" and i < ^.i | " +
                         tail + ") | select i",
                     "i",

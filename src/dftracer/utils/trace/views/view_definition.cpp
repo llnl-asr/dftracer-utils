@@ -11,17 +11,17 @@ namespace dftracer::utils::trace::views {
 
 using json::escape_json_string;
 
-ViewDefinition& ViewDefinition::with_name(const dstd::String& n) {
+ViewDefinition& ViewDefinition::with_name(dstd::StringView n) {
     name = n;
     return *this;
 }
 
-ViewDefinition& ViewDefinition::with_description(const dstd::String& d) {
+ViewDefinition& ViewDefinition::with_description(dstd::StringView d) {
     description = d;
     return *this;
 }
 
-ViewDefinition& ViewDefinition::with_query(const dstd::String& query_str) {
+ViewDefinition& ViewDefinition::with_query(dstd::StringView query_str) {
     if (!query_str.empty()) {
         auto result = Query::from_string(query_str);
         if (result) query = std::move(*result);
@@ -57,7 +57,7 @@ dstd::String ViewDefinition::to_json() const {
     return out;
 }
 
-ViewDefinition ViewDefinition::from_json(const dstd::String& json) {
+ViewDefinition ViewDefinition::from_json(dstd::StringView json) {
     ViewDefinition view_def;
 
     simdjson::dom::parser parser;

@@ -62,10 +62,9 @@ struct ContainmentSpec {
 
 ContainmentSpec make_containment_spec(
     dftracer::utils::dstd::StringIntern& intern,
-    const dstd::Vector<dstd::String>& partition,
-    const dstd::String& start_field, const dstd::String& dur_field,
-    const dstd::String& name_field,
-    const dstd::Vector<dstd::String>& group = {},
+    dstd::Span<const dstd::String> partition, dstd::StringView start_field,
+    dstd::StringView dur_field, dstd::StringView name_field,
+    dstd::Span<const dstd::String> group = {},
     const dftracer::utils::trace::index::RecordSchema* path_schema = nullptr,
     double time_scale = 1.0);
 
@@ -80,21 +79,21 @@ bool containment_row(const FoldEvent& ev, const ContainmentSpec& spec,
 // (enclosing-first on a tie), ready for the containment walk. Shared by both
 // builders so a combined build sorts once.
 dstd::Vector<dstd::Vector<std::int64_t>> sorted_lanes(
-    const dstd::Vector<ContainmentRow>& rows);
+    dstd::Span<const ContainmentRow> rows);
 
 dataframe::DataFrame build_call_tree(
-    const dstd::Vector<ContainmentRow>& rows,
-    const dstd::Vector<dstd::Vector<std::int64_t>>& lanes,
+    dstd::Span<const ContainmentRow> rows,
+    dstd::Span<const dstd::Vector<std::int64_t>> lanes,
     const dftracer::utils::dstd::StringIntern& intern, const TimeOut& out);
 dataframe::DataFrame build_flamegraph(
-    const dstd::Vector<ContainmentRow>& rows,
-    const dstd::Vector<dstd::Vector<std::int64_t>>& lanes,
+    dstd::Span<const ContainmentRow> rows,
+    dstd::Span<const dstd::Vector<std::int64_t>> lanes,
     const dftracer::utils::dstd::StringIntern& intern, const TimeOut& out);
 
 // Both frames from one buffer, sorting each lane once. .first = call_tree,
 // .second = flamegraph.
 dstd::Pair<dataframe::DataFrame, dataframe::DataFrame> build_containment_both(
-    const dstd::Vector<ContainmentRow>& rows,
+    dstd::Span<const ContainmentRow> rows,
     const dftracer::utils::dstd::StringIntern& intern, const TimeOut& out);
 
 // Distributed flamegraph: a rank folds its rows into an arena and serializes it
@@ -102,10 +101,10 @@ dstd::Pair<dataframe::DataFrame, dataframe::DataFrame> build_containment_both(
 // the node frame (merge_flamegraph_partials). The arena is the mergeable
 // partial for MPI gather and Dask tree-reduce alike.
 dstd::String flamegraph_partial(
-    const dstd::Vector<ContainmentRow>& rows,
+    dstd::Span<const ContainmentRow> rows,
     const dftracer::utils::dstd::StringIntern& intern, const TimeOut& out);
 dataframe::DataFrame merge_flamegraph_partials(
-    const dstd::Vector<dstd::StringView>& partials);
+    dstd::Span<const dstd::StringView> partials);
 
 // The View's containment terminal as a fuse-engine Fold: buffers rows during
 // the shared scan, builds in parallel at the end. One fold, two builders

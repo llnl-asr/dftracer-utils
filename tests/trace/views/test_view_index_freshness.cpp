@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
@@ -33,14 +34,15 @@ constexpr int NEW_EVENTS = 1500;
 constexpr std::size_t MEMBER_BYTES = 64 * 1024;
 constexpr int MEMBER_EVENTS = 6000;
 
-void write_events(const dstd::String& gz, const char* cat, int n,
-                  std::size_t member_bytes, const char* odd_cat = nullptr) {
-    const dstd::String plain = gz + ".plain";
+void write_events(dstd::CStringView gz, dstd::StringView cat, int n,
+                  std::size_t member_bytes, dstd::StringView odd_cat = {}) {
+    const dstd::String plain = dstd::String(gz) + ".plain";
     {
         dftu_utils_test::FileOut ofs(plain);
         ofs << "[\n";
         for (int i = 0; i < n; ++i) {
-            const char* c = (odd_cat && i >= n - 3) ? odd_cat : cat;
+            const dstd::StringView c =
+                (!odd_cat.empty() && i >= n - 3) ? odd_cat : cat;
             ofs << R"({"id":)" << i << R"(,"name":"read","cat":")" << c
                 << R"(","pid":1,"tid":1,"ts":)" << (1000 + i)
                 << R"(,"dur":5,"ph":"X"})" << "\n";
@@ -48,13 +50,14 @@ void write_events(const dstd::String& gz, const char* cat, int n,
     }
     if (member_bytes)
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
-            plain, gz, member_bytes));
+            plain, dstd::String(gz), member_bytes));
     else
-        REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
+        REQUIRE(
+            dftu_utils_test::compress_file_to_gzip(plain, dstd::String(gz)));
     dstd::fs::remove(plain).discard();
 }
 
-void rewrite_events(const dstd::String& gz, const char* cat, int n,
+void rewrite_events(dstd::CStringView gz, dstd::StringView cat, int n,
                     std::size_t member_bytes = 0) {
     const auto before = dstd::fs::mtime_ns(gz).value();
     write_events(gz, cat, n, member_bytes);
@@ -96,15 +99,15 @@ resolve_files(dstd::Vector<dstd::String> files) {
     co_return result;
 }
 
-std::size_t rows(const View& v, const dstd::String& q) {
+std::size_t rows(const View& v, dstd::StringView q) {
     return dftu_utils_test::ok(v.duql(q).collect().get()).num_rows();
 }
 
-View dir_view(const dstd::String& dir, const dstd::String& root = "") {
+View dir_view(dstd::CStringView dir, dstd::CStringView root = "") {
     return run(View::from_directory(dstd::String(dir), dstd::String(root)));
 }
 
-std::int64_t count_by(const dataframe::DataFrame& df, const dstd::String& cat) {
+std::int64_t count_by(const dataframe::DataFrame& df, dstd::StringView cat) {
     for (std::int64_t i = 0; i < df.num_rows(); ++i)
         if (bstr(df, i, "cat") == cat)
             return static_cast<std::int64_t>(bnum(df, i, "n"));

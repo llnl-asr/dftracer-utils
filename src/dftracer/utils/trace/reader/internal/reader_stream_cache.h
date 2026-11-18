@@ -42,8 +42,8 @@ class ReaderStreamCache {
      * @param end End byte offset
      * @return true if cached stream can be reused, false otherwise
      */
-    bool can_continue(StreamType type, const dstd::String& path,
-                      std::size_t start, std::size_t end) const {
+    bool can_continue(StreamType type, dstd::StringView path, std::size_t start,
+                      std::size_t end) const {
         if (!initialized_ || !stream_) return false;
         if (stream_->done()) return false;
         if (type_ != type) return false;
@@ -63,7 +63,7 @@ class ReaderStreamCache {
      * @param end End byte offset
      */
     void update(dstd::UniquePtr<ReaderStream> new_stream, StreamType type,
-                const dstd::String& path, std::size_t start, std::size_t end) {
+                dstd::StringView path, std::size_t start, std::size_t end) {
         stream_ = std::move(new_stream);
         type_ = type;
         path_ = path;

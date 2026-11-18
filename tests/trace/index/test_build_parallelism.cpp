@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -24,7 +26,7 @@ namespace {
 constexpr int FILES = 64;
 constexpr std::size_t WORKERS = 8;
 
-dstd::String write_small_trace(const dstd::String& dir, int n) {
+dstd::String write_small_trace(dstd::CStringView dir, int n) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < 40; ++i) {
@@ -36,11 +38,11 @@ dstd::String write_small_trace(const dstd::String& dir, int n) {
     out += "]\n";
     char name[32];
     std::snprintf(name, sizeof(name), "/t%04d.pfw.gz", n);
-    return dftu_utils_test::write_gz_trace(dir + name, out);
+    return dftu_utils_test::write_gz_trace(dstd::String(dir) + name, out);
 }
 
 trace::index::build::IndexBuildBatchResult build_with(
-    const dstd::Vector<dstd::String>& files, const dstd::String& index_dir,
+    dstd::Span<const dstd::String> files, dstd::CStringView index_dir,
     std::size_t workers) {
     trace::index::build::IndexBuildBatchResult result;
     Runtime rt(workers);

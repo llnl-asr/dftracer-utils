@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -27,8 +28,8 @@ struct BuildResult {
     bool index_created = false;
 };
 
-static BuildResult run_builder(const dstd::String& gz,
-                               const dstd::String& index_dir = "",
+static BuildResult run_builder(dstd::CStringView gz,
+                               dstd::CStringView index_dir = "",
                                bool force = false,
                                std::size_t checkpoint_size = 0) {
     Runtime rt(4);

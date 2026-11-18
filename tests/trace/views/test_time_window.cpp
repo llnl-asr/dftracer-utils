@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/index/indexer.h>
@@ -31,9 +33,8 @@ struct Event {
 
 // Events over gzip members of `member_bytes`, plus one thread_name record, and
 // an index for them.
-dstd::String write_trace(TestEnvironment& env, const dstd::String& name,
-                         const dstd::Vector<Event>& events,
-                         std::size_t member_bytes) {
+dstd::String write_trace(TestEnvironment& env, dstd::StringView name,
+                         dstd::Vector<Event> events, std::size_t member_bytes) {
     dftu_utils_test::TextOut out;
     out << "[\n";
     out << R"({"name":"thread_name","ph":"M","pid":1,"tid":1,)"
@@ -45,7 +46,7 @@ dstd::String write_trace(TestEnvironment& env, const dstd::String& name,
             << R"("pid":1,"tid":1,"ph":"X","ts":)" << e.ts << R"(,"dur":)"
             << e.dur << R"(,"args":{"bytes":1}})" << "\n";
     out << "]\n";
-    const auto plain = env.dir() + "/" + name + ".pfw";
+    const auto plain = env.dir() + "/" + dstd::String(name) + ".pfw";
     {
         dftu_utils_test::FileOut(plain) << out.str();
     }
@@ -60,19 +61,19 @@ dstd::String write_trace(TestEnvironment& env, const dstd::String& name,
     return gz;
 }
 
-View view_of(const dstd::String& gz) {
+View view_of(dstd::CStringView gz) {
     return View::from_file(
         dstd::String(gz),
         dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
-std::int64_t rows_in(const dstd::String& gz, double b, double e) {
+std::int64_t rows_in(dstd::CStringView gz, double b, double e) {
     return dftu_utils_test::ok(view_of(gz).time_range(b, e).collect().get())
         .num_rows();
 }
 
-double agg_in(const dstd::String& gz, double b, double e, AggOp op,
-              const dstd::String& field) {
+double agg_in(dstd::CStringView gz, double b, double e, AggOp op,
+              dstd::StringView field) {
     auto df = dftu_utils_test::ok(view_of(gz)
                                       .time_range(b, e)
                                       .group_by({GroupKey::name()})
@@ -111,13 +112,13 @@ dstd::Map<dstd::String, Occ> occupancy(const View& v) {
     return out;
 }
 
-Occ window_occ(const dstd::String& gz, double b, double e) {
+Occ window_occ(dstd::CStringView gz, double b, double e) {
     auto m = occupancy(view_of(gz).time_range(b, e));
     return m.empty() ? Occ{} : m.begin()->second;
 }
 
 // The length of the union of `events` clamped to [b, e).
-double union_in(const dstd::Vector<Event>& events, double b, double e) {
+double union_in(dstd::Span<const Event> events, double b, double e) {
     dstd::Vector<dstd::Pair<double, double>> iv;
     for (const auto& ev : events) {
         const double s = std::max(static_cast<double>(ev.ts), b);
@@ -255,7 +256,7 @@ TEST_SUITE("TimeWindow") {
             run(view_of(gz)
                     .time_range(11000000, 12000000)
                     .map_batches<int>(
-                        [](int&, const dstd::Vector<dstd::StringView>&) {},
+                        [](int&, dstd::Span<const dstd::StringView>) {},
                         [](int&& a, int&&) { return a; }, 1))
                 .stats;
         CHECK(stats.chunks_scanned < 10);

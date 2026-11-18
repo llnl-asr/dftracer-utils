@@ -127,7 +127,7 @@ dstd::Result<bool> roles_complete(const ViewPlan& plan) {
     return true;
 }
 
-bool answerable_field(const dstd::String& f) {
+bool answerable_field(dstd::StringView f) {
     return f == "dur" || f == "size" || f == "offset" || f == "ts" || f == "te";
 }
 
@@ -301,7 +301,7 @@ struct FilterSets {
 };
 
 bool add_leaf(const ViewPlan& plan, const duql::detail::FieldNode& field,
-              const dstd::Vector<const duql::LiteralValue*>& values,
+              dstd::Span<const duql::LiteralValue* const> values,
               FilterSets& sets) {
     if (field.any || values.empty()) return false;
     const dstd::String t = tier_field(plan, field.path);
@@ -344,7 +344,8 @@ bool extract_sets(const ViewPlan& plan, const duql::detail::QueryNode& n,
                        extract_sets(plan, *node.right, sets);
             } else if constexpr (std::is_same_v<T, duql::detail::CompareNode>) {
                 if (node.op != CompareOp::Eq) return false;
-                return add_leaf(plan, node.field, {&node.value.value}, sets);
+                const duql::LiteralValue* const value[] = {&node.value.value};
+                return add_leaf(plan, node.field, value, sets);
             } else if constexpr (std::is_same_v<T, duql::detail::InNode>) {
                 dstd::Vector<const LiteralValue*> values;
                 for (const auto& e : node.values.elements)
@@ -362,8 +363,8 @@ struct ValueCol {
     dstd::String field;
 };
 
-dstd::Vector<ValueCol> value_cols(
-    const ViewPlan& plan, const dstd::Vector<dstd::String>& value_names) {
+dstd::Vector<ValueCol> value_cols(const ViewPlan& plan,
+                                  dstd::Span<const dstd::String> value_names) {
     dstd::Vector<ValueCol> out;
     for (std::size_t vc = 0; vc < value_names.size(); ++vc) {
         dstd::String base = agg_value_base_field(value_names[vc]);
@@ -386,7 +387,7 @@ struct Prepared {
     bool by_path = false;
 };
 
-void log_declined(const dstd::String& why) {
+void log_declined(dstd::StringView why) {
     DFTRACER_UTILS_LOG_DEBUG(
         "View: the index partials cannot answer this query ({}); the traces "
         "are scanned",
@@ -395,7 +396,7 @@ void log_declined(const dstd::String& why) {
 
 using Preparation = dstd::Result<dstd::Optional<Prepared>>;
 
-Preparation declined(const dstd::String& why) {
+Preparation declined(dstd::StringView why) {
     log_declined(why);
     return dstd::Optional<Prepared>();
 }
@@ -566,7 +567,7 @@ Preparation prepare(const ViewPlan& plan, bool typed, PrepSource from) {
                 // one from an empty one, which the scan keeps apart, so a key
                 // the build did not keep declines on a trace too.
                 if (std::none_of(build_extra.begin(), build_extra.end(),
-                                 [&](const dstd::String& e) {
+                                 [&](dstd::StringView e) {
                                      return dstd::StringView(e) ==
                                             dstd::StringView(gk.arg);
                                  }))
@@ -622,7 +623,7 @@ Preparation prepare(const ViewPlan& plan, bool typed, PrepSource from) {
 
 // A path record's int field is signed where dftracer's is unsigned.
 dataframe::FieldStat field_stat(
-    const dstd::String& field,
+    dstd::StringView field,
     const trace::index::schemas::dft::agg::AggPartial& p,
     dataframe::FieldStatDomain domain) {
     dataframe::FieldStat fs;
@@ -660,8 +661,8 @@ bool key_is_resolved(GroupKey::Kind kind) {
 class Seeder {
    public:
     Seeder(const ViewPlan& plan, AggInputSpec spec,
-           const dstd::Vector<GroupKey>& keys,
-           const dstd::Vector<dstd::String>& extra, bool quantiles,
+           dstd::Span<const GroupKey> keys,
+           dstd::Span<const dstd::String> extra, bool quantiles,
            const dstd::StringIntern& texts)
         : keys_(keys),
           extra_(extra),
@@ -801,8 +802,8 @@ class Seeder {
         return {};
     }
 
-    const dstd::Vector<GroupKey>& keys_;
-    const dstd::Vector<dstd::String>& extra_;
+    dstd::Span<const GroupKey> keys_;
+    dstd::Span<const dstd::String> extra_;
     bool quantiles_;
     const dstd::StringIntern& texts_;
     bool has_bucket_;
@@ -826,8 +827,8 @@ void log_answer(const AggQueryStats& st) {
 }
 
 dataframe::AggStatePtr seed_rows_of(const ViewPlan& plan, AggInputSpec spec,
-                                    const dstd::Vector<GroupKey>& keys,
-                                    const dstd::Vector<dstd::String>& extra,
+                                    dstd::Span<const GroupKey> keys,
+                                    dstd::Span<const dstd::String> extra,
                                     bool quantiles,
                                     const dstd::StringIntern& texts,
                                     const AggQueryResult::Rows& rows) {

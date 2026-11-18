@@ -161,8 +161,7 @@ dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& p) {
 
 using Rows = dstd::Map<dstd::String, dstd::Map<dstd::String, double>>;
 
-Rows rows_of(const dataframe::DataFrame& f,
-             const dstd::Vector<dstd::String>& keys) {
+Rows rows_of(const dataframe::DataFrame& f, dstd::Vector<dstd::String> keys) {
     Rows out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r) {
         dstd::String k;
@@ -179,7 +178,7 @@ Rows rows_of(const dataframe::DataFrame& f,
 // equal, the quantile within the accuracy of its sketch.
 void same_rows(const dataframe::DataFrame& got,
                const dataframe::DataFrame& expected,
-               const dstd::Vector<dstd::String>& keys) {
+               dstd::Vector<dstd::String> keys) {
     const Rows g = rows_of(got, keys);
     const Rows e = rows_of(expected, keys);
     REQUIRE(e.size() > 0);
@@ -452,19 +451,21 @@ TEST_SUITE("ViewPartials") {
 
     TEST_CASE("profiles and aggregates group by extra keys without reads") {
         Fixture fx(/*extras=*/true);
-        auto profiles_by = [&](const char* arg) {
+        auto profiles_by = [&](dstd::StringView arg) {
             return fx.view()
-                .group_by({GroupKey::name(), GroupKey::of_arg(arg)})
+                .group_by(
+                    {GroupKey::name(), GroupKey::of_arg(dstd::String(arg))})
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}})
                 .collect_typed()
                 .get();
         };
-        auto events_by = [&](const char* arg) {
+        auto events_by = [&](dstd::StringView arg) {
             return dftu_utils_test::ok(
                 fx.view()
                     .filter(Query::from_string(R"(cat in ["POSIX", "STDIO"])")
                                 .value())
-                    .group_by({GroupKey::name(), GroupKey::of_arg(arg)})
+                    .group_by(
+                        {GroupKey::name(), GroupKey::of_arg(dstd::String(arg))})
                     .agg(specs())
                     .collect()
                     .get());
@@ -479,7 +480,7 @@ TEST_SUITE("ViewPartials") {
             p = views::detail::scan::filter(
                 p, Query::from_string(R"(cat in ["POSIX", "STDIO"])").value());
             p = views::detail::scan::group_by(
-                p, {GroupKey::name(), GroupKey::of_arg(arg)});
+                p, {GroupKey::name(), GroupKey::of_arg(dstd::String(arg))});
             expected.push_back(scan_only(views::detail::scan::agg(p, specs())));
         }
 

@@ -179,7 +179,7 @@ class ExtensionBuilders {
         dstd::Optional<dstd::String> file;
     };
     void end_granule();
-    static void report(Built& built, const char* callback,
+    static void report(Built& built, dstd::StringView callback,
                        const dstd::Error& error);
 
     dstd::Vector<Built> built_;

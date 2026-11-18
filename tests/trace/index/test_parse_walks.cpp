@@ -4,10 +4,12 @@
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -54,7 +56,7 @@ bool has_args_object(int shape) {
     return shape == 0 || shape == 2 || shape == 3 || shape == 5 || shape == 6;
 }
 
-dstd::String write_trace(const dstd::String& dir) {
+dstd::String write_trace(dstd::CStringView dir) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < RECORDS; ++i) {
@@ -116,15 +118,15 @@ dstd::String write_trace(const dstd::String& dir) {
         }
     }
     out += "]\n";
-    const dstd::String path =
-        dftu_utils_test::write_stored_gz_trace(dir + "/trace.pfw.gz", out);
+    const dstd::String path = dftu_utils_test::write_stored_gz_trace(
+        dstd::String(dir) + "/trace.pfw.gz", out);
     const timespec fixed[2] = {{FIXED_MTIME, 0}, {FIXED_MTIME, 0}};
     REQUIRE(::utimensat(AT_FDCWD, path.c_str(), fixed, 0) == 0);
     return path;
 }
 
 trace::index::build::IndexBuildBatchResult build_one(
-    const dstd::String& file, const dstd::String& index_dir,
+    dstd::CStringView file, dstd::CStringView index_dir,
     std::size_t checkpoint_size = 0) {
     Runtime rt(4);
     trace::index::build::IndexBuildBatchResult result;
@@ -238,7 +240,7 @@ dstd::String describe(const trace::views::detail::FoldEvent& ev,
         o, text(ev.cat_id), text(ev.name_id), text(ev.fhash_id),
         text(ev.hhash_id), ev.pid, ev.tid, ev.ts, ev.dur,
         static_cast<int>(ev.phase), ev.has_dur, ev.by_path, ev.unconverted);
-    const auto list = [&](const char* label, const auto& pairs) {
+    const auto list = [&](dstd::StringView label, const auto& pairs) {
         dstd::fmt_append<"{}:">(o, label);
         for (const auto& [k, v] : pairs) {
             dstd::fmt_append<" {}=">(o, text(k));
@@ -408,7 +410,7 @@ TEST_SUITE("IndexParseWalks") {
                 trace::reader::TraceReader reader(
                     {.file_path = file, .index_dir = env.dir() + "/idx"});
                 REQUIRE(reader.has_index());
-                const auto found = [&](const dstd::String& query) {
+                const auto found = [&](dstd::StringView query) {
                     trace::reader::ReadConfig rc;
                     rc.query = query;
                     return dftu_utils_test::ok(
@@ -426,7 +428,7 @@ TEST_SUITE("IndexParseWalks") {
     }
 
     TEST_CASE("a refused line keeps its place among the lines around it") {
-        const auto run = [](const dstd::Vector<dstd::String>& lines,
+        const auto run = [](dstd::Vector<dstd::String> lines,
                             std::size_t& dom_parses) {
             dstd::String text;
             for (const auto& line : lines) dstd::fmt_append<"{}\n">(text, line);
@@ -435,7 +437,9 @@ TEST_SUITE("IndexParseWalks") {
             dstd::Vector<dstd::String> seen;
             dom_parses = 0;
             trace::parse_lines(
-                parser, text.data(), text.size() - simdjson::SIMDJSON_PADDING,
+                parser,
+                dstd::StringView(text.data(),
+                                 text.size() - simdjson::SIMDJSON_PADDING),
                 [&](simdjson::dom::element, dstd::StringView src) {
                     ++dom_parses;
                     seen.push_back(dstd::fmt<"D:{}">(src));
@@ -446,8 +450,8 @@ TEST_SUITE("IndexParseWalks") {
                 });
             return seen;
         };
-        const auto check = [](const dstd::Vector<dstd::String>& seen,
-                              const dstd::Vector<dstd::String>& want) {
+        const auto check = [](dstd::Vector<dstd::String> seen,
+                              dstd::Vector<dstd::String> want) {
             REQUIRE(seen.size() == want.size());
             for (std::size_t i = 0; i < seen.size(); ++i)
                 CHECK(seen[i] == want[i]);
@@ -549,7 +553,7 @@ TEST_SUITE("IndexParseWalks") {
         constexpr int GOOD = 40;
         dstd::String out;
         out += "[\n";
-        const auto record = [](const char* tag, int id) {
+        const auto record = [](dstd::StringView tag, int id) {
             return dstd::fmt<
                 "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
                 "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":2,\"args\":{\"tag\":"
@@ -591,7 +595,7 @@ TEST_SUITE("IndexParseWalks") {
 
     TEST_CASE("a refused record after another on one line is indexed") {
         constexpr int GOOD = 40;
-        const auto record = [](int id, const char* extra) {
+        const auto record = [](int id, dstd::StringView extra) {
             return dstd::fmt<
                 "{}{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
                 "\"ph\":\"X\",\"ts\":{}{}{}}}">(R"({"id":)", id, 1000 + id,

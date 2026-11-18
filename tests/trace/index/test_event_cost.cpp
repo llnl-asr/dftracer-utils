@@ -2,6 +2,7 @@
 // The cases count work, not time.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -35,7 +36,7 @@ constexpr int SHAPES = 3;
 constexpr std::time_t FIXED_MTIME = 1700000000;
 constexpr std::uint64_t LEAF_PATHS = 24;
 constexpr std::uint64_t MIN_REDUCTION = 20;
-dstd::String write_trace(const dstd::String& dir) {
+dstd::String write_trace(dstd::CStringView dir) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < EVENTS; ++i) {
@@ -65,14 +66,14 @@ dstd::String write_trace(const dstd::String& dir) {
         }
     }
     out += "]\n";
-    const dstd::String path =
-        dftu_utils_test::write_stored_gz_trace(dir + "/trace.pfw.gz", out);
+    const dstd::String path = dftu_utils_test::write_stored_gz_trace(
+        dstd::String(dir) + "/trace.pfw.gz", out);
     const timespec fixed[2] = {{FIXED_MTIME, 0}, {FIXED_MTIME, 0}};
     REQUIRE(::utimensat(AT_FDCWD, path.c_str(), fixed, 0) == 0);
     return path;
 }
 
-void build_one(const dstd::String& file, const dstd::String& index_dir) {
+void build_one(dstd::CStringView file, dstd::CStringView index_dir) {
     Runtime rt(4);
     trace::index::build::IndexBuildBatchResult result;
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {

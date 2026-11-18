@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
@@ -36,8 +37,7 @@ dstd::String make_trace(int n) {
     return s;
 }
 
-void write_single_member(const dstd::String& path,
-                         const dstd::String& content) {
+void write_single_member(dstd::CStringView path, dstd::StringView content) {
     fileio::compress::GzipMemberCompressor comp;
     auto m = comp.compress_member(content.data(), content.size());
     REQUIRE(m.has_value());
@@ -46,7 +46,7 @@ void write_single_member(const dstd::String& path,
     dstd::fs::write_file(dstd::PathView(path), ofs).discard();
 }
 
-std::int64_t read_line_count(const dstd::String& gz, const dstd::String& idx) {
+std::int64_t read_line_count(dstd::CStringView gz, dstd::CStringView idx) {
     std::int64_t count = 0;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         trace::reader::TraceReader reader(trace::reader::TraceReaderConfig{

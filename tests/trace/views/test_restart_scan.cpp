@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -64,7 +66,7 @@ Trace make_trace() {
     return t;
 }
 
-void append_member(dstd::Vector<std::uint8_t>& out, const dstd::String& text) {
+void append_member(dstd::Vector<std::uint8_t>& out, dstd::StringView text) {
     fileio::compress::GzipMemberCompressor c;
     dstd::Vector<std::uint8_t> buf(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), buf.data(), buf.size());
@@ -72,7 +74,7 @@ void append_member(dstd::Vector<std::uint8_t>& out, const dstd::String& text) {
     out.insert(out.end(), buf.begin(), buf.begin() + *n);
 }
 
-void write_file(const dstd::String& path, const dstd::Vector<std::uint8_t>& b) {
+void write_file(dstd::CStringView path, dstd::Span<const std::uint8_t> b) {
     dftu_utils_test::FileOut f(path);
     f.write(reinterpret_cast<const char*>(b.data()),
             static_cast<std::streamsize>(b.size()));
@@ -87,7 +89,7 @@ struct Indexed {
 };
 
 Indexed make_indexed(TestEnvironment& env, const Trace& t,
-                     const dstd::String& name, bool one_member) {
+                     dstd::StringView name, bool one_member) {
     dstd::Vector<std::uint8_t> bytes;
     if (one_member) {
         dstd::String all;
@@ -105,9 +107,9 @@ Indexed make_indexed(TestEnvironment& env, const Trace& t,
         if (!cur.empty()) append_member(bytes, cur);
     }
     Indexed r;
-    r.gz = env.dir() + "/" + name + ".pfw.gz";
+    r.gz = env.dir() + "/" + dstd::String(name) + ".pfw.gz";
     write_file(r.gz, bytes);
-    const dstd::String dir = env.dir() + "/" + name + ".dftindex";
+    const dstd::String dir = env.dir() + "/" + dstd::String(name) + ".dftindex";
     REQUIRE(dftu_utils_test::build_index(r.gz, dir, CKPT));
     r.idx = determine_index_path(r.gz, dir);
     return r;
@@ -119,7 +121,7 @@ dstd::Vector<dftracer::utils::trace::index::gzip::GzipMemberRecord> members(
 }
 
 dstd::Vector<std::int64_t> sorted_col(
-    const dftracer::utils::dataframe::DataFrame& f, const char* name) {
+    const dftracer::utils::dataframe::DataFrame& f, dstd::StringView name) {
     dstd::Vector<std::int64_t> v;
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
         v.push_back(static_cast<std::int64_t>(bnum(f, r, name)));

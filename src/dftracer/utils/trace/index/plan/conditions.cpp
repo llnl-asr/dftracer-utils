@@ -54,12 +54,12 @@ dstd::String literal_to_string(const duql::LiteralNode& lit) {
         lit.value);
 }
 
-bool is_numeric_type(const dstd::String& vtype) {
+bool is_numeric_type(dstd::StringView vtype) {
     return vtype == "uint" || vtype == "int" || vtype == "double";
 }
 
-int compare_values(const dstd::String& a, const dstd::String& b,
-                   const dstd::String& vtype) {
+int compare_values(dstd::StringView a, dstd::StringView b,
+                   dstd::StringView vtype) {
     // Exact across integer and double text, so `x < 1.5` against an int zone
     // is not read as `x < 1`.
     if (is_numeric_type(vtype)) {
@@ -105,7 +105,7 @@ bool trusted_bounds(FileIndexData& data, const Zone& z, bool need_both) {
 // non-negative integer (a fraction, a negative number) leaves it out. A string
 // that is not an integer is a malformed query.
 dstd::Optional<std::uint64_t> timestamp_bound(
-    FileIndexData& data, const dstd::String& text,
+    FileIndexData& data, dstd::StringView text,
     const duql::detail::CompareNode& n) {
     std::uint64_t out = 0;
     const char* end = text.data() + text.size();
@@ -120,7 +120,7 @@ dstd::Optional<std::uint64_t> timestamp_bound(
 }
 
 bool zone_may_match(FileIndexData& data, const Zone& z, duql::CompareOp op,
-                    const dstd::String& val) {
+                    dstd::StringView val) {
     if (!trusted_bounds(data, z, false)) return true;
     switch (op) {
         case duql::CompareOp::Gt:
@@ -138,7 +138,7 @@ bool zone_may_match(FileIndexData& data, const Zone& z, duql::CompareOp op,
 
 // The dual of zone_may_match: every value in the zone satisfies `op val`.
 bool zone_all_match(FileIndexData& data, const Zone& z, duql::CompareOp op,
-                    const dstd::String& val) {
+                    dstd::StringView val) {
     if (!trusted_bounds(data, z, true)) return false;
     switch (op) {
         case duql::CompareOp::Gt:
@@ -230,7 +230,7 @@ void collect_equality_paths(const duql::detail::QueryNode& node,
         node.data);
 }
 
-dstd::StringView text_of(const dstd::String& s) { return s; }
+dstd::StringView text_of(dstd::StringView s) { return s; }
 dstd::StringView text_of(
     const dstd::Pair<dstd::String, trace::index::store::PathStat>& entry) {
     return entry.first;
@@ -240,7 +240,7 @@ dstd::StringView text_of(
 // evaluator does: as written, under "args.", or as an object or dotted flat
 // key along the way.
 template <class Paths>
-bool path_may_exist(const Paths& paths, const dstd::String& path) {
+bool path_may_exist(const Paths& paths, dstd::StringView path) {
     auto near = [&](dstd::StringView p) {
         for (const auto& entry : paths) {
             const dstd::StringView s = text_of(entry);
@@ -252,12 +252,13 @@ bool path_may_exist(const Paths& paths, const dstd::String& path) {
         }
         return false;
     };
-    return near(path) || (!path.starts_with("args.") && near("args." + path));
+    return near(path) ||
+           (!path.starts_with("args.") && near(dstd::fmt<"args.{}">(path)));
 }
 
 // Whether some record name satisfies `leaf`, a leaf on `name`; a pattern
 // leaf counts as satisfiable.
-bool name_may_match(const dstd::Vector<dstd::String>& names,
+bool name_may_match(dstd::Span<const dstd::String> names,
                     const duql::detail::QueryNode& leaf) {
     auto text = [](const duql::LiteralNode& lit) -> const dstd::String* {
         return std::get_if<dstd::String>(&lit.value);
@@ -357,7 +358,7 @@ class MetadataRecords final : public Condition {
    private:
     static bool may_hold(const trace::index::store::ChunkMetadata& m,
                          const duql::detail::QueryNode& leaf,
-                         const dstd::String& path) {
+                         dstd::StringView path) {
         if (m.records == 0) return false;
         if (m.paths && !path_may_exist(*m.paths, path)) return false;
         // A record without a top-level name resolves `name` under args.
@@ -388,7 +389,7 @@ class FileBloom final : public Condition {
     }
 
    private:
-    bool may_contain(const dstd::String& path, const dstd::String& val) {
+    bool may_contain(dstd::StringView path, dstd::StringView val) {
         const auto* bf = d_.file_bloom(path);
         return !bf || bf->possibly_contains(val);
     }
@@ -442,7 +443,7 @@ dstd::Optional<dstd::String> exists_path(const duql::detail::QueryNode& node) {
 }
 
 // Whether `p` lies below `base`.
-bool under(dstd::StringView p, const dstd::String& base) {
+bool under(dstd::StringView p, dstd::StringView base) {
     return p.size() > base.size() && p.starts_with(base) &&
            p[base.size()] == '.';
 }
@@ -473,7 +474,7 @@ class CatalogPresence final : public Condition {
         return !path || may_exist(*path);
     }
 
-    bool may_exist(const dstd::String& path) {
+    bool may_exist(dstd::StringView path) {
         if (!d_.by_path && unrecorded(path)) return true;
         const auto& catalog = d_.catalog();
         if (catalog.empty()) return true;
@@ -639,7 +640,7 @@ class Counts final : public Condition {
     }
 
     template <typename Pred>
-    ChunkSet proven(const dstd::String& path, Pred pred) {
+    ChunkSet proven(dstd::StringView path, Pred pred) {
         ChunkSet out;
         for (const auto& [ckpt, g] : d_.counts(path)) {
             const auto* vc = g.get();
@@ -746,7 +747,7 @@ class Zonemap final : public Condition {
     // `exists(path)` is false on a chunk whose zone records no value only
     // when no record of the file holds the path as null, an object or an
     // array, which the zone does not see.
-    dstd::Optional<ChunkSet> exists_chunks(const dstd::String& path,
+    dstd::Optional<ChunkSet> exists_chunks(dstd::StringView path,
                                            const ChunkSet& candidates) {
         if (!absence_is_missing(path)) return dstd::nullopt;
         const auto& zones = d_.zones(path);
@@ -758,7 +759,7 @@ class Zonemap final : public Condition {
         return out;
     }
 
-    bool absence_is_missing(const dstd::String& path) {
+    bool absence_is_missing(dstd::StringView path) {
         const auto& name = d_.evidence_name(path);
         if (!name || d_.fixed_field(*name)) return false;
         const dstd::String leaf = d_.by_path ? *name : "args." + *name;

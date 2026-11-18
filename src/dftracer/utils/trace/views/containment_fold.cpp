@@ -26,12 +26,12 @@ using dataframe::Series;
 namespace {
 
 FieldRef classify(dftracer::utils::dstd::StringIntern& intern,
-                  const dstd::String& f, bool& needs_args,
+                  dstd::StringView f, bool& needs_args,
                   dstd::Vector<dstd::String>& nested,
                   const dftracer::utils::trace::index::Roles* roles) {
     // A role's slot name reads the role; an undeclared one reads the field.
     if (roles) {
-        auto role = [&](dstd::StringView path, const char* slot) {
+        auto role = [&](dstd::StringView path, dstd::StringView slot) {
             return !path.empty() && (f == path || f == slot);
         };
         if (role(roles->entity, "pid")) return {FieldRef::Kind::Pid};
@@ -48,7 +48,7 @@ FieldRef classify(dftracer::utils::dstd::StringIntern& intern,
         if (f == "cat") return {FieldRef::Kind::Cat};
     }
     if (is_nested_path(f))
-        nested.push_back(f);
+        nested.emplace_back(f);
     else
         needs_args = true;
     return {FieldRef::Kind::Captured, intern.get_or_insert(f)};
@@ -125,7 +125,7 @@ std::uint32_t group_id_of(const FoldEvent& ev, const ContainmentSpec& spec,
 }  // namespace
 
 dstd::Vector<dstd::Vector<std::int64_t>> sorted_lanes(
-    const dstd::Vector<ContainmentRow>& rows) {
+    dstd::Span<const ContainmentRow> rows) {
     auto start = [&](std::int64_t i) {
         return rows[static_cast<std::size_t>(i)].start;
     };
@@ -159,9 +159,9 @@ dstd::Vector<dstd::Vector<std::int64_t>> sorted_lanes(
 
 ContainmentSpec make_containment_spec(
     dftracer::utils::dstd::StringIntern& intern,
-    const dstd::Vector<dstd::String>& partition,
-    const dstd::String& start_field, const dstd::String& dur_field,
-    const dstd::String& name_field, const dstd::Vector<dstd::String>& group,
+    dstd::Span<const dstd::String> partition, dstd::StringView start_field,
+    dstd::StringView dur_field, dstd::StringView name_field,
+    dstd::Span<const dstd::String> group,
     const dftracer::utils::trace::index::RecordSchema* path_schema,
     double time_scale) {
     ContainmentSpec s;
@@ -245,8 +245,8 @@ dstd::Result<void> ContainmentFold::merge(Fold& other) {
 }
 
 dataframe::DataFrame build_call_tree(
-    const dstd::Vector<ContainmentRow>& rows,
-    const dstd::Vector<dstd::Vector<std::int64_t>>& lanes,
+    dstd::Span<const ContainmentRow> rows,
+    dstd::Span<const dstd::Vector<std::int64_t>> lanes,
     const dftracer::utils::dstd::StringIntern& intern,
     const TimeOut& time_out) {
     const std::int64_t n = static_cast<std::int64_t>(rows.size());
@@ -319,7 +319,7 @@ dataframe::DataFrame build_call_tree(
         out.names.emplace_back(column);
     out.columns.push_back(Series::flat_i64(pid.data(), n));
     out.columns.push_back(Series::flat_i64(tid.data(), n));
-    auto times = [&](const dstd::Vector<double>& v) {
+    auto times = [&](dstd::Span<const double> v) {
         if (time_out.floating) return Series::flat_f64(v.data(), n);
         dstd::Vector<std::int64_t> whole(v.size());
         for (std::size_t i = 0; i < v.size(); ++i)
@@ -336,8 +336,8 @@ dataframe::DataFrame build_call_tree(
 }
 
 static dstd::Vector<dataframe::FlameNode> fold_flame_arena(
-    const dstd::Vector<ContainmentRow>& rows,
-    const dstd::Vector<dstd::Vector<std::int64_t>>& lanes,
+    dstd::Span<const ContainmentRow> rows,
+    dstd::Span<const dstd::Vector<std::int64_t>> lanes,
     const dftracer::utils::dstd::StringIntern& intern,
     const TimeOut& time_out) {
     const std::int64_t nlanes = static_cast<std::int64_t>(lanes.size());
@@ -469,8 +469,8 @@ static dataframe::DataFrame flame_arena_to_frame(
 }
 
 dataframe::DataFrame build_flamegraph(
-    const dstd::Vector<ContainmentRow>& rows,
-    const dstd::Vector<dstd::Vector<std::int64_t>>& lanes,
+    dstd::Span<const ContainmentRow> rows,
+    dstd::Span<const dstd::Vector<std::int64_t>> lanes,
     const dftracer::utils::dstd::StringIntern& intern,
     const TimeOut& time_out) {
     return flame_arena_to_frame(
@@ -478,7 +478,7 @@ dataframe::DataFrame build_flamegraph(
 }
 
 dstd::String flamegraph_partial(
-    const dstd::Vector<ContainmentRow>& rows,
+    dstd::Span<const ContainmentRow> rows,
     const dftracer::utils::dstd::StringIntern& intern,
     const TimeOut& time_out) {
     dstd::Vector<std::uint8_t> b = dataframe::serialize_flame_arena(
@@ -487,7 +487,7 @@ dstd::String flamegraph_partial(
 }
 
 dataframe::DataFrame merge_flamegraph_partials(
-    const dstd::Vector<dstd::StringView>& partials) {
+    dstd::Span<const dstd::StringView> partials) {
     dstd::Vector<dataframe::FlameNode> merged;
     merged.emplace_back();
     merged[0].name = "all";
@@ -501,7 +501,7 @@ dataframe::DataFrame merge_flamegraph_partials(
 }
 
 dstd::Pair<dataframe::DataFrame, dataframe::DataFrame> build_containment_both(
-    const dstd::Vector<ContainmentRow>& rows,
+    dstd::Span<const ContainmentRow> rows,
     const dftracer::utils::dstd::StringIntern& intern,
     const TimeOut& time_out) {
     dstd::Vector<dstd::Vector<std::int64_t>> lanes = sorted_lanes(rows);

@@ -374,7 +374,8 @@ class BatchRow {
     explicit BatchRow(const Input& in) : in_(in) {}
     template <bool Check>
     void run(Acc& acc) {
-        trace::parse_lines(parser_, in_.text.data(), in_.length,
+        trace::parse_lines(parser_,
+                           dstd::StringView(in_.text.data(), in_.length),
                            [&](simdjson::dom::element root, dstd::StringView) {
                                trace::views::detail::extract_fold_event_into(
                                    ev_, root, intern_, true);
@@ -399,7 +400,7 @@ class IndexDomRow {
     template <bool Check>
     void run(Acc& acc) {
         trace::parse_lines(
-            parser_, in_.text.data(), in_.length,
+            parser_, dstd::StringView(in_.text.data(), in_.length),
             [&](simdjson::dom::element root, dstd::StringView) {
                 if (!trace::views::detail::append_dftracer_record(
                         batch_, root, intern_, true, true, hints_, &cache_))
@@ -450,7 +451,7 @@ class IndexRefusedRow {
     template <bool Check>
     void run(Acc& acc) {
         trace::parse_lines(
-            parser_, in_.text.data(), in_.length,
+            parser_, dstd::StringView(in_.text.data(), in_.length),
             [&](simdjson::dom::element root, dstd::StringView) {
                 if (!trace::views::detail::append_dftracer_record(
                         batch_, root, intern_, true, true, hints_, &cache_))
@@ -488,7 +489,7 @@ class IndexDroppedRow {
     template <bool Check>
     void run(Acc& acc) {
         trace::parse_lines(
-            parser_, in_.text.data(), in_.length,
+            parser_, dstd::StringView(in_.text.data(), in_.length),
             [&](simdjson::dom::element root, dstd::StringView) {
                 if (!trace::views::detail::append_dftracer_record(
                         batch_, root, intern_, true, true, hints_, &cache_))

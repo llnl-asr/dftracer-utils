@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
@@ -66,10 +67,6 @@ dstd::String str(dstd::StringView view) {
     return dstd::String(view.data(), view.size());
 }
 
-dstd::String str(const dstd::String& value) {
-    return dstd::String(value.data(), value.size());
-}
-
 dstd::Expected<void, dstd::Error> run(
     coro::CoroTask<dstd::Expected<void, dstd::Error>> task) {
     return dftracer::utils::default_runtime().submit(std::move(task)).get();
@@ -95,17 +92,17 @@ void ok(dstd::Expected<void, dstd::Error> result) {
     REQUIRE(result.has_value());
 }
 
-dstd::String build_into(const dstd::String& dir,
-                        const dstd::Vector<dstd::String>& traces) {
-    const auto index_path = dir + "/.dftindex";
+dstd::String build_into(dstd::CStringView dir,
+                        dstd::Span<const dstd::String> traces) {
+    const auto index_path = dstd::String(dir) + "/.dftindex";
     for (const auto& trace : traces)
         REQUIRE(dftu_utils_test::build_index(
             dstd::String(trace), dstd::String(index_path), CHECKPOINT));
     return index_path;
 }
 
-void put_plugin_extension(const dstd::String& index_path,
-                          const dstd::Vector<dstd::String>& traces) {
+void put_plugin_extension(dstd::CStringView index_path,
+                          dstd::Span<const dstd::String> traces) {
     auto opened = Index::open(index_path);
     REQUIRE(opened.has_value());
     for (const auto& trace : traces) {
@@ -494,7 +491,7 @@ TEST_CASE("a second dictionary read finds an id below one it already read") {
     auto opened = Index::open(root);
     REQUIRE(opened.has_value());
 
-    const auto commit_entry = [&](const dstd::String& path, std::uint32_t id,
+    const auto commit_entry = [&](dstd::CStringView path, std::uint32_t id,
                                   dstd::StringView text) {
         auto build = take(opened->build(path, stat_of(1000, 4000, 9)));
         trace::index::put_agg_dictionary_entry(build, id, text);
@@ -762,7 +759,7 @@ TEST_CASE("a FileGroup publishes a repeated path in order and counts files") {
     const dstd::String dotted = "/traces/./rep.pfw.gz";
     const dstd::String other = "/traces/other.pfw.gz";
     const dstd::String bad = "/traces/bad.pfw.gz";
-    const auto key = [](const dstd::String& path) {
+    const auto key = [](dstd::CStringView path) {
         return fileio::get_logical_path(path);
     };
     const auto run_task = [](auto task) {
@@ -1595,14 +1592,13 @@ dstd::String write_bytes(const dstd::Path& path, dstd::StringView contents) {
     return dstd::String(path.str());
 }
 
-SourceStat stat_of_file(const dstd::String& path) {
+SourceStat stat_of_file(dstd::CStringView path) {
     dftracer::utils::common::InputFileStat st;
     REQUIRE(dftracer::utils::common::stat_input(path, st));
     return stat_of(static_cast<std::uint64_t>(st.mtime), st.size);
 }
 
-void register_traces(const Index& index,
-                     const dstd::Vector<dstd::String>& paths) {
+void register_traces(const Index& index, dstd::Vector<dstd::String> paths) {
     for (const auto& path : paths) {
         auto build = take(index.build(path, stat_of_file(path)));
         put_members(build, 1);

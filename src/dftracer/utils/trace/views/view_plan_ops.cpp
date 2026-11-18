@@ -140,8 +140,8 @@ dstd::Result<void> check_keys(const detail::ViewPlan& p,
     if (!detail::plan_by_path(p)) return {};
     const auto& schema = detail::plan_record_schema(p);
     const auto& roles = schema.roles;
-    auto role = [](const dstd::String& path, const char* field) {
-        return path.empty() ? dstd::String(field)
+    auto role = [](dstd::StringView path, dstd::StringView field) {
+        return path.empty() ? dstd::String(field.data(), field.size())
                             : dstd::String(path.data(), path.size());
     };
     for (auto& k : keys) {
@@ -265,7 +265,7 @@ ConfirmedFiles& confirmed_files() {
 // that does not exist yet holds no evidence, so its first build is left to
 // the first read. Concurrent callers may both rebuild one file; the index
 // writes serialize.
-dstd::Result<void> ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
+dstd::Result<void> ensure_indexes_fresh(dstd::Span<const ViewFile> files) {
     struct Pending {
         dstd::String key;
         dstd::String file;
@@ -1190,7 +1190,7 @@ ScanPlan timed(const ScanPlan& plan) {
     return next;
 }
 
-ScanPlan record_schema(const ScanPlan& plan, const dstd::String& id) {
+ScanPlan record_schema(const ScanPlan& plan, dstd::StringView id) {
     const auto found = dftracer::utils::trace::index::get_schema(id);
     if (!found) return failed_plan(plan, found.error());
     const auto& p = **found;
@@ -1232,7 +1232,7 @@ ScanPlan views_root(const ScanPlan& plan, dstd::String dir) {
 
 coro::CoroTask<dstd::Result<ExportStats>> for_each_batch(
     ScanPlan plan,
-    dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
+    dstd::Function<void(std::size_t, dstd::Span<const dstd::StringView>)>
         on_batch,
     std::size_t slot_count, std::uint64_t limit) {
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
@@ -1393,7 +1393,7 @@ coro::CoroTask<dstd::Result<dstd::String>> flamegraph_partial(
 }
 
 dataframe::DataFrame merge_flamegraph_partials(
-    const dstd::Vector<dstd::StringView>& partials) {
+    dstd::Span<const dstd::StringView> partials) {
     return detail::merge_flamegraph_partials(partials);
 }
 
@@ -1422,7 +1422,7 @@ dstd::Result<dstd::String> materialize_dir(const ScanPlan& plan) {
 }
 
 dstd::Result<void> register_materialized(const ScanPlan& plan,
-                                         const dstd::String& dir) {
+                                         dstd::StringView dir) {
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
         return resolved.error();
     dftracer::utils::trace::index::cache::register_view(dir, *plan);
@@ -1455,7 +1455,7 @@ coro::CoroTask<dstd::Result<ExportStats>> export_counters(ScanPlan plan,
 }
 
 coro::CoroTask<dstd::Result<void>> materialize_partials(
-    ScanPlan plan, const dstd::Vector<dstd::StringView>& partials) {
+    ScanPlan plan, dstd::Vector<dstd::StringView> partials) {
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
         co_return resolved.error();
     co_return co_await detail::run_materialize_partials(*plan, partials);
@@ -1475,14 +1475,14 @@ coro::CoroTask<dstd::Result<dstd::String>> aggregate_partial(ScanPlan plan) {
 }
 
 dstd::Result<dataframe::DataFrame> merge_partials_to_table(
-    const ScanPlan& plan, const dstd::Vector<dstd::StringView>& partials) {
+    const ScanPlan& plan, dstd::Span<const dstd::StringView> partials) {
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
         return resolved.error();
     return detail::merge_partials_to_table(*plan, partials);
 }
 
 dstd::Result<ExportStats> merge_counter_partials(
-    const ScanPlan& plan, const dstd::Vector<dstd::StringView>& partials,
+    const ScanPlan& plan, dstd::Span<const dstd::StringView> partials,
     ExportSink& sink) {
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
         return resolved.error();

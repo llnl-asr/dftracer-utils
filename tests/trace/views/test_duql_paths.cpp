@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
@@ -121,7 +122,7 @@ Names names_of(const dataframe::DataFrame& df) {
     return out;
 }
 
-View view_of(const dstd::String& gz, const char* filter) {
+View view_of(dstd::CStringView gz, dstd::StringView filter) {
     return View::from_file(
                dstd::String(gz),
                dstd::String(dstd::String(determine_index_path(gz, ""))))
@@ -361,7 +362,7 @@ TEST_SUITE("duql paths") {
         df.names = dstd::make_shared_strings({"name", "cat"});
         df.columns.push_back(dataframe::Series::strings(name));
         df.columns.push_back(dataframe::Series::strings(cat));
-        auto kept = [&](const char* filter) {
+        auto kept = [&](dstd::StringView filter) {
             const auto q = duql::Query::from_string(filter);
             REQUIRE(q.has_value());
             return names_of(df.filter(dftu_utils_test::ok(df.mask(*q))));

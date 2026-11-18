@@ -4,6 +4,7 @@
 // keyed by record schema.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -30,21 +31,21 @@ namespace {
 
 using namespace dftracer::utils::trace;
 
-dstd::String cache_of(const dstd::String& gz) {
+dstd::String cache_of(dstd::CStringView gz) {
     return dstd::String(determine_index_path(gz, ""));
 }
 
-dstd::String rollups_of(const dstd::String& gz) {
+dstd::String rollups_of(dstd::CStringView gz) {
     return dstd::String(
         dftracer::utils::trace::index::rollups_dir(cache_of(gz)));
 }
 
-dstd::String views_of(const dstd::String& gz) {
+dstd::String views_of(dstd::CStringView gz) {
     return dstd::String(dftracer::utils::trace::index::views_dir(cache_of(gz)));
 }
 
 // Signatures in the rollup store, from its usage records.
-dstd::Vector<std::uint64_t> rollup_sigs(const dstd::String& gz) {
+dstd::Vector<std::uint64_t> rollup_sigs(dstd::CStringView gz) {
     dstd::Vector<std::uint64_t> out;
     auto db = dftracer::utils::trace::index::cache::open_rollup_db(
         rollups_of(gz),
@@ -53,7 +54,7 @@ dstd::Vector<std::uint64_t> rollup_sigs(const dstd::String& gz) {
     return out;
 }
 
-std::uint64_t rollup_bytes(const dstd::String& gz) {
+std::uint64_t rollup_bytes(dstd::CStringView gz) {
     std::uint64_t total = 0;
     auto db = dftracer::utils::trace::index::cache::open_rollup_db(
         rollups_of(gz),
@@ -62,7 +63,7 @@ std::uint64_t rollup_bytes(const dstd::String& gz) {
     return total;
 }
 
-View by_cat(const dstd::String& gz, const dstd::String& query) {
+View by_cat(dstd::CStringView gz, dstd::StringView query) {
     return View::from_file(
                dstd::String(gz),
                dstd::String(dstd::String(determine_index_path(gz, ""))))
@@ -199,7 +200,7 @@ TEST_SUITE("QueryCache") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        auto plan = [&](const dstd::String& q) {
+        auto plan = [&](dstd::StringView q) {
             return views::detail::scan::agg(
                 views::detail::scan::group_by(
                     views::detail::scan::filter(
@@ -209,7 +210,7 @@ TEST_SUITE("QueryCache") {
                     {GroupKey::cat()}),
                 {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
-        auto materialize = [&](const dstd::String& q) {
+        auto materialize = [&](dstd::StringView q) {
             return canon(run(views::detail::scan::collect_frame(
                 views::detail::scan::materialize(plan(q), 0, 0))));
         };

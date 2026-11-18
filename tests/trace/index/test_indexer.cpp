@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -75,9 +76,9 @@ void touch_later(dstd::PathView path) {
 
 // `count` complete events called `name`, then one metadata line, so the trace
 // is never empty.
-void write_named_trace(const dstd::String& gz, dstd::StringView name,
+void write_named_trace(dstd::CStringView gz, dstd::StringView name,
                        int count = 20) {
-    const dstd::String plain = gz + ".plain";
+    const dstd::String plain = dstd::String(gz) + ".plain";
     {
         dftu_utils_test::FileOut out(plain);
         out << R"({"ph":"M","name":"process_name","pid":1,"tid":1,"args":{"name":"p"}})"
@@ -87,12 +88,12 @@ void write_named_trace(const dstd::String& gz, dstd::StringView name,
                 << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << 1000 + i * 100
                 << R"(,"dur":50,"args":{}})" << "\n";
     }
-    REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
+    REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, dstd::String(gz)));
     dstd::fs::remove(dstd::PathView(plain)).discard();
 }
 
 dstd::Map<dstd::String, double> event_counts_of(
-    dstd::Vector<dstd::String> traces, const dstd::String& index_dir) {
+    dstd::Vector<dstd::String> traces, dstd::CStringView index_dir) {
     dstd::Vector<trace::views::ViewFile> files;
     for (const auto& t : traces)
         files.push_back(trace::views::ViewFile{
@@ -110,9 +111,9 @@ dstd::Map<dstd::String, double> event_counts_of(
     return out;
 }
 
-dstd::Map<dstd::String, double> event_counts(const dstd::String& trace,
-                                             const dstd::String& index_dir) {
-    return event_counts_of({trace}, index_dir);
+dstd::Map<dstd::String, double> event_counts(dstd::CStringView trace,
+                                             dstd::CStringView index_dir) {
+    return event_counts_of({dstd::String(trace)}, index_dir);
 }
 
 }  // namespace
@@ -379,7 +380,7 @@ TEST_SUITE("Indexer") {
         auto ix = dftu_utils_test::ok(Indexer::open({a, b}, options));
         dftu_utils_test::ok(ix.build());
 
-        auto has_agg = [&](const dstd::String& trace) {
+        auto has_agg = [&](dstd::CStringView trace) {
             const dstd::String shared =
                 trace::internal::determine_index_path(trace, options.index_dir);
             auto opened = dftu_utils_test::ok(Index::open(shared));
@@ -497,7 +498,7 @@ struct ZlibPrefix {
     dstd::Vector<std::size_t> member_starts;
 };
 
-ZlibPrefix zlib_prefix(const dstd::String& path) {
+ZlibPrefix zlib_prefix(dstd::CStringView path) {
     const dstd::String data_raw =
         dstd::fs::read_file(dstd::PathView(path)).value_or(dstd::String());
     dstd::Vector<unsigned char> data(data_raw.begin(), data_raw.end());
@@ -534,7 +535,7 @@ ZlibPrefix zlib_prefix(const dstd::String& path) {
     return r;
 }
 
-dstd::String write_prefix(const dstd::String& src, const dstd::String& dst,
+dstd::String write_prefix(dstd::StringView src, dstd::StringView dst,
                           double frac) {
     dstd::String bytes =
         dstd::fs::read_file(dstd::PathView(src)).value_or(dstd::String());
@@ -543,7 +544,7 @@ dstd::String write_prefix(const dstd::String& src, const dstd::String& dst,
                              0, static_cast<std::size_t>(
                                     static_cast<double>(bytes.size()) * frac))))
         .discard();
-    return dst;
+    return dstd::String(dst);
 }
 
 struct Indexed {
@@ -553,7 +554,7 @@ struct Indexed {
     std::uint64_t members_end = 0;
 };
 
-Indexed indexed(const dstd::String& trace) {
+Indexed indexed(dstd::CStringView trace) {
     const auto snapshot = dftu_utils_test::index_snapshot(index_of(trace));
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     Indexed r;
@@ -571,7 +572,7 @@ Indexed indexed(const dstd::String& trace) {
 }
 
 dstd::String multimember_trace(dftu_utils_test::TestEnvironment& env,
-                               int events, const dstd::String& name) {
+                               int events, dstd::StringView name) {
     const auto plain = env.create_dft_test_file(events);
     const dstd::String gz((dstd::Path(env.dir()) / name).str());
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
@@ -737,7 +738,7 @@ TEST_SUITE("Truncated") {
         const auto ref = zlib_prefix(cut);
         REQUIRE(ref.events > 0);
 
-        const auto count_lines = [](const dstd::String& path)
+        const auto count_lines = [](dstd::CStringView path)
             -> dftracer::utils::coro::CoroTask<std::size_t> {
             dftracer::utils::trace::reader::TraceReader reader(
                 {.file_path = dstd::String(path)});

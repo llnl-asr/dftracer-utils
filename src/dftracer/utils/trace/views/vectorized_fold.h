@@ -77,7 +77,8 @@ class VectorizedFold : public Fold {
         }
         if (scratch_.empty()) return {};
         (*on_batch_)(state_,
-                     build_row_frame(scratch_, *intern_, select_, time_scale_));
+                     build_row_frame(dstd::Span<const FoldEvent>(scratch_),
+                                     *intern_, select_, time_scale_));
         return {};
     }
 

@@ -100,7 +100,7 @@ const dstd::Vector<SchemaLeaf>& Applier::tree() {
     return *tree_;
 }
 
-bool Applier::is_array(const dstd::String& field) const {
+bool Applier::is_array(dstd::StringView field) const {
     return std::find(arrays_.begin(), arrays_.end(), field) != arrays_.end();
 }
 

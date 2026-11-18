@@ -5,6 +5,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -29,8 +30,8 @@ namespace {
 // Widens a FLAT numeric column's row `row` to double regardless of its
 // stored width, matching test_view_common.h's bnum() so a value can be
 // compared across the C ABI and C++ result the same test derives.
-double abi_num(dftu_dataframe* df, std::int64_t row, const char* name) {
-    dftu_series* c = dftu_dataframe_column(df, name);
+double abi_num(dftu_dataframe* df, std::int64_t row, dstd::CStringView name) {
+    dftu_series* c = dftu_dataframe_column(df, name.c_str());
     REQUIRE(c != nullptr);
     double v = 0.0;
     switch (dftu_series_type(c)) {
@@ -64,8 +65,9 @@ double abi_num(dftu_dataframe* df, std::int64_t row, const char* name) {
     return v;
 }
 
-dstd::String abi_str(dftu_dataframe* df, std::int64_t row, const char* name) {
-    dftu_series* c = dftu_dataframe_column(df, name);
+dstd::String abi_str(dftu_dataframe* df, std::int64_t row,
+                     dstd::CStringView name) {
+    dftu_series* c = dftu_dataframe_column(df, name.c_str());
     REQUIRE(c != nullptr);
     std::int64_t len = 0;
     const char* data = dftu_series_string_at(c, row, &len);
@@ -126,10 +128,10 @@ dstd::String write_argmax_trace(TestEnvironment& env) {
 
 // Writes a small trace of `n` "ev" events at `dir`/name.pfw.gz and builds its
 // index, for the directory-scan test.
-dstd::String write_and_index(const dstd::String& dir, const dstd::String& name,
+dstd::String write_and_index(dstd::CStringView dir, dstd::StringView name,
                              int n, int pid) {
     REQUIRE(dstd::fs::create_directories(dir).has_value());
-    dstd::String pfw = dir + "/" + name + ".pfw";
+    dstd::String pfw = dstd::String(dir) + "/" + dstd::String(name) + ".pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < n; ++i)
         ofs << R"({"ph":"X","name":")" << name << R"(","cat":"POSIX","pid":)"

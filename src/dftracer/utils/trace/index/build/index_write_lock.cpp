@@ -16,7 +16,7 @@ struct IndexLocks {
 
 }  // namespace
 
-std::mutex& index_write_mutex(const dstd::String& index_path) {
+std::mutex& index_write_mutex(dstd::StringView index_path) {
     IndexLocks& locks = dstd::Singleton<IndexLocks>::get();
     std::lock_guard<std::mutex> lk(locks.mutex);
     auto& slot = locks.by_path[index_path];

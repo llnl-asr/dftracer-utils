@@ -130,7 +130,7 @@ class BloomFold : public trace::views::detail::Fold {
 
     /// Empty if the file is unseen.
     trace::index::schemas::dft::BloomCore::Catalog file_catalog(
-        const dstd::String& file);
+        dstd::StringView file);
     /// One per distinct (leaf, tag) pair a flush met, not one per event.
     std::uint64_t catalog_observations() const { return catalog_observations_; }
 
@@ -138,7 +138,7 @@ class BloomFold : public trace::views::detail::Fold {
     /// tests. Moved-from once finalize or write has run.
     const dstd::Map<std::uint64_t,
                     trace::index::schemas::dft::BloomCore::ChunkState>*
-    file_chunks(const dstd::String& file) const {
+    file_chunks(dstd::StringView file) const {
         auto it = files_.find(file);
         return it == files_.end() ? nullptr : &it->second.chunks;
     }
@@ -282,7 +282,7 @@ class BloomFold : public trace::views::detail::Fold {
     void observe_auto(AutoChunk& chunk,
                       const trace::views::detail::FoldEvent& e);
     ChunkState assemble_chunk(FileState& fs, std::uint64_t cp,
-                              const dstd::Vector<dstd::String>& dims,
+                              dstd::Span<const dstd::String> dims,
                               const AutoKeys& keys);
     AutoKeys auto_keys(dstd::CStringView file, FileState& fs);
     dstd::Vector<dstd::String> dims_of(const AutoKeys& keys) const;

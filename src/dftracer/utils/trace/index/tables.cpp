@@ -222,7 +222,7 @@ dstd::Result<void> scan_keys(const Snapshot& snapshot, const FileRef& file,
 template <class Fn>
 auto get_decoded(const Snapshot& snapshot, const FileRef& file,
                  const dftracer::utils::store::Namespace& ns,
-                 const dstd::String& key, Fn&& fn)
+                 dstd::StringView key, Fn&& fn)
     -> dstd::Result<dstd::Optional<
         typename ResultValue<decltype(fn(dstd::StringView{}))>::type>> {
     using Raw = decltype(fn(dstd::StringView{}));
@@ -245,7 +245,7 @@ auto get_decoded(const Snapshot& snapshot, const FileRef& file,
 dstd::Result<dstd::Optional<dstd::String>> get_string(const Snapshot& snapshot,
                                                       const FileRef& file,
                                                       Ext ext,
-                                                      const dstd::String& key) {
+                                                      dstd::StringView key) {
     return get_decoded(snapshot, file, read_ns(ext), key,
                        [](dstd::StringView body) { return own(body); });
 }
@@ -290,12 +290,12 @@ plugin_namespace(const Snapshot& snapshot, const FileRef& file,
     return dstd::Optional<dftracer::utils::store::Namespace>(ns);
 }
 
-void put_value(FileBuild& build, Ext ext, const dstd::String& key,
+void put_value(FileBuild& build, Ext ext, dstd::StringView key,
                dstd::StringView body) {
     IndexAccess::put(build, ext, dstd::ByteView(key), dstd::ByteView(body));
 }
 
-void put_bare(FileBuild& build, Ext ext, const dstd::String& key) {
+void put_bare(FileBuild& build, Ext ext, dstd::StringView key) {
     IndexAccess::put(build, ext, dstd::ByteView(key), dstd::ByteView());
 }
 

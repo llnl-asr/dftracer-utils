@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -32,8 +33,8 @@ extensions::ChunkDimensionStats dim(dstd::String name,
 // A file of three chunks (two lines each): chunk 0 has cat {a}, chunk 1 has
 // cat {b} and chunk 2's cat counts went over the cap (no counts record);
 // dur spans [10, 20], [30, 40], [50, 60].
-dstd::String build_index(const dstd::String& dir, const dstd::String& trace) {
-    const auto path = dir + "/.dftindex";
+dstd::String build_index(dstd::CStringView dir, dstd::CStringView trace) {
+    const auto path = dstd::String(dir) + "/.dftindex";
     auto opened = dftu_utils_test::open_test_index(path);
     auto w = dftu_utils_test::register_test_file(opened, trace, 1);
     const dstd::Vector<dstd::Vector<dstd::String>> cats = {{"a", "a"},
@@ -54,13 +55,15 @@ dstd::String build_index(const dstd::String& dir, const dstd::String& trace) {
     return path;
 }
 
-dstd::Vector<std::uint64_t> prune(const dstd::String& index,
-                                  const dstd::String& trace,
-                                  const dstd::String& text) {
+dstd::Vector<std::uint64_t> prune(dstd::CStringView index,
+                                  dstd::CStringView trace,
+                                  dstd::StringView text) {
     auto q = duql::Query::from_string(text);
     REQUIRE(q.has_value());
     trace::index::plan::ChunkPruner pruner;
-    auto out = dftu_utils_test::ok(pruner({index, trace, std::move(*q)}).get());
+    auto out = dftu_utils_test::ok(
+        pruner({dstd::String(index), dstd::String(trace), std::move(*q)})
+            .get());
     REQUIRE(out.success);
     if (out.candidate_checkpoints.empty() && out.file_may_match)
         return {0, 1, 2};

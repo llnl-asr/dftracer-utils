@@ -16,22 +16,21 @@ using yaml::Document;
 using yaml::Value;
 using Fail = dstd::Unexpected<dstd::Error>;
 
-Fail spec_error(const dstd::String& source, dstd::StringView what) {
+Fail spec_error(dstd::StringView source, dstd::StringView what) {
     return common::make_error<"record schema spec {}: {}">(
         common::ErrorCode::InvalidArgument, source, what);
 }
 
 dstd::Result<void> check_keys(const Value& map,
-                              std::initializer_list<const char*> keys,
-                              const dstd::String& where,
-                              const dstd::String& source) {
+                              std::initializer_list<dstd::StringView> keys,
+                              dstd::StringView where, dstd::StringView source) {
     if (!map.is_object())
         return spec_error(source, dstd::fmt<"{} must be a mapping">(where));
     dstd::Result<void> status;
     map.for_each_member([&](dstd::StringView key, Value) {
         if (!status) return;
         if (std::none_of(keys.begin(), keys.end(),
-                         [&](const char* k) { return key == k; }))
+                         [&](dstd::StringView k) { return key == k; }))
             status =
                 spec_error(source, dstd::fmt<"unknown key {}{}">(where, key));
     });
@@ -39,14 +38,14 @@ dstd::Result<void> check_keys(const Value& map,
 }
 
 dstd::Result<dstd::String> text_of(const Value& n, dstd::StringView key,
-                                   const dstd::String& source) {
+                                   dstd::StringView source) {
     const auto text = n.as_string();
     if (!text) return spec_error(source, dstd::fmt<"{} must be a string">(key));
     return dstd::String(*text);
 }
 
 dstd::Result<bool> flag_of(const Value& n, dstd::StringView key,
-                           const dstd::String& source) {
+                           dstd::StringView source) {
     const auto flag = n.as_bool();
     if (!flag)
         return spec_error(source, dstd::fmt<"{} must be true or false">(key));
@@ -55,9 +54,9 @@ dstd::Result<bool> flag_of(const Value& n, dstd::StringView key,
 
 template <typename E, std::size_t N>
 dstd::Result<E> choice_of(
-    const Value& n, const dstd::String& key,
+    const Value& n, dstd::StringView key,
     const std::array<dstd::Pair<const char*, E>, N>& names,
-    const dstd::String& source) {
+    dstd::StringView source) {
     const auto v = text_of(n, key, source);
     if (!v) return v.error();
     for (const auto& [name, value] : names)
@@ -72,7 +71,7 @@ dstd::Result<E> choice_of(
 }
 
 dstd::Result<FieldSpec> parse_field(dstd::StringView name, const Value& n,
-                                    const dstd::String& source) {
+                                    dstd::StringView source) {
     FieldSpec f;
     f.name = dstd::String(name);
     const dstd::String where = dstd::fmt<"fields.{}">(f.name);
@@ -121,7 +120,7 @@ dstd::Result<FieldSpec> parse_field(dstd::StringView name, const Value& n,
 }
 
 dstd::Result<SchemaSpec> parse_spec(const Value& spec,
-                                    const dstd::String& source) {
+                                    dstd::StringView source) {
     if (auto ok = check_keys(
             spec, {"id", "extends", "fields", "index", "source"}, "", source);
         !ok)
@@ -201,7 +200,7 @@ dstd::Result<SchemaSpec> parse_spec(const Value& spec,
 }  // namespace
 
 dstd::Result<SchemaSpec> parse_schema_spec(dstd::StringView text,
-                                           const dstd::String& source) {
+                                           dstd::StringView source) {
     auto document = Document::parse(dstd::String(text), "");
     if (!document) return spec_error(source, document.error().message());
     return parse_spec(document->root(), source);

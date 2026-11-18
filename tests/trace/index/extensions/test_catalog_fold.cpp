@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
@@ -29,9 +31,9 @@ constexpr int RECORDS = 400;
 
 using Catalog = dstd::Map<dstd::String, dstd::Tuple<int, int, std::uint64_t>>;
 
-dstd::String write_gz(TestEnvironment& env, const dstd::String& dir,
-                      const dstd::Vector<dstd::String>& lines) {
-    const dstd::String d = env.dir() + "/" + dir;
+dstd::String write_gz(TestEnvironment& env, dstd::CStringView dir,
+                      dstd::Span<const dstd::String> lines) {
+    const dstd::String d = env.dir() + "/" + dstd::String(dir);
     REQUIRE(dstd::fs::create_directories(d).has_value());
     const dstd::String plain = d + "/t.ndjson";
     {
@@ -99,7 +101,7 @@ void register_log_schema() {
         "test_catalog_fold"));
 }
 
-bool has_catalog(const dstd::String& gz) {
+bool has_catalog(dstd::CStringView gz) {
     const auto snapshot = dftu_utils_test::index_snapshot(
         dstd::String(determine_index_path(gz, "")));
     const auto file = dftu_utils_test::find_indexed_file(snapshot, gz);
@@ -108,7 +110,7 @@ bool has_catalog(const dstd::String& gz) {
                snapshot, *file, trace::index::store::IndexExtension::Catalog);
 }
 
-Catalog catalog_of(const dstd::String& gz) {
+Catalog catalog_of(dstd::CStringView gz) {
     const auto snapshot = dftu_utils_test::index_snapshot(
         dstd::String(determine_index_path(gz, "")));
     const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
@@ -120,14 +122,14 @@ Catalog catalog_of(const dstd::String& gz) {
     return out;
 }
 
-View view_of(const dstd::String& gz, const dstd::String& schema = "") {
+View view_of(dstd::CStringView gz, dstd::StringView schema = "") {
     View v = View::from_file(
         dstd::String(gz),
         dstd::String(dstd::String(determine_index_path(gz, ""))));
     return schema.empty() ? v : v.record_schema(dstd::String(schema));
 }
 
-void build_full(const dstd::String& gz, const dstd::String& schema = "") {
+void build_full(dstd::CStringView gz, dstd::StringView schema = "") {
     trace::index::IndexerOptions o;
     o.checkpoint_size = 2048;
     o.schema = schema;
@@ -137,8 +139,8 @@ void build_full(const dstd::String& gz, const dstd::String& schema = "") {
             .build());
 }
 
-void expect_scan_catalog_equals_build(const dstd::Vector<dstd::String>& lines,
-                                      const dstd::String& schema) {
+void expect_scan_catalog_equals_build(dstd::Span<const dstd::String> lines,
+                                      dstd::StringView schema) {
     TestEnvironment env(10);
     const dstd::String scanned = write_gz(env, "scanned", lines);
     const dstd::String built = write_gz(env, "built", lines);
@@ -153,7 +155,7 @@ void expect_scan_catalog_equals_build(const dstd::Vector<dstd::String>& lines,
 }
 
 // Rewrites the file's catalog with one more path, as the build wrote it.
-void plant_sentinel(const dstd::String& gz) {
+void plant_sentinel(dstd::CStringView gz) {
     const auto index = dftu_utils_test::open_test_index(
         dstd::String(determine_index_path(gz, "")));
     const auto snapshot = dftu_utils_test::index_take(index.snapshot());
@@ -172,7 +174,7 @@ void plant_sentinel(const dstd::String& gz) {
     dftu_utils_test::commit_test_build(build);
 }
 
-bool has_sentinel(const dstd::String& gz) {
+bool has_sentinel(dstd::CStringView gz) {
     return catalog_of(gz).count("zz.sentinel") == 1;
 }
 

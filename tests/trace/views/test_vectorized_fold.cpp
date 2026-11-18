@@ -37,7 +37,7 @@ views::detail::FoldEvent ev(dstd::StringIntern& in, std::uint64_t pid,
 }
 
 // Sum a numeric column with a real SIMD reduce over the materialized batch.
-std::int64_t col_sum(const dataframe::DataFrame& d, const char* name) {
+std::int64_t col_sum(const dataframe::DataFrame& d, dstd::StringView name) {
     for (std::size_t i = 0; i < d.names.size(); ++i)
         if (d.names[i] == name) {
             dftu_scalar s =

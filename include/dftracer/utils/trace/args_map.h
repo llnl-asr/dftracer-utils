@@ -63,9 +63,6 @@ class ArgsValueProxy {
             if (auto* p = std::get_if<dstd::String>(val_))
                 return dstd::StringView(*p);
             return default_val;
-        } else if constexpr (std::is_same_v<T, const char*>) {
-            if (auto* p = std::get_if<dstd::String>(val_)) return p->c_str();
-            return default_val;
         } else if constexpr (std::is_same_v<T, std::uint64_t>) {
             if (auto* p = std::get_if<std::uint64_t>(val_)) return *p;
             if (auto* p = std::get_if<std::int64_t>(val_)) {
@@ -197,16 +194,6 @@ class ArgsMap {
                                  : ArgsValueProxy{};
     }
 
-    ArgsValueProxy operator[](const char* key) const {
-        return (*this)[dstd::StringView(key)];
-    }
-
-    ArgsValueProxy operator[](const dstd::String& key) const {
-        return (*this)[dstd::StringView(key)];
-    }
-
-    ArgsValueProxy at(const char* key) const { return (*this)[key]; }
-    ArgsValueProxy at(const dstd::String& key) const { return (*this)[key]; }
     ArgsValueProxy at(dstd::StringView key) const { return (*this)[key]; }
 
     template <typename Fn>

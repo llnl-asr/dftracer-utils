@@ -45,7 +45,9 @@ constexpr double EXACT_DOUBLE = 9007199254740992.0;
 // Whether the number from `p` (just after a key's colon) satisfies every bound
 // of `r`; true when it cannot be read exactly, since only a certain failure
 // may drop the line.
-bool number_holds(const char* p, const char* end, const Prefilter::Range& r) {
+bool number_holds(dstd::StringView rest, const Prefilter::Range& r) {
+    const char* p = rest.data();
+    const char* const end = p + rest.size();
     while (p < end && (*p == ' ' || *p == '\t')) ++p;
     const char* tok = p;
     bool integer = true;
@@ -103,14 +105,18 @@ bool range_may_hold(dstd::StringView line, const Prefilter::Range& r) {
             continue;
         const char* q = start + seg.size();
         while (q < end && (*q == ' ' || *q == '\t')) ++q;
-        if (q < end && *q == ':' && number_holds(q + 1, end, r)) return true;
+        if (q < end && *q == ':' &&
+            number_holds(
+                dstd::StringView(q + 1, static_cast<std::size_t>(end - q - 1)),
+                r))
+            return true;
     }
     return false;
 }
 
 // memchr on the pivot byte, then compare: several times faster than memmem
 // or string_view::find, which cost more per line than parsing it.
-bool contains(dstd::StringView line, const dstd::String& n, std::size_t p) {
+bool contains(dstd::StringView line, dstd::StringView n, std::size_t p) {
     if (line.size() < n.size()) return false;
     const char* begin = line.data();
     const char* last = begin + (line.size() - n.size()) + p;

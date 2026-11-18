@@ -48,7 +48,7 @@ dstd::Unexpected<dstd::Error> refuse(const A&... a) {
 
 inline dstd::String std_str(dstd::StringView s) { return dstd::String(s); }
 
-dstd::Vector<dstd::String> std_strs(const dstd::Vector<dstd::String>& v);
+dstd::Vector<dstd::String> std_strs(dstd::Span<const dstd::String> v);
 
 template <class Names>
 dstd::Vector<dstd::String> strings_of(const Names& names) {
@@ -138,7 +138,7 @@ struct Reads {
 // The record fields the stages read: every field a term names before an
 // earlier stage defines a column of that name. An array is a field `expand`
 // or a quantifier reads as a whole.
-Reads referenced_fields(const dstd::Vector<duql::PipelineStage>& stages,
+Reads referenced_fields(dstd::Span<const duql::PipelineStage> stages,
                         const dstd::Function<dstd::Vector<dstd::String>(
                             const duql::PipelineLookup&)>& adds,
                         bool carried);
@@ -149,18 +149,18 @@ extern const dstd::String JSON_LIST;
 // The select token and column type that read the array field `path` as a
 // List, typed from the element paths the index observed.
 dstd::Pair<dstd::String, dataframe::DataType> list_type(
-    const dstd::Vector<SchemaLeaf>& tree, const dstd::String& path,
+    dstd::Span<const SchemaLeaf> tree, dstd::StringView path,
     bool args_fallback);
 
 // What a narrowed scan reads for the field `f`: an array (`array`, or a
 // field the index saw only elements under) as one list column, added to
 // `arrays`; an object as its leaf columns; anything else by name.
-dstd::Vector<dstd::String> scan_reads(const dstd::Vector<SchemaLeaf>& tree,
-                                      const dstd::String& f, bool array,
+dstd::Vector<dstd::String> scan_reads(dstd::Span<const SchemaLeaf> tree,
+                                      dstd::StringView f, bool array,
                                       dstd::Vector<dstd::String>& arrays,
                                       bool args_fallback);
 
-dataframe::TypeId observed_type(const dstd::String& type);
+dataframe::TypeId observed_type(dstd::StringView type);
 
 // One null row of `type`.
 dataframe::Series null_cell(const dataframe::DataType& type);
@@ -238,7 +238,7 @@ dataframe::LazyFrame map_source(dataframe::LazyFrame inner,
 // `f` with the columns `in` names, in order; one its rows lack is null.
 dataframe::DataFrame aligned(
     dataframe::DataFrame f,
-    const dstd::Vector<dstd::Pair<dstd::String, dataframe::TypeId>>& in);
+    dstd::Span<const dstd::Pair<dstd::String, dataframe::TypeId>> in);
 
 // One row per group of `inner`'s rows, folded by a GroupFold as they
 // stream.
@@ -355,7 +355,7 @@ class Applier {
     Status apply(const duql::PipelineStage& stage);
 
     // Ends the scan, so the columns are those the stages give.
-    void end_scan(const char* stage) { leave_scan(stage); }
+    void end_scan(dstd::StringView stage) { leave_scan(stage); }
 
     const dstd::Vector<dataframe::query::VectorColumn>& columns() const {
         return cols_;
@@ -401,7 +401,7 @@ class Applier {
     std::size_t typed_ = 0;
     const dstd::Vector<SchemaLeaf>& tree();
 
-    bool is_array(const dstd::String& field) const;
+    bool is_array(dstd::StringView field) const;
 
     bool is_json(dstd::StringView name) const;
 
@@ -414,18 +414,18 @@ class Applier {
     // A field read by the raw scan: a scanned column, or, while the view
     // still reads raw events, any field under the type the index observed.
     dstd::Optional<dataframe::query::VectorColumn> scan_column(
-        const dstd::String& base);
+        dstd::StringView base);
 
     // Whether the index lists field `f`, or a path under it.
-    bool indexed(const dstd::String& f);
+    bool indexed(dstd::StringView f);
 
-    void leave_scan(const char* stage);
+    void leave_scan(dstd::StringView stage);
 
     // An open pipeline keeps every column the scan returns, so the fields it
     // reads beyond the columns become columns of the scan without narrowing
     // it, as a full index would declare them. Only for plain paths, on a view
     // that still reads raw events.
-    bool name_paths(const dstd::Vector<dstd::String>& read);
+    bool name_paths(dstd::Span<const dstd::String> read);
 
     dstd::Vector<dstd::String> names() const;
 
@@ -435,16 +435,16 @@ class Applier {
 
     // The column of the bare name `base` under `args.`, when the source
     // falls back to it.
-    dstd::Optional<std::size_t> arg_index(const dstd::String& base) const;
+    dstd::Optional<std::size_t> arg_index(dstd::StringView base) const;
 
     dataframe::Expr col(dstd::StringView name) const;
 
     // Whether a field named `base` reads a column: the column itself, one it
     // lies inside, or one inside it.
-    bool has_column_for(const dstd::String& base) const;
+    bool has_column_for(dstd::StringView base) const;
 
     dstd::Result<dataframe::Expr> compile(const duql::TermRef& t,
-                                          const dstd::String& text,
+                                          dstd::StringView text,
                                           bool condition = false);
 
     // Whether `t` reads a column whose type the plan does not know: one a
@@ -455,7 +455,7 @@ class Applier {
     // columns its own types, then `t` compiles as it would over a plan that
     // declared them so, once per distinct set of types.
     dstd::Result<dataframe::Expr> per_batch(const duql::TermRef& t,
-                                            const dstd::String& text,
+                                            dstd::StringView text,
                                             bool condition);
 
     // `next` as the columns, each batch passed through `fn`.
@@ -472,7 +472,7 @@ class Applier {
     // The fields of the object `f` names into `keys`, `args` and `types`:
     // its one struct column, or the columns under its path, one per key; a
     // key over deeper columns reads whether any of them holds a value.
-    Status object_fields(const duql::TField& f, const dstd::String& text,
+    Status object_fields(const duql::TField& f, dstd::StringView text,
                          bool values, dstd::Vector<dstd::String>& keys,
                          dstd::Vector<dataframe::Expr>& args,
                          dstd::Vector<dataframe::DataType>& types);
@@ -496,14 +496,15 @@ class Applier {
 
     // The columns of `l`'s keys over the rows, computed apart when a key is
     // not a column; `t` owns `l`.
-    dstd::Result<dstd::Vector<dstd::String>> key_columns(
-        const duql::TermRef& t, const duql::TLookup& l, const dstd::String& id);
+    dstd::Result<dstd::Vector<dstd::String>> key_columns(const duql::TermRef& t,
+                                                         const duql::TLookup& l,
+                                                         dstd::StringView id);
 
     // The side of a joined `l`, with `marker` a TRUE column of that name;
     // in `right`, the columns it matches on.
     dstd::Result<dataframe::LazyFrame> joined_side(
         const duql::TLookup& l, dstd::Vector<dstd::String>& right, bool& memory,
-        const dstd::String& marker);
+        dstd::StringView marker);
 
     // Whether `l`'s keys are columns of one exact type each, the type of
     // the side's column, as a typed semi join matches them.
@@ -519,8 +520,8 @@ class Applier {
 
     Status lookup(const duql::TermRef& t, const duql::Term* term);
 
-    Status with_column(const dstd::String& name, const dataframe::Expr& e,
-                       const dstd::String& text);
+    Status with_column(dstd::StringView name, const dataframe::Expr& e,
+                       dstd::StringView text);
 
     // Keeps the `keep` columns. A keep that only drops the stages' own
     // columns keeps the columns the scan returns beyond the schema too.
@@ -536,7 +537,7 @@ class Applier {
     // The items as the only columns, in order, under their names. An item
     // that is its own column stays; the others are computed apart first so
     // no item reads another's result.
-    Status project(const dstd::Vector<duql::PipelineItem>& items);
+    Status project(dstd::Span<const duql::PipelineItem> items);
 
     Status stage(const duql::PipelineWhere& w);
 
@@ -558,9 +559,9 @@ class Applier {
     // The columns and directions `keys` sort by, computing the ones that are
     // not columns.
     dstd::Result<SortColumns> sort_columns(
-        const dstd::Vector<duql::PipelineSortKey>& keys);
+        dstd::Span<const duql::PipelineSortKey> keys);
 
-    Status sort(const dstd::Vector<duql::PipelineSortKey>& keys);
+    Status sort(dstd::Span<const duql::PipelineSortKey> keys);
 
     Status stage(const duql::PipelineSort& s);
 
@@ -583,9 +584,9 @@ class Applier {
     }
     Status stage(const duql::PipelineCallTree&);
 
-    void row_index(const dstd::String& name);
+    void row_index(dstd::StringView name);
 
-    dstd::Optional<std::size_t> field_index(const dstd::String& field) const;
+    dstd::Optional<std::size_t> field_index(dstd::StringView field) const;
 
     struct WinSpec {
         dftu_window_func func;
@@ -602,24 +603,23 @@ class Applier {
         dstd::Vector<dstd::String> udaf_args{};
     };
     // One dftu.frame.window pass over `order`, each spec's column appended.
-    void window_op(const dstd::Vector<dstd::String>& part,
-                   const dstd::String& order,
-                   const dstd::Vector<WinSpec>& specs);
+    void window_op(dstd::Span<const dstd::String> part, dstd::CStringView order,
+                   dstd::Span<const WinSpec> specs);
 
     // Aggregates over each whole partition, as `group` gives them, on every
     // row: the rows grouped by their partition id `pid` and joined back.
     Status partition_aggs(
-        const dstd::Vector<
-            dstd::Pair<const duql::PipelineWinCall*, dstd::String>>& calls,
-        const dstd::String& pid);
+        dstd::Span<const dstd::Pair<const duql::PipelineWinCall*, dstd::String>>
+            calls,
+        dstd::StringView pid);
 
-    dataframe::DataType type_of(const dstd::String& column) const;
+    dataframe::DataType type_of(dstd::StringView column) const;
 
-    dstd::Result<dataframe::DataType> sum_type(const dstd::String& in,
-                                               const dstd::String& text);
+    dstd::Result<dataframe::DataType> sum_type(dstd::StringView in,
+                                               dstd::StringView text);
 
     // Row `a` differs from row `b`, null included.
-    dataframe::Expr differs(const dstd::String& a, const dstd::String& b);
+    dataframe::Expr differs(dstd::StringView a, dstd::StringView b);
 
     // The window passes a `window` stage collects: over the order, over the
     // reverse order, then over the order again for what reads the first two.
@@ -643,7 +643,7 @@ class Applier {
                                             std::size_t i);
     // An argmax or argmin over its frame, which also reads the `by` column.
     Status window_arg(WindowPasses& p, const duql::PipelineWinCall& c,
-                      std::size_t i, const dstd::String& in);
+                      std::size_t i, dstd::StringView in);
     Status window_call(WindowPasses& p, const duql::PipelineWinCall& c,
                        std::size_t i);
     // Ranks: a row starts a run of peers when its sort keys differ from the
@@ -654,14 +654,15 @@ class Applier {
 
     static dftu_scalar plugin_scalar(const duql::LiteralValue& v);
 
-    static dstd::Unexpected<dstd::Error> plugin_refusal(
-        const dstd::String& what, const dftu_op_desc* op, const char* why);
+    static dstd::Unexpected<dstd::Error> plugin_refusal(dstd::StringView what,
+                                                        const dftu_op_desc* op,
+                                                        dstd::StringView why);
 
     // `f` with the column `name` replaced by the op run over it.
     static dstd::Result<dataframe::DataFrame> run_column_op(
-        dataframe::DataFrame f, const dstd::String& name,
-        const dftu_op_desc* op, const dstd::String& second, dftu_scalar a,
-        dftu_scalar b, const dstd::Optional<dstd::String>& str);
+        dataframe::DataFrame f, dstd::CStringView name, const dftu_op_desc* op,
+        dstd::CStringView second, dftu_scalar a, dftu_scalar b,
+        const dstd::Optional<dstd::String>& str);
 
     Status stage(const duql::PipelinePlugin& p);
 
@@ -674,7 +675,7 @@ class Applier {
     Status stage(const duql::PipelineExpand& e);
 
     // A term reading the column `name` as it is.
-    static duql::PipelineItem column_item(const dstd::String& name);
+    static duql::PipelineItem column_item(dstd::StringView name);
 
     Status stage(const duql::PipelinePivot& p);
 
@@ -682,8 +683,8 @@ class Applier {
     // column `agg.value` per aggregate and value.
     static dstd::Result<dataframe::DataFrame> spread(
         dataframe::DataFrame f, std::size_t n_keys,
-        const dstd::Vector<dstd::String>& aggs,
-        dstd::Vector<dstd::String> values, bool open, std::uint64_t limit);
+        dstd::Span<const dstd::String> aggs, dstd::Vector<dstd::String> values,
+        bool open, std::uint64_t limit);
 
     Status stage(const duql::PipelineUnpivot& u);
 
@@ -701,7 +702,7 @@ class Applier {
     // The type an as-of pair shares: the type itself, else the number type
     // both convert to.
     static dstd::Result<dataframe::DataType> asof_type(
-        const dstd::String& what, const dstd::String& side,
+        dstd::StringView what, dstd::StringView side,
         const dataframe::DataType& rows, const dataframe::DataType& other);
 
     // The side's columns a lookup adds, but its keys and the `consumed`
@@ -715,16 +716,16 @@ class Applier {
         dstd::Vector<dataframe::query::VectorColumn> columns;
     };
     dstd::Result<SideValues> side_values(
-        const duql::PipelineLookup& l, const char* clause,
-        const dstd::Vector<std::size_t>& keys, std::size_t consumed,
+        const duql::PipelineLookup& l, dstd::StringView clause,
+        dstd::Span<const std::size_t> keys, std::size_t consumed,
         std::size_t consumed2 = SIZE_MAX) const;
 
     // `lookup s on k asof t`: the engine's as-of join on names both frames
     // share, then the input order back.
     Status asof_lookup(
         const duql::PipelineLookup& l, const duql::PipelineAsof& a,
-        const dstd::Vector<dstd::String>& left,
-        const dstd::Vector<dstd::String>& right, const dstd::String& keys_text,
+        dstd::Span<const dstd::String> left,
+        dstd::Span<const dstd::String> right, dstd::StringView keys_text,
         const dstd::Function<dstd::Optional<std::size_t>(dstd::StringView)>&
             side_index);
 
@@ -732,20 +733,20 @@ class Applier {
     // memory, in file order) on the rows once the scan has ended.
     Status overlap_lookup(
         const duql::PipelineLookup& l, const duql::PipelineOverlap& o,
-        const dstd::Vector<dstd::String>& left,
-        const dstd::Vector<dstd::String>& right, const dstd::String& keys_text,
+        dstd::Span<const dstd::String> left,
+        dstd::Span<const dstd::String> right, dstd::StringView keys_text,
         const dstd::Function<dstd::Optional<std::size_t>(dstd::StringView)>&
             side_index);
 
     // The type both sides of a union give `name`, or a refusal naming it.
     static dstd::Result<dataframe::DataType> unify(
-        const dstd::String& name, const dataframe::DataType& a,
+        dstd::StringView name, const dataframe::DataType& a,
         const dataframe::DataType& b);
 
     // `v` with the columns `cols` as `want`: missing ones null, others cast.
     static View align(View v,
-                      const dstd::Vector<dataframe::query::VectorColumn>& cols,
-                      const dstd::Vector<dataframe::query::VectorColumn>& want);
+                      dstd::Span<const dataframe::query::VectorColumn> cols,
+                      dstd::Span<const dataframe::query::VectorColumn> want);
 
     Status stage(const duql::PipelineUnion& u);
 
@@ -755,7 +756,7 @@ class Applier {
         const duql::PipelineAgg& a, dstd::Optional<dataframe::TypeId> in) const;
 
     dstd::Result<dstd::Optional<dataframe::TypeId>> term_type(
-        const duql::TermRef& t, const dstd::String& text);
+        const duql::TermRef& t, dstd::StringView text);
 
     // A whole-field term's column, usable by the trace aggregation.
     dstd::Optional<dataframe::query::VectorColumn> trace_column(
@@ -776,7 +777,7 @@ class Applier {
     static dstd::Result<dstd::Vector<double>> plugin_params(
         const duql::PipelineAgg& a);
 
-    static dataframe::DataType plugin_type(const dstd::String& name);
+    static dataframe::DataType plugin_type(dstd::CStringView name);
 
     // The result type of the UDAF `spec` runs, bound to the types of its
     // argument columns; the bind's error when it refuses them.
@@ -798,12 +799,12 @@ class Applier {
 
     // A group with an aggregate the engine lacks: one streaming pass, in
     // input order, that folds the engine's aggregates and duql's.
-    void fold_group(const dstd::Vector<dstd::String>& keys,
-                    const dstd::Vector<dataframe::GroupAgg>& specs,
-                    const dstd::Vector<dstd::String>& by,
+    void fold_group(dstd::Span<const dstd::String> keys,
+                    dstd::Span<const dataframe::GroupAgg> specs,
+                    dstd::Span<const dstd::String> by,
                     dstd::Vector<dataframe::query::FoldAgg> fold);
 
-    void finish(FrameFn fn, const dstd::String& line,
+    void finish(FrameFn fn, dstd::StringView line,
                 dstd::Optional<dataframe::Schema> schema = dstd::nullopt);
 
     // `agg` over no rows: one row, counts 0 and the rest null.

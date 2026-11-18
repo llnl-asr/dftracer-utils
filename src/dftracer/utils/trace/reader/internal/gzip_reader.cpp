@@ -27,10 +27,10 @@ using dftracer::utils::trace::reader::reader_error;
 using dftracer::utils::trace::reader::ReaderErrorType;
 
 static dftracer::utils::dstd::Result<void> validate_parameters(
-    const char *buffer, std::size_t buffer_size, std::size_t start_bytes,
+    dftracer::utils::dstd::Span<const char> buffer, std::size_t start_bytes,
     std::size_t end_bytes,
     std::size_t max_bytes = std::numeric_limits<std::size_t>::max()) {
-    if (!buffer || buffer_size == 0) {
+    if (!buffer.data() || buffer.empty()) {
         return reader_error(ReaderErrorType::InvalidArgument,
                             "Invalid buffer parameters");
     }
@@ -157,7 +157,7 @@ coro::CoroTask<dstd::Result<std::size_t>> GzipReader::read_async(
     std::size_t start_bytes, std::size_t end_bytes, char *buffer,
     std::size_t buffer_size) {
     check_reader_state(is_open_, indexer_.get());
-    auto valid = validate_parameters(buffer, buffer_size, start_bytes,
+    auto valid = validate_parameters({buffer, buffer_size}, start_bytes,
                                      end_bytes, indexer_.get()->max_bytes());
     if (!valid.has_value()) co_return valid.error();
 
@@ -204,7 +204,7 @@ coro::CoroTask<dstd::Result<std::size_t>> GzipReader::read_line_bytes_async(
         end_bytes = indexer_.get()->max_bytes();
     }
 
-    auto valid = validate_parameters(buffer, buffer_size, start_bytes,
+    auto valid = validate_parameters({buffer, buffer_size}, start_bytes,
                                      end_bytes, indexer_.get()->max_bytes());
     if (!valid.has_value()) co_return valid.error();
 
@@ -308,8 +308,8 @@ coro::CoroTask<dstd::Result<void>> GzipReader::read_lines_with_processor_async(
             line_size--;
         }
 
-        const auto process_ok =
-            co_await processor.process(buffer.data(), line_size);
+        const auto process_ok = co_await processor.process(
+            dstd::StringView(buffer.data(), line_size));
         if (!process_ok) {
             processor.end();
             co_return dstd::Result<void>{};
@@ -352,7 +352,7 @@ GzipReader::read_line_bytes_with_processor_async(std::size_t start_bytes,
         if (!read.has_value()) co_return read.error();
         const std::size_t bytes_read = *read;
         if (bytes_read == 0) break;
-        co_await processor.process(buffer.data(), bytes_read);
+        co_await processor.process(dstd::StringView(buffer.data(), bytes_read));
     }
 
     processor.end();

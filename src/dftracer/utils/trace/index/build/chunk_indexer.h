@@ -161,7 +161,7 @@ inline ChunkIndexerConfig for_schema(ChunkIndexerConfig config,
 struct IndexedDimensions {
     dstd::Vector<dstd::String> dimensions;
 
-    bool has_dimension(const dstd::String& dim) const {
+    bool has_dimension(dstd::StringView dim) const {
         return std::find(dimensions.begin(), dimensions.end(), dim) !=
                dimensions.end();
     }
@@ -170,8 +170,7 @@ struct IndexedDimensions {
         const ChunkIndexerConfig& config) const {
         dstd::Vector<dstd::String> missing;
 
-        auto check_dim = [this, &missing](const dstd::String& name,
-                                          bool enabled) {
+        auto check_dim = [this, &missing](dstd::StringView name, bool enabled) {
             if (enabled && !has_dimension(name)) {
                 missing.emplace_back(name);
             }
@@ -212,12 +211,12 @@ struct ChunkIndexerInput {
     ChunkIndexerConfig config;
     std::size_t batch_size = 4 * 1024 * 1024;
 
-    ChunkIndexerInput& with_file_path(const dstd::String& path) {
+    ChunkIndexerInput& with_file_path(dstd::StringView path) {
         file_path = path;
         return *this;
     }
 
-    ChunkIndexerInput& with_index_path(const dstd::String& path) {
+    ChunkIndexerInput& with_index_path(dstd::StringView path) {
         index_path = path;
         return *this;
     }

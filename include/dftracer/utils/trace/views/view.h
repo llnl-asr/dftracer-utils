@@ -573,9 +573,9 @@ class ViewSession {
     std::int64_t key_count_of(const void* out) const;
     bool add_containment_branch(
         const detail::ScanPlan& branch,
-        const dstd::Vector<dstd::String>& partition, const dstd::String& ts,
-        const dstd::String& dur, const dstd::String& name,
-        const dstd::Vector<dstd::String>& group,
+        dstd::Span<const dstd::String> partition, dstd::StringView ts,
+        dstd::StringView dur, dstd::StringView name,
+        dstd::Span<const dstd::String> group,
         dstd::SharedPtr<dftracer::utils::dataframe::DataFrame> out_ct,
         dstd::SharedPtr<dftracer::utils::dataframe::DataFrame> out_fg,
         dstd::SharedPtr<dstd::String> out_partial = nullptr);
@@ -613,7 +613,7 @@ struct SchemaLeaf {
 
 /// `leaves` as a JSON array of objects with path, type, count, field and
 /// declared_type (null when empty or unset).
-dstd::String schema_tree_json(const dstd::Vector<SchemaLeaf>& leaves);
+dstd::String schema_tree_json(dstd::Span<const SchemaLeaf> leaves);
 
 /// Collects several plans together: record them with collect(), then
 /// execute() once. Plans over the same trace base share one scan, as
@@ -691,7 +691,7 @@ class TraceSession {
         std::size_t count;
         Resolve resolve;
     };
-    void add(const dstd::Vector<dataframe::LazyFrame>& plans, Resolve resolve);
+    void add(dstd::Span<const dataframe::LazyFrame> plans, Resolve resolve);
 
     dstd::Vector<dataframe::LazyFrame> plans_;
     dstd::Vector<Pending> pending_;
@@ -863,11 +863,11 @@ class View : public dataframe::LazyOps<View> {
         dstd::Vector<dstd::String> group = {}) const;
     dataframe::LazyResult<dstd::String> aggregate_partial() const;
     static dataframe::DataFrame merge_flamegraph_partials(
-        const dstd::Vector<dstd::StringView>& partials);
+        dstd::Span<const dstd::StringView> partials);
     /// An Aggregation error for a partial that is empty or from another
     /// aggregation, and the error of decoding it.
     dstd::Result<dataframe::DataFrame> merge_partials(
-        const dstd::Vector<dstd::StringView>& partials) const;
+        dstd::Span<const dstd::StringView> partials) const;
 
     /// The aggregation index's record families.
     dataframe::LazyResult<TypedResult> typed(int shard_begin = 0,
@@ -920,24 +920,24 @@ class View : public dataframe::LazyOps<View> {
     /// map_batches folds each batch into a per-slot partial and reduces them
     /// with `combine`; a default `P` must be the identity of combine.
     coro::CoroTask<dstd::Result<ExportStats>> for_each_batch(
-        dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
+        dstd::Function<void(std::size_t, dstd::Span<const dstd::StringView>)>
             on_batch,
         std::size_t slot_count, std::uint64_t limit = 0) const;
     template <class P>
     coro::CoroTask<dstd::Result<BatchResult<P>>> map_batches(
-        dstd::Function<void(P&, const dstd::Vector<dstd::StringView>&)> fold,
+        dstd::Function<void(P&, dstd::Span<const dstd::StringView>)> fold,
         dstd::Function<P(P&&, P&&)> combine, std::size_t slot_count,
         std::uint64_t limit = 0) const {
         if (slot_count == 0) slot_count = 1;
         dstd::Vector<P> partials(slot_count);
         // A named callback, not a temporary in the co_await: GCC 11-12 destroy
         // such temporaries twice.
-        dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
-            on_batch = [&partials, &fold](
-                           std::size_t slot,
-                           const dstd::Vector<dstd::StringView>& events) {
-                fold(partials[slot], events);
-            };
+        dstd::Function<void(std::size_t, dstd::Span<const dstd::StringView>)>
+            on_batch =
+                [&partials, &fold](std::size_t slot,
+                                   dstd::Span<const dstd::StringView> events) {
+                    fold(partials[slot], events);
+                };
         auto scanned =
             co_await for_each_batch(std::move(on_batch), slot_count, limit);
         if (!scanned) co_return scanned.error();
@@ -965,7 +965,7 @@ class View : public dataframe::LazyOps<View> {
     /// view's aggregation. An Aggregation error for a partial that is empty or
     /// from another aggregation, and the error of decoding it.
     dstd::Result<ExportStats> merge_counter_partials(
-        const dstd::Vector<dstd::StringView>& partials, ExportSink& sink) const;
+        dstd::Span<const dstd::StringView> partials, ExportSink& sink) const;
 
     /// A caller branch of the scan over this viewer's events, as a plan that
     /// yields no columns; `attach` runs once per collect of the plan. It
@@ -996,7 +996,7 @@ class View : public dataframe::LazyOps<View> {
     /// The distributed rollup terminals, over this viewer's
     /// aggregation. The bytes behind `partials` must outlive the task.
     coro::CoroTask<dstd::Result<void>> materialize_partials(
-        const dstd::Vector<dstd::StringView>& partials) const;
+        dstd::Vector<dstd::StringView> partials) const;
     dstd::Result<dstd::Optional<dataframe::DataFrame>> reconstruct_if_cached()
         const;
 
@@ -1004,7 +1004,7 @@ class View : public dataframe::LazyOps<View> {
     /// the error of a view that is not a plain aggregation or events scan.
     dstd::Result<dstd::Vector<dstd::String>> mv_source() const;
     dstd::Result<dstd::String> materialize_dir() const;
-    dstd::Result<void> register_materialized(const dstd::String& dir) const;
+    dstd::Result<void> register_materialized(dstd::StringView dir) const;
 
     /// The plan: the trace scan as a source plus the ops above it.
     const dataframe::LazyFrame& lazy() const { return lf_; }
@@ -1028,13 +1028,13 @@ class View : public dataframe::LazyOps<View> {
     explicit View(detail::ScanPlan plan);
     View(detail::ScanPlan plan, dataframe::LazyFrame lf);
     View reshape(
-        const char* builder,
+        dstd::StringView builder,
         const dstd::Function<detail::ScanPlan(const detail::ScanPlan&)>& step)
         const;
     /// The scan plan with every op of this view absorbed into it, for the
     /// terminal `method`; an InvalidArgument error naming the first op that
     /// stays behind, or the error this view kept.
-    dstd::Result<detail::ScanPlan> absorbed(const char* method,
+    dstd::Result<detail::ScanPlan> absorbed(dstd::StringView method,
                                             Need need) const;
     /// This view with `error` kept, unless it holds one.
     View failed(dstd::Error error) const;

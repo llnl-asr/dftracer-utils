@@ -96,18 +96,17 @@ struct Pushable {
     bool exact;
 };
 
-dstd::Vector<dstd::String> trace_names(
-    const dstd::Vector<dstd::String>& names) {
+dstd::Vector<dstd::String> trace_names(dstd::Span<const dstd::String> names) {
     dstd::Vector<dstd::String> out;
     out.reserve(names.size());
     for (const auto& n : names) out.emplace_back(n);
     return out;
 }
 
-bool same_names(const dstd::Vector<dstd::String>& a,
-                const dstd::Vector<dstd::String>& b) {
+bool same_names(dstd::Span<const dstd::String> a,
+                dstd::Span<const dstd::String> b) {
     return std::equal(a.begin(), a.end(), b.begin(), b.end(),
-                      [](const dstd::String& x, const dstd::String& y) {
+                      [](dstd::StringView x, dstd::StringView y) {
                           return dstd::StringView(x) == dstd::StringView(y);
                       });
 }
@@ -116,8 +115,7 @@ bool same_names(const dstd::Vector<dstd::String>& a,
 // when it cannot be pushed: an out-of-range column, or ts/dur under a
 // time_scale (the streamed morsel is scaled, the query matches the raw field).
 dstd::Optional<dstd::String> pushable_field(
-    std::int32_t ci, const dstd::Vector<dstd::String>& fnames,
-    double time_scale) {
+    std::int32_t ci, dstd::Span<const dstd::String> fnames, double time_scale) {
     if (ci < 0 || static_cast<std::size_t>(ci) >= fnames.size())
         return dstd::nullopt;
     const dstd::String& col = fnames[static_cast<std::size_t>(ci)];
@@ -135,7 +133,7 @@ dstd::Optional<dstd::String> pushable_field(
 // stay with the engine: the DSL regex searches, and rewriting anchors is not
 // worth a wrong answer.
 dstd::Optional<Pushable> translate_str_pred(
-    const dataframe::Expr& e, const dstd::Vector<dstd::String>& fnames,
+    const dataframe::Expr& e, dstd::Span<const dstd::String> fnames,
     double time_scale) {
     std::int32_t ci = -1;
     dataframe::StrPredOp op{};
@@ -233,9 +231,9 @@ dstd::Optional<dstd::Vector<std::int64_t>> int_values(
 }
 
 // A `col is_in values` leaf: exact for an integer or String value set.
-dstd::Optional<Pushable> translate_is_in(
-    const dataframe::Expr& e, const dstd::Vector<dstd::String>& fnames,
-    double time_scale) {
+dstd::Optional<Pushable> translate_is_in(const dataframe::Expr& e,
+                                         dstd::Span<const dstd::String> fnames,
+                                         double time_scale) {
     std::int32_t ci = -1;
     dataframe::Series values;
     if (!dataframe::expr_as_col_is_in(e, &ci, &values)) return dstd::nullopt;
@@ -257,9 +255,9 @@ dstd::Optional<Pushable> translate_is_in(
 // Translate a `col <cmp> scalar` LazyFrame predicate into an index-pushable
 // query on the named event field. nullopt for anything else (col-vs-col,
 // arithmetic), which the engine applies itself.
-dstd::Optional<duql::Expr> translate_leaf(
-    const dataframe::Expr& e, const dstd::Vector<dstd::String>& fnames,
-    double time_scale) {
+dstd::Optional<duql::Expr> translate_leaf(const dataframe::Expr& e,
+                                          dstd::Span<const dstd::String> fnames,
+                                          double time_scale) {
     std::int32_t ci = -1;
     dataframe::CmpOp op{};
     dataframe::Scalar rhs;
@@ -321,9 +319,9 @@ dstd::Optional<duql::Expr> translate_leaf(
 //         other side keeps.
 //   NOT - the operand must translate EXACTLY. Negating a superset yields a
 //         subset, which drops rows.
-dstd::Optional<Pushable> translate_pred(
-    const dataframe::Expr& e, const dstd::Vector<dstd::String>& fnames,
-    double time_scale) {
+dstd::Optional<Pushable> translate_pred(const dataframe::Expr& e,
+                                        dstd::Span<const dstd::String> fnames,
+                                        double time_scale) {
     dataframe::LogicalOp lop{};
     dataframe::Expr lhs, rhs;
     if (dataframe::expr_as_logical(e, &lop, &lhs, &rhs)) {
@@ -654,7 +652,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
 
 // A group key the view folds natively with the raw value, named as its output
 // column. cat is left out: the view lowercases it, the engine does not.
-dstd::Optional<GroupKey> fixed_group_key(const dstd::String& name) {
+dstd::Optional<GroupKey> fixed_group_key(dstd::StringView name) {
     if (name == "name") return GroupKey::name();
     if (name == "pid") return GroupKey::pid();
     if (name == "tid") return GroupKey::tid();
@@ -665,7 +663,7 @@ dstd::Optional<GroupKey> fixed_group_key(const dstd::String& name) {
 
 // Numeric event fields every event carries, so the view's per-event fold and
 // the engine's column reduction see the same values.
-bool is_fixed_numeric_field(const dstd::String& name) {
+bool is_fixed_numeric_field(dstd::StringView name) {
     return name == "ts" || name == "dur" || name == "pid" || name == "tid";
 }
 
@@ -687,8 +685,8 @@ dstd::Optional<AggOp> simple_agg_op(dataframe::Agg op) {
 }
 
 // The source column a bare column reference reads, or nullopt.
-dstd::Optional<dstd::String> column_of(
-    const dataframe::Expr& e, const dstd::Vector<dstd::String>& names) {
+dstd::Optional<dstd::String> column_of(const dataframe::Expr& e,
+                                       dstd::Span<const dstd::String> names) {
     const std::int32_t ci = dataframe::expr_col_index(e);
     if (ci < 0 || static_cast<std::size_t>(ci) >= names.size())
         return dstd::nullopt;
@@ -748,7 +746,7 @@ namespace {
 // reads, or dstd::nullopt when it reads none it can name.
 dstd::Optional<detail::ComputedColumn> computed_from(
     dstd::String name, const dataframe::Expr& e,
-    const dstd::Vector<dstd::String>& current) {
+    dstd::Span<const dstd::String> current) {
     detail::ComputedColumn c;
     c.name = std::move(name);
     dstd::Vector<std::int32_t> at(current.size(), -1);
@@ -958,8 +956,8 @@ bool is_containment(TraceOutput o) {
 
 dstd::Vector<dstd::Function<dataframe::DataFrame(const ExportStats&)>>
 ViewSource::add_branches(ViewSession& session,
-                         const dstd::Vector<const ViewSource*>& members,
-                         const dstd::Vector<bool>& skip) {
+                         dstd::Span<const ViewSource* const> members,
+                         dstd::Span<const std::uint8_t> skip) {
     // Containment members over the same events and fields share one buffered
     // fold, whichever of its outputs each one reads.
     struct Tree {
@@ -1067,8 +1065,8 @@ coro::CoroTask<dstd::Result<ViewSource::Batch>> ViewSource::run_batch(
     raw.reserve(members.size());
     for (const auto& m : members) raw.push_back(m.get());
     dstd::Vector<dstd::Function<dataframe::DataFrame(const ExportStats&)>>
-        resolve =
-            add_branches(session, raw, dstd::Vector<bool>(raw.size(), false));
+        resolve = add_branches(session, raw,
+                               dstd::Vector<std::uint8_t>(raw.size(), 0));
     auto executed = session.execute();
     auto ran = co_await std::move(executed);
     if (!ran) co_return ran.error();
@@ -1175,7 +1173,7 @@ ViewSource::open_batch(
         channels;
     dstd::Vector<dstd::SharedPtr<coro::AsyncSemaphore>> budgets;
     dstd::Vector<dstd::SharedPtr<std::atomic<bool>>> dropped;
-    dstd::Vector<bool> streamed(views.size(), false);
+    dstd::Vector<std::uint8_t> streamed(views.size(), 0);
     for (std::size_t i = 0; i < views.size(); ++i) {
         channels.push_back(coro::make_unbounded_channel<dataframe::Morsel>());
         budgets.push_back(
@@ -1185,7 +1183,7 @@ ViewSource::open_batch(
         if (v.can_stream_rows()) {
             detail::add_stream_branch(*session->state_, v.plan_, channels[i],
                                       budgets[i], dropped[i]);
-            streamed[i] = true;
+            streamed[i] = 1;
         }
     }
     dstd::Vector<dstd::Function<dataframe::DataFrame(const ExportStats&)>>
@@ -1625,7 +1623,7 @@ namespace {
 // The column `name` of a one-row terminal frame. A frame without it, or with
 // no row, did not come from that terminal.
 dataframe::Series terminal_cell(const dataframe::DataFrame& frame,
-                                const char* name) {
+                                dstd::StringView name) {
     const std::int64_t at = frame.column_index(name);
     if (at < 0 || static_cast<std::size_t>(at) >= frame.columns.size() ||
         frame.columns[static_cast<std::size_t>(at)].length() < 1)
@@ -1641,12 +1639,12 @@ dstd::String partial_of(const dataframe::DataFrame& frame) {
 
 dataframe::DataFrame stats_frame(const ExportStats& stats) {
     dataframe::DataFrame f;
-    auto count = [&](const char* name, std::uint64_t v) {
+    auto count = [&](dstd::StringView name, std::uint64_t v) {
         const auto x = static_cast<std::int64_t>(v);
         f.names.emplace_back(name);
         f.columns.push_back(dataframe::Series::flat_i64(&x, 1));
     };
-    auto flag = [&](const char* name, bool v) {
+    auto flag = [&](dstd::StringView name, bool v) {
         const std::uint8_t bits = v ? 1 : 0;
         f.names.emplace_back(name);
         f.columns.push_back(
@@ -1666,11 +1664,11 @@ dataframe::DataFrame stats_frame(const ExportStats& stats) {
 }
 
 ExportStats stats_of(const dataframe::DataFrame& frame) {
-    auto count = [&](const char* name) {
+    auto count = [&](dstd::StringView name) {
         return static_cast<std::uint64_t>(
             terminal_cell(frame, name).data<std::int64_t>()[0]);
     };
-    auto flag = [&](const char* name) {
+    auto flag = [&](dstd::StringView name) {
         return terminal_cell(frame, name).any();
     };
     ExportStats s;

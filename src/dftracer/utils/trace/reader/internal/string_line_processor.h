@@ -13,9 +13,8 @@ class StringLineProcessor : public LineProcessor {
    public:
     explicit StringLineProcessor(dstd::String& result) : result_(result) {}
 
-    coro::CoroTask<bool> process(const char* data,
-                                 std::size_t length) override {
-        result_.append(data, length);
+    coro::CoroTask<bool> process(dstd::StringView line) override {
+        result_.append(line);
         result_.append(1, '\n');
         co_return true;
     }

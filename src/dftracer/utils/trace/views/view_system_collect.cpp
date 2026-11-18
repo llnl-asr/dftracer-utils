@@ -206,14 +206,14 @@ dataframe::DataFrame build_counters_frame(const Groups& groups, int shard_begin,
     }
 
     dataframe::DataFrame b;
-    auto add_str = [&](const char* nm, const dstd::Vector<dstd::String>& v) {
+    auto add_str = [&](dstd::StringView nm, dstd::Span<const dstd::String> v) {
         dstd::Vector<dstd::StringView> views;
         views.reserve(v.size());
         for (const auto& s : v) views.emplace_back(s);
         b.names.emplace_back(nm);
         b.columns.push_back(dataframe::Series::strings(views));
     };
-    auto add_f64 = [&](dstd::StringView nm, const dstd::Vector<double>& v) {
+    auto add_f64 = [&](dstd::StringView nm, dstd::Span<const double> v) {
         b.names.emplace_back(nm);
         b.columns.push_back(dataframe::Series::flat_f64(
             v.data(), static_cast<std::int64_t>(v.size())));

@@ -53,7 +53,7 @@ int compare_f64(double a, double b) {
     return 0;
 }
 
-int compare_string(const dstd::String& a, const dstd::String& b) {
+int compare_string(dstd::StringView a, dstd::StringView b) {
     if (a < b) return -1;
     if (b < a) return 1;
     return 0;
@@ -112,7 +112,7 @@ int compare_f32(float a, float b) {
     return compare_f64(static_cast<double>(a), static_cast<double>(b));
 }
 
-void encode_string(KeyBuilder& builder, const dstd::String& value) {
+void encode_string(KeyBuilder& builder, dstd::StringView value) {
     builder.str({value.data(), value.size()});
 }
 
@@ -130,7 +130,7 @@ bool same_f64(double a, double b) {
     return std::bit_cast<std::uint64_t>(a) == std::bit_cast<std::uint64_t>(b);
 }
 
-bool strings_equal(const dstd::String& a, const dstd::String& b) {
+bool strings_equal(dstd::StringView a, dstd::StringView b) {
     return a.size() == b.size() &&
            (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
 }

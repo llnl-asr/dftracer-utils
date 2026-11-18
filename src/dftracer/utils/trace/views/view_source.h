@@ -189,8 +189,8 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     static dstd::Vector<dstd::Function<
         dftracer::utils::dataframe::DataFrame(const ExportStats&)>>
     add_branches(ViewSession& session,
-                 const dstd::Vector<const ViewSource*>& members,
-                 const dstd::Vector<bool>& skip);
+                 dstd::Span<const ViewSource* const> members,
+                 dstd::Span<const std::uint8_t> skip);
 
     dstd::Result<dftracer::utils::dataframe::Schema> compute_schema() const;
 

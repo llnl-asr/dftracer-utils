@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -21,7 +22,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-dstd::String write_small_trace(const dstd::String& dir, int n) {
+dstd::String write_small_trace(dstd::CStringView dir, int n) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < 40; ++i) {
@@ -32,10 +33,11 @@ dstd::String write_small_trace(const dstd::String& dir, int n) {
     }
     out += "]\n";
     return dftu_utils_test::write_gz_trace(
-        dir + "/t" + dstd::String(dstd::to_string(n)) + ".pfw.gz", out);
+        dstd::String(dir) + "/t" + dstd::String(dstd::to_string(n)) + ".pfw.gz",
+        out);
 }
 
-dstd::String write_long_line_trace(const dstd::String& dir, std::size_t bytes) {
+dstd::String write_long_line_trace(dstd::CStringView dir, std::size_t bytes) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < 40; ++i) {
@@ -49,7 +51,8 @@ dstd::String write_long_line_trace(const dstd::String& dir, std::size_t bytes) {
         out += "}}\n";
     }
     out += "]\n";
-    return dftu_utils_test::write_gz_trace(dir + "/long.pfw.gz", out);
+    return dftu_utils_test::write_gz_trace(dstd::String(dir) + "/long.pfw.gz",
+                                           out);
 }
 
 }  // namespace

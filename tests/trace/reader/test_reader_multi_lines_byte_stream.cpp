@@ -29,10 +29,11 @@ using namespace dftu_utils_test;
 
 // Helper function to create a test file with variable line lengths
 static dstd::String create_variable_line_test_file(
-    const dstd::String& test_dir, std::size_t line_count,
+    dstd::StringView test_dir, std::size_t line_count,
     std::size_t min_line_size = 50, std::size_t max_line_size = 500) {
-    dstd::String txt_file = test_dir + "/variable_lines_multi.txt";
-    dstd::String gz_file = test_dir + "/variable_lines_multi.gz";
+    dstd::String txt_file =
+        dstd::String(test_dir) + "/variable_lines_multi.txt";
+    dstd::String gz_file = dstd::String(test_dir) + "/variable_lines_multi.gz";
 
     // Create text file with variable line lengths
     dftu_utils_test::FileOut f(txt_file);

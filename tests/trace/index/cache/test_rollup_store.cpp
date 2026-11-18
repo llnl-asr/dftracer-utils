@@ -23,7 +23,7 @@ using namespace dftracer::utils::trace::index::cache;
 namespace {
 
 // A single-key AggState (group "grp") with Count + Sum(v) over `values`.
-dataframe::AggStatePtr make_state(const dstd::Vector<double>& values) {
+dataframe::AggStatePtr make_state(dstd::Vector<double> values) {
     dstd::Vector<dstd::String> keys(values.size(), "grp");
     dstd::Vector<double> vd = values;
     dataframe::Series key = dataframe::Series::strings(keys);
@@ -37,8 +37,8 @@ dataframe::AggStatePtr make_state(const dstd::Vector<double>& values) {
 }
 
 // A multi-group AggState: row i belongs to group gkeys[i] with value values[i].
-dataframe::AggStatePtr make_state_kv(const dstd::Vector<dstd::String>& gkeys,
-                                     const dstd::Vector<double>& values) {
+dataframe::AggStatePtr make_state_kv(dstd::Vector<dstd::String> gkeys,
+                                     dstd::Vector<double> values) {
     dstd::Vector<dstd::String> keys = gkeys;
     dstd::Vector<double> vd = values;
     dataframe::Series key = dataframe::Series::strings(keys);

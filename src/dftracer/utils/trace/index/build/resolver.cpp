@@ -97,8 +97,8 @@ dstd::Result<dstd::Vector<dstd::String>> indexed_paths(const Snapshot& snapshot,
     return out;
 }
 
-bool covers(const dstd::Vector<dstd::String>& indexed,
-            const dstd::Vector<dstd::String>& fields) {
+bool covers(dstd::Span<const dstd::String> indexed,
+            dstd::Span<const dstd::String> fields) {
     for (const dstd::String& f : fields)
         if (std::find(indexed.begin(), indexed.end(), f) == indexed.end())
             return false;
@@ -107,7 +107,7 @@ bool covers(const dstd::Vector<dstd::String>& indexed,
 
 // The file's recorded schema is current and, when `wanted` is set, is it.
 dstd::Result<bool> schema_current(const Snapshot& snapshot, const FileRef& file,
-                                  const dstd::String& wanted) {
+                                  dstd::StringView wanted) {
     const auto recorded = trace::index::schema(snapshot, file);
     if (!recorded) return recorded.error();
     if (!*recorded) return false;
@@ -446,7 +446,7 @@ dstd::Vector<runtime::fs::FoundFile> scanned_entries(
 }
 
 dstd::Vector<runtime::fs::FoundFile> scanned_entries(
-    const ResolverResult& result, const dstd::Vector<FileWorkItem>& items) {
+    const ResolverResult& result, dstd::Span<const FileWorkItem> items) {
     dstd::Vector<runtime::fs::FoundFile> out;
     out.reserve(items.size());
     for (const auto& item : items) {

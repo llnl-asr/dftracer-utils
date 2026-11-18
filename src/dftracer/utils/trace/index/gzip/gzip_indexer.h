@@ -110,10 +110,10 @@ class GzipIndexer : public CheckpointIndexer {
     /// Checks what the constructor requires: a non-empty existing `gz_path` and
     /// a non-zero `ckpt_size`. The constructor ends the process on arguments
     /// that fail it.
-    static dstd::Result<void> check_arguments(const dstd::String &gz_path,
+    static dstd::Result<void> check_arguments(dstd::CStringView gz_path,
                                               std::uint64_t ckpt_size);
 
-    GzipIndexer(const dstd::String &gz_path, const dstd::String &index_path,
+    GzipIndexer(dstd::String gz_path, dstd::String index_path,
                 std::uint64_t checkpoint_size = DEFAULT_CHECKPOINT_SIZE,
                 bool force = false);
     ~GzipIndexer();

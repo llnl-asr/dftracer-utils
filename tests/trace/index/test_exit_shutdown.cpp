@@ -47,7 +47,8 @@ TEST_CASE("index: writes an index and a cache then returns" * doctest::skip()) {
     auto held = cache::CacheStore::open(root + "/cache",
                                         cache::CacheStore::Mode::ReadWrite);
     REQUIRE(held != nullptr);
-    REQUIRE(held->put(7, {{"k", "v"}}, 1).has_value());
+    const dstd::Pair<dstd::String, dstd::String> entry[] = {{"k", "v"}};
+    REQUIRE(held->put(7, entry, 1).has_value());
 }
 
 TEST_CASE("index: a process that wrote an index and a cache exits clean") {

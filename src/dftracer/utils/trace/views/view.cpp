@@ -340,9 +340,9 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
 // branch's query cannot be built.
 bool ViewSession::add_containment_branch(
     const dstd::SharedPtr<const detail::ViewPlan>& branch,
-    const dstd::Vector<dstd::String>& partition, const dstd::String& ts,
-    const dstd::String& dur, const dstd::String& name,
-    const dstd::Vector<dstd::String>& group,
+    dstd::Span<const dstd::String> partition, dstd::StringView ts,
+    dstd::StringView dur, dstd::StringView name,
+    dstd::Span<const dstd::String> group,
     dstd::SharedPtr<dataframe::DataFrame> out_ct,
     dstd::SharedPtr<dataframe::DataFrame> out_fg,
     dstd::SharedPtr<dstd::String> out_partial) {
@@ -469,7 +469,7 @@ coro::CoroTask<dstd::Result<ExportStats>> ViewSession::execute() {
     co_return stats;
 }
 
-void TraceSession::add(const dstd::Vector<dataframe::LazyFrame>& plans,
+void TraceSession::add(dstd::Span<const dataframe::LazyFrame> plans,
                        Resolve resolve) {
     if (*executed_) dstd::fatal("TraceSession::collect after execute()");
     plans_.insert(plans_.end(), plans.begin(), plans.end());
@@ -563,11 +563,11 @@ View View::with_lazy(dataframe::LazyFrame lf) const {
 }
 
 View View::reshape(
-    const char* builder,
+    dstd::StringView builder,
     const dstd::Function<detail::scan::ScanPlan(const detail::scan::ScanPlan&)>&
         step) const {
     if (!lf_.status()) return *this;
-    auto refuse = [&](const dstd::String& why) {
+    auto refuse = [&](dstd::StringView why) {
         return failed(dstd::Error::from_format<"View::{} {}">(
             common::ErrorCode::InvalidArgument, builder, why));
     };
@@ -617,10 +617,10 @@ bool View::aggregates() const {
            !detail::is_row_query(*src->plan());
 }
 
-dstd::Result<detail::scan::ScanPlan> View::absorbed(const char* method,
+dstd::Result<detail::scan::ScanPlan> View::absorbed(dstd::StringView method,
                                                     Need need) const {
     if (auto kept = lf_.status(); !kept) return kept.error();
-    auto fail = [&](const dstd::String& why) {
+    auto fail = [&](dstd::StringView why) {
         return common::make_error<"View::{} {}">(
             common::ErrorCode::InvalidArgument, method, why);
     };
@@ -725,13 +725,14 @@ coro::CoroTask<dstd::Result<ExportStats>> run_materialize(
 
 coro::CoroTask<dstd::Result<void>> materialize_from_partials(
     detail::scan::ScanPlan v, dstd::Vector<dstd::StringView> partials) {
-    auto materialized = detail::run_materialize_partials(*v, partials);
+    auto materialized =
+        detail::run_materialize_partials(*v, std::move(partials));
     co_return co_await std::move(materialized);
 }
 
 coro::CoroTask<dstd::Result<ExportStats>> scan_batches(
     detail::scan::ScanPlan v,
-    dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
+    dstd::Function<void(std::size_t, dstd::Span<const dstd::StringView>)>
         on_batch,
     std::size_t slot_count, std::uint64_t limit) {
     const std::uint64_t cap = v->limit;
@@ -820,12 +821,12 @@ dataframe::LazyResult<dstd::String> View::aggregate_partial() const {
 }
 
 dataframe::DataFrame View::merge_flamegraph_partials(
-    const dstd::Vector<dstd::StringView>& partials) {
+    dstd::Span<const dstd::StringView> partials) {
     return detail::scan::merge_flamegraph_partials(partials);
 }
 
 dstd::Result<dataframe::DataFrame> View::merge_partials(
-    const dstd::Vector<dstd::StringView>& partials) const {
+    dstd::Span<const dstd::StringView> partials) const {
     auto v = absorbed("merge_partials", Need::Aggregate);
     if (!v) return v.error();
     return detail::scan::merge_partials_to_table(*v, partials);
@@ -910,7 +911,7 @@ dataframe::LazyFrame View::compare(const View& variant) const {
 }
 
 coro::CoroTask<dstd::Result<ExportStats>> View::for_each_batch(
-    dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
+    dstd::Function<void(std::size_t, dstd::Span<const dstd::StringView>)>
         on_batch,
     std::size_t slot_count, std::uint64_t limit) const {
     auto v = absorbed("for_each_batch", Need::EventsHead);
@@ -957,9 +958,9 @@ dstd::Result<dstd::Vector<SchemaLeaf>> detail::catalog_leaves(const View& v) {
     return detail::scan::catalog_tree(v.plan_);
 }
 
-dstd::String schema_tree_json(const dstd::Vector<SchemaLeaf>& leaves) {
+dstd::String schema_tree_json(dstd::Span<const SchemaLeaf> leaves) {
     dstd::String out = "[";
-    auto text = [&](const dstd::String& s) {
+    auto text = [&](dstd::StringView s) {
         if (s.empty()) {
             out += "null";
             return;
@@ -1011,7 +1012,7 @@ dstd::Result<bool> View::collect_would_bootstrap() const {
 }
 
 dstd::Result<ExportStats> View::merge_counter_partials(
-    const dstd::Vector<dstd::StringView>& partials, ExportSink& sink) const {
+    dstd::Span<const dstd::StringView> partials, ExportSink& sink) const {
     auto v = absorbed("merge_counter_partials", Need::Aggregate);
     if (!v) return v.error();
     return detail::scan::merge_counter_partials(*v, partials, sink);
@@ -1027,10 +1028,10 @@ dataframe::LazyFrame View::branch(SessionBranch attach) const {
 }
 
 coro::CoroTask<dstd::Result<void>> View::materialize_partials(
-    const dstd::Vector<dstd::StringView>& partials) const {
+    dstd::Vector<dstd::StringView> partials) const {
     auto v = absorbed("materialize_partials", Need::Aggregate);
     if (!v) return failed_task<void>(v.error());
-    return materialize_from_partials(std::move(*v), partials);
+    return materialize_from_partials(std::move(*v), std::move(partials));
 }
 
 dstd::Result<dstd::Optional<dataframe::DataFrame>> View::reconstruct_if_cached()
@@ -1077,7 +1078,7 @@ dstd::Result<dstd::String> View::materialize_dir() const {
     return detail::scan::materialize_dir(*v);
 }
 
-dstd::Result<void> View::register_materialized(const dstd::String& dir) const {
+dstd::Result<void> View::register_materialized(dstd::StringView dir) const {
     auto v = absorbed("register_materialized", Need::Any);
     if (!v) return v.error();
     return detail::scan::register_materialized(*v, dir);

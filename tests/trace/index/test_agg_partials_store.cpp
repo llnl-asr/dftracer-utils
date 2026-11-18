@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
@@ -56,7 +57,7 @@ using Key = dstd::Pair<dstd::String, dstd::String>;
 
 const char* const NAMES[] = {"read", "write", "open", "close"};
 
-dstd::String write_trace(const dstd::String& dir, int n,
+dstd::String write_trace(dstd::CStringView dir, int n,
                          dstd::Map<Key, dstd::Vector<double>>& durations,
                          int salt = 0) {
     dstd::String out;
@@ -82,7 +83,7 @@ dstd::String write_trace(const dstd::String& dir, int n,
     }
     out += "]\n";
     const dstd::String pfw =
-        dir + "/t" + dstd::String(dstd::to_string(n)) + ".pfw";
+        dstd::String(dir) + "/t" + dstd::String(dstd::to_string(n)) + ".pfw";
     {
         dstd::fs::write_file(dstd::PathView(pfw), out).discard();
     }
@@ -105,7 +106,7 @@ IndexerOptions options(dstd::StringView index_dir) {
     return o;
 }
 
-double build_seconds(const dstd::Vector<dstd::String>& files,
+double build_seconds(dstd::Vector<dstd::String> files,
                      dstd::StringView index_dir) {
     auto ix = dftu_utils_test::ok(Indexer::open(files, options(index_dir)));
     const auto t0 = dstd::steady_now();
@@ -119,7 +120,7 @@ struct Stored {
     dstd::Set<std::uint32_t> chunks;
 };
 
-trace::index::Snapshot open_index(const dstd::String& index_path) {
+trace::index::Snapshot open_index(dstd::CStringView index_path) {
     return dftu_utils_test::ok(trace::index::plan::open_snapshot(index_path));
 }
 
@@ -276,10 +277,11 @@ constexpr const char* CRASH_DIR_ENV = "DFTRACER_UTILS_TEST_AGG_CRASH_DIR";
 constexpr int CRASH_FILES = 3;
 constexpr std::uint64_t CRASH_RUNS = 2;
 
-dstd::Vector<dstd::String> crash_files(const dstd::String& dir) {
+dstd::Vector<dstd::String> crash_files(dstd::CStringView dir) {
     dstd::Vector<dstd::String> files;
     for (int i = 0; i < CRASH_FILES; ++i)
-        files.push_back(dir + "/t" + dstd::to_string(i) + ".pfw.gz");
+        files.push_back(dstd::String(dir) + "/t" + dstd::to_string(i) +
+                        ".pfw.gz");
     return files;
 }
 

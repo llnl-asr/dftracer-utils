@@ -72,7 +72,7 @@ dstd::Optional<dataframe::TypeId> Applier::agg_type(
 }
 
 dstd::Result<dstd::Optional<dataframe::TypeId>> Applier::term_type(
-    const duql::TermRef& t, const dstd::String& text) {
+    const duql::TermRef& t, dstd::StringView text) {
     if (!t) return dstd::Optional<dataframe::TypeId>();
     if (const auto* f = whole_field(t))
         if (const auto c = scan_column(dstd::String(f->base)))
@@ -433,7 +433,7 @@ dstd::Result<dataframe::DataType> Applier::udaf_type(
     return bound->result_type();
 }
 
-dataframe::DataType Applier::plugin_type(const dstd::String& name) {
+dataframe::DataType Applier::plugin_type(dstd::CStringView name) {
     switch (DFTU_OP_SIG_RET(dftu_op_find(name.c_str())->sig)) {
         case DFTU_TOK_I64:
             return dataframe::scalar(dataframe::TypeId::Int64);
@@ -706,11 +706,11 @@ Status Applier::frame_group(
     return {};
 }
 
-void Applier::fold_group(const dstd::Vector<dstd::String>& keys,
-                         const dstd::Vector<dataframe::GroupAgg>& specs,
-                         const dstd::Vector<dstd::String>& by,
+void Applier::fold_group(dstd::Span<const dstd::String> keys,
+                         dstd::Span<const dataframe::GroupAgg> specs,
+                         dstd::Span<const dstd::String> by,
                          dstd::Vector<dataframe::query::FoldAgg> fold) {
-    dstd::Vector<dstd::String> read = keys;
+    dstd::Vector<dstd::String> read(keys.begin(), keys.end());
     auto at = [&](dstd::StringView name) {
         const auto it = std::find(read.begin(), read.end(), name);
         if (it != read.end())
@@ -773,9 +773,9 @@ void Applier::fold_group(const dstd::Vector<dstd::String>& keys,
     columns_from_view();
 }
 
-void Applier::finish(FrameFn fn, const dstd::String& line,
+void Applier::finish(FrameFn fn, dstd::StringView line,
                      dstd::Optional<dataframe::Schema> schema) {
-    lines.push_back(line);
+    lines.emplace_back(line);
     if (!schema) schema = v_.output_schema();
     v_ = v_.with_lazy(
         finish_source(v_.lazy(), std::move(*schema), std::move(fn)));
@@ -830,7 +830,7 @@ dstd::Vector<dataframe::Series> fill_key_texts(const dataframe::DataFrame& fr,
     return text;
 }
 
-dstd::String fill_key_in(const dstd::Vector<dataframe::Series>& text,
+dstd::String fill_key_in(dstd::Span<const dataframe::Series> text,
                          std::int64_t r) {
     dstd::String k;
     for (const dataframe::Series& s : text) {

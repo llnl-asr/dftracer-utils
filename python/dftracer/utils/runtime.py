@@ -12,11 +12,8 @@ from typing import (
     Generator,
     Generic,
     List,
-    Optional,
-    Tuple,
     TypedDict,
     TypeVar,
-    Union,
     cast,
     overload,
 )
@@ -132,7 +129,7 @@ class TaskHandle(Generic[T_co]):
     @overload
     def __init__(
         self,
-        native: "_NativeTaskHandle[T_co]",
+        native: _NativeTaskHandle[T_co],
         future: None = None,
         name: str = "",
         task_id: int = -1,
@@ -140,31 +137,31 @@ class TaskHandle(Generic[T_co]):
     @overload
     def __init__(
         self,
-        native: "_NativeTaskHandle[_N]",
+        native: _NativeTaskHandle[_N],
         future: None = None,
         name: str = "",
         task_id: int = -1,
         *,
-        finish: "Callable[[_N], T_co]",
+        finish: Callable[[_N], T_co],
     ) -> None: ...
     @overload
     def __init__(
         self,
         native: None = None,
-        future: "Optional[Future[T_co]]" = None,
+        future: Future[T_co] | None = None,
         name: str = "",
         task_id: int = -1,
     ) -> None: ...
     def __init__(
         self,
-        native: "Optional[_NativeTaskHandle[_N]]" = None,
-        future: "Optional[Future[T_co]]" = None,
+        native: _NativeTaskHandle[_N] | None = None,
+        future: Future[T_co] | None = None,
         name: str = "",
         task_id: int = -1,
-        finish: "Optional[Callable[[_N], T_co]]" = None,
+        finish: Callable[[_N], T_co] | None = None,
     ) -> None:
-        self._native = cast("Optional[_NativeTaskHandle[T_co]]", native)
-        self._get: Optional[Callable[[], T_co]] = None
+        self._native = cast("_NativeTaskHandle[T_co] | None", native)
+        self._get: Callable[[], T_co] | None = None
         if native is not None:
             if finish is not None:
                 convert = finish
@@ -174,8 +171,8 @@ class TaskHandle(Generic[T_co]):
         self._future = future
         self._name = name
         self._task_id = task_id
-        self._exception: Optional[BaseException] = None
-        self._finished: "Optional[Tuple[T_co]]" = None
+        self._exception: BaseException | None = None
+        self._finished: tuple[T_co] | None = None
 
     def get(self) -> T_co:
         """Block until task completes and return result. Raises on error.
@@ -188,9 +185,9 @@ class TaskHandle(Generic[T_co]):
             return self._finished[0]
         if self._future is not None:
             return self._future.result()
-        return None  # type: ignore[return-value]  # ty: ignore[invalid-explicit-return]  # no backing future
+        return cast("T_co", None)  # no backing future
 
-    def add_done_callback(self, fn: "Callable[[TaskHandle[T_co]], None]") -> None:
+    def add_done_callback(self, fn: Callable[[TaskHandle[T_co]], None]) -> None:
         """Call ``fn(handle)`` once when the task ends, at once if it has.
 
         A native task calls it on the pool worker that finished it, which takes
@@ -222,7 +219,7 @@ class TaskHandle(Generic[T_co]):
 
         if self._native is None:
             if self._future is None:
-                return None  # type: ignore[return-value]  # ty: ignore[invalid-explicit-return]  # no backing task
+                return cast("T_co", None)  # no backing task
             return (yield from asyncio.wrap_future(self._future).__await__())
         native = self._native
         loop = asyncio.get_running_loop()
@@ -236,19 +233,19 @@ class TaskHandle(Generic[T_co]):
             except Exception as error:
                 waiting.set_exception(error)
 
-        def on_done(_native: "_NativeTaskHandle[T_co]") -> None:
+        def on_done(_native: _NativeTaskHandle[T_co]) -> None:
             try:
                 loop.call_soon_threadsafe(settle)
             except RuntimeError:
                 pass
 
-        def on_waiting_done(future: "asyncio.Future[T_co]") -> None:
+        def on_waiting_done(future: asyncio.Future[T_co]) -> None:
             if future.cancelled():
                 native.cancel()
 
         waiting.add_done_callback(on_waiting_done)
         native.add_done_callback(on_done)
-        return (yield from waiting)
+        return cast("T_co", (yield from waiting))
 
     def wait(self) -> None:
         """Block until task completes. Raises on error."""
@@ -280,7 +277,7 @@ class TaskHandle(Generic[T_co]):
         return self._task_id
 
     @property
-    def exception(self) -> Optional[BaseException]:
+    def exception(self) -> BaseException | None:
         """Stored exception if task failed, None otherwise."""
         return self._exception
 
@@ -318,14 +315,14 @@ class Runtime:
         self._init_fields(python_threads)
 
     def _init_fields(self, python_threads: int = 0) -> None:
-        self._py_pool: Optional[ThreadPoolExecutor] = None
+        self._py_pool: ThreadPoolExecutor | None = None
         self._py_pool_size = python_threads
         # TaskHandle[object]: these collections hold handles of every submitted
         # task, whose result types are heterogeneous and not tracked per handle.
-        self._handles: List[TaskHandle[object]] = []
-        self._failed_handles: List[TaskHandle[object]] = []
+        self._handles: list[TaskHandle[object]] = []
+        self._failed_handles: list[TaskHandle[object]] = []
         self._lock = threading.Lock()
-        self._on_task_error: Optional[Callable[[TaskHandle[object], BaseException], None]] = None
+        self._on_task_error: Callable[[TaskHandle[object], BaseException], None] | None = None
         self._py_task_counter = 0
 
     @classmethod
@@ -359,10 +356,10 @@ class Runtime:
     # name is derived from the callable and its source location.
     def submit(
         self,
-        task_or_fn: "Union[_NativeTaskHandle[object], Callable[..., object]]",
-        *args: object,
-        **kwargs: object,
-    ) -> TaskHandle[object]:
+        task_or_fn: _NativeTaskHandle[R] | Callable[P, R],
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> TaskHandle[R]:
         """Submit a task for async execution.
 
         Accepts either a native TaskHandle (pass-through) or a Python callable; the
@@ -376,10 +373,10 @@ class Runtime:
         """
         if isinstance(task_or_fn, _NativeTaskHandle):
             # Native path: wrap a handle from a build_async-style binding.
-            handle: TaskHandle[object] = TaskHandle(native=task_or_fn, name=task_or_fn.name)
+            native_handle: TaskHandle[R] = TaskHandle(native=task_or_fn, name=task_or_fn.name)
             with self._lock:
-                self._handles.append(handle)
-            return handle
+                self._handles.append(native_handle)
+            return native_handle
 
         if not callable(task_or_fn):
             raise TypeError(f"Expected callable or TaskHandle, got {type(task_or_fn).__name__}")
@@ -388,11 +385,11 @@ class Runtime:
             task_id = self._py_task_counter
             self._py_task_counter += 1
 
-        handle = TaskHandle[object](name=_derive_name(task_or_fn), task_id=task_id)
+        handle = TaskHandle[R](name=_derive_name(task_or_fn), task_id=task_id)
 
         # The result is opaque at the pool layer; callers retrieve it typed
         # through the handle's overloaded get().
-        def wrapper() -> object:
+        def wrapper() -> R:
             try:
                 return task_or_fn(*args, **kwargs)
             except BaseException as e:
@@ -414,7 +411,7 @@ class Runtime:
 
         return handle
 
-    def wait(self, handle: TaskHandle[object]) -> None:
+    def wait(self, handle: TaskHandle[R]) -> None:
         """Block until a specific task completes."""
         handle.wait()
 
@@ -433,7 +430,7 @@ class Runtime:
         with self._lock:
             handles = list(self._handles)
 
-        errors: List[str] = []
+        errors: list[str] = []
         for h in handles:
             try:
                 h.wait()
@@ -452,7 +449,7 @@ class Runtime:
         if raise_on_error and errors:
             raise RuntimeError(f"{len(errors)} task(s) failed:\n" + "\n".join(errors))
 
-    def get_failed(self) -> List[TaskHandle[object]]:
+    def get_failed(self) -> list[TaskHandle[object]]:
         """Return handles of tasks that failed since last clear.
 
         Call after ``wait_all()`` to inspect failures.
@@ -467,7 +464,7 @@ class Runtime:
 
     def set_error_callback(
         self,
-        callback: Optional[Callable[[TaskHandle[object], BaseException], None]],
+        callback: Callable[[TaskHandle[object], BaseException], None] | None,
     ) -> None:
         """Set callback invoked when any task fails.
 
@@ -507,13 +504,13 @@ class Runtime:
         """Return True if the runtime is making progress."""
         return self._native.is_responsive()
 
-    def set_timeout(self, global_ms: Union[int, float, str] = 0) -> None:
+    def set_timeout(self, global_ms: int | float | str = 0) -> None:
         """Set the global timeout. A bare number is milliseconds; a string such
         as "30s" or "5m" is converted."""
         ms = int(round(coerce_duration(global_ms, 1e3, "global_ms")))
         self._native.set_timeout(global_ms=ms)
 
-    def set_default_task_timeout(self, ms: Union[int, float, str] = 0) -> None:
+    def set_default_task_timeout(self, ms: int | float | str = 0) -> None:
         """Set the default per-task timeout. A bare number is milliseconds; a
         string such as "30s" or "5m" is converted."""
         ms_val = int(round(coerce_duration(ms, 1e3, "ms")))
@@ -541,14 +538,14 @@ class Runtime:
 
     def __exit__(
         self,
-        exc_type: Optional[type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         self.shutdown()
 
 
-_default_wrapper: Optional[Runtime] = None
+_default_wrapper: Runtime | None = None
 
 
 def get_default_runtime() -> Runtime:
@@ -560,7 +557,7 @@ def get_default_runtime() -> Runtime:
     return _default_wrapper
 
 
-def peek_default_runtime() -> Optional[Runtime]:
+def peek_default_runtime() -> Runtime | None:
     """Return the process runtime, or None before its first use.
 
     Never makes one, so a caller that only looks does not start a

@@ -13,7 +13,7 @@ so callers may fall back to it when it is installed.
 from __future__ import annotations
 
 import functools
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Protocol, Sequence, cast
 
 from . import dftracer_utils_ext as _ext
 from .enums import UNIT_CODES, DType
@@ -23,38 +23,47 @@ _ARROW_IMPORT = hasattr(_ext, "_series_from_arrow")
 
 
 @functools.lru_cache(maxsize=None)
-def _pyarrow() -> "Optional[Any]":
+def _pyarrow() -> ModuleType | None:
     """pyarrow, or None when it is not installed; looked up once."""
     try:
-        import pyarrow as pa  # ty: ignore[import-not-found]
+        import pyarrow as pa
     except ImportError:
         return None
-    return pa
+    return cast("ModuleType", pa)
 
 
 if TYPE_CHECKING:
+    from datetime import tzinfo
     from types import ModuleType
 
-    import numpy as np  # ty: ignore[import-not-found]
-    import pandas as pd  # ty: ignore[import-not-found]
-    import polars as pl  # ty: ignore[import-not-found]
-    from pandas._libs.missing import NAType  # ty: ignore[import-not-found]
-    from pandas.api.extensions import ExtensionArray  # ty: ignore[import-not-found]
+    import numpy as np
+    import pandas as pd
+    import polars as pl
+    import pyarrow as pa
+    from pandas._libs.missing import NAType
+    from pandas.api.extensions import ExtensionArray
+    from polars import Series as PolarsSeries
 
     from .series import Series
 
 
-def _to_pandas(arrow_obj: Any, arrow: bool) -> Any:
+class _MaskedDtype(Protocol):
+    numpy_dtype: np.dtype[Any]
+
+
+def _to_pandas(
+    arrow_obj: pa.Table | pa.Array | pa.ChunkedArray, arrow: bool
+) -> pd.DataFrame | pd.Series:
     """``pyarrow`` to pandas: NumPy dtypes (a copy) or, with ``arrow``, the
     ``pd.ArrowDtype`` columns that share the Arrow buffers."""
     if not arrow:
         return arrow_obj.to_pandas()
-    import pandas as pd  # ty: ignore[import-not-found]
+    import pandas as pd
 
     return arrow_obj.to_pandas(types_mapper=pd.ArrowDtype)
 
 
-_POLARS_DTYPES: Dict[DType, str] = {
+_POLARS_DTYPES: dict[DType, str] = {
     DType.BOOL: "Boolean",
     DType.INT8: "Int8",
     DType.INT16: "Int16",
@@ -106,23 +115,23 @@ _PYTHON_OBJECT_TYPES = (
 )
 
 
-def _temporal_numpy(native: "Series", dtype: DType) -> "np.ndarray":
+def _temporal_numpy(native: Series, dtype: DType) -> np.ndarray:
     """A date, timestamp or duration column as ``datetime64`` or ``timedelta64``
     (UTC values for a zoned timestamp), with ``NaT`` for null."""
-    import numpy as np  # ty: ignore[import-not-found]
+    import numpy as np
 
     unit = _TEMPORAL_KINDS[dtype] or tuple(UNIT_CODES)[native.time_unit]
-    phys = native._physical()
+    phys: Series = native._physical()
     if dtype == DType.DATE32:
         phys = phys._cast(int(DType.INT64))
     if phys.null_count:
         phys = phys.fillna(_NAT)
     kind = "timedelta64" if dtype == DType.DURATION else "datetime64"
-    return np.array(memoryview(phys)).view(f"{kind}[{unit}]")  # ty: ignore[invalid-argument-type]
+    return np.array(memoryview(phys)).view(f"{kind}[{unit}]")
 
 
-def _object_numpy(values: Sequence[object]) -> "np.ndarray":
-    import numpy as np  # ty: ignore[import-not-found]
+def _object_numpy(values: Sequence[object]) -> np.ndarray:
+    import numpy as np
 
     out = np.empty(len(values), dtype=object)
     for i, v in enumerate(values):
@@ -131,29 +140,29 @@ def _object_numpy(values: Sequence[object]) -> "np.ndarray":
 
 
 def _parts(
-    native: "Series", nullable: bool, na: "Optional[NAType]" = None
-) -> Tuple[bytearray, Optional[bytearray], str]:
+    native: Series, nullable: bool, na: NAType | None = None
+) -> tuple[bytearray, bytearray | None, str]:
     """The column's values, null mask and numpy dtype string from one native
     pass (``Series._np_parts``): bytearrays that numpy wraps without a copy."""
     return native._np_parts(nullable, na)
 
 
-def _frombuffer(data: Union[bytes, bytearray, memoryview], dtype: str) -> "np.ndarray":
-    import numpy as np  # ty: ignore[import-not-found]
+def _frombuffer(data: bytes | bytearray | memoryview, dtype: str) -> np.ndarray:
+    import numpy as np
 
     return np.frombuffer(data, dtype=dtype)
 
 
-def _native_numpy(native: "Series") -> "np.ndarray":
+def _native_numpy(native: Series) -> np.ndarray:
     """The native column as a NumPy array without pyarrow; TypeError for a
     type with no native conversion."""
-    import numpy as np  # ty: ignore[import-not-found]
+    import numpy as np
 
     try:
         # memoryview forces the native buffer protocol (a plain
         # np.asarray(handle) can fall back to a 0-d object array).
         # The native buffer support is not in the stub (PEP 688 is 3.12+).
-        return np.asarray(memoryview(native))  # ty: ignore[invalid-argument-type]
+        return np.asarray(memoryview(native))
     except (BufferError, TypeError):
         pass
     if DType(native.type) in (DType.STRING, DType.LARGE_STRING):
@@ -184,50 +193,55 @@ def _native_numpy(native: "Series") -> "np.ndarray":
 _POLARS_NATIVE_ONLY = (DType.FLOAT16, DType.DECIMAL128, DType.DECIMAL256)
 
 
-def _polars_via_arrow(native: "Series") -> bool:
+def _polars_via_arrow(native: Series) -> bool:
     """Whether the Arrow capsule gives polars the dtype the native path does: not
     for Float16 and decimals."""
     return _ARROW_ARRAY and DType(native.type) not in _POLARS_NATIVE_ONLY
 
 
-def _polars_native(native: "Series", pl: Any) -> "pl.Series":
+def _polars_native(native: Series, pl: ModuleType) -> pl.Series:
     """The column as a polars Series built natively, with no pyarrow."""
     dtype = DType(native.type)
     if dtype in _TEMPORAL_KINDS:
         values = _temporal_numpy(native, dtype)
         if values.dtype.name.endswith("[s]"):
             values = values.astype(values.dtype.name.replace("[s]", "[ms]"))
-        out = pl.Series(values)
+        out: PolarsSeries = pl.Series(values)
         if dtype == DType.TIMESTAMP and native.timezone:
             out = out.dt.replace_time_zone("UTC").dt.convert_time_zone(native.timezone)
         return out
     if dtype == DType.FLOAT16:
-        import numpy as np  # ty: ignore[import-not-found]
+        import numpy as np
 
-        return pl.Series(_native_numpy(native).astype(np.float32))  # type: ignore[union-attr]
-    values: Any = native._to_pylist()
+        floats: PolarsSeries = pl.Series(_native_numpy(native).astype(np.float32))
+        return floats
+    pylist: Any = native._to_pylist()
     if native.encoding == 2 and dtype in (DType.STRING, DType.LARGE_STRING):
-        return pl.Series(values, dtype=pl.Categorical)
+        categorical: PolarsSeries = pl.Series(pylist, dtype=pl.Categorical)
+        return categorical
     if dtype == DType.MAP:
-        values = [
-            None if row is None else [{"key": k, "value": v} for k, v in row] for row in values
+        pylist = [
+            None if row is None else [{"key": k, "value": v} for k, v in row] for row in pylist
         ]
     polars_dtype = _POLARS_DTYPES.get(dtype)
-    return pl.Series(values, dtype=getattr(pl, polars_dtype) if polars_dtype else None)
+    result: PolarsSeries = pl.Series(
+        pylist, dtype=getattr(pl, polars_dtype) if polars_dtype else None
+    )
+    return result
 
 
-def _pandas_values(native: "Series") -> "Union[pd.Series, np.ndarray]":
+def _pandas_values(native: Series) -> pd.Series | np.ndarray:
     """The column as a pandas Series or NumPy array built without pyarrow: a
     zoned timestamp gets its zone, everything else its NumPy array."""
-    import pandas as pd  # ty: ignore[import-not-found]
+    import pandas as pd
 
     if DType(native.type) in (DType.STRING, DType.LARGE_STRING) and _ARROW_ARRAY:
-        import numpy as np  # ty: ignore[import-not-found]
+        import numpy as np
 
         string = pd.Series(np.array(["x"], dtype=object)).dtype
         if isinstance(string, pd.StringDtype) and string.storage == "pyarrow":
             try:
-                import pyarrow as pa  # ty: ignore[import-not-found]
+                import pyarrow as pa
             except ImportError:
                 pass
             else:
@@ -244,14 +258,14 @@ def _pandas_values(native: "Series") -> "Union[pd.Series, np.ndarray]":
     return pd.Series(values).dt.tz_localize("UTC").dt.tz_convert(native.timezone)
 
 
-def _pandas_categorical(native: "Series") -> "pd.Categorical":
+def _pandas_categorical(native: Series) -> pd.Categorical:
     """A dictionary-encoded string column as ``pd.Categorical``. With pyarrow the
     codes and the dictionary are taken as they are, so no string is built per
     row, and the categories keep the dictionary order without its unused
     entries. Without pyarrow the codes are not reachable, so the strings are
     built once and the categories come out sorted."""
-    import numpy as np  # ty: ignore[import-not-found]
-    import pandas as pd  # ty: ignore[import-not-found]
+    import numpy as np
+    import pandas as pd
 
     pa = _pyarrow() if _ARROW_ARRAY else None
     if pa is not None:
@@ -269,7 +283,7 @@ def _pandas_categorical(native: "Series") -> "pd.Categorical":
     return pd.Categorical(values)
 
 
-def _pandas_default(native: "Series") -> "Union[pd.Series, np.ndarray, ExtensionArray]":
+def _pandas_default(native: Series) -> pd.Series | np.ndarray | ExtensionArray:
     """The default ``to_pandas`` column: ``pd.Categorical`` for a dictionary
     column, pandas' nullable dtype for an integer, bool or (where the default
     string dtype is ``object``) string column that holds nulls, and the NumPy
@@ -292,19 +306,19 @@ def _pandas_default(native: "Series") -> "Union[pd.Series, np.ndarray, Extension
 def _default_string_dtype() -> bool:
     """Whether pandas already stores strings in a ``StringDtype`` that holds
     missing values (pandas 3)."""
-    import numpy as np  # ty: ignore[import-not-found]
-    import pandas as pd  # ty: ignore[import-not-found]
+    import numpy as np
+    import pandas as pd
 
     return isinstance(pd.Series(np.array(["x"], dtype=object)).dtype, pd.StringDtype)
 
 
-def _pandas_nullable(native: "Series") -> "Optional[ExtensionArray]":
+def _pandas_nullable(native: Series) -> ExtensionArray | None:
     """The column as pandas' own nullable extension array (``Int8`` .. ``UInt64``,
     ``Float32``, ``Float64``, ``boolean``, ``string``), built without pyarrow; a
     null is ``pd.NA`` and a float NaN stays NaN. ``None`` for a type with no such
     dtype, which the caller converts as usual."""
-    import numpy as np  # ty: ignore[import-not-found]
-    import pandas as pd  # ty: ignore[import-not-found]
+    import numpy as np
+    import pandas as pd
 
     dtype = DType(native.type)
     if native.encoding == 2 and dtype in (DType.STRING, DType.LARGE_STRING):
@@ -333,14 +347,14 @@ def _pandas_nullable(native: "Series") -> "Optional[ExtensionArray]":
     return None
 
 
-def _apply_index(pdf: "pd.DataFrame", index: "Union[str, Sequence[str]]") -> "pd.DataFrame":
+def _apply_index(pdf: pd.DataFrame, index: str | Sequence[str]) -> pd.DataFrame:
     """``pdf`` with the named columns moved into the pandas index, in the order
     given (a MultiIndex for several names). KeyError names an unknown column and
     ValueError a repeated one."""
     names = [index] if isinstance(index, str) else list(index)
     if not names:
         raise ValueError("to_pandas: index must name at least one column")
-    seen: "set[str]" = set()
+    seen: set[str] = set()
     for name in names:
         if name not in pdf.columns:
             raise KeyError(f"to_pandas: no column named {name!r} to use as the index")
@@ -352,28 +366,28 @@ def _apply_index(pdf: "pd.DataFrame", index: "Union[str, Sequence[str]]") -> "pd
 
 def _arrow_native(name: str) -> Callable[..., Any]:
     """The native Arrow entry point `name`."""
-    return getattr(_ext, name)
+    return cast("Callable[..., Any]", getattr(_ext, name))
 
 
-def _require_pyarrow() -> "ModuleType":
+def _require_pyarrow() -> ModuleType:
     try:
-        import pyarrow as pa  # ty: ignore[import-not-found]
+        import pyarrow as pa
     except ImportError:
         raise ImportError(
             "pyarrow is required for Arrow conversion. Install with: pip install pyarrow"
         ) from None
-    return pa
+    return cast("ModuleType", pa)
 
 
 class NeedsArrow(TypeError):
     """Data that only pyarrow can import."""
 
 
-def _retype(native: "Series", dtype: DType, unit: str = "us", zone: str = "") -> "Series":
+def _retype(native: Series, dtype: DType, unit: str = "us", zone: str = "") -> Series:
     return _ext._series_retype(native, int(dtype), UNIT_CODES[unit], zone)
 
 
-def _objects(values: Sequence[object], mask: "Optional[np.ndarray]") -> "Series":
+def _objects(values: Sequence[object], mask: np.ndarray | None) -> Series:
     items = list(values)
     if mask is not None:
         items = [None if m else v for v, m in zip(items, mask.tolist())]
@@ -382,7 +396,7 @@ def _objects(values: Sequence[object], mask: "Optional[np.ndarray]") -> "Series"
     return _ext._series_from_list(items)
 
 
-def _temporal(a: "np.ndarray", mask: "Optional[np.ndarray]", zone: str = "") -> "Series":
+def _temporal(a: np.ndarray, mask: np.ndarray | None, zone: str = "") -> Series:
     import numpy as np
 
     unit = np.datetime_data(a.dtype)[0]
@@ -409,7 +423,7 @@ def _temporal(a: "np.ndarray", mask: "Optional[np.ndarray]", zone: str = "") -> 
     return _retype(native, DType.TIMESTAMP, unit, zone)
 
 
-def numpy_to_native(a: Any, mask: "Optional[np.ndarray]" = None) -> "Series":
+def numpy_to_native(a: np.ndarray, mask: np.ndarray | None = None) -> Series:
     """A 1-D NumPy array (or masked array) as a native column; ``mask`` is true
     where null."""
     import numpy as np
@@ -437,7 +451,7 @@ def numpy_to_native(a: Any, mask: "Optional[np.ndarray]" = None) -> "Series":
     raise TypeError(f"cannot import a NumPy array of dtype {a.dtype}")
 
 
-def _zone_name(tz: Any) -> str:
+def _zone_name(tz: str | tzinfo | None) -> str:
     if tz is None:
         return ""
     for attr in ("key", "zone"):
@@ -447,7 +461,7 @@ def _zone_name(tz: Any) -> str:
     return str(tz)
 
 
-def _dictionary(codes: "np.ndarray", categories: "List[str]") -> "Optional[Series]":
+def _dictionary(codes: np.ndarray, categories: list[str]) -> Series | None:
     """A dictionary column from integer codes (negative for null) and their
     strings, built through pyarrow so no string is made per row; None without
     pyarrow or an Arrow-enabled extension."""
@@ -460,7 +474,7 @@ def _dictionary(codes: "np.ndarray", categories: "List[str]") -> "Optional[Serie
     )
 
 
-def _arrow_dictionary(s: Any) -> "Optional[Series]":
+def _arrow_dictionary(s: pl.Series) -> Series | None:
     """A polars ``Categorical`` or ``Enum`` as a dictionary column from its
     Arrow export, which carries the codes and the values together; None
     without pyarrow or an Arrow-enabled extension."""
@@ -469,7 +483,7 @@ def _arrow_dictionary(s: Any) -> "Optional[Series]":
     return _ext._series_from_arrow(s.to_arrow())
 
 
-def pandas_to_native(s: Any) -> "Series":
+def pandas_to_native(s: pd.Series) -> Series:
     """A ``pandas.Series`` as a native column: a NaN in a float column and a
     ``NaT`` or ``NA`` anywhere read as null. A ``category`` column whose
     categories are strings becomes a dictionary-encoded string column, in
@@ -500,7 +514,8 @@ def pandas_to_native(s: Any) -> "Series":
     kind = getattr(dtype, "kind", "O")
     if kind in "biuf":
         if pd.api.types.is_extension_array_dtype(dtype):
-            values = s.to_numpy(dtype=dtype.numpy_dtype, na_value=dtype.numpy_dtype.type(0))
+            masked = cast("_MaskedDtype", dtype)
+            values = s.to_numpy(dtype=masked.numpy_dtype, na_value=masked.numpy_dtype.type(0))
         else:
             values = s.to_numpy()
         return numpy_to_native(values, hidden)
@@ -511,7 +526,7 @@ def pandas_to_native(s: Any) -> "Series":
     raise TypeError(f"cannot import a pandas column of dtype {dtype}")
 
 
-def polars_to_native(s: Any) -> "Series":
+def polars_to_native(s: pl.Series) -> Series:
     """A ``polars.Series`` as a native column."""
     import polars as pl
 
@@ -536,10 +551,11 @@ def polars_to_native(s: Any) -> "Series":
         return _ext._series_retype(_ext._series_from_numpy(phys, mask), int(DType.DATE32))
     if name.startswith("Datetime"):
         native = _ext._series_from_numpy(s.to_physical().fill_null(0).to_numpy(), mask)
-        return _retype(native, DType.TIMESTAMP, dtype.time_unit, dtype.time_zone or "")
+        datetime = cast("pl.Datetime", dtype)
+        return _retype(native, DType.TIMESTAMP, datetime.time_unit, datetime.time_zone or "")
     if name.startswith("Duration"):
         native = _ext._series_from_numpy(s.to_physical().fill_null(0).to_numpy(), mask)
-        return _retype(native, DType.DURATION, dtype.time_unit)
+        return _retype(native, DType.DURATION, cast("pl.Duration", dtype).time_unit)
     if name.startswith(("List", "Array", "Struct")):
         return _objects(s.to_list(), None)
     if name == "Null":
@@ -547,7 +563,7 @@ def polars_to_native(s: Any) -> "Series":
     raise NeedsArrow(f"a polars column of dtype {dtype} needs pyarrow")
 
 
-def index_columns(df: Any) -> "List[Tuple[str, Any]]":
+def index_columns(df: pd.DataFrame) -> list[tuple[str, pd.Series]]:
     """The columns a non-default pandas index adds, as ``(name, pandas.Series)``,
     named by the level or ``__index_level_<i>__``."""
     import pandas as pd
@@ -564,9 +580,10 @@ def index_columns(df: Any) -> "List[Tuple[str, Any]]":
     ]
 
 
-def _indices(indices: "Union[Series, Sequence[int]]") -> List[int]:
+def _indices(indices: Series | Sequence[int]) -> list[int]:
     if isinstance(indices, _ext.Series):
-        return [int(cast(int, i)) for i in cast("_ext.Series[Any]", indices).to_list()]
+        raw: object = indices
+        return [int(cast(int, i)) for i in cast("Series", raw).to_list()]
     return [int(i) for i in indices]
 
 

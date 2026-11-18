@@ -28,6 +28,7 @@ comparison.
 from __future__ import annotations
 
 import atexit
+import builtins
 import contextlib
 import copy
 import math
@@ -37,15 +38,12 @@ from typing import (
     Any,
     Callable,
     ContextManager,
-    Dict,
     Generator,
     Iterator,
-    List,
     Literal,
     Mapping,
-    Optional,
+    NoReturn,
     Sequence,
-    Tuple,
     TypeVar,
     Union,
     overload,
@@ -345,7 +343,7 @@ _PREDICATE_ONLY = (
 
 # The group transform behind an ``over`` for the kinds the engine has, keyed
 # by the column op's registry name.
-TRANSFORM_KINDS: Dict[str, str] = {
+TRANSFORM_KINDS: dict[str, str] = {
     "dftu.series.cumsum": "cumsum",
     "dftu.series.cum_prod": "cumprod",
     "dftu.series.cummax": "cummax",
@@ -373,15 +371,15 @@ class ColumnOp:
     def __init__(
         self,
         op: str,
-        column2: "Optional[Expr]" = None,
+        column2: Expr | None = None,
         a: Scalar = 0,
         b: Scalar = 0,
-        text: Optional[str] = None,
-        over: Optional[List[str]] = None,
-        kind: Optional[str] = None,
+        text: str | None = None,
+        over: list[str] | None = None,
+        kind: str | None = None,
         n: int = 0,
-        agg: "Optional[Agg]" = None,
-        unit: Optional[str] = None,
+        agg: Agg | None = None,
+        unit: str | None = None,
     ) -> None:
         self.op = op
         self.column2 = column2
@@ -399,37 +397,53 @@ class ColumnOp:
         self.unit = unit
 
 
-class Expr:
+if TYPE_CHECKING:
+
+    class _Namespaces:
+        """The ``str`` and ``dt`` namespaces, bound on ``Expr`` after its body
+        (below); declared in a base so the name ``str`` does not shadow the
+        builtin type inside the ``Expr`` body."""
+
+        @property
+        def str(self) -> _ExprStr: ...
+        @property
+        def dt(self) -> _ExprDt: ...
+
+else:
+    _Namespaces = object
+
+
+class Expr(_Namespaces):
     """A lazy expression. Build values with ``+ - * /`` and the numeric prims,
     or predicates with comparisons / string-match / membership / ``& | ~``.
     Evaluate a value or a numeric-comparison mask in memory with :meth:`apply`;
     serialize a pure predicate for index pushdown with :meth:`to_duql`."""
 
-    def __add__(self, other: object) -> "Expr":
+    def __add__(self, other: object) -> Expr:
         return Bin("+", self, wrap(other))
 
-    def __sub__(self, other: object) -> "Expr":
+    def __sub__(self, other: object) -> Expr:
         return Bin("-", self, wrap(other))
 
-    def __mul__(self, other: object) -> "Expr":
+    def __mul__(self, other: object) -> Expr:
         return Bin("*", self, wrap(other))
 
-    def __truediv__(self, other: object) -> "Expr":
+    def __truediv__(self, other: object) -> Expr:
         return Bin("/", self, wrap(other))
 
-    def __radd__(self, other: object) -> "Expr":
+    def __radd__(self, other: object) -> Expr:
         return Bin("+", wrap(other), self)
 
-    def __rsub__(self, other: object) -> "Expr":
+    def __rsub__(self, other: object) -> Expr:
         return Bin("-", wrap(other), self)
 
-    def __rmul__(self, other: object) -> "Expr":
+    def __rmul__(self, other: object) -> Expr:
         return Bin("*", wrap(other), self)
 
-    def __rtruediv__(self, other: "Union[Expr, Agg, int, float]") -> "Expr":
+    def __rtruediv__(self, other: Expr | Agg | int | float) -> Expr:
         return Bin("/", wrap(other), self)
 
-    def _series_arith(self, name: str, other: object, reverse: bool = False) -> "Expr":
+    def _series_arith(self, name: str, other: object, reverse: bool = False) -> Expr:
         """The Python-semantics ``floordiv`` / ``mod`` / ``pow`` of the Series
         kernels, as a column op: ``other`` is an expression or a number."""
 
@@ -442,33 +456,33 @@ class Expr:
             self, ColumnOp(f"dftu.series.{name}_scalar", None, other, 1 if reverse else 0)
         )
 
-    def __floordiv__(self, other: object) -> "Expr":
+    def __floordiv__(self, other: object) -> Expr:
         return self._series_arith("floordiv", other)
 
-    def __rfloordiv__(self, other: object) -> "Expr":
+    def __rfloordiv__(self, other: object) -> Expr:
         return self._series_arith("floordiv", other, True)
 
-    def __mod__(self, other: object) -> "Expr":
+    def __mod__(self, other: object) -> Expr:
         return self._series_arith("mod", other)
 
-    def __rmod__(self, other: object) -> "Expr":
+    def __rmod__(self, other: object) -> Expr:
         return self._series_arith("mod", other, True)
 
-    def __pow__(self, other: object) -> "Expr":
+    def __pow__(self, other: object) -> Expr:
         return self._series_arith("pow", other)
 
-    def __rpow__(self, other: object) -> "Expr":
+    def __rpow__(self, other: object) -> Expr:
         return self._series_arith("pow", other, True)
 
-    def floordiv(self, other: "Union[Expr, int, float]") -> "Expr":
+    def floordiv(self, other: Expr | int | float) -> Expr:
         """Floor division (Python semantics); ``//``."""
         return self._series_arith("floordiv", other)
 
-    def mod(self, other: "Union[Expr, int, float]") -> "Expr":
+    def mod(self, other: Expr | int | float) -> Expr:
         """Remainder with the sign of the divisor (Python semantics); ``%``."""
         return self._series_arith("mod", other)
 
-    def pow(self, exponent: "Union[Expr, int, float]") -> "Expr":
+    def pow(self, exponent: Expr | int | float) -> Expr:
         """This expression raised to ``exponent``; ``**``."""
         return self._series_arith("pow", exponent)
 
@@ -476,104 +490,109 @@ class Expr:
     # string, they also evaluate in memory to a boolean mask; against a bool
     # they are filter-only. Against another column expression they compare the
     # two row by row (null where either side is null) and are not pushable.
-    def __gt__(self, other: "Union[Value, Expr]") -> "Expr":
+    def __gt__(self, other: Value | Expr) -> Expr:
         return Cmp("gt", self, other)
 
-    def __ge__(self, other: "Union[Value, Expr]") -> "Expr":
+    def __ge__(self, other: Value | Expr) -> Expr:
         return Cmp("ge", self, other)
 
-    def __lt__(self, other: "Union[Value, Expr]") -> "Expr":
+    def __lt__(self, other: Value | Expr) -> Expr:
         return Cmp("lt", self, other)
 
-    def __le__(self, other: "Union[Value, Expr]") -> "Expr":
+    def __le__(self, other: Value | Expr) -> Expr:
         return Cmp("le", self, other)
 
-    def __eq__(self, other: "Union[Value, Expr]") -> "Expr":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
+    def __eq__(self, other: Value | Expr) -> Expr:
         return Cmp("eq", self, other)
 
-    def __ne__(self, other: "Union[Value, Expr]") -> "Expr":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
+    def __ne__(self, other: Value | Expr) -> Expr:
         return Cmp("ne", self, other)
 
-    def eq(self, other: "Union[Value, Expr]") -> "Expr":
+    def eq(self, other: Value | Expr) -> Expr:
         """Equality predicate (the method form of ``==``)."""
         return Cmp("eq", self, other)
 
-    def ne(self, other: "Union[Value, Expr]") -> "Expr":
+    def ne(self, other: Value | Expr) -> Expr:
         """Inequality predicate (the method form of ``!=``)."""
         return Cmp("ne", self, other)
 
-    def lt(self, other: "Union[Value, Expr]") -> "Expr":
+    def lt(self, other: Value | Expr) -> Expr:
         """Less-than predicate (the method form of ``<``)."""
         return Cmp("lt", self, other)
 
-    def le(self, other: "Union[Value, Expr]") -> "Expr":
+    def le(self, other: Value | Expr) -> Expr:
         """Less-or-equal predicate (the method form of ``<=``)."""
         return Cmp("le", self, other)
 
-    def gt(self, other: "Union[Value, Expr]") -> "Expr":
+    def gt(self, other: Value | Expr) -> Expr:
         """Greater-than predicate (the method form of ``>``)."""
         return Cmp("gt", self, other)
 
-    def ge(self, other: "Union[Value, Expr]") -> "Expr":
+    def ge(self, other: Value | Expr) -> Expr:
         """Greater-or-equal predicate (the method form of ``>=``)."""
         return Cmp("ge", self, other)
 
-    def add(self, other: "Union[Value, Expr]") -> "Expr":
+    def add(self, other: Value | Expr) -> Expr:
         """The method form of ``+``."""
         return Bin("+", self, wrap(other))
 
-    def sub(self, other: "Union[Value, Expr]") -> "Expr":
+    def sub(self, other: Value | Expr) -> Expr:
         """The method form of ``-``."""
         return Bin("-", self, wrap(other))
 
-    def mul(self, other: "Union[Value, Expr]") -> "Expr":
+    def mul(self, other: Value | Expr) -> Expr:
         """The method form of ``*``."""
         return Bin("*", self, wrap(other))
 
-    def truediv(self, other: "Union[Value, Expr]") -> "Expr":
+    def truediv(self, other: Value | Expr) -> Expr:
         """The method form of ``/``."""
         return Bin("/", self, wrap(other))
 
-    def neg(self) -> "Expr":
+    def neg(self) -> Expr:
         """The negation of each value."""
         return Unary("negate", self)
 
-    def and_(self, other: "Union[Value, Expr]") -> "Expr":
+    def and_(self, other: Value | Expr) -> Expr:
         """The method form of ``&``."""
         return Logical("and", self, as_expr(other))
 
-    def or_(self, other: "Union[Value, Expr]") -> "Expr":
+    def or_(self, other: Value | Expr) -> Expr:
         """The method form of ``|``."""
         return Logical("or", self, as_expr(other))
 
-    def not_(self) -> "Expr":
+    def not_(self) -> Expr:
         """The method form of ``~``."""
         return Logical("not", self, None)
 
-    def radians(self) -> "Expr":
+    def radians(self) -> Expr:
         """Each value, in degrees, as radians (Float64; polars ``radians``)."""
         return self * (math.pi / 180.0)
 
-    def degrees(self) -> "Expr":
+    def degrees(self) -> Expr:
         """Each value, in radians, as degrees (Float64; polars ``degrees``)."""
         return self * (180.0 / math.pi)
 
     def pipe(
         self,
-        function: "Callable[Concatenate[Expr, _P], _R]",
-        *args: "_P.args",
-        **kwargs: "_P.kwargs",
-    ) -> "_R":
+        function: Callable[Concatenate[Expr, _P], _R],
+        *args: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> _R:
         """``function(self, *args, **kwargs)`` (polars ``pipe``)."""
         return function(self, *args, **kwargs)
 
-    def count(self) -> "Agg":
+    def count(self) -> Agg:
         """The number of non-null values of this expression per group, as an
         :class:`Agg` (pandas ``count``). The group row count is the bare
         :func:`count`."""
         return Agg("count_valid", self)
 
-    __hash__ = None  # type: ignore[assignment]  # comparisons build exprs, not bools
+    # Comparisons build exprs, not bools, so a column is unhashable.
+    if TYPE_CHECKING:
+
+        def __hash__(self) -> NoReturn: ...
+    else:
+        __hash__ = None
 
     # A column has no single truth value; `if expr:` or `and` / `or` on one
     # would otherwise take one branch for every row. pandas and numpy refuse
@@ -585,13 +604,13 @@ class Expr:
         )
 
     # Combine predicates: &, |, ~ (Python and/or cannot be overloaded).
-    def __and__(self, other: object) -> "Expr":
+    def __and__(self, other: object) -> Expr:
         return Logical("and", self, as_expr(other))
 
-    def __or__(self, other: object) -> "Expr":
+    def __or__(self, other: object) -> Expr:
         return Logical("or", self, as_expr(other))
 
-    def __invert__(self) -> "Expr":
+    def __invert__(self) -> Expr:
         return Logical("not", self, None)
 
     if TYPE_CHECKING:
@@ -615,9 +634,9 @@ class Expr:
 
     def clip(
         self,
-        lower_bound: "Optional[Union[int, float]]" = None,
-        upper_bound: "Optional[Union[int, float]]" = None,
-    ) -> "Expr":
+        lower_bound: int | float | None = None,
+        upper_bound: int | float | None = None,
+    ) -> Expr:
         """Clamp each value to ``[lower_bound, upper_bound]`` (elementwise,
         SIMD); a bound that is ``None`` or NaN clips nothing and a NaN value
         stays NaN, as in Polars."""
@@ -626,8 +645,8 @@ class Expr:
         return Clip(self, lo, hi)
 
     def cast(
-        self, dtype: "Literal['int64', 'uint64', 'float64', 'bool', 'string', 'binary']"
-    ) -> "Expr":
+        self, dtype: Literal["int64", "uint64", "float64", "bool", "string", "binary"]
+    ) -> Expr:
         """Cast each value to ``dtype``. ``'string'`` gives the decimal digits of an
         integer, the shortest text of a float that shows a point or exponent
         (``2.0``, ``1e+21``) and ``true`` / ``false`` for a bool, the engine's
@@ -636,29 +655,29 @@ class Expr:
         when the plan runs."""
         return Cast(CAST_CODES[dtype], self)
 
-    def fill_null(self, value: Union[int, float]) -> "Expr":
+    def fill_null(self, value: int | float) -> Expr:
         """Replace nulls with ``value`` (elementwise)."""
         return Fillna(self, value)
 
-    def is_between(self, lower: Union[int, float], upper: Union[int, float]) -> "Expr":
+    def is_between(self, lower: int | float, upper: int | float) -> Expr:
         """Bool mask of ``lower <= x <= upper`` (desugars to two compares)."""
         return (self >= lower) & (self <= upper)
 
-    def where(self, cond: "Expr", other: "Union[Expr, int, float]") -> "Expr":
+    def where(self, cond: Expr, other: Expr | int | float) -> Expr:
         """Per row, this value where ``cond`` holds, else ``other`` (pandas
         ``Series.where``; a null condition takes ``other``)."""
         return Select(as_expr(cond), self, wrap(other))
 
-    def mask(self, cond: "Expr", other: "Union[Expr, int, float]") -> "Expr":
+    def mask(self, cond: Expr, other: Expr | int | float) -> Expr:
         """Per row, ``other`` where ``cond`` holds, else this value (pandas
         ``Series.mask``)."""
         return Select(as_expr(cond), wrap(other), self)
 
-    def is_null(self) -> "Expr":
+    def is_null(self) -> Expr:
         """Bool mask of the null rows."""
         return IsNull(self, True)
 
-    def is_not_null(self) -> "Expr":
+    def is_not_null(self) -> Expr:
         """Bool mask of the present rows."""
         return IsNull(self, False)
 
@@ -666,64 +685,64 @@ class Expr:
     def _op(
         self,
         op: str,
-        a: Union[int, float] = 0,
-        b: Union[int, float] = 0,
-        text: Optional[str] = None,
-        kind: Optional[str] = None,
+        a: int | float = 0,
+        b: int | float = 0,
+        text: str | None = None,
+        kind: str | None = None,
         n: int = 0,
-        unit: Optional[str] = None,
-    ) -> "Expr":
+        unit: str | None = None,
+    ) -> Expr:
 
         return ColumnOpNode(self, ColumnOp(op, None, a, b, text, None, kind, n, None, unit))
 
-    def cum_sum(self) -> "Expr":
+    def cum_sum(self) -> Expr:
         """The running sum (``cum_prod`` / ``cum_max`` / ``cum_min`` /
         ``cum_count`` likewise): a column op, the whole column at once; in a
         plan a breaker step. ``.over(keys)`` makes it group-wise."""
         return self._op("dftu.series.cumsum")
 
-    def cum_max(self) -> "Expr":
+    def cum_max(self) -> Expr:
         return self._op("dftu.series.cummax")
 
-    def cum_min(self) -> "Expr":
+    def cum_min(self) -> Expr:
         return self._op("dftu.series.cummin")
 
-    def between(self, left: Union[int, float], right: Union[int, float]) -> "Expr":
+    def between(self, left: int | float, right: int | float) -> Expr:
         """The pandas ``between``: :meth:`is_between` with both ends included,
         pandas' default ``inclusive="both"``."""
         return self.is_between(left, right)
 
-    def shift(self, n: int = 1) -> "Expr":
+    def shift(self, n: int = 1) -> Expr:
         return self._op("dftu.series.shift", a=int(n), n=int(n))
 
-    def rank(self, method: str = "average", descending: bool = False) -> "Expr":
+    def rank(self, method: str = "average", descending: bool = False) -> Expr:
 
         if method not in RANK_METHODS:
             raise ValueError(f"rank: unknown method {method!r}")
         return self._op("dftu.series.rank", a=RANK_METHODS[method], b=1 if descending else 0)
 
-    def forward_fill(self) -> "Expr":
+    def forward_fill(self) -> Expr:
         return self._op("dftu.series.ffill")
 
-    def backward_fill(self) -> "Expr":
+    def backward_fill(self) -> Expr:
         return self._op("dftu.series.bfill")
 
-    def rolling_sum(self, window_size: int) -> "Expr":
+    def rolling_sum(self, window_size: int) -> Expr:
         """The trailing window of ``window_size`` rows (``rolling_mean`` /
         ``_min`` / ``_max`` / ``_var`` / ``_std`` / ``_median`` /
         ``_quantile`` likewise), null until it is full."""
         return self._rolling("sum", window_size)
 
-    def rolling_mean(self, window_size: int) -> "Expr":
+    def rolling_mean(self, window_size: int) -> Expr:
         return self._rolling("mean", window_size)
 
-    def rolling_min(self, window_size: int) -> "Expr":
+    def rolling_min(self, window_size: int) -> Expr:
         return self._rolling("min", window_size)
 
-    def rolling_max(self, window_size: int) -> "Expr":
+    def rolling_max(self, window_size: int) -> Expr:
         return self._rolling("max", window_size)
 
-    def _rolling(self, op: str, window_size: int) -> "Expr":
+    def _rolling(self, op: str, window_size: int) -> Expr:
 
         if window_size < 1:
             raise ValueError("rolling: window_size must be at least 1")
@@ -735,36 +754,36 @@ class Expr:
             n=int(window_size),
         )
 
-    def rolling_var(self, window_size: int) -> "Expr":
+    def rolling_var(self, window_size: int) -> Expr:
         return self._op("dftu.series.rolling_var", a=int(window_size))
 
-    def rolling_std(self, window_size: int) -> "Expr":
+    def rolling_std(self, window_size: int) -> Expr:
         return self._op("dftu.series.rolling_std", a=int(window_size))
 
-    def rolling_median(self, window_size: int) -> "Expr":
+    def rolling_median(self, window_size: int) -> Expr:
         return self._op("dftu.series.rolling_median", a=int(window_size))
 
-    def rolling_quantile(self, quantile: float, window_size: int) -> "Expr":
+    def rolling_quantile(self, quantile: float, window_size: int) -> Expr:
         return self._op("dftu.series.rolling_quantile", a=int(window_size), b=float(quantile))
 
-    def ewm_mean(self, alpha: float) -> "Expr":
+    def ewm_mean(self, alpha: float) -> Expr:
         return self._op("dftu.series.ewm_mean", a=float(alpha))
 
-    def ewm_std(self, alpha: float) -> "Expr":
+    def ewm_std(self, alpha: float) -> Expr:
         return self._op("dftu.series.ewm_std", a=float(alpha))
 
-    def sort(self, *, descending: bool = False, nulls_last: bool = False) -> "Expr":
+    def sort(self, *, descending: bool = False, nulls_last: bool = False) -> Expr:
         """This column's values in order (the other columns do not move, as
         polars ``col.sort()`` inside ``with_columns``). Nulls come first, or
         last with ``nulls_last=True``."""
         return self._op("dftu.series.sort", a=1 if descending else 0, b=1 if nulls_last else 0)
 
-    def arg_sort(self, descending: bool = False, nulls_last: bool = False) -> "Expr":
+    def arg_sort(self, descending: bool = False, nulls_last: bool = False) -> Expr:
         """The row indices that sort this column; nulls first by default, or
         last with ``nulls_last=True``. Ties keep input order."""
         return self._op("dftu.series.argsort", a=1 if descending else 0, b=1 if nulls_last else 0)
 
-    def duplicated(self, keep: "Union[Literal['first', 'last'], bool]" = "first") -> "Expr":
+    def duplicated(self, keep: Literal["first", "last"] | bool = "first") -> Expr:
         """Bool mask of the values that repeat an earlier one (pandas
         ``Series.duplicated``): ``keep="first"`` leaves the first of equal
         values unmarked, ``"last"`` the last, ``False`` marks every one
@@ -782,14 +801,14 @@ class Expr:
             return nth > 1
         return nth < one.sum().over(self.name)
 
-    def hash(self) -> "Expr":
+    def hash(self) -> Expr:
         """A 64-bit hash of each value (``fnv1a`` over its repr)."""
         return self._op("dftu.hash.fnv1a")
 
-    def log10(self) -> "Expr":
-        return self.log() / math.log(10.0)  # type: ignore[attr-defined]
+    def log10(self) -> Expr:
+        return self.log() / math.log(10.0)
 
-    def over(self, keys: "Union[str, Sequence[str]]") -> "Expr":
+    def over(self, keys: str | Sequence[str]) -> Expr:
         """The group-wise form of the column op this expression is (polars
         ``over``): ``col("x").cum_sum().over("k")`` is the engine's group
         transform, one value per input row in input order. An aggregate's
@@ -812,14 +831,14 @@ class Expr:
         spec.kind = kind
         return ColumnOpNode(self.arg, spec)
 
-    def alias(self, name: str) -> "Named":
+    def alias(self, name: str) -> Named:
         """This expression under an output name, for ``select`` /
         ``with_columns`` (the polars spelling)."""
         return Named(name, self)
 
     # String predicates (Bool masks). Each runs in memory through the engine's
     # string kernels and, on a bare field, pushes down as duql.
-    def contains(self, sub: "Union[str, Expr]", case: bool = True) -> "Expr":
+    def contains(self, sub: str | Expr, case: bool = True) -> Expr:
         """Substring predicate. Case-sensitive like pandas / polars; ``case=False``
         folds both sides to lowercase first (duql's ``"sub" in field``). ``sub``
         may be an expression: the per-row needle, null where either side is
@@ -832,153 +851,151 @@ class Expr:
             return _StrPred("contains", self, sub)
         return _IContains(self, sub)
 
-    def starts_with(self, prefix: "Union[str, Expr]") -> "Expr":
+    def starts_with(self, prefix: str | Expr) -> Expr:
         """Prefix predicate; ``prefix`` may be an expression (per-row needle)."""
         if isinstance(prefix, Expr):
             return _StrPredCol("starts_with", self, prefix)
         return _StrPred("starts_with", self, prefix)
 
-    def ends_with(self, suffix: "Union[str, Expr]") -> "Expr":
+    def ends_with(self, suffix: str | Expr) -> Expr:
         """Suffix predicate; ``suffix`` may be an expression (per-row needle)."""
         if isinstance(suffix, Expr):
             return _StrPredCol("ends_with", self, suffix)
         return _StrPred("ends_with", self, suffix)
 
-    def like(self, pattern: str) -> "Expr":
+    def like(self, pattern: str) -> Expr:
         """SQL LIKE: ``%`` matches any run, ``_`` any single char, ``\\`` escapes."""
         return _StrPred("like", self, pattern)
 
-    def ilike(self, pattern: str) -> "Expr":
+    def ilike(self, pattern: str) -> Expr:
         """Case-insensitive LIKE (both sides lowercased)."""
         return _ILike(self, pattern)
 
-    def regex(self, pattern: str) -> "Expr":
+    def regex(self, pattern: str) -> Expr:
         """duql regex found anywhere in the value (a search, like
         duql's ``~``). See :meth:`fullmatch` for a whole-string match."""
         return _StrPred("regex", self, pattern)
 
-    def iregex(self, pattern: str) -> "Expr":
+    def iregex(self, pattern: str) -> Expr:
         """Case-insensitive regex search. Filter-only: it has no in-memory form."""
         return _IRegex(self, pattern)
 
-    def fullmatch(self, pattern: str) -> "Expr":
+    def fullmatch(self, pattern: str) -> Expr:
         """duql regex matching the whole value (pandas ``str.fullmatch``).
         In-memory only: duql has no anchored form."""
         return _StrPred("fullmatch", self, pattern)
 
-    def encode(self, encoding: str = "utf-8") -> "Expr":
+    def encode(self, encoding: str = "utf-8") -> Expr:
         """The UTF-8 bytes of each string, as a binary column (pandas
         ``str.encode``). Only UTF-8, the engine's text encoding."""
         require_utf8("encode", encoding)
         return self.cast("binary")
 
-    def decode(self, encoding: str = "utf-8") -> "Expr":
+    def decode(self, encoding: str = "utf-8") -> Expr:
         """Each binary value read as UTF-8 text (pandas ``str.decode``); a
         value that is not valid UTF-8 is null. Only UTF-8."""
         require_utf8("decode", encoding)
         return self.cast("string")
 
-    def isascii(self) -> "Expr":
+    def isascii(self) -> Expr:
         """True where every character is ASCII, as ``str.isascii`` (an empty
         string too)."""
         return self.fullmatch("[\\x00-\\x7f]*")
 
-    def is_in(self, values: Sequence[Value]) -> "Expr":
+    def is_in(self, values: Sequence[Value]) -> Expr:
         """Membership predicate: the value is one of ``values`` (all ints or all
         strings)."""
         return _IsIn(self, values, negate=False)
 
-    def not_in(self, values: Sequence[Value]) -> "Expr":
+    def not_in(self, values: Sequence[Value]) -> Expr:
         """Exclusion predicate: the value is none of ``values``."""
         return _IsIn(self, values, negate=True)
 
     # String maps.
-    def lower(self) -> "Expr":
+    def lower(self) -> Expr:
         """ASCII lowercase."""
         return _StrMap("lower", self)
 
-    def upper(self) -> "Expr":
+    def upper(self) -> Expr:
         """ASCII uppercase."""
         return _StrMap("upper", self)
 
-    def strip(self) -> "Expr":
+    def strip(self) -> Expr:
         """Drop leading and trailing whitespace."""
         return _StrMap("strip", self)
 
-    def lstrip(self) -> "Expr":
+    def lstrip(self) -> Expr:
         """Drop leading whitespace."""
         return _StrMap("lstrip", self)
 
-    def rstrip(self) -> "Expr":
+    def rstrip(self) -> Expr:
         """Drop trailing whitespace."""
         return _StrMap("rstrip", self)
 
     # The expression forms of the eager ``Series.str`` methods: the same
     # names, the same values, nulls and types (ASCII; a byte outside ASCII is
     # left as it is by the case forms and fails the character classes).
-    def capitalize(self) -> "Expr":
+    def capitalize(self) -> Expr:
         """First letter upper, the rest lower."""
         return _StrMap("capitalize", self)
 
-    def title(self) -> "Expr":
+    def title(self) -> Expr:
         """Each run of letters starts upper, the rest lower."""
         return _StrMap("title", self)
 
-    def swapcase(self) -> "Expr":
+    def swapcase(self) -> Expr:
         """Every letter's case flipped."""
         return _StrMap("swapcase", self)
 
-    def casefold(self) -> "Expr":
+    def casefold(self) -> Expr:
         """ASCII casefold (the lowercase form)."""
         return _StrMap("lower", self)
 
-    def isalnum(self) -> "Expr":
+    def isalnum(self) -> Expr:
         """Bool: non-empty and all letters or digits."""
         return _StrFn("isalnum", self)
 
-    def isalpha(self) -> "Expr":
+    def isalpha(self) -> Expr:
         """Bool: non-empty and all letters."""
         return _StrFn("isalpha", self)
 
-    def isdigit(self) -> "Expr":
+    def isdigit(self) -> Expr:
         """Bool: non-empty and all digits."""
         return _StrFn("isdigit", self)
 
-    def isdecimal(self) -> "Expr":
+    def isdecimal(self) -> Expr:
         """Bool: as :meth:`isdigit` over ASCII."""
         return _StrFn("isdecimal", self)
 
-    def isnumeric(self) -> "Expr":
+    def isnumeric(self) -> Expr:
         """Bool: as :meth:`isdigit` over ASCII."""
         return _StrFn("isnumeric", self)
 
-    def isspace(self) -> "Expr":
+    def isspace(self) -> Expr:
         """Bool: non-empty and all whitespace."""
         return _StrFn("isspace", self)
 
-    def islower(self) -> "Expr":
+    def islower(self) -> Expr:
         """Bool: has a letter and every letter is lower."""
         return _StrFn("islower", self)
 
-    def isupper(self) -> "Expr":
+    def isupper(self) -> Expr:
         """Bool: has a letter and every letter is upper."""
         return _StrFn("isupper", self)
 
-    def istitle(self) -> "Expr":
+    def istitle(self) -> Expr:
         """Bool: title case, as Python ``str.istitle``."""
         return _StrFn("istitle", self)
 
-    def pad_start(self, width: int, fill: str = " ") -> "Expr":
+    def pad_start(self, width: int, fill: str = " ") -> Expr:
         """Left-pad to ``width`` bytes with ``fill``."""
         return _StrFn("pad_start", self, text=_fill_char(fill), i0=int(width))
 
-    def pad_end(self, width: int, fill: str = " ") -> "Expr":
+    def pad_end(self, width: int, fill: str = " ") -> Expr:
         """Right-pad to ``width`` bytes with ``fill``."""
         return _StrFn("pad_end", self, text=_fill_char(fill), i0=int(width))
 
-    def pad(
-        self, width: int, side: Literal["left", "right"] = "left", fillchar: str = " "
-    ) -> "Expr":
+    def pad(self, width: int, side: Literal["left", "right"] = "left", fillchar: str = " ") -> Expr:
         """Pad on ``side`` (pandas ``str.pad``)."""
         if side == "left":
             return self.pad_start(width, fillchar)
@@ -986,35 +1003,35 @@ class Expr:
             return self.pad_end(width, fillchar)
         raise ValueError("side must be 'left' or 'right'")
 
-    def ljust(self, width: int, fillchar: str = " ") -> "Expr":
+    def ljust(self, width: int, fillchar: str = " ") -> Expr:
         """As :meth:`pad_end`."""
         return self.pad_end(width, fillchar)
 
-    def rjust(self, width: int, fillchar: str = " ") -> "Expr":
+    def rjust(self, width: int, fillchar: str = " ") -> Expr:
         """As :meth:`pad_start`."""
         return self.pad_start(width, fillchar)
 
-    def center(self, width: int, fillchar: str = " ") -> "Expr":
+    def center(self, width: int, fillchar: str = " ") -> Expr:
         """Center in ``width`` bytes, Python's ``str.center`` placement."""
         return _StrFn("center", self, text=_fill_char(fillchar), i0=int(width))
 
-    def zfill(self, width: int) -> "Expr":
+    def zfill(self, width: int) -> Expr:
         """Left-pad with ``0`` to ``width`` after an optional sign."""
         return _StrFn("zfill", self, i0=int(width))
 
-    def removeprefix(self, prefix: str) -> "Expr":
+    def removeprefix(self, prefix: str) -> Expr:
         """Drop a leading ``prefix`` when present."""
         return _StrFn("removeprefix", self, text=prefix)
 
-    def removesuffix(self, suffix: str) -> "Expr":
+    def removesuffix(self, suffix: str) -> Expr:
         """Drop a trailing ``suffix`` when present."""
         return _StrFn("removesuffix", self, text=suffix)
 
-    def repeat(self, repeats: int) -> "Expr":
+    def repeat(self, repeats: int) -> Expr:
         """Each value repeated ``repeats`` times."""
         return _StrFn("repeat", self, i0=int(repeats))
 
-    def slice_replace(self, start: int = 0, stop: Optional[int] = None, repl: str = "") -> "Expr":
+    def slice_replace(self, start: int = 0, stop: int | None = None, repl: str = "") -> Expr:
         """Bytes ``[start, stop)`` of each value replaced with ``repl``."""
         return _StrFn(
             "slice_replace",
@@ -1024,44 +1041,44 @@ class Expr:
             i1=_STR_NO_STOP if stop is None else int(stop),
         )
 
-    def split(self, pat: str) -> "Expr":
+    def split(self, pat: str) -> Expr:
         """Split on the literal ``pat``: a ``list<string>`` (no ``expand``;
         take the pieces with :meth:`get`)."""
         return _StrFn("split", self, text=pat)
 
-    def rsplit(self, pat: str) -> "Expr":
+    def rsplit(self, pat: str) -> Expr:
         """As :meth:`split` (every occurrence, so the same parts)."""
         return _StrFn("split", self, text=pat)
 
-    def partition(self, sep: str = " ") -> "Expr":
+    def partition(self, sep: str = " ") -> Expr:
         """Split at the first ``sep`` into a 3-element ``list<string>``
         (head, sep, tail); take the pieces with :meth:`get`."""
         return _StrFn("partition", self, text=sep)
 
-    def rpartition(self, sep: str = " ") -> "Expr":
+    def rpartition(self, sep: str = " ") -> Expr:
         """As :meth:`partition`, at the last ``sep``."""
         return _StrFn("rpartition", self, text=sep)
 
-    def extract(self, pat: str, group: int = 1) -> "Expr":
+    def extract(self, pat: str, group: int = 1) -> Expr:
         """The capture ``group`` of the first regex ``pat`` match, null where
         there is none."""
         return _StrFn("extract", self, text=pat, i0=int(group))
 
-    def regex_replace(self, pat: str, to: str) -> "Expr":
+    def regex_replace(self, pat: str, to: str) -> Expr:
         """Replace every regex ``pat`` match with ``to`` (``$n``, ``${name}``,
         ``$$``); an invalid pattern or replacement raises at evaluation."""
         return _StrFn("regex_replace", self, text=pat, text2=to)
 
-    def findall(self, pat: str) -> "Expr":
+    def findall(self, pat: str) -> Expr:
         """Every regex match as a ``list<string>``."""
         return _StrFn("findall", self, text=pat)
 
-    def normalize(self, form: NormForm) -> "Expr":
+    def normalize(self, form: NormForm) -> Expr:
         """Each value in the Unicode normalization ``form``; null for a value
         that is not valid UTF-8."""
         return _StrFn("normalize", self, i0=norm_form_code(form))
 
-    def translate(self, table: Mapping[Union[int, str], Union[str, int, None]]) -> "Expr":
+    def translate(self, table: Mapping[int | str, str | int | None]) -> Expr:
         """Each codepoint replaced by ``table``, as ``str.translate``: a key is
         a codepoint or one character, a value a string, a codepoint or ``None``
         to delete it."""
@@ -1081,7 +1098,7 @@ class Expr:
         drop_whitespace: bool = True,
         break_long_words: bool = True,
         break_on_hyphens: bool = True,
-    ) -> "Expr":
+    ) -> Expr:
         """Each value wrapped to lines of at most ``width`` codepoints, joined
         by newlines (``textwrap.TextWrapper`` of CPython 3.13.10, 3.14.1 and later with these
         options)."""
@@ -1092,33 +1109,33 @@ class Expr:
         )
         return _StrFn("wrap", self, i0=int(width), i1=flags)
 
-    def match(self, pat: str) -> "Expr":
+    def match(self, pat: str) -> Expr:
         """Regex anchored at the start (pandas ``str.match``)."""
         return _StrPred("regex", self, "^(?:" + pat + ")")
 
-    def rfind(self, sub: str) -> "Expr":
+    def rfind(self, sub: str) -> Expr:
         """Byte index of the last ``sub``, or -1 (Int64)."""
         return _StrFn("rfind", self, text=sub)
 
-    def index(self, sub: str) -> "Expr":
+    def index(self, sub: str) -> Expr:
         """As :meth:`find`, but a plan run over a row without ``sub`` raises
         ``ValueError``, as Python's ``str.index``."""
         return _StrFn("index", self, text=sub)
 
-    def rindex(self, sub: str) -> "Expr":
+    def rindex(self, sub: str) -> Expr:
         """As :meth:`rfind`, raising like :meth:`index`."""
         return _StrFn("rindex", self, text=sub)
 
-    def join(self, sep: str) -> "Expr":
+    def join(self, sep: str) -> Expr:
         """Each ``list<string>`` value joined with ``sep``."""
         return _StrFn("join", self, text=sep)
 
-    def get(self, i: int) -> "Expr":
+    def get(self, i: int) -> Expr:
         """A list's element ``i`` (negative counts from the end), or a
         string's byte ``i`` (non-negative; null past the end)."""
         return _StrFn("get", self, i0=int(i))
 
-    def cat(self, others: "Optional[Expr]" = None, sep: str = "") -> "Expr":
+    def cat(self, others: Expr | None = None, sep: str = "") -> Expr:
         """Row-wise concatenation with the column ``others``, ``sep`` between.
         The one-column form joins the whole column into one string, which is
         an aggregate: use ``Series.str.cat``."""
@@ -1130,7 +1147,7 @@ class Expr:
             raise TypeError("cat needs another column expression (use lit() for a constant)")
         return _StrFn("cat", self, other=others, text=sep)
 
-    def get_dummies(self, sep: str = "|") -> "Expr":
+    def get_dummies(self, sep: str = "|") -> Expr:
         """Not an expression: it makes one column per token, which a
         column expression cannot. Use ``Series.str.get_dummies``."""
         raise NotImplementedError(
@@ -1138,27 +1155,27 @@ class Expr:
             "use Series.str.get_dummies"
         )
 
-    def len_bytes(self) -> "Expr":
+    def len_bytes(self) -> Expr:
         """Per-row byte length (Int64)."""
         return _StrLen(self, chars=False)
 
-    def len_chars(self) -> "Expr":
+    def len_chars(self) -> Expr:
         """Per-row UTF-8 codepoint count (Int64)."""
         return _StrLen(self, chars=True)
 
-    def find(self, needle: str) -> "Expr":
+    def find(self, needle: str) -> Expr:
         """Byte index of the first ``needle`` (Int64), null where it is absent
         (Polars ``str.find``); ``Series.str.find`` gives -1, as pandas."""
         return _StrFind(self, needle, True)
 
-    def replace(self, old: str, new: str) -> "Expr":
+    def replace(self, old: str, new: str) -> Expr:
         """Replace the first ``old`` with ``new`` in each value. Takes ``str``
         only; use :meth:`replace_all` for expression arguments."""
         if isinstance(old, Expr) or isinstance(new, Expr):
             raise TypeError("replace takes str arguments; use replace_all for columns")
         return _StrReplace(self, old, new, all=False)
 
-    def replace_all(self, old: "Union[str, Expr]", new: "Union[str, Expr]") -> "Expr":
+    def replace_all(self, old: str | Expr, new: str | Expr) -> Expr:
         """Replace every ``old`` with ``new`` in each value. Either may be an
         expression (a ``str`` beside one is a literal); null where any operand
         is null, the value unchanged for an empty ``old``."""
@@ -1170,15 +1187,15 @@ class Expr:
             )
         return _StrReplace(self, old, new, all=True)
 
-    def slice(self, start: int, length: int) -> "Expr":
+    def slice(self, start: int, length: int) -> Expr:
         """The byte substring ``[start, start + length)`` of each value."""
         return _StrSlice(self, start, length)
 
     def quantile(
         self,
         quantile: float,
-        interpolation: "Literal['linear', 'nearest', 'lower', 'higher', 'midpoint']" = "nearest",
-    ) -> "Agg":
+        interpolation: Literal["linear", "nearest", "lower", "higher", "midpoint"] = "nearest",
+    ) -> Agg:
         """The exact quantile at level ``quantile`` in [0, 1], per group (an
         :class:`Agg`); null for a group with no present value. ``interpolation``
         picks the result between two ranks, ``"nearest"`` as in Polars. The
@@ -1188,26 +1205,26 @@ class Expr:
         check_quantile(quantile, interpolation)
         return Agg("quantile", self, param=float(quantile), interpolation=interpolation)
 
-    def median(self) -> "Agg":
+    def median(self) -> Agg:
         """The exact median per group (an :class:`Agg`): :meth:`quantile` at
         0.5, whose two interpolations of the middle ranks agree."""
         return self.quantile(0.5, "linear")
 
-    def n_unique(self) -> "Agg":
+    def n_unique(self) -> Agg:
         """The number of distinct present values per group (an :class:`Agg`):
         :meth:`distinct`, a KMV sketch that is exact below 1024 values."""
         return self.distinct()
 
-    def len(self) -> "Agg":
+    def len(self) -> Agg:
         """The row count per group, nulls included (an :class:`Agg`)."""
         return Agg("count", self)
 
-    def null_count(self) -> "Agg":
+    def null_count(self) -> Agg:
         """The number of null values per group (an :class:`Agg`)."""
         name = f"null_count_{self.name}" if isinstance(self, Col) else "null_count"
         return Agg("sum", self.is_null().cast("int64"), name)
 
-    def approx_quantile(self, q: float) -> "Agg":
+    def approx_quantile(self, q: float) -> Agg:
         """An approximate quantile at level ``q`` in [0, 1], per group, from a
         DDSketch: mergeable in bounded memory, exact only to the sketch's
         relative accuracy."""
@@ -1215,7 +1232,7 @@ class Expr:
             raise ValueError(f"approx_quantile: q must be in [0, 1], not {q!r}")
         return Agg("pct", self, param=q)
 
-    def sketch_quantile(self, q: float) -> "Agg":
+    def sketch_quantile(self, q: float) -> Agg:
         """The ``q`` quantile in [0, 1] of the merge of a group's stored
         DDSketches (base64 text, such as ``dur.sketch``), clamped to the
         merged minimum and maximum. Null cells, text that is not a sketch and
@@ -1228,8 +1245,8 @@ class Expr:
     def percentile(
         self,
         p: float,
-        interpolation: "Literal['linear', 'nearest', 'lower', 'higher', 'midpoint']" = "linear",
-    ) -> "Agg":
+        interpolation: Literal["linear", "nearest", "lower", "higher", "midpoint"] = "linear",
+    ) -> Agg:
         """The exact percentile ``p`` in [0, 100], per group (numpy-style,
         linear interpolation by default); ``F.dur.percentile(99)`` is
         ``F.dur.quantile(0.99, "linear")``."""
@@ -1238,29 +1255,29 @@ class Expr:
         check_quantile(p / 100.0, interpolation)
         return Agg("quantile", self, param=p / 100.0, interpolation=interpolation)
 
-    def busy(self, resolution: "Union[int, float, str, None]" = None) -> "Agg":
+    def busy(self, resolution: int | float | str | None = None) -> Agg:
         """Trace occupancy (``TraceViewer.agg`` only): the time at least one
         event was active. ``resolution`` snaps interval edges to that grid (a
         number is microseconds, a string such as ``"1ms"`` is converted);
         unset is the exact union."""
         return _occupancy("busy", self, resolution)
 
-    def concurrency(self, resolution: "Union[int, float, str, None]" = None) -> "Agg":
+    def concurrency(self, resolution: int | float | str | None = None) -> Agg:
         """Trace occupancy: average parallelism, summed duration over
         :meth:`busy` time; see :meth:`busy` for ``resolution``."""
         return _occupancy("concurrency", self, resolution)
 
-    def utilization(self, resolution: "Union[int, float, str, None]" = None) -> "Agg":
+    def utilization(self, resolution: int | float | str | None = None) -> Agg:
         """Trace occupancy: :meth:`busy` time over the makespan; see
         :meth:`busy` for ``resolution``."""
         return _occupancy("utilization", self, resolution)
 
-    def active(self, resolution: "Union[int, float, str, None]" = None) -> "Agg":
+    def active(self, resolution: int | float | str | None = None) -> Agg:
         """Trace occupancy: the peak number of events active at once; see
         :meth:`busy` for ``resolution``."""
         return _occupancy("active", self, resolution)
 
-    def set_union(self, typed: bool = False) -> "Agg":
+    def set_union(self, typed: bool = False) -> Agg:
         """The distinct values of this expression per group. By default one
         text cell: the values sorted as text and joined with ``\\x1e``; a string
         holding that byte is refused. With ``typed=True`` a list column of the
@@ -1269,75 +1286,75 @@ class Expr:
         group an empty list, and no limit on the bytes of a string."""
         return Agg("set_union", self, param=1.0 if typed else 0.0)
 
-    def hist(self) -> "Agg":
+    def hist(self) -> Agg:
         """The DDSketch histogram per group: a ``list<struct{lo, hi, count}>``
         column (mergeable, relative-error buckets)."""
         return Agg("hist", self)
 
-    def argmax(self, by: "Expr") -> "Agg":
+    def argmax(self, by: Expr) -> Agg:
         """The String repr of this expression at the row maximizing ``by``,
         per group (an :class:`Agg`)."""
         return Agg("argmax", self, by=by)
 
-    def argmin(self, by: "Expr") -> "Agg":
+    def argmin(self, by: Expr) -> Agg:
         """The String repr of this expression at the row minimizing ``by``,
         per group. Several ``argmin``/``argmax`` aggregates naming the same
         ``by`` all report the same winning row."""
         return Agg("argmin", self, by=by)
 
-    def distinct(self, k: int = 0) -> "Agg":
+    def distinct(self, k: int = 0) -> Agg:
         """Approximate distinct count per group (a KMV sketch of ``k`` hashes,
         1024 by default), exact below ``k`` distinct values."""
         return Agg("distinct", self, param=float(k))
 
-    def list_sorted(self, by: "Expr") -> "Agg":
+    def list_sorted(self, by: Expr) -> Agg:
         """This expression's reprs per group as a ``list<string>``, ordered by
         ``by`` ascending with the repr breaking ties."""
         return Agg("list_sorted", self, by=by)
 
-    def topk(self, by: "Expr", k: int = 0) -> "Agg":
+    def topk(self, by: Expr, k: int = 0) -> Agg:
         """The reprs at the ``k`` largest ``by`` values per group (8 by
         default), a ``list<string>`` in descending ``by`` order."""
         return Agg("topk", self, param=float(k), by=by)
 
-    def bottomk(self, by: "Expr", k: int = 0) -> "Agg":
+    def bottomk(self, by: Expr, k: int = 0) -> Agg:
         """The reprs at the ``k`` smallest ``by`` values per group (8 by
         default), a ``list<string>`` in ascending ``by`` order."""
         return Agg("bottomk", self, param=float(k), by=by)
 
-    def approx_topk(self, k: int = 0) -> "Agg":
+    def approx_topk(self, k: int = 0) -> Agg:
         """Approximate heavy hitters per group (SpaceSaving with ``k``
         counters, 8 by default): a ``list<struct{value, count}>`` column by
         descending count."""
         return Agg("approx_topk", self, param=float(k))
 
-    def sample(self, k: int = 0) -> "Agg":
+    def sample(self, k: int = 0) -> Agg:
         """A deterministic, mergeable bottom-``k``-by-hash sample of this
         expression's distinct reprs per group (8 by default), a sorted
         ``list<string>``."""
         return Agg("sample", self, param=float(k))
 
-    def corr(self, by: "Expr") -> "Agg":
+    def corr(self, by: Expr) -> Agg:
         """Pearson correlation of this expression against ``by`` per group."""
         return Agg("corr", self, by=by)
 
-    def covar_pop(self, by: "Expr") -> "Agg":
+    def covar_pop(self, by: Expr) -> Agg:
         """Population covariance of this expression against ``by`` per group."""
         return Agg("covar_pop", self, by=by)
 
-    def covar_samp(self, by: "Expr") -> "Agg":
+    def covar_samp(self, by: Expr) -> Agg:
         """Sample covariance of this expression against ``by`` per group."""
         return Agg("covar_samp", self, by=by)
 
-    def regr_slope(self, by: "Expr") -> "Agg":
+    def regr_slope(self, by: Expr) -> Agg:
         """Least-squares slope of this expression on ``by`` per group."""
         return Agg("regr_slope", self, by=by)
 
-    def regr_intercept(self, by: "Expr") -> "Agg":
+    def regr_intercept(self, by: Expr) -> Agg:
         """Least-squares intercept of this expression on ``by`` per group."""
         return Agg("regr_intercept", self, by=by)
 
-    def regr_r2(self, by: "Expr") -> "Agg":
+    def regr_r2(self, by: Expr) -> Agg:
         """Coefficient of determination of this expression on ``by`` per
         group."""
         return Agg("regr_r2", self, by=by)
@@ -1346,55 +1363,55 @@ class Expr:
         # Prims/unary math (dispatched via __getattr__) and aggs (installed by
         # setattr below), declared so consumers get precise types not Any.
         # BEGIN GENERATED from api.def by scripts/gen_pyi.py
-        def cum_prod(self) -> "Expr": ...
-        def cum_count(self) -> "Expr": ...
-        def diff(self) -> "Expr": ...
-        def pct_change(self) -> "Expr": ...
-        def is_nan(self) -> "Expr": ...
-        def is_finite(self) -> "Expr": ...
-        def is_infinite(self) -> "Expr": ...
-        def is_unique(self) -> "Expr": ...
-        def is_duplicated(self) -> "Expr": ...
-        def reverse(self) -> "Expr": ...
-        def interpolate(self) -> "Expr": ...
+        def cum_prod(self) -> Expr: ...
+        def cum_count(self) -> Expr: ...
+        def diff(self) -> Expr: ...
+        def pct_change(self) -> Expr: ...
+        def is_nan(self) -> Expr: ...
+        def is_finite(self) -> Expr: ...
+        def is_infinite(self) -> Expr: ...
+        def is_unique(self) -> Expr: ...
+        def is_duplicated(self) -> Expr: ...
+        def reverse(self) -> Expr: ...
+        def interpolate(self) -> Expr: ...
         # END GENERATED
-        def ilog2(self) -> "Expr": ...
-        def bit_width(self) -> "Expr": ...
-        def popcount(self) -> "Expr": ...
-        def clz(self) -> "Expr": ...
-        def ctz(self) -> "Expr": ...
-        def mix64(self) -> "Expr": ...
-        def abs(self) -> "Expr": ...
-        def round(self) -> "Expr": ...
-        def floor(self) -> "Expr": ...
-        def ceil(self) -> "Expr": ...
-        def log(self) -> "Expr": ...
-        def sqrt(self) -> "Expr": ...
-        def exp(self) -> "Expr": ...
-        def log1p(self) -> "Expr": ...
-        def expm1(self) -> "Expr": ...
-        def sign(self) -> "Expr": ...
-        def negate(self) -> "Expr": ...
-        def trunc(self) -> "Expr": ...
-        def sum(self) -> "Agg": ...
-        def min(self) -> "Agg": ...
-        def max(self) -> "Agg": ...
-        def mean(self) -> "Agg": ...
-        def var(self) -> "Agg": ...
-        def std(self) -> "Agg": ...
-        def skew(self, bias: bool = True) -> "Agg": ...
-        def kurt(self, bias: bool = True) -> "Agg": ...
-        def first(self) -> "Agg": ...
-        def last(self) -> "Agg": ...
-        def sumsq(self) -> "Agg": ...
-        def bit_or(self) -> "Agg": ...
-        def prod(self) -> "Agg": ...
+        def ilog2(self) -> Expr: ...
+        def bit_width(self) -> Expr: ...
+        def popcount(self) -> Expr: ...
+        def clz(self) -> Expr: ...
+        def ctz(self) -> Expr: ...
+        def mix64(self) -> Expr: ...
+        def abs(self) -> Expr: ...
+        def round(self) -> Expr: ...
+        def floor(self) -> Expr: ...
+        def ceil(self) -> Expr: ...
+        def log(self) -> Expr: ...
+        def sqrt(self) -> Expr: ...
+        def exp(self) -> Expr: ...
+        def log1p(self) -> Expr: ...
+        def expm1(self) -> Expr: ...
+        def sign(self) -> Expr: ...
+        def negate(self) -> Expr: ...
+        def trunc(self) -> Expr: ...
+        def sum(self) -> Agg: ...
+        def min(self) -> Agg: ...
+        def max(self) -> Agg: ...
+        def mean(self) -> Agg: ...
+        def var(self) -> Agg: ...
+        def std(self) -> Agg: ...
+        def skew(self, bias: bool = True) -> Agg: ...
+        def kurt(self, bias: bool = True) -> Agg: ...
+        def first(self) -> Agg: ...
+        def last(self) -> Agg: ...
+        def sumsq(self) -> Agg: ...
+        def bit_or(self) -> Agg: ...
+        def prod(self) -> Agg: ...
 
     # Runtime prim-method seam; hidden from the checker so unknown attributes
     # are type errors, not Any (the real methods are declared above).
     if not TYPE_CHECKING:
 
-        def __getattr__(self, name):
+        def __getattr__(self, name: builtins.str) -> Callable[[], Expr]:
             # F.dur.ilog2()/F.hhash.mix64() - int bit primitive; F.dur.floor()/
             # .log()/... - FP unary math. Both are unary methods.
             if name in PRIM_CODES:
@@ -1424,7 +1441,7 @@ class Expr:
     # END GENERATED aliases
 
 
-def _expr_method(name: str, op: str, doc: str) -> "Callable[[Expr], Expr]":
+def _expr_method(name: str, op: str, doc: str) -> Callable[[Expr], Expr]:
     def method(self: Expr) -> Expr:
         return self._op(op)
 
@@ -1467,7 +1484,7 @@ class Col(Expr):
     def __init__(self, name: str) -> None:
         self.name = name
 
-    def any(self) -> "_AnyCol":
+    def any(self) -> _AnyCol:
         """The same field as ``any(name)``: a predicate on it holds when any
         element of the array holds. It filters in the trace scan
         (``TraceViewer.duql``); ``apply`` cannot evaluate it."""
@@ -1484,7 +1501,7 @@ class Named:
 
     __slots__ = ("name", "expr")
 
-    def __init__(self, name: str, expr: "Expr") -> None:
+    def __init__(self, name: str, expr: Expr) -> None:
         self.name = name
         self.expr = expr
 
@@ -1492,14 +1509,18 @@ class Named:
 #: One item of a ``select``: a column name, a bare column expression (its own
 #: name), or a named expression.
 Selector = Union[str, "Expr", Named]
+#: An argument of ``select``: a selector, an aggregate, or a list of selectors.
+SelectItem = Union[Selector, "Agg", Sequence[Selector]]
 
 
-def resolve_selectors(items: Sequence[object]) -> "List[Tuple[str, Optional[Expr]]]":
+def resolve_selectors(
+    items: Sequence[SelectItem],
+) -> list[tuple[str, Expr | None]]:
     """Flatten ``select`` arguments to ``(output name, expression or None)``
     pairs: a name or a bare column keeps itself (no expression to compute), a
     named expression computes under its name. A computed expression without
     a name is refused: the engine names every column."""
-    out: "List[Tuple[str, Optional[Expr]]]" = []
+    out: list[tuple[str, Expr | None]] = []
     for item in items:
         if isinstance(item, str):
             out.append((item, None))
@@ -1517,7 +1538,7 @@ def resolve_selectors(items: Sequence[object]) -> "List[Tuple[str, Optional[Expr
 
 
 class Lit(Expr):
-    def __init__(self, value: Union[Scalar, str]) -> None:
+    def __init__(self, value: Scalar | str) -> None:
         self.value = value
 
 
@@ -1541,7 +1562,7 @@ class Unary(Expr):
 
 
 class Clip(Expr):
-    def __init__(self, arg: Expr, lo: "Union[int, float]", hi: "Union[int, float]") -> None:
+    def __init__(self, arg: Expr, lo: int | float, hi: int | float) -> None:
         self.arg = arg
         self.lo = lo
         self.hi = hi
@@ -1554,7 +1575,7 @@ class Cast(Expr):
 
 
 class Fillna(Expr):
-    def __init__(self, arg: Expr, fill: "Union[int, float]") -> None:
+    def __init__(self, arg: Expr, fill: int | float) -> None:
         self.arg = arg
         self.fill = fill
 
@@ -1574,7 +1595,7 @@ class Cmp(Expr):
 
 
 class Logical(Expr):
-    def __init__(self, op: str, left: Expr, right: "Expr | None") -> None:
+    def __init__(self, op: str, left: Expr, right: Expr | None) -> None:
         self.op = op
         self.left = left
         self.right = right
@@ -1739,7 +1760,7 @@ class _StrFn(Expr):
         self,
         name: str,
         arg: Expr,
-        other: "Optional[Expr]" = None,
+        other: Expr | None = None,
         text: str = "",
         text2: str = "",
         i0: int = 0,
@@ -1820,7 +1841,7 @@ def col(name: str) -> Expr:
     return Col(name)
 
 
-def lit(value: Union[Scalar, str]) -> Expr:
+def lit(value: Scalar | str) -> Expr:
     """A scalar literal (kept distinct from a column name, Polars-style)."""
     return Lit(value)
 
@@ -1831,14 +1852,14 @@ class AggLeaf(Expr):
     aggregate first, then :func:`split_aggs` rewrites the leaf into a column
     reference over the joined result."""
 
-    def __init__(self, agg: "Agg") -> None:
+    def __init__(self, agg: Agg) -> None:
         self.agg = agg
 
 
 class ColumnOpNode(Expr):
     """A registered column op over ``arg`` (see ``_expr_ops``)."""
 
-    def __init__(self, arg: Expr, spec: "ColumnOp") -> None:
+    def __init__(self, arg: Expr, spec: ColumnOp) -> None:
         self.arg = arg
         self.spec = spec
 
@@ -1862,11 +1883,11 @@ class _ExprStr:
 
     def contains(
         self,
-        pat: "Union[str, Expr]",
+        pat: str | Expr,
         case: bool = True,
         regex: bool = True,
         *,
-        literal: Optional[bool] = None,
+        literal: bool | None = None,
     ) -> Expr:
         """A regex search by default (the pandas and Polars default), the
         substring predicate with ``regex=False`` or ``literal=True``; the
@@ -1878,10 +1899,10 @@ class _ExprStr:
             return self._e.regex(pat if case else "(?i)" + pat)
         return self._e.contains(pat, case)
 
-    def starts_with(self, prefix: "Union[str, Expr]") -> Expr:
+    def starts_with(self, prefix: str | Expr) -> Expr:
         return self._e.starts_with(prefix)
 
-    def ends_with(self, suffix: "Union[str, Expr]") -> Expr:
+    def ends_with(self, suffix: str | Expr) -> Expr:
         return self._e.ends_with(suffix)
 
     def to_lowercase(self) -> Expr:
@@ -1917,9 +1938,7 @@ class _ExprStr:
             return self._e.replace(pat, repl)
         raise NotImplementedError("replace() supports n=-1 (all) or n=1 (first)")
 
-    def replace_all(
-        self, pat: "Union[str, Expr]", repl: "Union[str, Expr]", *, literal: bool = False
-    ) -> Expr:
+    def replace_all(self, pat: str | Expr, repl: str | Expr, *, literal: bool = False) -> Expr:
         """Replace every match of the regex ``pat`` (the Polars default;
         ``repl`` may use ``$n`` / ``${name}``) or, with ``literal=True`` or an
         expression argument, every occurrence of ``pat``."""
@@ -1935,7 +1954,7 @@ class _ExprStr:
         """The last ``n`` bytes of each value (polars ``tail``)."""
         return self._e.slice(-n, n)
 
-    def slice(self, start: int = 0, stop: Optional[int] = None) -> Expr:
+    def slice(self, start: int = 0, stop: int | None = None) -> Expr:
         """Byte substring ``[start, stop)``, as ``Series.str.slice``."""
         return self._e.slice(start, -1 if stop is None else max(stop - start, 0))
 
@@ -1968,10 +1987,10 @@ class _ExprStr:
 
     # The pandas names of the methods above, and of the expression's own
     # string methods.
-    def startswith(self, pat: "Union[str, Expr]") -> Expr:
+    def startswith(self, pat: str | Expr) -> Expr:
         return self.starts_with(pat)
 
-    def endswith(self, pat: "Union[str, Expr]") -> Expr:
+    def endswith(self, pat: str | Expr) -> Expr:
         return self.ends_with(pat)
 
     def len(self) -> Expr:
@@ -2000,7 +2019,7 @@ class _ExprStr:
     def casefold(self) -> Expr:
         return self._e.casefold()
 
-    def cat(self, others: "Union[Expr, str, None]" = None, sep: str = "") -> Expr:
+    def cat(self, others: Expr | str | None = None, sep: str = "") -> Expr:
         if isinstance(others, str):
             others = lit(others)
         return self._e.cat(others, sep)
@@ -2017,7 +2036,7 @@ class _ExprStr:
     def normalize(self, form: NormForm) -> Expr:
         return self._e.normalize(form)
 
-    def translate(self, table: Mapping[Union[int, str], Union[str, int, None]]) -> Expr:
+    def translate(self, table: Mapping[int | str, str | int | None]) -> Expr:
         return self._e.translate(table)
 
     def wrap(
@@ -2092,9 +2111,7 @@ class _ExprStr:
     def match(self, pat: str) -> Expr:
         return self._e.match(pat)
 
-    def pad(
-        self, width: int, side: "Literal['left', 'right']" = "left", fillchar: str = " "
-    ) -> Expr:
+    def pad(self, width: int, side: Literal["left", "right"] = "left", fillchar: str = " ") -> Expr:
         return self._e.pad(width, side, fillchar)
 
     def partition(self, sep: str = " ", expand: bool = False) -> Expr:
@@ -2133,7 +2150,7 @@ class _ExprStr:
     def rstrip(self) -> Expr:
         return self._e.rstrip()
 
-    def slice_replace(self, start: int = 0, stop: "Optional[int]" = None, repl: str = "") -> Expr:
+    def slice_replace(self, start: int = 0, stop: int | None = None, repl: str = "") -> Expr:
         return self._e.slice_replace(start, stop, repl)
 
     def split(self, pat: str, expand: bool = False) -> Expr:
@@ -2158,12 +2175,12 @@ class _ExprDt:
 
     __slots__ = ("_e", "_unit", "_given")
 
-    def __init__(self, e: Expr, unit: Optional[str] = None) -> None:
+    def __init__(self, e: Expr, unit: str | None = None) -> None:
         self._e = e
         self._given = unit
         self._unit = unit or "us"
 
-    def __call__(self, unit: str) -> "_ExprDt":
+    def __call__(self, unit: str) -> _ExprDt:
         return _ExprDt(self._e, unit)
 
     def _part(self, code: int) -> Expr:
@@ -2273,21 +2290,21 @@ class _ExprDt:
         """The polars name of :meth:`strftime`."""
         return self.strftime(format)
 
-    def truncate(self, every: "Union[int, str]") -> Expr:
+    def truncate(self, every: int | str) -> Expr:
         """Each instant floored to a multiple of ``every`` (a pandas offset
         string or a count of the column's units); ``floor`` is the pandas
         name, ``ceil`` and ``round`` likewise."""
         return self._round(every, 0)
 
-    def floor(self, freq: "Union[int, str]") -> Expr:
+    def floor(self, freq: int | str) -> Expr:
         """As :meth:`truncate` (the pandas name)."""
         return self._round(freq, 0)
 
-    def ceil(self, freq: "Union[int, str]") -> Expr:
+    def ceil(self, freq: int | str) -> Expr:
         """Each instant ceiled to a multiple of ``freq``."""
         return self._round(freq, 1)
 
-    def round(self, freq: "Union[int, str]") -> Expr:
+    def round(self, freq: int | str) -> Expr:
         return self._round(freq, 2)
 
     def normalize(self) -> Expr:
@@ -2301,7 +2318,7 @@ class _ExprDt:
         unit."""
         return self.epoch("ns").cast("float64") / 1_000_000_000
 
-    def tz_localize(self, tz: Optional[str]) -> Expr:
+    def tz_localize(self, tz: str | None) -> Expr:
         """A naive Timestamp column marked as ``tz`` (``None`` strips the
         zone). Only UTC can mark a naive column. A column that is already
         aware is not refused here, as ``Series.dt.tz_localize`` does: the
@@ -2315,13 +2332,13 @@ class _ExprDt:
             )
         return self._e._op("dftu.series.with_timezone", text=tz)
 
-    def tz_convert(self, tz: Optional[str]) -> Expr:
+    def tz_convert(self, tz: str | None) -> Expr:
         """The same instants shown in zone ``tz`` (``None`` for the naive UTC
         column); no tick moves. A naive column is not refused here, as
         ``Series.dt.tz_convert`` does."""
         return self._e._op("dftu.series.with_timezone", text=tz or "")
 
-    def _round(self, every: "Union[int, str]", mode: int) -> Expr:
+    def _round(self, every: int | str, mode: int) -> Expr:
 
         # A rule is a count of the unit of the column it runs on, known only
         # then; reject a rule that no unit could read now.
@@ -2333,12 +2350,20 @@ class _ExprDt:
 
 # The namespaces, bound after the class body so the names `str` and `dt` do
 # not shadow the builtin type inside it.
-Expr.str = property(lambda self: _ExprStr(self), doc="The string namespace (polars ``col.str.*``).")  # type: ignore[attr-defined]
+setattr(
+    Expr,
+    "str",
+    property(lambda self: _ExprStr(self), doc="The string namespace (polars ``col.str.*``)."),
+)
 
 
-Expr.dt = property(  # type: ignore[attr-defined]
-    lambda self: _ExprDt(self),
-    doc="The temporal namespace (polars ``col.dt.*``); the parts read the column's own unit, an Int64 as microseconds.",
+setattr(
+    Expr,
+    "dt",
+    property(
+        lambda self: _ExprDt(self),
+        doc="The temporal namespace (polars ``col.dt.*``); the parts read the column's own unit, an Int64 as microseconds.",
+    ),
 )
 
 
@@ -2363,7 +2388,7 @@ class _Udf(Expr):
     """A call of a registered scalar UDF over ``args``; ``handle`` is the native
     UDF the call holds, so the plugin that registered it stays loaded."""
 
-    def __init__(self, name: str, handle: "_ext._UdfHandle", args: Tuple[Expr, ...]) -> None:
+    def __init__(self, name: str, handle: _ext._UdfHandle, args: tuple[Expr, ...]) -> None:
         self.name = name
         self.handle = handle
         self.args = args
@@ -2386,10 +2411,10 @@ class Udf:
     def __init__(
         self,
         name: str,
-        handle: "_ext._UdfHandle",
+        handle: _ext._UdfHandle,
         *,
         owning: bool = False,
-        func: "Optional[Callable[..., Any]]" = None,
+        func: Callable[..., Any] | None = None,
         origin: str = "",
     ) -> None:
         self._name = name
@@ -2413,7 +2438,7 @@ class Udf:
         return self._closed
 
     @property
-    def func(self) -> "Optional[Callable[..., Any]]":
+    def func(self) -> Callable[..., Any] | None:
         """The Python function behind a ``@dft.udf`` UDF, or ``None``."""
         return self._func
 
@@ -2428,13 +2453,13 @@ class Udf:
             del _OWNED_UDFS[self._name]
             _ext.udf_unregister(self._name)
 
-    def __enter__(self) -> "Udf":
+    def __enter__(self) -> Udf:
         return self
 
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def __call__(self, *args: Any) -> Expr:
+    def __call__(self, *args: Value | Expr) -> Expr:
         if self._closed:
             raise RuntimeError(f"udf {self._name!r} is closed")
         return _Udf(self._name, self._handle, tuple(wrap(a) for a in args))
@@ -2445,10 +2470,10 @@ class Udf:
 
 # The UDFs that @dft.udf registered and not yet closed, by name. They are held
 # strongly: only close() or the end of a scope removes one.
-_OWNED_UDFS: "Dict[str, Udf]" = {}
+_OWNED_UDFS: dict[str, Udf] = {}
 
 
-_UDF_SCOPES: "List[List[Udf]]" = []
+_UDF_SCOPES: list[list[Udf]] = []
 
 
 _UDF_EXIT_HOOK = False
@@ -2473,6 +2498,7 @@ def _udf_origin(fn: Callable[..., Any]) -> str:
 def _batch_result_dtype(fn: Callable[..., Any], returns: object) -> str:
     """The result dtype name of a batch UDF from ``returns=`` or the return
     annotation (``np.ndarray`` needs ``returns=``; ``npt.NDArray[np.float64]`` names it)."""
+    fn_name = getattr(fn, "__name__", "a callable")
     try:
         import numpy as np
     except ImportError as exc:  # pragma: no cover - numpy is a hard need here
@@ -2491,18 +2517,18 @@ def _batch_result_dtype(fn: Callable[..., Any], returns: object) -> str:
                 returns = inner[0]
     if returns is None:
         raise TypeError(
-            f"udf {fn.__name__!r} needs a result dtype: pass returns=np.float64 (or another "
+            f"udf {fn_name!r} needs a result dtype: pass returns=np.float64 (or another "
             "dtype) or annotate the return as npt.NDArray[np.float64]"
         )
     if not isinstance(returns, (type, str, np.dtype)):
-        raise TypeError(f"udf {fn.__name__!r}: {returns!r} is not a numpy dtype")
+        raise TypeError(f"udf {fn_name!r}: {returns!r} is not a numpy dtype")
     try:
-        name = np.dtype(returns).name
+        name: str = np.dtype(returns).name
     except TypeError as exc:
-        raise TypeError(f"udf {fn.__name__!r}: {returns!r} is not a numpy dtype") from exc
+        raise TypeError(f"udf {fn_name!r}: {returns!r} is not a numpy dtype") from exc
     if name not in _BATCH_DTYPES:
         raise TypeError(
-            f"udf {fn.__name__!r} returns {name}, which a udf cannot give; "
+            f"udf {fn_name!r} returns {name}, which a udf cannot give; "
             f"the result is one of {sorted(_BATCH_DTYPES)}"
         )
     return name
@@ -2555,19 +2581,19 @@ class _UdfRegistry(Mapping[str, Udf]):
         self,
         *,
         batch: bool = False,
-        name: "Optional[str]" = None,
+        name: str | None = None,
         returns: object = None,
         volatile: bool = False,
     ) -> Callable[[Callable[..., Any]], Udf]: ...
     def __call__(
         self,
-        fn: "Optional[Callable[..., Any]]" = None,
+        fn: Callable[..., Any] | None = None,
         *,
         batch: bool = False,
-        name: "Optional[str]" = None,
+        name: str | None = None,
         returns: object = None,
         volatile: bool = False,
-    ) -> "Union[Udf, Callable[[Callable[..., Any]], Udf]]":
+    ) -> Udf | Callable[[Callable[..., Any]], Udf]:
         """Register ``fn`` as a scalar UDF; see the class doc. ``name`` defaults
         to the function name, ``returns`` is the result dtype of a batch UDF
         when its annotation does not name it, ``volatile=True`` says the result
@@ -2580,7 +2606,7 @@ class _UdfRegistry(Mapping[str, Udf]):
         self,
         fn: Callable[..., Any],
         batch: bool,
-        name: "Optional[str]",
+        name: str | None,
         returns: object,
         volatile: bool,
     ) -> Udf:
@@ -2629,7 +2655,7 @@ class _UdfRegistry(Mapping[str, Udf]):
             _UDF_SCOPES[-1].append(owned)
         return owned
 
-    def scope(self) -> "ContextManager[None]":
+    def scope(self) -> ContextManager[None]:
         """``with dft.udf.scope():`` closes the UDFs that ``@dft.udf`` registered
         inside the block when it ends, in reverse order. Scopes nest. The scope is
         process wide, not per thread."""
@@ -2638,7 +2664,7 @@ class _UdfRegistry(Mapping[str, Udf]):
 
 @contextlib.contextmanager
 def _udf_scope() -> Generator[None, None, None]:
-    mine: "List[Udf]" = []
+    mine: list[Udf] = []
     _UDF_SCOPES.append(mine)
     try:
         yield
@@ -2670,7 +2696,7 @@ class _When:
     def __init__(self, cond: Expr) -> None:
         self._cond = cond
 
-    def then(self, value: "Union[Expr, int, float]") -> "_Then":
+    def then(self, value: Expr | int | float) -> _Then:
         return _Then(self._cond, wrap(value))
 
 
@@ -2681,7 +2707,7 @@ class _Then:
         self._cond = cond
         self._value = value
 
-    def otherwise(self, value: "Union[Expr, int, float]") -> Expr:
+    def otherwise(self, value: Expr | int | float) -> Expr:
         return Select(self._cond, self._value, wrap(value))
 
 
@@ -2690,7 +2716,7 @@ def when(cond: Expr) -> _When:
     return _When(as_expr(cond))
 
 
-def if_else(cond: Expr, a: "Union[Expr, int, float]", b: "Union[Expr, int, float]") -> Expr:
+def if_else(cond: Expr, a: Expr | int | float, b: Expr | int | float) -> Expr:
     """``a`` where ``cond`` holds, else ``b``, per row (numpy ``where`` over
     expressions; the frame filter keeps the name ``where``)."""
     return Select(as_expr(cond), wrap(a), wrap(b))
@@ -2700,6 +2726,8 @@ class _FAccessor:
     """The ``F`` entry point. ``F.dur`` / ``F("args.level")`` / ``F["args.level"]``
     all build a field-leaf :class:`Expr`; use the call/subscript forms for a
     nested or non-identifier field name."""
+
+    any: Wildcard
 
     def __call__(self, name: str) -> Expr:
         return Col(name)
@@ -2718,7 +2746,7 @@ class Wildcard(Expr):
     wildcard path computes only the mean, so other reductions raise in
     ``TraceViewer.agg`` - name a field for those."""
 
-    def count(self) -> "Agg":
+    def count(self) -> Agg:
         return Agg("count", self)
 
 
@@ -2726,13 +2754,13 @@ F = _FAccessor()
 
 
 #: ``F.any`` - the numeric-args wildcard (see :class:`Wildcard`).
-F.any = Wildcard()  # type: ignore[attr-defined]
+F.any = Wildcard()
 
 
 # Serialize `expr` to a post-order AST, resolving column names to input indices
 # via `resolve` (a name -> int callable). Structural only - the C++ compiler does
 # type inference, CSE, and lowering, so every consumer gets the same engine.
-def emit_ast(expr: Expr, resolve: Callable[[str], int], ast: List[tuple]) -> None:
+def emit_ast(expr: Expr, resolve: Callable[[str], int], ast: list[tuple[object, ...]]) -> None:
     if isinstance(expr, Lit):
         if isinstance(expr.value, str):
             ast.append((_AST_LIT_S, expr.value))
@@ -2867,10 +2895,10 @@ class Agg:
     def __init__(
         self,
         op: str,
-        value: "Expr | None",
-        out: "str | None" = None,
+        value: Expr | None,
+        out: str | None = None,
         param: float = 0.0,
-        by: "Expr | None" = None,
+        by: Expr | None = None,
         interpolation: str = "linear",
     ) -> None:
         self.op = op
@@ -2880,10 +2908,10 @@ class Agg:
         self.by = by
         self.interpolation = interpolation
 
-    def alias(self, name: str) -> "Agg":
+    def alias(self, name: str) -> Agg:
         return Agg(self.op, self.value, name, self.param, self.by, self.interpolation)
 
-    def over(self, keys: "Union[str, Sequence[str]]") -> Expr:
+    def over(self, keys: str | Sequence[str]) -> Expr:
         """This aggregate per group of ``keys``, broadcast back onto every
         row of its group (polars ``col("x").sum().over("k")``, the pandas
         ``transform``): a group-by joined back on the keys, in input order."""
@@ -2939,13 +2967,17 @@ class Agg:
     def __le__(self, other: object) -> Expr:
         return self._cmp("le", other)
 
-    def __eq__(self, other: object) -> Expr:  # type: ignore[override]  # ty: ignore[incompatible-method-override]
+    def __eq__(self, other: object) -> Expr:
         return self._cmp("eq", other)
 
-    def __ne__(self, other: object) -> Expr:  # type: ignore[override]  # ty: ignore[incompatible-method-override]
+    def __ne__(self, other: object) -> Expr:
         return self._cmp("ne", other)
 
-    __hash__ = None  # type: ignore[assignment]
+    if TYPE_CHECKING:
+
+        def __hash__(self) -> NoReturn: ...
+    else:
+        __hash__ = None
 
     @property
     def out(self) -> str:
@@ -2962,11 +2994,11 @@ class Agg:
             return f"{op}_{self.value.name}"
         return self.op
 
-    def _spec(self, names: List[str]) -> tuple:
+    def _spec(self, names: list[str]) -> tuple[object, ...]:
         code = AGG_CODE[self.op]
         if self.value is None:
             return (code, None, self.out, self.param)
-        ast: List[tuple] = []
+        ast: list[tuple[object, ...]] = []
         emit_ast(self.value, names.index, ast)
         if self.op == "quantile":
             return (
@@ -2980,17 +3012,17 @@ class Agg:
             )
         if self.by is None:
             return (code, ast, self.out, self.param)
-        by_ast: List[tuple] = []
+        by_ast: list[tuple[object, ...]] = []
         emit_ast(self.by, names.index, by_ast)
         return (code, ast, self.out, self.param, by_ast)
 
 
-def _occupancy(op: str, value: Expr, resolution: "Union[int, float, str, None]") -> Agg:
+def _occupancy(op: str, value: Expr, resolution: int | float | str | None) -> Agg:
     grid = 0 if resolution is None else int(round(coerce_duration(resolution, 1e6, "resolution")))
     return Agg(op, value, param=float(grid))
 
 
-def _make_agg_method(op: str) -> "Callable[[Expr], Agg]":
+def _make_agg_method(op: str) -> Callable[[Expr], Agg]:
     def method(self: Expr) -> Agg:
         return Agg(op, self)
 
@@ -3029,14 +3061,14 @@ def _expr_kurt(self: Expr, bias: bool = True) -> Agg:
     return Agg("kurt" if bias else "kurt_unbiased", self)
 
 
-Expr.skew = _expr_skew  # type: ignore[assignment,method-assign]
+setattr(Expr, "skew", _expr_skew)
 
 
-Expr.kurt = _expr_kurt  # type: ignore[assignment,method-assign]
+setattr(Expr, "kurt", _expr_kurt)
 
 
-def collect_columns(expr: Expr) -> List[str]:
-    seen: List[str] = []
+def collect_columns(expr: Expr) -> list[str]:
+    seen: list[str] = []
 
     def walk(e: Expr) -> None:
         if isinstance(e, AggLeaf):
@@ -3107,18 +3139,18 @@ STRING_NODES = (
 )
 
 
-def has_column_op(expr: "Expr") -> bool:
+def has_column_op(expr: Expr) -> bool:
     if isinstance(expr, ColumnOpNode):
         return True
     return any(has_column_op(v) for v in vars(expr).values() if isinstance(v, Expr))
 
 
-def split_column_ops(expr: "Expr") -> "Tuple[Expr, List[Tuple[str, Expr, ColumnOp]]]":
+def split_column_ops(expr: Expr) -> tuple[Expr, list[tuple[str, Expr, ColumnOp]]]:
     """The expression with every column op replaced by a column reference
     ``__dftu_cop_<i>__``, and the ops so named in evaluation order (an op's
     argument has its own ops replaced first, so each entry's argument is a
     plain expression over columns, the earlier temporaries included)."""
-    ops: List[Tuple[str, Expr, ColumnOp]] = []
+    ops: list[tuple[str, Expr, ColumnOp]] = []
 
     def rewrite(e: Expr) -> Expr:
         if isinstance(e, (Col, Lit)):

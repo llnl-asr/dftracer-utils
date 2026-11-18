@@ -21,10 +21,8 @@ import math
 from typing import (
     TYPE_CHECKING,
     Callable,
-    Dict,
     List,
     Literal,
-    Optional,
     Sequence,
     Tuple,
     TypeVar,
@@ -33,9 +31,8 @@ from typing import (
 )
 
 from ..agg import UdafAgg
-from ..dataframe import DataFrame
-from ..expr import Agg, col
-from ..groupby import GroupBy
+from ..dataframe import DataFrame, JoinHow
+from ..expr import Agg, Expr, col
 from ..series import Series
 
 if TYPE_CHECKING:
@@ -59,7 +56,7 @@ _T = TypeVar("_T")
 # Aggregates that combine from per-partition partials, and the partial columns
 # each needs: n = non-null count, s = sum, ss = sum of squares, m = mean and
 # m2 = the sum of squared deviations from the mean (what var and std merge from).
-_NEEDS: Dict[str, Tuple[str, ...]] = {
+_NEEDS: dict[str, tuple[str, ...]] = {
     "count": ("n",),
     "sum": ("s",),
     "min": ("mn",),
@@ -85,7 +82,7 @@ _AGG_OP = {
 # Aggregates that need a whole group in one partition: exact only after a shuffle by the keys.
 _HOLISTIC = ("median", "quantile", "nunique", "set_union")
 # The combining aggregates computed straight on a whole group (the exact=True path).
-_DIRECT: Dict[str, Callable[[str], Agg]] = {
+_DIRECT: dict[str, Callable[[str], Agg]] = {
     "count": lambda c: col(c).count(),
     "sum": lambda c: col(c).sum(),
     "min": lambda c: col(c).min(),
@@ -99,7 +96,7 @@ _DIRECT: Dict[str, Callable[[str], Agg]] = {
 _TREE_THRESHOLD = 1024
 
 
-def _keys(keys: Keys) -> List[str]:
+def _keys(keys: Keys) -> list[str]:
     return [keys] if isinstance(keys, str) else list(keys)
 
 
@@ -116,7 +113,7 @@ def _pick(parts: Sequence[DataFrame], i: int) -> DataFrame:
     return parts[i]
 
 
-def _split(frame: DataFrame, keys: List[str], n: int) -> List[DataFrame]:
+def _split(frame: DataFrame, keys: list[str], n: int) -> list[DataFrame]:
     return frame.hash_partition(keys, n)
 
 
@@ -130,9 +127,9 @@ def _head(frame: DataFrame, k: int) -> DataFrame:
 
 def _with_overlap(
     fn: Callable[[DataFrame], DataFrame],
-    prev: Optional[DataFrame],
+    prev: DataFrame | None,
     frame: DataFrame,
-    nxt: Optional[DataFrame],
+    nxt: DataFrame | None,
 ) -> DataFrame:
     """``fn`` over ``prev + frame + nxt``, keeping only the rows that belong to ``frame``."""
     before = prev if prev is not None and len(prev) else None
@@ -144,29 +141,34 @@ def _with_overlap(
     return cast(DataFrame, out.iloc[lead : lead + len(frame)])
 
 
-def _join(left: DataFrame, right: DataFrame, on: Keys, how: str, kw: Dict[str, bool]) -> DataFrame:
-    return left.join(right, on=on, how=how, **kw)  # ty: ignore[invalid-argument-type]
+def _join(left: DataFrame, right: DataFrame, on: Keys, how: str, kw: dict[str, bool]) -> DataFrame:
+    return left.join(
+        right,
+        on=on,
+        how=cast("JoinHow", how),
+        nulls_equal=kw.get("nulls_equal", False),
+    )
 
 
-def _aggregate(frame: DataFrame, keys: List[str], aggs: Dict[str, Agg]) -> DataFrame:
-    return cast(GroupBy, frame.group_by(keys)).agg(**aggs)
+def _aggregate(frame: DataFrame, keys: list[str], aggs: dict[str, Agg]) -> DataFrame:
+    return frame.group_by(keys).agg(**aggs)
 
 
-def _refs(frame: DataFrame, keys: List[str], columns: List[str]) -> DataFrame:
+def _refs(frame: DataFrame, keys: list[str], columns: list[str]) -> DataFrame:
     """One partition's per-group reference values: the minimum of each column."""
     return _aggregate(frame, keys, {f"__ref_{c}": col(c).min() for c in columns})
 
 
-def _min_fold(parts: Sequence[DataFrame], keys: List[str]) -> DataFrame:
+def _min_fold(parts: Sequence[DataFrame], keys: list[str]) -> DataFrame:
     merged = _concat(parts)
     return _aggregate(merged, keys, {n: col(n).min() for n in merged.columns if n not in keys})
 
 
 def _partial(
     frame: DataFrame,
-    keys: List[str],
-    plan: Dict[str, Tuple[str, ...]],
-    refs: Optional[DataFrame] = None,
+    keys: list[str],
+    plan: dict[str, tuple[str, ...]],
+    refs: DataFrame | None = None,
 ) -> DataFrame:
     """One partition's partial aggregates, one row per group.
 
@@ -181,7 +183,7 @@ def _partial(
         src = src.with_columns(
             **{f"__d_{c}": _s(src, c) - _s(src, f"__ref_{c}") for c in moment_cols}
         )
-    aggs: Dict[str, Agg] = {}
+    aggs: dict[str, Agg] = {}
     for c, needs in plan.items():
         x = f"__d_{c}" if c in moment_cols else c
         for kind in needs:
@@ -209,13 +211,13 @@ def _partial(
     return out
 
 
-def _combine(parts: Sequence[DataFrame], keys: List[str]) -> DataFrame:
+def _combine(parts: Sequence[DataFrame], keys: list[str]) -> DataFrame:
     """Merge partial frames: counts, sums and sums of squares add; min and max fold;
     (n, mean, M2) merge as within-partition spread plus the spread of the means."""
     merged = _concat(parts)
     names = [n for n in merged.columns if n not in keys]
     moments = [n[4:] for n in names if n.startswith("__m_")]  # the columns with a mean
-    aggs: Dict[str, Agg] = {}
+    aggs: dict[str, Agg] = {}
     for n in names:
         kind = n[2:].split("_", 1)[0]
         if kind == "m":
@@ -261,9 +263,9 @@ def _combine(parts: Sequence[DataFrame], keys: List[str]) -> DataFrame:
     return out.select(*[n for n in out.columns if n not in drop])
 
 
-def _finish(partial: DataFrame, keys: List[str], specs: List[Tuple[str, str, str]]) -> DataFrame:
+def _finish(partial: DataFrame, keys: list[str], specs: list[tuple[str, str, str]]) -> DataFrame:
     """Turn the merged partials into the requested aggregates."""
-    out = {}
+    out: dict[str, Expr | Series] = {}
     for name, c, op in specs:
         n, s, ss = col(f"__n_{c}"), col(f"__s_{c}"), col(f"__ss_{c}")
         if op == "count":
@@ -286,11 +288,12 @@ def _finish(partial: DataFrame, keys: List[str], specs: List[Tuple[str, str, str
     return partial.with_columns(**out).select(*keys, *[name for name, _, _ in specs])
 
 
-def _parse(name: str, spec: AggSpec) -> Tuple[str, str, Optional[float], _Interpolation]:
+def _parse(name: str, spec: AggSpec) -> tuple[str, str, float | None, _Interpolation]:
     """One ``agg`` value as ``(column, op, param, interpolation)``: an ``Agg`` over one plain
     column, or a ``(column, op)`` pair, or ``(column, "quantile", q)`` (linear). A
     ``col(c).quantile(q)`` Agg is a quantile with its own interpolation, ``median`` is the 0.5
     quantile."""
+    interpolation: _Interpolation = "linear"
     if isinstance(spec, Agg):
         if isinstance(spec, UdafAgg):
             raise TypeError(f"agg {name!r}: the udaf {spec.name!r} does not combine from partials")
@@ -304,7 +307,6 @@ def _parse(name: str, spec: AggSpec) -> Tuple[str, str, Optional[float], _Interp
     else:
         column, op, *rest = spec
         param = rest[0] if rest else None
-        interpolation: _Interpolation = "linear"
     if column is None:
         raise ValueError(
             f"agg {name!r}: only an aggregate over one plain column combines from partials"
@@ -316,11 +318,11 @@ def _parse(name: str, spec: AggSpec) -> Tuple[str, str, Optional[float], _Interp
 
 def _exact_part(
     frame: DataFrame,
-    keys: List[str],
-    specs: List[Tuple[str, str, str, Optional[float], _Interpolation]],
+    keys: list[str],
+    specs: list[tuple[str, str, str, float | None, _Interpolation]],
 ) -> DataFrame:
     """Every requested aggregate per group over one whole-group partition."""
-    outs: List[DataFrame] = []
+    outs: list[DataFrame] = []
     direct = {n: _DIRECT[op](c) for n, c, op, _, _ in specs if op in _DIRECT}
     if direct:
         outs.append(_aggregate(frame, keys, direct))
@@ -348,11 +350,11 @@ def _exact_part(
 
 
 class _GroupBy:
-    def __init__(self, frame: "DaskFrame", keys: List[str]) -> None:
+    def __init__(self, frame: DaskFrame, keys: list[str]) -> None:
         self._frame = frame
         self._keys = keys
 
-    def agg(self, *, exact: bool = False, **named: AggSpec) -> "DaskFrame":
+    def agg(self, *, exact: bool = False, **named: AggSpec) -> DaskFrame:
         """Aggregate per group. Each value is a ``col(c).sum()``-style ``Agg`` or a
         ``(column, name)`` pair with ``name`` one of ``count``, ``sum``, ``min``, ``max``,
         ``sumsq``, ``mean``, ``var``, ``std`` (``var`` and ``std`` are the sample form); the
@@ -365,9 +367,9 @@ class _GroupBy:
         exact value here), ``(column, "nunique")`` (distinct non-null values) and
         ``(column, "set_union")``. The result then stays hash-partitioned by the keys."""
         self._frame._need_parts("group_by().agg")
-        specs: List[Tuple[str, str, str]] = []
-        full: List[Tuple[str, str, str, Optional[float], _Interpolation]] = []
-        plan: Dict[str, Tuple[str, ...]] = {}
+        specs: list[tuple[str, str, str]] = []
+        full: list[tuple[str, str, str, float | None, _Interpolation]] = []
+        plan: dict[str, tuple[str, ...]] = {}
         for name, spec in named.items():
             column, op, param, interpolation = _parse(name, spec)
             if op not in _NEEDS and op not in _HOLISTIC:
@@ -410,14 +412,12 @@ class DaskFrame:
 
     # A partition is a ``DataFrame`` in memory or a ``Future`` of one on a worker. Both are typed
     # as the frame they stand for, because Dask resolves a future before it calls a function.
-    def __init__(self, parts: List[DataFrame], client: Optional["Client"] = None) -> None:
+    def __init__(self, parts: list[DataFrame], client: Client | None = None) -> None:
         self._parts = parts
         self._client = client
 
     @classmethod
-    def from_frames(
-        cls, frames: Sequence[DataFrame], client: Optional["Client"] = None
-    ) -> "DaskFrame":
+    def from_frames(cls, frames: Sequence[DataFrame], client: Client | None = None) -> DaskFrame:
         frames = list(frames)
         parts = (
             cast(List[DataFrame], client.scatter(frames, hash=False))
@@ -428,8 +428,8 @@ class DaskFrame:
 
     @classmethod
     def from_function(
-        cls, fn: Callable[[_T], DataFrame], args: Sequence[_T], client: Optional["Client"] = None
-    ) -> "DaskFrame":
+        cls, fn: Callable[[_T], DataFrame], args: Sequence[_T], client: Client | None = None
+    ) -> DaskFrame:
         """One partition per element of ``args``: ``fn(arg)`` runs on a worker (or here)."""
         f = cls([], client)
         f._parts = [f._submit(fn, a) for a in args]
@@ -439,15 +439,15 @@ class DaskFrame:
     def npartitions(self) -> int:
         return len(self._parts)
 
-    def _submit(self, fn: Callable["_P", _R], *args: "_P.args", **kwargs: "_P.kwargs") -> _R:
+    def _submit(self, fn: Callable[_P, _R], *args: _P.args, **kwargs: _P.kwargs) -> _R:
         if self._client is None:
             return fn(*args, **kwargs)
         return cast(_R, self._client.submit(fn, *args, pure=False, **kwargs))
 
-    def _gather(self, items: List[_R]) -> List[_R]:
+    def _gather(self, items: list[_R]) -> list[_R]:
         return list(items) if self._client is None else self._client.gather(items)
 
-    def _like(self, parts: List[DataFrame]) -> "DaskFrame":
+    def _like(self, parts: list[DataFrame]) -> DaskFrame:
         return DaskFrame(parts, self._client)
 
     def close(self) -> None:
@@ -472,8 +472,8 @@ class DaskFrame:
         *,
         arrow: bool = False,
         nullable: bool = False,
-        index: "Union[str, Sequence[str], None]" = None,
-    ) -> "PandasFrame":
+        index: str | Sequence[str] | None = None,
+    ) -> PandasFrame:
         """:meth:`DataFrame.to_pandas` of the concatenated partitions."""
         return self.to_frame().to_pandas(arrow=arrow, nullable=nullable, index=index)
 
@@ -483,7 +483,7 @@ class DaskFrame:
         *args: Extra,
         overlap: int = 0,
         overlap_next: int = 0,
-    ) -> "DaskFrame":
+    ) -> DaskFrame:
         """``fn(partition, *args)`` on every partition, results in the same order.
 
         With ``overlap=k``, ``fn`` also sees the last ``k`` rows of the previous
@@ -502,8 +502,8 @@ class DaskFrame:
         # The overlap comes from the neighbouring partition only, so a window that
         # reaches past a neighbour shorter than the overlap is wrong.
         n = len(self._parts)
-        prevs: List[Optional[DataFrame]] = [None] * n
-        nexts: List[Optional[DataFrame]] = [None] * n
+        prevs: list[DataFrame | None] = [None] * n
+        nexts: list[DataFrame | None] = [None] * n
         if overlap:
             prevs[1:] = [self._submit(_tail, p, overlap) for p in self._parts[:-1]]
         if overlap_next:
@@ -522,7 +522,7 @@ class DaskFrame:
     def reduce(
         self,
         partial: Callable[[DataFrame], _R],
-        combine: Callable[[List[_R]], _R],
+        combine: Callable[[list[_R]], _R],
         split_every: int = 8,
     ) -> _R:
         """``partial`` on every partition, then ``combine`` on groups of up to
@@ -542,9 +542,7 @@ class DaskFrame:
     def group_by(self, keys: Keys) -> _GroupBy:
         return _GroupBy(self, _keys(keys))
 
-    def shuffle(
-        self, keys: Keys, n: Optional[int] = None, stages: Optional[int] = None
-    ) -> "DaskFrame":
+    def shuffle(self, keys: Keys, n: int | None = None, stages: int | None = None) -> DaskFrame:
         """Hash-partition by ``keys`` into ``n`` partitions (default: as many as now), so all
         rows of a key are in one partition. A key goes to the same partition in every process,
         and in both forms below.
@@ -583,12 +581,12 @@ class DaskFrame:
 
     def join(
         self,
-        other: Union["DaskFrame", DataFrame],
+        other: DaskFrame | DataFrame,
         on: Keys,
         how: str = "inner",
         strategy: str = "auto",
-        nulls_equal: Optional[bool] = None,
-    ) -> "DaskFrame":
+        nulls_equal: bool | None = None,
+    ) -> DaskFrame:
         """Join with ``other`` on ``on``. ``strategy="broadcast"`` copies ``other`` to every
         partition (``how`` inner or left only: an unmatched row of the broadcast side would
         repeat on every partition); ``"shuffle"`` hashes both sides by ``on`` and joins matching
@@ -603,7 +601,7 @@ class DaskFrame:
             other._need_parts("join (the other frame)")
         if strategy not in ("auto", "broadcast", "shuffle"):
             raise ValueError(f"unknown join strategy {strategy!r}")
-        kw: Dict[str, bool] = {}
+        kw: dict[str, bool] = {}
         if nulls_equal is not None:
             if "nulls_equal" not in inspect.signature(DataFrame.join).parameters:
                 raise NotImplementedError(

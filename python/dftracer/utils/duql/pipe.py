@@ -5,11 +5,9 @@ from __future__ import annotations
 
 from typing import (
     TYPE_CHECKING,
-    Any,
-    Dict,
     Iterator,
     Literal,
-    Optional,
+    Mapping,
     Sequence,
     Tuple,
     Union,
@@ -19,22 +17,24 @@ from ..dataframe import DataFrame
 from ..dftracer_utils_ext import duql_canonical, duql_load_path
 from ..expr import Expr, duql_string
 from ..trace.viewer import TraceViewer
-from .col import Col, Named, ParamValue, SortKey, fn, value_text
+from .col import Col, Item, Named, ParamValue, SortKey, Value, fn, value_text
 
 if TYPE_CHECKING:
+    from ..dftracer_utils_ext import Scalar
+
     pass
 
 
-def sub(pipeline: "Pipe") -> Col:
+def sub(pipeline: Pipe) -> Col:
     """The scalar sub-query ``(from ...)``: the only cell of ``pipeline``."""
     return Col("(" + pipeline.inline() + ")")
 
 
-def _path(p: Union[str, Col]) -> str:
+def _path(p: str | Col) -> str:
     return p.raw() if isinstance(p, Col) else p
 
 
-def _item(item: object) -> str:
+def _item(item: Item) -> str:
     if isinstance(item, Named):
         return item.text()
     if isinstance(item, str):
@@ -44,19 +44,19 @@ def _item(item: object) -> str:
     raise TypeError("an item is a path string, a Col or a Named (col.alias(name))")
 
 
-def _items(items: Sequence[object], named: Dict[str, object]) -> str:
+def _items(items: Sequence[Item], named: Mapping[str, Value]) -> str:
     parts = [_item(i) for i in items]
     parts += [Named(k, v).text() for k, v in named.items()]
     return ", ".join(parts)
 
 
-def _block(fields: Dict[str, object], unnamed: Sequence[object] = ()) -> str:
+def _block(fields: Mapping[str, Value], unnamed: Sequence[Value] = ()) -> str:
     parts = [value_text(v) for v in unnamed]
     parts += [Named(k, v).text() for k, v in fields.items()]
     return "{ " + ", ".join(parts) + " }" if parts else "{ }"
 
 
-def _sort_keys(keys: Sequence[Union[str, Col, SortKey]]) -> str:
+def _sort_keys(keys: Sequence[str | Col | SortKey]) -> str:
     return ", ".join(k.text() if isinstance(k, SortKey) else _path(k) for k in keys)
 
 
@@ -79,12 +79,12 @@ class Pipe:
 
     def __init__(self) -> None:
         self._from = ""
-        self._decls: Tuple[str, ...] = ()
-        self._stages: Tuple[str, ...] = ()
-        self._params: Dict[str, ParamValue] = {}
-        self._file: Optional[Union[str, Col]] = None
+        self._decls: tuple[str, ...] = ()
+        self._stages: tuple[str, ...] = ()
+        self._params: dict[str, ParamValue] = {}
+        self._file: str | Col | None = None
 
-    def _copy(self) -> "Pipe":
+    def _copy(self) -> Pipe:
         p = Pipe()
         p._from = self._from
         p._decls = self._decls
@@ -93,12 +93,12 @@ class Pipe:
         p._file = self._file
         return p
 
-    def _stage(self, text: str) -> "Pipe":
+    def _stage(self, text: str) -> Pipe:
         p = self._copy()
         p._stages = (*self._stages, text)
         return p
 
-    def _decl(self, text: str) -> "Pipe":
+    def _decl(self, text: str) -> Pipe:
         p = self._copy()
         p._decls = (*self._decls, text)
         return p
@@ -119,28 +119,28 @@ class Pipe:
     def __repr__(self) -> str:
         return f"Pipe({self.raw()!r})"
 
-    def bind(self, **params: ParamValue) -> "Pipe":
+    def bind(self, **params: ParamValue) -> Pipe:
         """Binds ``$name`` parameters; the values never enter the text."""
         p = self._copy()
         p._params.update(params)
         return p
 
     @property
-    def params(self) -> Dict[str, ParamValue]:
+    def params(self) -> dict[str, ParamValue]:
         return dict(self._params)
 
-    def let(self, name: str, pipeline: "Pipe") -> "Pipe":
+    def let(self, name: str, pipeline: Pipe) -> Pipe:
         """``let name = pipeline;`` before the query."""
         return self._decl(f"let {name} = {pipeline.inline()}")
 
-    def define(self, name: str, body: object, params: Sequence[str] = ()) -> "Pipe":
+    def define(self, name: str, body: Pipe | Value, params: Sequence[str] = ()) -> Pipe:
         """The macro ``def name(params) = body;`` before the query. A ``Pipe``
         body without a source defines a pipeline macro."""
         head = f"{name}({', '.join(params)})" if params else name
         text = body.inline() if isinstance(body, Pipe) else value_text(body)
         return self._decl(f"def {head} = {text}")
 
-    def where(self, condition: Union[Col, Expr]) -> "Pipe":
+    def where(self, condition: Col | Expr) -> Pipe:
         """Keeps the rows where ``condition`` holds; a columnar ``Expr``
         (``F("dur") > 5``) is taken as its duql filter."""
         text = (
@@ -150,36 +150,36 @@ class Pipe:
         )
         return self._stage("where " + text)
 
-    def derive(self, **fields: object) -> "Pipe":
+    def derive(self, **fields: Value) -> Pipe:
         return self._stage("derive " + _items((), fields))
 
-    def select(self, *items: object, **named: object) -> "Pipe":
+    def select(self, *items: Item, **named: Value) -> Pipe:
         return self._stage("select " + _items(items, named))
 
-    def drop(self, *paths: Union[str, Col]) -> "Pipe":
+    def drop(self, *paths: str | Col) -> Pipe:
         return self._stage("drop " + ", ".join(_path(p) for p in paths))
 
-    def rename(self, **new_to_old: Union[str, Col]) -> "Pipe":
+    def rename(self, **new_to_old: str | Col) -> Pipe:
         """``rename new = old``: ``rename(n="name")``."""
         return self._stage(
             "rename " + ", ".join(f"{k} = {_path(v)}" for k, v in new_to_old.items())
         )
 
-    def distinct(self, *keys: object) -> "Pipe":
+    def distinct(self, *keys: Item) -> Pipe:
         return self._stage("distinct " + ", ".join(_item(k) for k in keys) if keys else "distinct")
 
-    def group(self, *keys: object, **aggregates: object) -> "Pipe":
+    def group(self, *keys: Item, **aggregates: Value) -> Pipe:
         head = _items(keys, {}) + " " if keys else ""
         return self._stage("group " + head + _block(aggregates))
 
-    def agg(self, *unnamed: object, **aggregates: object) -> "Pipe":
+    def agg(self, *unnamed: Value, **aggregates: Value) -> Pipe:
         """``agg { ... }``; a positional aggregate is named from its text,
         so ``agg(c("dur").sum())`` gives the column ``sum_dur``."""
         return self._stage("agg " + _block(aggregates, unnamed))
 
     def window(
-        self, *partition: object, sort: Sequence[Union[str, Col, SortKey]] = (), **fields: object
-    ) -> "Pipe":
+        self, *partition: Item, sort: Sequence[str | Col | SortKey] = (), **fields: Value
+    ) -> Pipe:
         text = "window "
         if partition:
             text += _items(partition, {}) + " "
@@ -189,11 +189,11 @@ class Pipe:
 
     def pivot(
         self,
-        key: object,
-        values: Sequence[object] = (),
+        key: Item,
+        values: Sequence[Value] = (),
         labels: Sequence[str] = (),
-        **aggregates: object,
-    ) -> "Pipe":
+        **aggregates: Value,
+    ) -> Pipe:
         """``pivot key in [v as label, ...] { ... }``; ``labels`` pairs with
         ``values``, and an empty label keeps the default ``agg.value`` name."""
         text = "pivot " + _item(key)
@@ -205,19 +205,19 @@ class Pipe:
             text += " in [" + ", ".join(parts) + "]"
         return self._stage(text + " " + _block(aggregates))
 
-    def unpivot(self, *paths: Union[str, Col], key: str, value: str) -> "Pipe":
+    def unpivot(self, *paths: str | Col, key: str, value: str) -> Pipe:
         return self._stage(f"unpivot {', '.join(_path(p) for p in paths)} as {key}, {value}")
 
-    def sort(self, *keys: Union[str, Col, SortKey]) -> "Pipe":
+    def sort(self, *keys: str | Col | SortKey) -> Pipe:
         """Sorts by ``keys``; ``-c("x")`` or ``c("x").desc()`` descends."""
         return self._stage("sort " + _sort_keys(keys))
 
     def take(
         self,
-        n: Union[int, Col],
-        by: Sequence[object] = (),
-        sort: Sequence[Union[str, Col, SortKey]] = (),
-    ) -> "Pipe":
+        n: int | Col,
+        by: Sequence[Item] = (),
+        sort: Sequence[str | Col | SortKey] = (),
+    ) -> Pipe:
         text = "take " + value_text(n)
         if by:
             text += " by " + ", ".join(_item(b) for b in by)
@@ -225,19 +225,19 @@ class Pipe:
             text += " sort " + _sort_keys(sort)
         return self._stage(text)
 
-    def take_range(self, first: Union[int, Col], last: Union[int, Col]) -> "Pipe":
+    def take_range(self, first: int | Col, last: int | Col) -> Pipe:
         """``take first..last``: rows ``first`` to ``last``, 1-based and inclusive."""
         return self._stage(f"take {value_text(first)}..{value_text(last)}")
 
-    def skip(self, n: Union[int, Col]) -> "Pipe":
+    def skip(self, n: int | Col) -> Pipe:
         return self._stage("skip " + value_text(n))
 
     def sample(
         self,
-        amount: Union[int, float, Col],
+        amount: int | float | Col,
         percent: bool = False,
-        seed: Optional[Union[int, Col]] = None,
-    ) -> "Pipe":
+        seed: int | Col | None = None,
+    ) -> Pipe:
         text = "sample " + value_text(amount) + ("%" if percent else "")
         if seed is not None:
             text += f" seed {value_text(seed)}"
@@ -245,11 +245,11 @@ class Pipe:
 
     def expand(
         self,
-        path: Union[str, Col],
-        as_: Optional[str] = None,
-        with_index: Optional[str] = None,
+        path: str | Col,
+        as_: str | None = None,
+        with_index: str | None = None,
         keep_empty: bool = False,
-    ) -> "Pipe":
+    ) -> Pipe:
         text = "expand " + _path(path)
         if as_:
             text += " as " + as_
@@ -259,21 +259,21 @@ class Pipe:
             text += " keep_empty"
         return self._stage(text)
 
-    def parse(self, col: Union[str, Col], pattern: object) -> "Pipe":
+    def parse(self, col: str | Col, pattern: str | Col) -> Pipe:
         """``parse col ~ pattern``; ``pattern`` is a string or ``param("p")``
         bound to a string, and its named groups become columns."""
         return self._stage(f"parse {_path(col)} ~ {value_text(pattern)}")
 
-    def _side(self, side: "Union[Pipe, str]") -> str:
+    def _side(self, side: Pipe | str) -> str:
         return side if isinstance(side, str) else f"({side.inline()})"
 
     def lookup(
         self,
-        side: "Union[Pipe, str]",
+        side: Pipe | str,
         on: Sequence[JoinKey],
-        into: Optional[str] = None,
+        into: str | None = None,
         how: Literal["left", "inner", "anti"] = "left",
-    ) -> "Pipe":
+    ) -> Pipe:
         """``lookup side on k, ...``; ``side`` is a row-set name or a Pipe with
         a source. A key is a path, a Col, or a pair ``(this_side, side_key)``
         for ``a == b``. ``how="inner"`` drops rows with no match; ``"anti"``
@@ -289,12 +289,12 @@ class Pipe:
 
     def lookup_asof(
         self,
-        side: "Union[Pipe, str]",
+        side: Pipe | str,
         on: Sequence[JoinKey],
         time: JoinKey,
         direction: Literal["backward", "forward", "nearest"] = "backward",
-        within: Optional[object] = None,
-    ) -> "Pipe":
+        within: int | float | Col | None = None,
+    ) -> Pipe:
         text = f"lookup {self._side(side)} on {', '.join(_join_key(k) for k in on)} asof {_join_key(time)}"
         if direction != "backward":
             text += " " + direction
@@ -303,22 +303,22 @@ class Pipe:
         return self._stage(text)
 
     def lookup_overlap(
-        self, side: "Union[Pipe, str]", on: Sequence[JoinKey], into: Optional[str] = None
-    ) -> "Pipe":
+        self, side: Pipe | str, on: Sequence[JoinKey], into: str | None = None
+    ) -> Pipe:
         text = f"lookup {self._side(side)} on {', '.join(_join_key(k) for k in on)} overlap"
         return self._stage(text + (f" into {into}" if into else ""))
 
-    def union(self, other: "Union[Pipe, str]") -> "Pipe":
+    def union(self, other: Pipe | str) -> Pipe:
         """Appends the rows of ``other``: a Pipe with a source, or the name of
         a row set or ``let``."""
         if isinstance(other, str):
             return self._stage("union " + other)
         return self._stage(f"union ({other.inline()})")
 
-    def call(self, call: Col) -> "Pipe":
+    def call(self, call: Col) -> Pipe:
         return self._stage("call " + call.raw())
 
-    def sink(self, name: str, **options: str) -> "Pipe":
+    def sink(self, name: str, **options: str) -> Pipe:
         """Ends the pipeline by writing its rows to the sink ``name``, e.g.
         ``sink("csv", path="out.csv")``. Every option is a string: the sink
         reads them as text. A sink is the last stage of a pipeline, so a stage
@@ -332,7 +332,7 @@ class Pipe:
             text += f" {key} {duql_string(value)}"
         return self._stage(text)
 
-    def time_range(self, low: object = None, high: object = None, overlap: bool = False) -> "Pipe":
+    def time_range(self, low: Value = None, high: Value = None, overlap: bool = False) -> Pipe:
         """``time_range low .. high``; leave a bound out for an open side."""
         if low is None and high is None:
             raise ValueError("time_range needs a low or a high bound")
@@ -341,24 +341,24 @@ class Pipe:
             text += " " + value_text(high)
         return self._stage(text + (" overlap" if overlap else ""))
 
-    def use(self, name: str, *args: object) -> "Pipe":
+    def use(self, name: str, *args: Value) -> Pipe:
         """A stage that calls the pipeline macro ``name`` with ``args``."""
         return self._stage(f"{name}({', '.join(value_text(a) for a in args)})")
 
-    def call_tree(self) -> "Pipe":
+    def call_tree(self) -> Pipe:
         return self._stage("call_tree")
 
     def bucket(
         self,
-        width: object,
+        width: int | float | Col,
         fill: bool = False,
-        as_: Optional[str] = None,
+        as_: str | None = None,
         mode: str = "zero",
-        low: Optional[object] = None,
-        high: Optional[object] = None,
-        every: Optional[object] = None,
-        at: Optional[object] = None,
-    ) -> "Pipe":
+        low: Value = None,
+        high: Value = None,
+        every: int | float | Col | None = None,
+        at: Value = None,
+    ) -> Pipe:
         """``bucket width [every e] [at t] [fill [mode] [from low to high]] [as name]``; ``mode`` is
         ``"zero"``, ``"forward"`` or ``"linear"``, and a mode or range needs ``fill``."""
         if mode not in ("zero", "forward", "linear"):
@@ -381,8 +381,12 @@ class Pipe:
         return self._stage(text + (f" as {as_}" if as_ else ""))
 
     def session(
-        self, *keys: object, gap: object, max: Optional[object] = None, as_: Optional[str] = None
-    ) -> "Pipe":
+        self,
+        *keys: Item,
+        gap: int | float | Col,
+        max: int | float | Col | None = None,
+        as_: str | None = None,
+    ) -> Pipe:
         text = "session "
         if keys:
             text += _items(keys, {}) + " "
@@ -393,11 +397,11 @@ class Pipe:
             text += " as " + as_
         return self._stage(text)
 
-    def on(self, viewer: "TraceViewer") -> "TraceViewer":
+    def on(self, viewer: TraceViewer) -> TraceViewer:
         """The query applied to ``viewer`` with the bound parameters."""
         return viewer.duql(self.raw(), **self._params)
 
-    def _viewer(self) -> "TraceViewer":
+    def _viewer(self) -> TraceViewer:
         f = self._file
         if isinstance(f, Col):
             bound = self._params.get(f.raw()[1:])
@@ -409,11 +413,11 @@ class Pipe:
             )
         return TraceViewer(f)
 
-    def collect(self) -> "DataFrame":
+    def collect(self) -> DataFrame:
         """Runs the query on its source file."""
         return self.on(self._viewer()).collect()
 
-    def stream(self, batch_size: int = 65536) -> "Iterator[DataFrame]":
+    def stream(self, batch_size: int = 65536) -> Iterator[DataFrame]:
         return self.on(self._viewer()).stream(batch_size)
 
     def count(self) -> int:
@@ -422,7 +426,7 @@ class Pipe:
         n = got["__rows"][0]
         return n if isinstance(n, int) else 0
 
-    def first(self) -> Optional[Dict[str, Any]]:
+    def first(self) -> dict[str, Scalar | None] | None:
         """The first row as a dict, or None when there is none."""
         got = self.take(1).collect().to_dict()
         if not got or not next(iter(got.values())):
@@ -441,14 +445,14 @@ class Source:
     __slots__ = ("_members",)
 
     def __init__(self) -> None:
-        self._members: Tuple[str, ...] = ()
+        self._members: tuple[str, ...] = ()
 
-    def _add(self, text: str) -> "Source":
+    def _add(self, text: str) -> Source:
         s = Source()
         s._members = (*self._members, text)
         return s
 
-    def rowset(self, name: str, pipeline: "Pipe") -> "Source":
+    def rowset(self, name: str, pipeline: Pipe) -> Source:
         """``name = pipeline``. Raises ValueError when the pipeline starts
         with a source."""
         body = pipeline.inline()
@@ -456,12 +460,12 @@ class Source:
             raise ValueError("a source row set cannot start with from")
         return self._add(f"{name} = {body}")
 
-    def define(self, name: str, body: object, params: Sequence[str] = ()) -> "Source":
+    def define(self, name: str, body: Pipe | Value, params: Sequence[str] = ()) -> Source:
         """``def name(params) = body``; a ``Pipe`` body defines a pipeline
         macro."""
         return self._add(Pipe().define(name, body, params).raw()[:-2])
 
-    def flag(self, name: str, value: bool) -> "Source":
+    def flag(self, name: str, value: bool) -> Source:
         """``def name = true`` or ``def name = false``."""
         return self._add(f"def {name} = {'true' if value else 'false'}")
 
@@ -477,7 +481,7 @@ class Source:
         return f"Source({self.text()!r})"
 
 
-def source(*files: Union[str, Col]) -> Pipe:
+def source(*files: str | Col) -> Pipe:
     """A query over trace files: ``from "a.pfw.gz", "b.pfw.gz"``, or over the
     file bound to a parameter: ``source(param("f"))``."""
     if not files:

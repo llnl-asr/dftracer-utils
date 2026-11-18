@@ -13,7 +13,7 @@ functions below are the polars top-level ones that map onto engine ops.
 
 from __future__ import annotations
 
-from typing import Any, Optional, Sequence, cast, overload
+from typing import Literal, Sequence, cast, overload
 
 from .dataframe import DataFrame
 from .expr import Expr, col, lit
@@ -33,28 +33,33 @@ __all__ = [
 ]
 
 
-def read_parquet(path: str, columns: Optional[Sequence[str]] = None) -> DataFrame:
+def read_parquet(path: str, columns: Sequence[str] | None = None) -> DataFrame:
     """Read a Parquet file into a :class:`DataFrame`."""
     return DataFrame.from_parquet(path, columns=columns)
 
 
-def scan_parquet(path: str, columns: Optional[Sequence[str]] = None) -> LazyFrame:
+def scan_parquet(path: str, columns: Sequence[str] | None = None) -> LazyFrame:
     """A :class:`LazyFrame` over a Parquet file. The file is read when the plan
     is built; the ops after it are deferred."""
     return DataFrame.from_parquet(path, columns=columns).lazy()
 
 
 @overload
-def concat(items: Sequence[DataFrame], how: str = "vertical") -> DataFrame: ...
-@overload
-def concat(items: Sequence[LazyFrame], how: str = "vertical") -> LazyFrame: ...
 def concat(
-    items: Sequence[DataFrame] | Sequence[LazyFrame], how: str = "vertical"
+    items: Sequence[DataFrame], how: Literal["vertical", "diagonal"] = "vertical"
+) -> DataFrame: ...
+@overload
+def concat(
+    items: Sequence[LazyFrame], how: Literal["vertical", "diagonal"] = "vertical"
+) -> LazyFrame: ...
+def concat(
+    items: Sequence[DataFrame] | Sequence[LazyFrame],
+    how: Literal["vertical", "diagonal"] = "vertical",
 ) -> DataFrame | LazyFrame:
     """Vertically concatenate frames. ``how="diagonal"`` unions the columns,
     null-filling those absent from a part. A sequence of ``LazyFrame`` gives a
     ``LazyFrame`` (vertical only): each plan streams in turn."""
-    frames = list(items)
+    frames: list[DataFrame | LazyFrame] = list(items)
     if not frames:
         raise ValueError("concat() needs at least one frame")
     if how not in ("vertical", "diagonal"):
@@ -64,4 +69,4 @@ def concat(
         if how != "vertical":
             raise ValueError("LazyFrame concat is vertical only")
         return first.concat(*cast(Sequence[LazyFrame], frames[1:]))
-    return first.concat(*cast(Sequence[DataFrame], frames[1:]), how=cast(Any, how))
+    return first.concat(*cast(Sequence[DataFrame], frames[1:]), how=how)

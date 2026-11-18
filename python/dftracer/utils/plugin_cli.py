@@ -7,7 +7,6 @@ import argparse
 import importlib
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from . import _build, jit
 from .jit.package import build, is_jit_plugin, provided_names
@@ -170,9 +169,9 @@ def _render_header(cls: type) -> str:
     attr = next(iter(provided.keys()))
     stem = stem[: -(len(attr) + 1)]
     guard = _mangle(stem) + "_H"
-    macros: Dict[str, str] = {}
+    macros: dict[str, str] = {}
     lines = []
-    for attr, qid in sorted(provided.items(), key=lambda kv: kv[1]):
+    for _attr, qid in sorted(provided.items(), key=lambda kv: kv[1]):
         macro = _mangle(qid)
         if macro in macros and macros[macro] != qid:
             raise ValueError(
@@ -264,7 +263,7 @@ def _cmd_cflags(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="dftracer_plugin", description="Scaffold and build native DFTracer plugins."
     )

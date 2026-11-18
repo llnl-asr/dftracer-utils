@@ -25,7 +25,7 @@ from __future__ import annotations
 import ast
 import builtins
 import math
-from typing import Callable, Dict, List, NoReturn, Optional, Set, Tuple
+from typing import Callable, NoReturn
 
 from .. import _build
 from .._c_text import c_str_literal
@@ -205,17 +205,17 @@ class _Compiler:
     def __init__(self, fn: Callable[..., object], src: Source) -> None:
         self.fn = fn
         self.src = src
-        self.vars: Dict[str, int] = {}
-        self.params: List[Tuple[str, int]] = []
+        self.vars: dict[str, int] = {}
+        self.params: list[tuple[str, int]] = []
         self.ret = FLOAT
 
-    def reject(self, what: str, node: "Optional[ast.AST]") -> NoReturn:
+    def reject(self, what: str, node: ast.AST | None) -> NoReturn:
         raise self.src.error(f"unsupported in @dft.udf: {what}{_BATCH_HINT}", node)
 
-    def fail(self, reason: str, node: "Optional[ast.AST]") -> NoReturn:
+    def fail(self, reason: str, node: ast.AST | None) -> NoReturn:
         raise self.src.error(reason, node)
 
-    def annotation(self, node: "Optional[ast.expr]", where: str, at: ast.AST) -> int:
+    def annotation(self, node: ast.expr | None, where: str, at: ast.AST) -> int:
         if isinstance(node, ast.Name) and node.id in _TYPE_NAMES:
             return _TYPE_NAMES[node.id]
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -237,7 +237,7 @@ class _Compiler:
         names = {BOOL: "bool", INT: "int", FLOAT: "float"}
         self.fail(f"a {names[have]} value cannot be used where {names[want]} is needed", node)
 
-    def expr(self, node: ast.expr, ctx: "Set[str]") -> Tuple[str, int]:
+    def expr(self, node: ast.expr, ctx: set[str]) -> tuple[str, int]:
         if isinstance(node, ast.Constant):
             v = node.value
             if isinstance(v, bool):
@@ -291,7 +291,7 @@ class _Compiler:
             return "INFINITY" if v > 0 else "(-INFINITY)"
         return repr(v)
 
-    def name(self, node: ast.Name, ctx: "Set[str]") -> Tuple[str, int]:
+    def name(self, node: ast.Name, ctx: set[str]) -> tuple[str, int]:
         ident = node.id
         if ident in self.vars:
             if ident not in ctx:
@@ -327,12 +327,12 @@ class _Compiler:
             and self.free_name(node.value.id) is math
         )
 
-    def attribute(self, node: ast.Attribute) -> Tuple[str, int]:
+    def attribute(self, node: ast.Attribute) -> tuple[str, int]:
         if self.is_math(node) and node.attr in _MATH_CONST:
             return self.float_literal(_MATH_CONST[node.attr]), FLOAT
         self.reject("an attribute access", node)
 
-    def condition(self, node: ast.expr, ctx: "Set[str]") -> str:
+    def condition(self, node: ast.expr, ctx: set[str]) -> str:
         code, ty = self.expr(node, ctx)
         if ty != BOOL:
             self.fail(
@@ -341,7 +341,7 @@ class _Compiler:
             )
         return code
 
-    def unary(self, node: ast.UnaryOp, ctx: "Set[str]") -> Tuple[str, int]:
+    def unary(self, node: ast.UnaryOp, ctx: set[str]) -> tuple[str, int]:
         code, ty = self.expr(node.operand, ctx)
         if isinstance(node.op, ast.Not):
             if ty != BOOL:
@@ -355,7 +355,7 @@ class _Compiler:
             return f"i_neg({self.coerce(code, ty, INT, node)})", INT
         self.reject("this unary operator", node)
 
-    def binop(self, node: ast.BinOp, ctx: "Set[str]") -> Tuple[str, int]:
+    def binop(self, node: ast.BinOp, ctx: set[str]) -> tuple[str, int]:
         a, ta = self.expr(node.left, ctx)
         b, tb = self.expr(node.right, ctx)
         op = node.op
@@ -404,7 +404,7 @@ class _Compiler:
             )
         self.reject("this binary operator", node)
 
-    def compare(self, node: ast.Compare, ctx: "Set[str]") -> Tuple[str, int]:
+    def compare(self, node: ast.Compare, ctx: set[str]) -> tuple[str, int]:
         operands = [self.expr(node.left, ctx)] + [self.expr(c, ctx) for c in node.comparators]
         nodes = [node.left] + list(node.comparators)
         parts = []
@@ -419,7 +419,7 @@ class _Compiler:
             parts.append(f"({a} {sym} {b})")
         return "(" + " && ".join(parts) + ")", BOOL
 
-    def call(self, node: ast.Call, ctx: "Set[str]") -> Tuple[str, int]:
+    def call(self, node: ast.Call, ctx: set[str]) -> tuple[str, int]:
         if node.keywords:
             self.reject("a keyword argument", node)
         func = node.func
@@ -457,9 +457,7 @@ class _Compiler:
             return f"(({args[0][0]}) != 0)", BOOL
         self.reject(f"the call {what}() with {n} argument(s)", node)
 
-    def math_call(
-        self, name: str, args: "List[Tuple[str, int]]", node: ast.Call
-    ) -> Tuple[str, int]:
+    def math_call(self, name: str, args: list[tuple[str, int]], node: ast.Call) -> tuple[str, int]:
         flt = [self.coerce(c, t, FLOAT, node) for c, t in args]
         if name in _MATH_FLOAT and len(args) == 1:
             return _MATH_FLOAT[name].format(*flt), FLOAT
@@ -483,9 +481,9 @@ class _Compiler:
             )
 
     def block(
-        self, body: "List[ast.stmt]", ctx: "Set[str]", depth: int
-    ) -> Tuple[List[str], "Set[str]", bool]:
-        lines: List[str] = []
+        self, body: list[ast.stmt], ctx: set[str], depth: int
+    ) -> tuple[list[str], set[str], bool]:
+        lines: list[str] = []
         pad = "    " * depth
         returned = False
         for stmt in body:
@@ -525,7 +523,7 @@ class _Compiler:
                 self.reject(f"the statement {type(stmt).__name__}", stmt)
         return lines, ctx, returned
 
-    def assign(self, stmt: ast.stmt, ctx: "Set[str]", pad: str) -> List[str]:
+    def assign(self, stmt: ast.stmt, ctx: set[str], pad: str) -> list[str]:
         if isinstance(stmt, ast.Assign):
             if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
                 self.reject("an assignment to anything but one name", stmt)
@@ -557,11 +555,11 @@ class _Compiler:
         ctx.add(target.id)
         return [f"{pad}v_{target.id} = {code};"]
 
-    def compile(self, node: ast.FunctionDef) -> Tuple[str, "List[Tuple[str, int]]", int]:
+    def compile(self, node: ast.FunctionDef) -> tuple[str, list[tuple[str, int]], int]:
         args = node.args
         if args.vararg or args.kwarg or args.kwonlyargs or args.defaults or args.kw_defaults:
             self.reject("*args, **kwargs, keyword-only arguments or defaults", node)
-        ctx: Set[str] = set()
+        ctx: set[str] = set()
         for a in list(args.posonlyargs) + list(args.args):
             ty = self.annotation(a.annotation, f"the argument '{a.arg}'", a)
             self.params.append((a.arg, ty))
@@ -587,7 +585,7 @@ class _Compiler:
         return text, self.params, self.ret
 
 
-def _emit(name: str, row_fn: str, params: "List[Tuple[str, int]]", ret: int, volatile: bool) -> str:
+def _emit(name: str, row_fn: str, params: list[tuple[str, int]], ret: int, volatile: bool) -> str:
     n = len(params)
     natural = {BOOL: "DFTU_TYPE_BOOL", INT: "DFTU_TYPE_INT64", FLOAT: "DFTU_TYPE_FLOAT64"}
     lit = c_str_literal(name)
@@ -632,7 +630,7 @@ def _emit(name: str, row_fn: str, params: "List[Tuple[str, int]]", ret: int, vol
     gen_args = []
     null_decl = []
     null_conds = []
-    range_scan: List[str] = []
+    range_scan: list[str] = []
     for i, (_, t) in enumerate(params):
         arg_decl.append(f"    const void* d{i} = dftu_series_data(args[{i}]);")
         null_decl.append(

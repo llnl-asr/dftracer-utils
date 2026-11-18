@@ -9,7 +9,7 @@ caller sees, and the native side prefixes the UDF name.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable
 
 
 class _Column:
@@ -26,7 +26,7 @@ class _Column:
 
     def __init__(self, keep: object, ptr: int, typestr: str, count: int) -> None:
         self.keep = keep
-        iface: Dict[str, Any] = {
+        iface: dict[str, Any] = {
             "version": 3,
             "shape": (count,),
             "typestr": typestr,
@@ -36,7 +36,7 @@ class _Column:
 
 
 def call(
-    fn: Callable[..., object], rows: int, returns: str, specs: "List[Tuple[str, int, object]]"
+    fn: Callable[..., object], rows: int, returns: str, specs: list[tuple[str, int, object]]
 ) -> object:
     """Run ``fn`` over one batch of ``rows`` rows and return the result as a
     contiguous buffer: ``returns`` elements, or bit-packed bits (least

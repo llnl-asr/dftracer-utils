@@ -17,18 +17,18 @@ naming the first op it cannot take.
 from __future__ import annotations
 
 import json
+import os
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
     Dict,
+    Generic,
     Iterator,
-    List,
     Literal,
+    Mapping,
     NamedTuple,
-    Optional,
     Sequence,
-    Type,
     TypeVar,
     Union,
     cast,
@@ -39,22 +39,25 @@ from .. import dftracer_utils_ext as _ext
 from .._aliases import install as _install_aliases
 from ..dataframe import DataFrame, PhaseArg, TimeUnitArg
 from ..enums import coerce_bytes, coerce_duration
-from ..expr import Agg, Expr
+from ..expr import Agg, Expr, Named, SelectItem
 from ..lazyframe import BoundColumn, LazyFrame, LazyResult, collect_all
-from ..schemas import RecordSchema, schema_id
+from ..schemas import JsonValue, RecordSchema, schema_id
 from .lazy import LazyOps
 from .partials import agg_specs, export_stats, partial_bytes, stats_row
 
 _S = TypeVar("_S", bound=RecordSchema)
+T = TypeVar("T")
 
 # The native calls that `columns` makes, bound once: it is read in loops.
 _scan_columns = _ext.TraceViewer.columns
 _plan_columns = _ext.LazyFrame.schema
 
 if TYPE_CHECKING:
+    from ..dftracer_utils_ext import Scalar
     from ..enums import DType
     from ..plugins import Plugins
     from ..runtime import Runtime
+    from ..schemas import JsonValue
 
 
 DuqlParam = Union[bool, int, float, str, Sequence[Union[bool, int, float, str]]]
@@ -94,18 +97,19 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
     # the viewer, and __init__ has nothing left to do.
     def __new__(
         cls,
-        files: Any,
-        index_dir: Optional[str] = None,
-        runtime: "Optional[Runtime]" = None,
-        record_schema: "Union[str, Type[RecordSchema], None]" = None,
-    ) -> "TraceViewer":
+        files: str | os.PathLike[str] | Sequence[str | os.PathLike[str]] | _ext.TraceViewer,
+        index_dir: str | None = None,
+        runtime: Runtime | None = None,
+        record_schema: str | type[RecordSchema] | None = None,
+    ) -> TraceViewer:
         if cls is not TraceViewer:
             raise TypeError(
                 "TraceViewer cannot be subclassed: the native calls build the class bound by "
                 "_bind_types, so an instance of a subclass would come back as a TraceViewer"
             )
+        out: TraceViewer
         if isinstance(files, _ext.TraceViewer):
-            out = files
+            out = cast("TraceViewer", files)
         else:
             out = _ext.TraceViewer.__new__(TraceViewer)
             _ext.TraceViewer.__init__(out, files, index_dir)
@@ -117,23 +121,23 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
 
     def __init__(
         self,
-        files: Any,
-        index_dir: Optional[str] = None,
-        runtime: "Optional[Runtime]" = None,
-        record_schema: "Union[str, Type[RecordSchema], None]" = None,
+        files: str | os.PathLike[str] | Sequence[str | os.PathLike[str]] | _ext.TraceViewer,
+        index_dir: str | None = None,
+        runtime: Runtime | None = None,
+        record_schema: str | type[RecordSchema] | None = None,
     ) -> None:
         pass
 
     @property
-    def _runtime(self) -> "Optional[Runtime]":
+    def _runtime(self) -> Runtime | None:
         return getattr(self, "_rt", None)
 
     @_runtime.setter
-    def _runtime(self, runtime: "Optional[Runtime]") -> None:
+    def _runtime(self, runtime: Runtime | None) -> None:
         self._rt = runtime
 
     # -- constructing results ----------------------------------------------------
-    def _trace(self, out: "TraceViewer") -> "TraceViewer":
+    def _trace(self, out: TraceViewer) -> TraceViewer:
         out._runtime = self._runtime
         return out
 
@@ -163,11 +167,11 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         out._open = True
         return out
 
-    def _absorbed(self, plan: LazyFrame) -> "TraceViewer":
+    def _absorbed(self, plan: LazyFrame) -> TraceViewer:
         return self._trace(_ext.TraceViewer.with_lazy(self, plan))
 
     # -- absorbed LazyFrame ops ----------------------------------------------------
-    def filter(self, predicate: object) -> "TraceViewer":
+    def filter(self, predicate: str | Expr) -> TraceViewer:
         """Keep events matching ``predicate``: a duql string, or an
         expression. An expression filters events, pushed to the index, while
         it is a plain field predicate and nothing but filters came before it;
@@ -181,7 +185,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
             return self._absorbed(self._plan().filter(predicate))
         return self._trace(_ext.TraceViewer.filter(self, predicate))
 
-    def duql(self, text: str, **params: DuqlParam) -> "TraceViewer":
+    def duql(self, text: str, **params: DuqlParam) -> TraceViewer:
         """Run the duql pipeline ``text`` with ``params`` bound to its
         ``$name`` parameters (bool, int, float or str, or a list of them for
         ``x in $name``). Leading ``where``
@@ -193,7 +197,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         scanning."""
         return _ext.TraceViewer.explain_duql(self, text, params)
 
-    def select(self, *items: object) -> "TraceViewer":
+    def select(self, *items: SelectItem) -> TraceViewer:
         """Project to ``items``, as :meth:`LazyFrame.select`. Names on raw
         events, with only filters before, are the fields the scan reads: any
         field, indexed or not, and a name without the ``args.`` prefix that
@@ -204,61 +208,59 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
             return self._trace(_ext.TraceViewer.select(self, names))
         return self._absorbed(self._plan().select(*items))
 
-    def with_column(self, name: str, expr: Expr) -> "TraceViewer":
+    def with_column(self, name: str, expr: Expr) -> TraceViewer:
         return self._absorbed(self._plan().with_column(name, expr))
 
-    def with_columns(self, *named: object, **columns: Expr) -> "TraceViewer":
+    def with_columns(self, *named: Named, **columns: Expr) -> TraceViewer:
         return self._absorbed(self._plan().with_columns(*named, **columns))
 
     def _schema_complete(self) -> bool:
         return False
 
-    def drop(self, *names: Union[str, Sequence[str]]) -> "TraceViewer":
+    def drop(self, *names: str | Sequence[str]) -> TraceViewer:
         return self._absorbed(self._plan().drop(*names))
 
-    def rename(self, names: Any) -> "TraceViewer":
+    def rename(self, names: Sequence[str] | Mapping[str, str]) -> TraceViewer:
         return self._absorbed(self._plan().rename(names))
 
-    def sort_by(
-        self, name: str, descending: bool = False, nulls_last: bool = True
-    ) -> "TraceViewer":
+    def sort_by(self, name: str, descending: bool = False, nulls_last: bool = True) -> TraceViewer:
         return self._absorbed(self._plan().sort_by(name, descending, nulls_last))
 
-    def topk(self, name: str, k: int, largest: bool = True) -> "TraceViewer":
+    def topk(self, name: str, k: int, largest: bool = True) -> TraceViewer:
         return self._absorbed(self._plan().topk(name, k, largest))
 
-    def head(self, n: int = 5) -> "TraceViewer":
+    def head(self, n: int = 5) -> TraceViewer:
         return self._absorbed(self._plan().head(n))
 
-    def slice(self, offset: int, length: int) -> "TraceViewer":
+    def slice(self, offset: int, length: int) -> TraceViewer:
         return self._absorbed(self._plan().slice(offset, length))
 
-    def __getitem__(self, key: object) -> "Union[BoundColumn, TraceViewer]":
+    def __getitem__(self, key: object) -> BoundColumn | TraceViewer:
         """:meth:`LazyFrame.__getitem__` over this viewer: a list of names or a
         slice is absorbed, so the result is a ``TraceViewer``."""
         return cast(
-            "Union[BoundColumn, TraceViewer]", LazyFrame.__getitem__(cast("LazyFrame", self), key)
+            "BoundColumn | TraceViewer", LazyFrame.__getitem__(cast("LazyFrame", self), key)
         )
 
-    def __copy__(self) -> "TraceViewer":
+    def __copy__(self) -> TraceViewer:
         """A viewer never changes, so a copy, deep or shallow, is the viewer."""
         return self
 
-    def __deepcopy__(self, memo: object) -> "TraceViewer":
+    def __deepcopy__(self, memo: object) -> TraceViewer:
         return self
 
-    def offset(self, n: int) -> "TraceViewer":
+    def offset(self, n: int) -> TraceViewer:
         """Skip the first ``n`` rows."""
         return self._absorbed(self._plan().slice(n, (1 << 63) - 1))
 
-    def auto_spill(self) -> "TraceViewer":
+    def auto_spill(self) -> TraceViewer:
         return self._absorbed(self._plan().auto_spill())
 
     # -- trace builders -------------------------------------------------------------
-    def phase(self, phase: PhaseArg) -> "TraceViewer":
+    def phase(self, phase: PhaseArg) -> TraceViewer:
         return self._trace(_ext.TraceViewer.phase(self, phase))
 
-    def time_range(self, begin: float, end: float) -> "TraceViewer":
+    def time_range(self, begin: float, end: float) -> TraceViewer:
         """Keep the events that start in ``[begin, end)``. Busy, concurrency,
         utilization and active take every event overlapping the window,
         clipped to it; utilization divides by ``end - begin``."""
@@ -266,9 +268,9 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
 
     def time_bucket(
         self,
-        interval_us: Union[int, float, str],
-        normalize_to: Union[int, Literal["min"], None] = None,
-    ) -> "TraceViewer":
+        interval_us: int | float | str,
+        normalize_to: int | Literal["min"] | None = None,
+    ) -> TraceViewer:
         """Bucket events by time; a bare number is microseconds, a string
         (``"1ms"``) is converted. ``normalize_to`` aligns the buckets: an int
         origin, ``"min"`` for the trace's first timestamp (from the index), or
@@ -276,40 +278,40 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         us = int(round(coerce_duration(interval_us, 1e6, "interval_us")))
         return self._trace(_ext.TraceViewer.time_bucket(self, us, normalize_to))
 
-    def resolution(self, cell: Union[int, float, str]) -> "TraceViewer":
+    def resolution(self, cell: int | float | str) -> TraceViewer:
         """The grid the occupancy aggregates (busy, concurrency, utilization,
         active) snap interval edges to; a bare number is microseconds. 0 is the
         exact union."""
         us = int(round(coerce_duration(cell, 1e6, "resolution")))
         return self._trace(_ext.TraceViewer.resolution(self, us))
 
-    def time_unit(self, unit: TimeUnitArg) -> "TraceViewer":
+    def time_unit(self, unit: TimeUnitArg) -> TraceViewer:
         return self._trace(_ext.TraceViewer.time_unit(self, unit))
 
-    def time_scale(self, ns_ratio: float) -> "TraceViewer":
+    def time_scale(self, ns_ratio: float) -> TraceViewer:
         return self._trace(_ext.TraceViewer.time_scale(self, ns_ratio))
 
-    def rollup_root(self, path: str) -> "TraceViewer":
+    def rollup_root(self, path: str) -> TraceViewer:
         return self._trace(_ext.TraceViewer.rollup_root(self, path))
 
-    def views_root(self, path: str) -> "TraceViewer":
+    def views_root(self, path: str) -> TraceViewer:
         return self._trace(_ext.TraceViewer.views_root(self, path))
 
-    def memory_budget(self, nbytes: Union[int, str]) -> "TraceViewer":
+    def memory_budget(self, nbytes: int | str) -> TraceViewer:
         """Spill budget for the scan and the plan; bytes or a unit string."""
         return self._trace(_ext.TraceViewer.memory_budget(self, coerce_bytes(nbytes, "nbytes")))
 
-    def group_by(self, *keys: "Union[str, Sequence[str]]") -> "TraceViewer":
+    def group_by(self, *keys: str | Sequence[str]) -> TraceViewer:
         """Trace group keys: ``name``/``cat``/``pid``/``tid``/``fhash``/
         ``hhash``/``arg:<key>``, any other field, or a transform call such as
         ``basename(fname)``, as separate arguments or one list. No keys folds
         every event into one row."""
-        flat: List[str] = []
+        flat: list[str] = []
         for k in keys:
             flat.extend([k] if isinstance(k, str) else k)
         return self._trace(_ext.TraceViewer.group_by(self, *flat))
 
-    def agg(self, *specs: Union[str, Agg]) -> "TraceViewer":
+    def agg(self, *specs: str | Agg) -> TraceViewer:
         """Trace aggregates: spec strings (``"count"``, ``"mean:dur"``,
         ``"p99:dur"``, ``"busy:dur"``) or bare-field ``Agg`` expressions
         (``F.dur.sum()``, ``F.dur.busy(resolution="1ms")``, ``F.any.mean()``)."""
@@ -332,12 +334,12 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
 
     aggregate = agg
 
-    def agg_numeric_args(self, *reductions: str) -> "TraceViewer":
+    def agg_numeric_args(self, *reductions: str) -> TraceViewer:
         """Aggregate every discovered numeric arg: no reductions gives one mean
         column per arg; op names give one ``<op>_<arg>`` column each."""
         return self._trace(_ext.TraceViewer.agg_numeric_args(self, *reductions))
 
-    def rows(self, cls: Type[_S]) -> Iterator[_S]:
+    def rows(self, cls: type[_S]) -> Iterator[_S]:
         """One ``cls`` instance per selected record, each field set from the
         column at its path (``None`` when absent). Streams :meth:`stream` chunks,
         so only one chunk of rows is held at a time."""
@@ -348,16 +350,17 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
             for name in cls._json:
                 path = paths[name]
                 if path in data:
-                    data[path] = cast("List[object]", frame[path]._to_pylist())
+                    data[path] = frame[path]._to_pylist()
             columns = {name: data.get(path) for name, path in paths.items()}
             for i in range(len(frame)):
-                yield cls(
-                    **{name: (col[i] if col is not None else None) for name, col in columns.items()}
-                )
+                values = {
+                    name: (col[i] if col is not None else None) for name, col in columns.items()
+                }
+                yield cls(**cast("Dict[str, Scalar]", values))
 
     # -- inspection -------------------------------------------------------------------
     @property
-    def columns(self) -> List[str]:
+    def columns(self) -> list[str]:
         """Output column names without running the plan. A file whose index
         holds no path catalog is scanned once first, so every path it holds is
         listed."""
@@ -369,26 +372,26 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         return _plan_columns(plan)
 
     @property
-    def schema(self) -> "Dict[str, DType]":
+    def schema(self) -> dict[str, DType]:
         """Output column names and dtypes without running the plan; raises when
         the files have no one record schema."""
         _ext.TraceViewer.columns(self)
         return self._schema_plan().schema
 
-    def column_info(self) -> Dict[str, str]:
+    def column_info(self) -> dict[str, str]:
         """Every column the index knows, mapped to its type name (``"int64"``
         / ``"float64"`` / ``"string"``), with a ``resolved.*`` alias per hash
         column. Reads index metadata only."""
         return dict(_ext.TraceViewer.column_info(self))
 
-    def schema_tree(self) -> Dict[str, Any]:
+    def schema_tree(self) -> dict[str, JsonValue]:
         """The paths the files hold, from the index without scanning, nested by
         ``.`` segments: each node maps a segment to a dict with ``type`` (the
         observed type), ``count`` (records holding it non-null), ``field`` and
         ``declared_type`` (the record schema's field, when declared) and
         ``children`` (the nodes below it); keys without a value are left out.
         A declared field that no file holds has ``count`` 0."""
-        tree: Dict[str, Any] = {}
+        tree: dict[str, Any] = {}
         for leaf in json.loads(_ext.TraceViewer.schema_tree(self)):
             nodes = tree
             *parents, last = leaf["path"].split(".")
@@ -398,7 +401,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
             for key in ("type", "count", "field", "declared_type"):
                 if leaf[key] is not None:
                     node[key] = leaf[key]
-        return tree
+        return cast("dict[str, JsonValue]", tree)
 
     def time_metric(self) -> str:
         """The trace's own time unit (``"us"``/``"ns"``/``"ms"``/``"sec"``)."""
@@ -445,7 +448,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         dur: str = "dur",
         name: str = "name",
         group: Sequence[str] = (),
-    ) -> "LazyResult[Containment]":
+    ) -> LazyResult[Containment]:
         """Both :meth:`call_tree` and :meth:`flamegraph` from one buffered fold."""
         ct, fg = _ext.TraceViewer.containment(self, list(partition), ts, dur, name, list(group))
         return LazyResult([self._new(ct), self._new(fg)], lambda f: Containment(f[0], f[1]))
@@ -457,7 +460,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         dur: str = "dur",
         name: str = "name",
         group: Sequence[str] = (),
-    ) -> "LazyResult[bytes]":
+    ) -> LazyResult[bytes]:
         """A mergeable flamegraph of this viewer's files, for a distributed
         run; merge with :meth:`merge_flamegraph_partials`. Partition by pid so
         a lane stays on one rank."""
@@ -471,7 +474,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         """The flamegraph node frame of every rank's partial (no scan)."""
         return _ext.merge_flamegraph_partials(list(partials))
 
-    def aggregate_partial(self) -> "LazyResult[bytes]":
+    def aggregate_partial(self) -> LazyResult[bytes]:
         """A mergeable partial of this aggregation for a distributed run;
         merge with :meth:`merge_partials`."""
         return LazyResult(
@@ -486,7 +489,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         """Write this aggregation's rollup from every rank's partial."""
         _ext.TraceViewer.materialize_partials(self, list(partials), self._runtime)
 
-    def reconstruct_if_cached(self) -> Optional[DataFrame]:
+    def reconstruct_if_cached(self) -> DataFrame | None:
         """This aggregation from its rollup, or ``None`` when none serves it."""
         out = _ext.TraceViewer.reconstruct_if_cached(self)
         return out
@@ -495,13 +498,13 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         self,
         shard_begin: int = 0,
         shard_end: int = 0,
-        progress: Optional[Callable[[int, int], None]] = None,
-    ) -> "LazyResult[Dict[str, DataFrame]]":
+        progress: Callable[[int, int], None] | None = None,
+    ) -> LazyResult[dict[str, DataFrame]]:
         """The aggregation index's ``regular`` / ``aggregated`` / ``counters``
         records over shard range ``[shard_begin, shard_end)`` (0 = all)."""
         tv, runtime = self, self._runtime
 
-        def finish(_: List[DataFrame]) -> Dict[str, DataFrame]:
+        def finish(_: list[DataFrame]) -> dict[str, DataFrame]:
             raw = _ext.TraceViewer.typed(tv, shard_begin, shard_end, progress, runtime)
             return cast("Dict[str, DataFrame]", raw)
 
@@ -511,17 +514,19 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         self,
         shard_begin: int = 0,
         shard_end: int = 0,
-        progress: Optional[Callable[[int, int], None]] = None,
-    ) -> Dict[str, DataFrame]:
+        progress: Callable[[int, int], None] | None = None,
+    ) -> dict[str, DataFrame]:
         """:meth:`typed`, run now."""
         return self.typed(shard_begin, shard_end, progress).collect()
 
     @overload
-    def sink_json(self, path: str, lazy: Literal[False] = ...) -> Dict[str, object]: ...
+    def sink_json(self, path: str, lazy: Literal[False] = ...) -> dict[str, JsonValue]: ...
     @overload
-    def sink_json(self, path: str, lazy: Literal[True]) -> "LazyResult[Dict[str, object]]": ...
+    def sink_json(self, path: str, lazy: Literal[True]) -> LazyResult[dict[str, JsonValue]]: ...
 
-    def sink_json(self, path: str, lazy: bool = False) -> Any:
+    def sink_json(
+        self, path: str, lazy: bool = False
+    ) -> dict[str, JsonValue] | LazyResult[dict[str, JsonValue]]:
         """Write the selected events to ``path`` as NDJSON, verbatim (a
         re-indexable trace). Runs now and returns the scan stats; ``lazy=True``
         returns a :class:`LazyResult` for :func:`collect_all` or a session."""
@@ -533,28 +538,28 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
     @overload
     def materialize(
         self,
-        checkpoint_size: Union[int, str] = ...,
-        part_size: Union[int, str] = ...,
-        progress: Optional[Callable[[int, int], None]] = ...,
+        checkpoint_size: int | str = ...,
+        part_size: int | str = ...,
+        progress: Callable[[int, int], None] | None = ...,
         lazy: Literal[False] = ...,
-    ) -> Dict[str, object]: ...
+    ) -> dict[str, JsonValue]: ...
     @overload
     def materialize(
         self,
-        checkpoint_size: Union[int, str] = ...,
-        part_size: Union[int, str] = ...,
-        progress: Optional[Callable[[int, int], None]] = ...,
+        checkpoint_size: int | str = ...,
+        part_size: int | str = ...,
+        progress: Callable[[int, int], None] | None = ...,
         *,
         lazy: Literal[True],
-    ) -> "LazyResult[Dict[str, object]]": ...
+    ) -> LazyResult[dict[str, JsonValue]]: ...
 
     def materialize(
         self,
-        checkpoint_size: Union[int, str] = 0,
-        part_size: Union[int, str] = 0,
-        progress: Optional[Callable[[int, int], None]] = None,
+        checkpoint_size: int | str = 0,
+        part_size: int | str = 0,
+        progress: Callable[[int, int], None] | None = None,
         lazy: bool = False,
-    ) -> Any:
+    ) -> dict[str, JsonValue] | LazyResult[dict[str, JsonValue]]:
         """Persist this query so a later matching read is served from it: a
         filtered trace for events, a rollup for an aggregation. Idempotent.
         Sizes take bytes or a unit string."""
@@ -562,10 +567,12 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         cs = coerce_bytes(checkpoint_size, "checkpoint_size")
         ps = coerce_bytes(part_size, "part_size")
 
-        def finish(_: List[DataFrame]) -> Dict[str, object]:
-            return _ext.TraceViewer.materialize(tv, cs, ps, progress, runtime)
+        def finish(_: list[DataFrame]) -> dict[str, JsonValue]:
+            return cast(
+                "dict[str, JsonValue]", _ext.TraceViewer.materialize(tv, cs, ps, progress, runtime)
+            )
 
-        result: LazyResult[Dict[str, object]] = LazyResult([], finish)
+        result: LazyResult[dict[str, JsonValue]] = LazyResult([], finish)
         return result if lazy else result.collect()
 
     def export_trace(
@@ -573,14 +580,14 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         path: str,
         compress: bool = True,
         index: bool = False,
-        member_size: Union[int, str] = 0,
+        member_size: int | str = 0,
         level: int = 6,
-        part_size: Union[int, str] = 0,
-    ) -> Dict[str, object]:
+        part_size: int | str = 0,
+    ) -> dict[str, JsonValue]:
         """Write a trace file now: the aggregation as counter events when this
         viewer aggregates, else the selected events. Sizes take bytes or a
         unit string."""
-        return _ext.TraceViewer.export_trace(
+        out = _ext.TraceViewer.export_trace(
             self,
             path,
             compress,
@@ -590,11 +597,12 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
             coerce_bytes(part_size, "part_size"),
             self._runtime,
         )
+        return cast("dict[str, JsonValue]", out)
 
     @overload
-    def statistics(self, lazy: Literal[False] = ...) -> Dict[str, object]: ...
+    def statistics(self, lazy: Literal[False] = ...) -> dict[str, JsonValue]: ...
     @overload
-    def statistics(self, lazy: Literal[True]) -> "LazyResult[Dict[str, object]]": ...
+    def statistics(self, lazy: Literal[True]) -> LazyResult[dict[str, JsonValue]]: ...
 
     def statistics(self, lazy: bool = False) -> Any:
         """Count, mean and stddev of ``dur`` and the ``ts`` range of the
@@ -603,13 +611,13 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         result = LazyResult([plan], lambda f: stats_row(f[0]))
         return result if lazy else result.collect()
 
-    def compare(self, variant: "TraceViewer") -> LazyFrame:
+    def compare(self, variant: TraceViewer) -> LazyFrame:
         """This viewer's ``group_by`` + ``agg`` applied to ``variant``'s events
         too, joined on the group key: the keys, ``l_`` / ``r_`` per metric and
         ``delta_`` / ``pct_``. Both sides over the same files share one scan."""
         return self._new(_ext.TraceViewer.compare(self, variant))
 
-    def mv_source(self) -> List[str]:
+    def mv_source(self) -> list[str]:
         """The materialized-view files that would serve this query, or ``[]``."""
         return list(_ext.TraceViewer.mv_source(self))
 
@@ -617,31 +625,31 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         """The optimized plan as text, for introspection and tests."""
         return self.lazy().explain()
 
-    def stream(self, batch_size: int = 65536) -> "Iterator[DataFrame]":
+    def stream(self, batch_size: int = 65536) -> Iterator[DataFrame]:
         """The rows as :class:`DataFrame` chunks of about ``batch_size`` rows,
         holding a bounded amount in memory."""
         return self.lazy().stream(batch_size)
 
-    def session(self) -> "Session":
+    def session(self) -> Session:
         """A :class:`Session` whose registered plans run together."""
         return Session(self)
 
 
-class Handle:
+class Handle(Generic[T]):
     """A deferred result of a :class:`Session`; :meth:`result` returns it,
     executing the session first if it has not run."""
 
     __slots__ = ("_session", "_value", "_resolved")
 
-    def __init__(self, session: "Session") -> None:
+    def __init__(self, session: Session) -> None:
         self._session = session
-        self._value: object = None
+        self._value: T | None = None
         self._resolved = False
 
-    def result(self) -> Any:
+    def result(self) -> T:
         if not self._resolved:
             self._session.execute()
-        return self._value
+        return cast("T", self._value)
 
 
 class Session:
@@ -659,35 +667,45 @@ class Session:
 
     def __init__(self, viewer: TraceViewer) -> None:
         self._viewer = viewer
-        self._roots: List[Any] = []
-        self._handles: List[Handle] = []
+        self._roots: list[Any] = []
+        self._handles: list[Handle[Any]] = []
         self._executed = False
 
-    def collect(self, root: "Union[LazyFrame, LazyResult[Any]]") -> Handle:
+    @overload
+    def collect(self, root: LazyFrame) -> Handle[DataFrame]: ...
+    @overload
+    def collect(self, root: LazyResult[T]) -> Handle[T]: ...
+    def collect(self, root: LazyFrame | LazyResult[T]) -> Handle[DataFrame] | Handle[T]:
         """Register a plan or a lazy result; its handle resolves on execute."""
         if self._executed:
             raise RuntimeError("cannot add a plan after the session has executed")
-        handle = Handle(self)
+        handle: Handle[Any] = Handle(self)
         self._roots.append(root)
         self._handles.append(handle)
         return handle
 
-    def sink_json(self, viewer: TraceViewer, path: str) -> Handle:
+    def sink_json(self, viewer: TraceViewer, path: str) -> Handle[dict[str, JsonValue]]:
         """``viewer.sink_json(path)``, run with the session."""
         return self.collect(viewer.sink_json(path, lazy=True))
 
-    def materialize(self, viewer: TraceViewer, **kwargs: Any) -> Handle:
+    def materialize(
+        self,
+        viewer: TraceViewer,
+        checkpoint_size: int | str = 0,
+        part_size: int | str = 0,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> Handle[dict[str, JsonValue]]:
         """``viewer.materialize(...)``, run with the session."""
-        return self.collect(viewer.materialize(lazy=True, **kwargs))
+        return self.collect(viewer.materialize(checkpoint_size, part_size, progress, lazy=True))
 
-    def attach(self, plugins: "Plugins") -> Handle:
+    def attach(self, plugins: Plugins) -> Handle[dict[str, object]]:
         """Fold every plugin of ``plugins`` over the session's scan of its
         viewer; the result is the ``{name: value}`` mapping of
         ``Plugins.run().results``. The plugins share the scan only when the
         viewer has no filter."""
         native = plugins._native
 
-        def finish(_: List[DataFrame]) -> Dict[str, object]:
+        def finish(_: list[DataFrame]) -> dict[str, object]:
             raw = _ext.plugin_results(native)
             return {name: plugins._shape(val) for name, val in raw.items()}
 
@@ -704,7 +722,7 @@ class Session:
             handle._resolved = True
         self._executed = True
 
-    def __enter__(self) -> "Session":
+    def __enter__(self) -> Session:
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:

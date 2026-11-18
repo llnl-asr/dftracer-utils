@@ -38,7 +38,7 @@ def _series(layout, chunked):
 
 def _layouts():
     return [
-        pytest.param(layout, chunked, id="%s-%s" % (layout, "chunked" if chunked else "one"))
+        pytest.param(layout, chunked, id="{}-{}".format(layout, "chunked" if chunked else "one"))
         for layout in ("flat", "view", "dictionary")
         for chunked in (False, True)
     ]
@@ -64,7 +64,7 @@ def _frame(layout, chunked):
 def _needs_capsule(native, name):
     if not hasattr(native, name):
         pytest.skip(
-            "extension built without Arrow: %s is absent, to_polars is the native path" % name
+            f"extension built without Arrow: {name} is absent, to_polars is the native path"
         )
 
 
@@ -120,8 +120,7 @@ def _arrow_pandas_strings():
     string = pd.Series(np.array(["x"], dtype=object)).dtype
     if not (isinstance(string, pd.StringDtype) and string.storage == "pyarrow"):
         pytest.skip(
-            "pandas keeps strings in Python objects here (dtype %s); the Arrow branch is not taken"
-            % string
+            f"pandas keeps strings in Python objects here (dtype {string}); the Arrow branch is not taken"
         )
 
 

@@ -15,14 +15,9 @@ from typing import (
     Awaitable,
     Callable,
     ContextManager,
-    Dict,
     Iterator,
-    List,
     NoReturn,
-    Optional,
     Protocol,
-    Set,
-    Tuple,
     TypeVar,
     overload,
 )
@@ -81,16 +76,16 @@ def sleep(seconds: float) -> Awaitable[None]:
 
 
 @overload
-def all(a: Awaitable[_T1], b: Awaitable[_T2], /) -> Awaitable[Tuple[_T1, _T2]]: ...
+def all(a: Awaitable[_T1], b: Awaitable[_T2], /) -> Awaitable[tuple[_T1, _T2]]: ...
 @overload
 def all(
     a: Awaitable[_T1], b: Awaitable[_T2], c: Awaitable[_T3], /
-) -> Awaitable[Tuple[_T1, _T2, _T3]]: ...
+) -> Awaitable[tuple[_T1, _T2, _T3]]: ...
 @overload
 def all(
     a: Awaitable[_T1], b: Awaitable[_T2], c: Awaitable[_T3], d: Awaitable[_T4], /
-) -> Awaitable[Tuple[_T1, _T2, _T3, _T4]]: ...
-def all(*tasks: Awaitable[object]) -> Awaitable[Tuple[object, ...]]:
+) -> Awaitable[tuple[_T1, _T2, _T3, _T4]]: ...
+def all(*tasks: Awaitable[object]) -> Awaitable[tuple[object, ...]]:
     """``a, b = await jit.all(self.t1(), self.t2())``: run the tasks at once and
     give their results in order. The first failure cancels the others and is the
     result."""
@@ -104,7 +99,7 @@ def any(first: Awaitable[_T], second: Awaitable[_T], /, *rest: Awaitable[_T]) ->
     _marker("any")
 
 
-def emit(name: str, value: "int | float | str", /) -> None:
+def emit(name: str, value: int | float | str, /) -> None:
     """Emit the named result ``name`` of the run: the text of ``value`` as bytes
     (an ``int`` in decimal, a ``float`` with 17 significant digits, a ``str`` as
     UTF-8). Only a :func:`finalize` body emits."""
@@ -138,15 +133,15 @@ class Value(Protocol):
     for a null, a missing or a mistyped value (a JSON number converts between
     ``int`` and ``float``, a ``bool`` is an ``int``, a YAML scalar is text)."""
 
-    def find(self, key: str, /) -> "Value": ...
+    def find(self, key: str, /) -> Value: ...
     def as_int(self, default: int = 0, /) -> int: ...
     def as_float(self, default: float = 0.0, /) -> float: ...
     def as_str(self, default: str = "", /) -> str: ...
     def as_bool(self, default: bool = False, /) -> bool: ...
     def is_null(self) -> bool: ...
     def __len__(self) -> int: ...
-    def __iter__(self) -> Iterator["Value"]: ...
-    def items(self) -> Iterator[Tuple[str, "Value"]]: ...
+    def __iter__(self) -> Iterator[Value]: ...
+    def items(self) -> Iterator[tuple[str, Value]]: ...
 
 
 def json(text: str, /) -> Value:
@@ -296,7 +291,7 @@ class TaskSig:
 
     __slots__ = ("name", "params", "ret")
 
-    def __init__(self, name: str, params: "List[Tuple[str, str]]", ret: "str | None") -> None:
+    def __init__(self, name: str, params: list[tuple[str, str]], ret: str | None) -> None:
         self.name = name
         self.params = params
         self.ret = ret
@@ -311,15 +306,15 @@ class FlowFn:
         *,
         name: str,
         is_async: bool,
-        sig: "TaskSig | None",
-        fields: List[str],
-        body: List[str],
+        sig: TaskSig | None,
+        fields: list[str],
+        body: list[str],
         ob_size: int,
-        uses: "Set[str]",
-        res_frees: List[str],
-        emit_names: List[str],
-        store_gets: "Set[str]",
-        op_defs: List[str],
+        uses: set[str],
+        res_frees: list[str],
+        emit_names: list[str],
+        store_gets: set[str],
+        op_defs: list[str],
     ) -> None:
         self.name = name
         self.is_async = is_async
@@ -345,7 +340,7 @@ def task_signature(fn: Callable[..., object], name: str, source_text: str) -> Ta
     node = funcs[0]
     if not isinstance(node, ast.AsyncFunctionDef):
         raise _flow_error("@jit.task decorates an `async def` method", node)
-    params: List[Tuple[str, str]] = []
+    params: list[tuple[str, str]] = []
     for arg in node.args.args[1:]:
         ann = arg.annotation
         kind = _KIND_OF_ANNOTATION.get(ann.id) if isinstance(ann, ast.Name) else None
@@ -354,7 +349,7 @@ def task_signature(fn: Callable[..., object], name: str, source_text: str) -> Ta
                 f"parameter {arg.arg} of a @jit.task is annotated `int` or `float`", arg
             )
         params.append((arg.arg, kind))
-    ret: Optional[str] = None
+    ret: str | None = None
     r = node.returns
     if isinstance(r, ast.Name) and r.id in _KIND_OF_ANNOTATION:
         ret = _KIND_OF_ANNOTATION[r.id]
@@ -363,13 +358,13 @@ def task_signature(fn: Callable[..., object], name: str, source_text: str) -> Ta
     return TaskSig(name, params, ret)
 
 
-def _flow_error(reason: str, node: "ast.AST | None") -> JitError:
+def _flow_error(reason: str, node: ast.AST | None) -> JitError:
     err = JitError(reason, locate=False)
     err.node = node if isinstance(node, ast.AST) else None
     return err
 
 
-def _frame_struct(fn: FlowFn) -> List[str]:
+def _frame_struct(fn: FlowFn) -> list[str]:
     return [
         f"struct DftuFrame_{fn.name} {{",
         "    int pc;",
@@ -385,11 +380,11 @@ def _frame_struct(fn: FlowFn) -> List[str]:
 
 def _step_fn(
     fn: FlowFn,
-    cfg_pre: List[str],
+    cfg_pre: list[str],
     has_stores: bool,
     uses_cap: bool,
-    close_lines: "List[str] | None" = None,
-) -> List[str]:
+    close_lines: list[str] | None = None,
+) -> list[str]:
     n = fn.name
     out = [
         f"static dftu_status _step_{n}(dftu_ctx* ctx, void* coro, dftu_task** wait, uint32_t cap,",
@@ -440,7 +435,7 @@ def _step_fn(
     return out
 
 
-def _release_fn(fn: FlowFn, is_root: bool) -> List[str]:
+def _release_fn(fn: FlowFn, is_root: bool) -> list[str]:
     n = fn.name
     out = [
         f"static void _release_{n}(void* coro) {{",
@@ -459,7 +454,7 @@ def _release_fn(fn: FlowFn, is_root: bool) -> List[str]:
     return out
 
 
-def _job_fns(fn: FlowFn) -> List[str]:
+def _job_fns(fn: FlowFn) -> list[str]:
     sig = fn.sig
     assert sig is not None
     n = fn.name
@@ -521,18 +516,18 @@ def _job_fns(fn: FlowFn) -> List[str]:
 
 
 def emit_flows(
-    flows: List[FlowFn],
+    flows: list[FlowFn],
     *,
     has_cfg: bool,
-    cfg_pre: List[str],
+    cfg_pre: list[str],
     has_stores: bool,
-    chans: "Dict[str, PortDecl] | None" = None,
-) -> Tuple[List[str], List[str], Set[str]]:
+    chans: dict[str, PortDecl] | None = None,
+) -> tuple[list[str], list[str], set[str]]:
     """The C of every flow body of a plugin and its ``on_finalize``: returns the
     definitions (after the config and store types), the ``on_finalize`` function
     and the host services the bodies use."""
     chans = chans or {}
-    uses: Set[str] = set()
+    uses: set[str] = set()
     for fn in flows:
         uses |= fn.uses
     fin = [f for f in flows if f.sig is None]

@@ -6,10 +6,10 @@ from __future__ import annotations
 from typing import (
     TYPE_CHECKING,
     AbstractSet,
+    Any,
     Callable,
     Hashable,
     Iterable,
-    Optional,
     Sequence,
     Union,
 )
@@ -19,17 +19,27 @@ import pandas as pd
 import pyarrow as pa
 
 if TYPE_CHECKING:
-    import dask.dataframe as dd  # ty: ignore[import-not-found]
+    import dask.dataframe as dd
+    from pandas.core.groupby import SeriesGroupBy
+
+_Dtype = Union[pd.api.extensions.ExtensionDtype, "np.dtype[Any]", str]
 
 
-def _partial_agg_columns(full_cols, sum_cols, min_cols, max_cols, set_cols_items, dtype_of):
+def _partial_agg_columns(
+    full_cols: Sequence[str],
+    sum_cols: Sequence[str],
+    min_cols: Sequence[str],
+    max_cols: Sequence[str],
+    set_cols_items: Sequence[tuple[str, object]],
+    dtype_of: Callable[[str], _Dtype | None],
+) -> dict[str, _Dtype | None]:
     """Metric column -> dtype map for a partial view aggregation, in the one
     order every partial has: per full column its sum, count, min, max, m2,
     mean_hi and mean_lo, then the sum, min, max and set columns. The data
     (`partial_arrow_view_groupby`), the empty partition and the dask meta all
     follow it. `dtype_of(col)` resolves a metric column's dtype from the
     caller's source (a live frame or the dask meta)."""
-    cols = {}
+    cols: dict[str, _Dtype | None] = {}
     for c in full_cols:
         cols[f"{c}_sum"] = dtype_of(c)
         cols[f"{c}_count"] = pd.ArrowDtype(pa.int64())
@@ -78,14 +88,14 @@ def _central_moments(work: pd.DataFrame, view_type: str, cols: Sequence[str]) ->
 
 
 def merge_view_partials(
-    df: Union[pd.DataFrame, dd.DataFrame],
+    df: pd.DataFrame | dd.DataFrame,
     full_cols: Sequence[str],
     sum_cols: Sequence[str] = (),
     min_cols: Sequence[str] = (),
     max_cols: Sequence[str] = (),
     set_cols: Sequence[str] = (),
-    flatten_fn: Optional[Callable[[Iterable[AbstractSet[Hashable]]], AbstractSet[Hashable]]] = None,
-) -> Union[pd.DataFrame, dd.DataFrame]:
+    flatten_fn: Callable[[Iterable[AbstractSet[Hashable]]], AbstractSet[Hashable]] | None = None,
+) -> pd.DataFrame | dd.DataFrame:
     """Merge partial view aggregations (the output of `partial_arrow_view_groupby`,
     one row per view row per partition) into one row per view row, ready for
     `finalize_view_partials`. The columns are named as the partials name them:
@@ -109,14 +119,17 @@ def merge_view_partials(
         raise ValueError("merge_view_partials: set_cols need a flatten_fn")
     if hasattr(df, "compute"):
         import dask.dataframe as dd
-        from dask import delayed
+        from dask.delayed import delayed
 
         merged = merge_view_partials(
             df.compute(), full_cols, sum_cols, min_cols, max_cols, set_cols, flatten_fn
         )
         return dd.from_delayed([delayed(merged)], meta=merged.iloc[:0])
     levels = list(range(df.index.nlevels))
-    g = lambda s: s.groupby(level=levels)  # noqa: E731
+
+    def g(s: pd.Series) -> SeriesGroupBy:
+        return s.groupby(level=levels)
+
     out = {}
     for c in full_cols:
         need = [f"{c}_{k}" for k in ("sum", "count", "min", "max", "m2", "mean_hi", "mean_lo")]
@@ -161,15 +174,15 @@ def merge_view_partials(
 
 
 def partial_arrow_view_groupby(
-    df,
-    view_type,
-    full_cols,
-    sum_cols,
-    min_cols,
-    max_cols,
-    set_cols_items,
-    flatten_fn,
-):
+    df: pd.DataFrame,
+    view_type: str,
+    full_cols: Sequence[str],
+    sum_cols: Sequence[str],
+    min_cols: Sequence[str],
+    max_cols: Sequence[str],
+    set_cols_items: Sequence[tuple[str, object]],
+    flatten_fn: Callable[..., object] | None,
+) -> pd.DataFrame:
     """Per-partition Arrow groupby emitting mergeable partial aggregates.
 
     `flatten_fn` flattens a grouped set-column series when its aggregation
@@ -182,10 +195,10 @@ def partial_arrow_view_groupby(
     if work.empty:
         # Derive dtypes from the input columns so an empty partition matches
         # the meta declared by the caller (which uses the same rule).
-        def _col_dtype(col, default=pd.ArrowDtype(pa.float64())):
+        def _col_dtype(col: str, default: _Dtype | None = None) -> _Dtype:
             if col in work.columns:
                 return work[col].dtype
-            return default
+            return pd.ArrowDtype(pa.float64()) if default is None else default
 
         cols = _partial_agg_columns(
             full_cols, sum_cols, min_cols, max_cols, set_cols_items, _col_dtype
@@ -250,7 +263,7 @@ def partial_arrow_view_groupby(
     return out[[name for name in order if name in out.columns]]
 
 
-def finalize_view_partials(df, full_cols):
+def finalize_view_partials(df: pd.DataFrame, full_cols: Sequence[str]) -> pd.DataFrame:
     """Compute mean/std per view_type row from merged partials; drop helper cols."""
     if df.empty:
         return df
@@ -280,16 +293,24 @@ def finalize_view_partials(df, full_cols):
     return out
 
 
-def build_partial_meta(records, view_type, full_cols, sum_cols, min_cols, max_cols, set_cols_items):
+def build_partial_meta(
+    records: dd.DataFrame,
+    view_type: str,
+    full_cols: Sequence[str],
+    sum_cols: Sequence[str],
+    min_cols: Sequence[str],
+    max_cols: Sequence[str],
+    set_cols_items: Sequence[tuple[str, object]],
+) -> pd.DataFrame:
     """Dask meta for the output of `partial_arrow_view_groupby`."""
     in_meta = records._meta
 
-    def _dtype_of(col, default=pd.ArrowDtype(pa.float64())):
+    def _dtype_of(col: str, default: _Dtype | None = None) -> _Dtype:
         if col in in_meta.columns:
             return in_meta[col].dtype
         if isinstance(in_meta.index, pd.MultiIndex) and col in in_meta.index.names:
             return in_meta.index.get_level_values(col).dtype
-        return default
+        return pd.ArrowDtype(pa.float64()) if default is None else default
 
     cols = _partial_agg_columns(full_cols, sum_cols, min_cols, max_cols, set_cols_items, _dtype_of)
     meta = pd.DataFrame({name: pd.Series(dtype=dt) for name, dt in cols.items()})
@@ -298,7 +319,7 @@ def build_partial_meta(records, view_type, full_cols, sum_cols, min_cols, max_co
     return meta
 
 
-def build_final_meta(merged, full_cols):
+def build_final_meta(merged: dd.DataFrame, full_cols: Sequence[str]) -> pd.DataFrame:
     """Dask meta for the output of `finalize_view_partials`."""
     cols = {}
     for c in merged.columns:
@@ -315,7 +336,7 @@ def build_final_meta(merged, full_cols):
     return meta
 
 
-def normalize_arrow_dtypes(df):
+def normalize_arrow_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     """Demote Arrow-backed category columns to object for downstream pandas ops."""
     for col in df.select_dtypes(include=["category"]).columns:
         df[col] = df[col].astype("object")

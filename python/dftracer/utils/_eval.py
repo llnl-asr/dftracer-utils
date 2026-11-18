@@ -11,7 +11,7 @@ parallel evaluation. An expression with no column is folded here.
 from __future__ import annotations
 
 import ast
-from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, NamedTuple, Optional, Union, cast
 
 from . import dftracer_utils_ext as _ext
 from ._convert import _arrow_native
@@ -43,7 +43,8 @@ from .expr import (
 from .series import Series
 
 if TYPE_CHECKING:
-    import pyarrow as pa  # ty: ignore[import-not-found]
+    import pyarrow as pa
+    from typing_extensions import TypeAlias
 
     from .dataframe import DataFrame
 
@@ -65,14 +66,14 @@ class AstOp(NamedTuple):
 
 # The one table of the arithmetic and comparison operators that `apply`, the jit
 # compiler and `jit.op` lower. `Mod` has no engine opcode.
-ARITH_OPS: Tuple[AstOp, ...] = (
+ARITH_OPS: tuple[AstOp, ...] = (
     AstOp(ast.Add, "+", "add", 0),
     AstOp(ast.Sub, "-", "sub", 1),
     AstOp(ast.Mult, "*", "mul", 2),
     AstOp(ast.Div, "/", "div", 3),
     AstOp(ast.Mod, "%", "mod", None),
 )
-COMPARE_OPS: Tuple[AstOp, ...] = (
+COMPARE_OPS: tuple[AstOp, ...] = (
     AstOp(ast.Gt, ">", "gt", 0),
     AstOp(ast.GtE, ">=", "ge", 1),
     AstOp(ast.Lt, "<", "lt", 2),
@@ -81,34 +82,25 @@ COMPARE_OPS: Tuple[AstOp, ...] = (
     AstOp(ast.NotEq, "!=", "ne", 5),
 )
 
-ARITH_SYMBOL: Dict[type, str] = {o.node: o.symbol for o in ARITH_OPS}
-ARITH_CODE: Dict[type, int] = {o.node: o.code for o in ARITH_OPS if o.code is not None}
-ENGINE_ARITH_SYMBOL: Dict[type, str] = {n: ARITH_SYMBOL[n] for n in ARITH_CODE}
-COMPARE_SYMBOL: Dict[type, str] = {o.node: o.symbol for o in COMPARE_OPS}
-COMPARE_NAME: Dict[type, str] = {o.node: o.name for o in COMPARE_OPS}
-COMPARE_CODE: Dict[type, int] = {o.node: o.code for o in COMPARE_OPS if o.code is not None}
+ARITH_SYMBOL: dict[type, str] = {o.node: o.symbol for o in ARITH_OPS}
+ARITH_CODE: dict[type, int] = {o.node: o.code for o in ARITH_OPS if o.code is not None}
+ENGINE_ARITH_SYMBOL: dict[type, str] = {n: ARITH_SYMBOL[n] for n in ARITH_CODE}
+COMPARE_SYMBOL: dict[type, str] = {o.node: o.symbol for o in COMPARE_OPS}
+COMPARE_NAME: dict[type, str] = {o.node: o.name for o in COMPARE_OPS}
+COMPARE_CODE: dict[type, int] = {o.node: o.code for o in COMPARE_OPS if o.code is not None}
 
 # A source of columns for in-memory evaluation: a DataFrame, a
 # {name: Series} mapping, or a pyarrow Table imported at the Arrow boundary.
-Source = Union["DataFrame", Dict[str, "Series"], "pa.Table"]
+Source: TypeAlias = Union["DataFrame", Dict[str, "Series"], "pa.Table"]
 # where(): a frame in, the same kind of frame out.
-Frame = Union["DataFrame", "pa.Table"]
+Frame: TypeAlias = Union["DataFrame", "pa.Table"]
 
 _INT64 = int(DType.INT64)
 _UINT64 = int(DType.UINT64)
 _FLOAT64 = int(DType.FLOAT64)
 
 
-# A source of columns for in-memory evaluation: a DataFrame, a
-# {name: Series} mapping, or a pyarrow Table imported at the Arrow boundary.
-Source = Union["DataFrame", Dict[str, "Series"], "pa.Table"]
-
-
-# where(): a frame in, the same kind of frame out.
-Frame = Union["DataFrame", "pa.Table"]
-
-
-def columnar(expr: Expr) -> "Columnar":
+def columnar(expr: Expr) -> Columnar:
     """Wrap a value expression; call ``apply(source)`` to evaluate it on the
     DataFrame engine and get a native ``Series``."""
     if not isinstance(expr, Expr):
@@ -116,7 +108,7 @@ def columnar(expr: Expr) -> "Columnar":
     return Columnar(expr)
 
 
-def where(table: Frame, pred: "Expr | str") -> Frame:
+def where(table: Frame, pred: Expr | str) -> Frame:
     """Keep the rows where ``pred`` is true.
 
     ``pred`` is either an expression (numeric comparisons / ``& | ~``),
@@ -148,7 +140,7 @@ class Columnar:
         self._columns = collect_columns(expr)
 
     @property
-    def columns(self) -> List[str]:
+    def columns(self) -> list[str]:
         """Input column names this expression reads."""
         return list(self._columns)
 
@@ -168,7 +160,7 @@ class Columnar:
         per-node path."""
         cols = self._to_vec_columns(source)
         if self._columns:
-            ast: List[tuple] = []
+            ast: list[tuple[object, ...]] = []
             self._serialize(self._expr, ast)
             inputs = [cols[name] for name in self._columns]
             return _ext.vec_eval(ast, inputs)
@@ -182,14 +174,14 @@ class Columnar:
 
     # Serialize `expr` to a post-order AST (a list of (op, args...) tuples) that
     # the C++ engine rebuilds and compiles. Structural only - no type logic.
-    def _serialize(self, expr: Expr, ast: List[tuple]) -> None:
+    def _serialize(self, expr: Expr, ast: list[tuple[object, ...]]) -> None:
         emit_ast(expr, self._columns.index, ast)
 
-    def _to_vec_columns(self, source: Source) -> Dict[str, "Series"]:
+    def _to_vec_columns(self, source: Source) -> dict[str, Series]:
         return _import_vec_columns(self._columns, source)
 
 
-def unwrap_source_columns(source: object) -> Dict[str, Series]:
+def unwrap_source_columns(source: object) -> dict[str, Series]:
     """Every column of ``source`` (a frame, a native batch, a ``{name:
     Series}`` mapping or a pyarrow Table) as wrapped Series, by name."""
     native = source
@@ -199,16 +191,17 @@ def unwrap_source_columns(source: object) -> Dict[str, Series]:
         return {name: _ext.DataFrame.__getitem__(native, name) for name in native.column_names}
     import pyarrow as pa
 
-    out: Dict[str, Series] = {}
-    for name in native.column_names:
-        arr = native.column(name)
+    table = cast("pa.Table", native)
+    out: dict[str, Series] = {}
+    for name in table.column_names:
+        arr = table.column(name)
         if isinstance(arr, pa.ChunkedArray):
             arr = arr.combine_chunks()
         out[name] = _arrow_native("_series_from_arrow")(arr)
     return out
 
 
-def _first_column(source: Source) -> Dict[str, "Series"]:
+def _first_column(source: Source) -> dict[str, Series]:
     """One column of ``source`` to give a constant expression its length (empty
     when the source has no column)."""
     native = source
@@ -216,7 +209,7 @@ def _first_column(source: Source) -> Dict[str, "Series"]:
     return _import_vec_columns(names, source) if names else {}
 
 
-def _import_vec_columns(names: List[str], source: Source) -> Dict[str, "Series"]:
+def _import_vec_columns(names: list[str], source: Source) -> dict[str, Series]:
     """Resolve `names` to native vec columns from `source` (a native batch or a
     pyarrow Table), importing at the Arrow boundary only when needed."""
     # A native batch (a DataFrame or a {name: Series} dict) is used directly.
@@ -227,7 +220,7 @@ def _import_vec_columns(names: List[str], source: Source) -> Dict[str, "Series"]
     # A pyarrow Table: import each needed column into vec at the boundary.
     import pyarrow as pa
 
-    cols: Dict[str, "Series"] = {}
+    cols: dict[str, Series] = {}
     for name in names:
         arr = source.column(name)
         if isinstance(arr, pa.ChunkedArray):
@@ -236,14 +229,14 @@ def _import_vec_columns(names: List[str], source: Source) -> Dict[str, "Series"]
     return cols
 
 
-def eval_many(exprs: "List[Expr | Columnar]", source: Source) -> "List[Series]":
+def eval_many(exprs: list[Expr | Columnar], source: Source) -> list[Series]:
     """Evaluate several value expressions in ONE compiled pass over `source`.
 
     CSE spans all of them, so a subexpression shared across outputs is computed
     once. Returns one :class:`Series` per input expression, aligned to `exprs`.
     `source` is a native vec batch or a pyarrow Table, as for :meth:`Columnar.apply`."""
     cs = [e if isinstance(e, Columnar) else columnar(e) for e in exprs]
-    union: List[str] = []
+    union: list[str] = []
     seen = set()
     for c in cs:
         for name in c.columns:
@@ -255,15 +248,15 @@ def eval_many(exprs: "List[Expr | Columnar]", source: Source) -> "List[Series]":
     cols = _import_vec_columns(union, source)
     inputs = [cols[name] for name in union]
     index = {name: i for i, name in enumerate(union)}
-    asts: List[List[tuple]] = []
+    asts: list[list[tuple[object, ...]]] = []
     for c in cs:
-        ast: List[tuple] = []
+        ast: list[tuple[object, ...]] = []
         emit_ast(c._expr, index.__getitem__, ast)
         asts.append(ast)
     return list(_ext.vec_eval_many(asts, inputs))
 
 
-def _broadcast_scalar(value: Scalar, out_float: bool, cols: Dict[str, "Series"]) -> "Series":
+def _broadcast_scalar(value: Scalar, out_float: bool, cols: dict[str, Series]) -> Series:
     # Only the length of an input column is used, never its values: a null,
     # NaN or infinity in that column must not reach the constant. An all-null
     # column of the target type, filled with the value, has no other source.
@@ -273,7 +266,7 @@ def _broadcast_scalar(value: Scalar, out_float: bool, cols: Dict[str, "Series"])
     return _ext._series_nulls(int(_FLOAT64 if out_float else _INT64), n).fillna(value)
 
 
-def _is_float(expr: Expr, cols: Dict[str, "Series"]) -> bool:
+def _is_float(expr: Expr, cols: dict[str, Series]) -> bool:
     if isinstance(expr, Lit):
         return isinstance(expr.value, float)
     if isinstance(expr, Col):
@@ -304,19 +297,19 @@ class _ScalarVal(NamedTuple):
 
 
 class _ColVal(NamedTuple):
-    value: "Series"
+    value: Series
 
 
 _EvalResult = Union[_ScalarVal, _ColVal]
 
 
-def _need_col(r: _EvalResult, message: str) -> "Series":
+def _need_col(r: _EvalResult, message: str) -> Series:
     if isinstance(r, _ColVal):
         return r.value
     raise TypeError(message)
 
 
-def _eval(expr: Expr, cols: Dict[str, "Series"], out_float: bool) -> _EvalResult:
+def _eval(expr: Expr, cols: dict[str, Series], out_float: bool) -> _EvalResult:
     if isinstance(expr, Lit):
         return _ScalarVal(float(expr.value) if out_float else int(expr.value))
     if isinstance(expr, Col):
@@ -378,11 +371,11 @@ _COL_OP = {"+": "add", "-": "sub", "*": "mul", "/": "div"}
 _SCALAR_OP = {"+": "add_scalar", "-": "sub_scalar", "*": "mul_scalar", "/": "div_scalar"}
 
 
-def _binop(op: str, left: _EvalResult, right: _EvalResult) -> "Series":
+def _binop(op: str, left: _EvalResult, right: _EvalResult) -> Series:
     if isinstance(left, _ColVal) and isinstance(right, _ColVal):
-        return getattr(_ext.Series, _COL_OP[op])(left.value, right.value)
+        return cast("Series", getattr(_ext.Series, _COL_OP[op])(left.value, right.value))
     if isinstance(left, _ColVal):  # col op scalar
-        return getattr(_ext.Series, _SCALAR_OP[op])(left.value, right.value)
+        return cast("Series", getattr(_ext.Series, _SCALAR_OP[op])(left.value, right.value))
     if isinstance(right, _ColVal) and op in ("+", "*"):  # scalar op col (commutes)
-        return getattr(_ext.Series, _SCALAR_OP[op])(right.value, left.value)
+        return cast("Series", getattr(_ext.Series, _SCALAR_OP[op])(right.value, left.value))
     raise NotImplementedError(f"scalar {op} column needs a vec kernel (not yet available)")

@@ -16,9 +16,9 @@ from dftracer.utils import dftracer_utils_ext as ext  # noqa: E402
 
 _ROOT = Path(__file__).resolve().parents[2]
 _PYI = _ROOT / "python/dftracer/utils/dftracer_utils_ext.pyi"
-# Opaque handles that are capsules at run time; the .pyi names them for the
-# checkers.
-_TYPING_ONLY = {"_UdfHandle", "_UdafHandle"}
+# Opaque handles that are capsules at run time, and the protocol for an object
+# that owns a native Runtime; the .pyi names them for the checkers.
+_TYPING_ONLY = {"_UdfHandle", "_UdafHandle", "_RuntimeHolder"}
 _DEAD_EXPORTS = [
     "TraceReaderIterator",
     "_ArrowStreamingIterator",
@@ -114,7 +114,7 @@ _STUB_TEXT = _ROOT / "docs" / "source" / "_ext_stub.py"
 
 def test_the_stub_keeps_every_overload_and_the_docstrings():
     text = _STUB_TEXT.read_text(encoding="utf-8")
-    assert '    @overload\n    def rolling(self, window: int) -> "Rolling": ...' in text
-    assert "    def rolling(\n        self, window: int, op: Literal" in text
+    assert "    @overload\n    def rolling(self, window: int) -> Rolling: ..." in text
+    assert "    def rolling(self, window: int, op: Literal" in text
     assert "Exponentially weighted window" in text
     assert "class Rolling:" in text and "class Ewm:" in text

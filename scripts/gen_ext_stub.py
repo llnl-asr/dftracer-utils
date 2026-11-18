@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import sys
 import types
-from typing import Generic, Tuple, TypedDict, TypeVar, overload
+from typing import Generic, Protocol, Tuple, TypedDict, TypeVar, overload
 '''
 
 FOOTER = '''

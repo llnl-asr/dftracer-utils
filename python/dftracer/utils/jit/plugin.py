@@ -9,7 +9,6 @@ from typing import (
     TYPE_CHECKING,
     Callable,
     Dict,
-    List,
     cast,
     get_args,
     get_origin,
@@ -55,8 +54,8 @@ class JitPlugin:
         self,
         name: str,
         source: str,
-        renames: Dict[str, List[str]],
-        result_names: "Dict[str, str] | None" = None,
+        renames: dict[str, list[str]],
+        result_names: dict[str, str] | None = None,
         shippable: bool = True,
         lowering: str = "branch",
     ) -> None:
@@ -121,7 +120,7 @@ def store_plugin_name(identity: str) -> str:
     ``.so`` and the host's namespace prefix: its identity with every byte outside
     ``[a-z0-9-]`` escaped (``_`` as ``__``, ``.`` as ``_d``, ``/`` as ``_s``, any other
     as ``_u<hex>_``), so two identities never share a name."""
-    out: List[str] = []
+    out: list[str] = []
     for c in identity:
         if c in _STORE_NAME_CHARS and c != "_":
             out.append(c)
@@ -164,9 +163,7 @@ _PORT_FACTORY = {
 }
 
 
-def _port_decls(
-    cls: type, pkg: "JitPackage", declared: "Dict[str, _PortDecl]"
-) -> "Dict[str, _PortDecl]":
+def _port_decls(cls: type, pkg: JitPackage, declared: dict[str, _PortDecl]) -> dict[str, _PortDecl]:
     """Complete the port attributes of ``cls``: the element type from the
     annotation, the host name from the plugin identity, and, for a reference, the
     options and type of the declaration it names (checked against this end)."""
@@ -192,7 +189,8 @@ def _port_decls(
                 attr,
             )
         tp = resolve_hint(cls, attr, own[attr])
-        name = _PORT_ORIGINS.get(get_origin(tp))  # type: ignore[arg-type]
+        origin = get_origin(tp)
+        name = _PORT_ORIGINS.get(origin) if origin is not None else None
         want = _PORT_FACTORY[(decl.kind, decl.role)]
         args = get_args(tp)
         if name is None or len(args) != 1:
@@ -263,7 +261,7 @@ def _port_decls(
             decl.logical = decl.full = src.full
             decl.credits, decl.policy = src.credits, src.policy
             decl.max_msg_bytes, decl.merge = src.max_msg_bytes, src.merge
-    seen: Dict[str, str] = {}
+    seen: dict[str, str] = {}
     for attr, decl in declared.items():
         if decl.logical in seen:
             raise class_error(
@@ -273,14 +271,14 @@ def _port_decls(
     return declared
 
 
-def build_plugin(cls: type, pkg: "JitPackage") -> type:
-    maps: Dict[str, AnyMap] = {}
-    ports: Dict[str, PortHandle] = {}
-    chans: Dict[str, _PortDecl] = {}
-    each: List[EachEvent] = []
-    batches: List[EachBatch] = []
-    task_fns: Dict[str, Callable[..., object]] = {}
-    finalize_fns: List[Callable[..., object]] = []
+def build_plugin(cls: type, pkg: JitPackage) -> type:
+    maps: dict[str, AnyMap] = {}
+    ports: dict[str, PortHandle] = {}
+    chans: dict[str, _PortDecl] = {}
+    each: list[EachEvent] = []
+    batches: list[EachBatch] = []
+    task_fns: dict[str, Callable[..., object]] = {}
+    finalize_fns: list[Callable[..., object]] = []
     for attr, val in vars(cls).items():
         if isinstance(val, Map):
             maps[attr] = val
@@ -357,15 +355,15 @@ def build_plugin(cls: type, pkg: "JitPackage") -> type:
     if plan_duql is not None and not isinstance(plan_duql, str):
         raise class_error(cls, "@jit.plugin plan_duql must be a query DSL string", "plan_duql")
     configs = config_fields(cls)
-    op_defs: List[str] = []
-    task_sigs: Dict[str, _TaskSig] = {}
+    op_defs: list[str] = []
+    task_sigs: dict[str, _TaskSig] = {}
     if each[0].raw:
         body = raw_body(each[0].fn)
         # A raw body is spliced verbatim, so which fields it reads off `e` is
         # not knowable; resolve all of them.
         fields_used: builtins.set[str] = builtins.set(ALL_FIXED_FIELDS)
-        str_literals: List[str] = []
-        arg_keys: List[str] = []
+        str_literals: list[str] = []
+        arg_keys: list[str] = []
         arg_helpers: builtins.set[str] = builtins.set()
         # A raw body appends rows itself, so the row budget cannot be counted
         # from the AST; RAW_ROWS_PER_EVENT is the contract it must respect.
@@ -402,13 +400,13 @@ def build_plugin(cls: type, pkg: "JitPackage") -> type:
         arg_helpers = compiler.arg_helpers
         op_defs = compiler.op_defs
         rows_per_event = compiler.rows_per_event
-    flow_fns: "List[_FlowFn]" = []
-    flow_defs: "List[str] | None" = None
-    finalize_lines: "List[str] | None" = None
-    flow_uses: "builtins.set[str]" = (
+    flow_fns: list[_FlowFn] = []
+    flow_defs: list[str] | None = None
+    finalize_lines: list[str] | None = None
+    flow_uses: builtins.set[str] = (
         builtins.set(compiler.uses) if not each[0].raw else builtins.set()
     )
-    extra_gets: "builtins.set[str]" = builtins.set()
+    extra_gets: builtins.set[str] = builtins.set()
     if finalize_fns:
         sigs = task_sigs
         for fn, sig in [(finalize_fns[0], None)] + [(task_fns[a], sigs[a]) for a in task_fns]:
@@ -429,7 +427,7 @@ def build_plugin(cls: type, pkg: "JitPackage") -> type:
                     op_defs.append(def_text)
             extra_gets |= flow.store_gets
             flow_uses |= flow.uses
-        cfg_pre: List[str] = ["    const DftuCfg* _c = R->cfg;", "    (void)_c;"] if configs else []
+        cfg_pre: list[str] = ["    const DftuCfg* _c = R->cfg;", "    (void)_c;"] if configs else []
         for cf in configs.values():
             cfg_pre += cf.locals_()
             if cf.kind == "str":
@@ -494,13 +492,13 @@ def build_plugin(cls: type, pkg: "JitPackage") -> type:
 
 def _build_batch_plugin(
     cls: type,
-    pkg: "JitPackage",
-    maps: Dict[str, AnyMap],
-    ports: Dict[str, PortHandle],
-    plains: Dict[str, PlainField],
-    stores: Dict[str, StoreField],
-    batches: "List[EachBatch]",
-    chans: "Dict[str, _PortDecl]",
+    pkg: JitPackage,
+    maps: dict[str, AnyMap],
+    ports: dict[str, PortHandle],
+    plains: dict[str, PlainField],
+    stores: dict[str, StoreField],
+    batches: list[EachBatch],
+    chans: dict[str, _PortDecl],
 ) -> type:
     if len(batches) != 1:
         raise class_error(cls, "@jit.plugin needs exactly one @jit.each_batch method")
@@ -570,7 +568,7 @@ def _build_batch_plugin(
 _HOST_NAME_PREFIX = "dftu."
 
 
-def series_module(fn: Callable[..., Expr], module: "str | None", pkg: "JitPackage") -> str:
+def series_module(fn: Callable[..., Expr], module: str | None, pkg: JitPackage) -> str:
     if module is not None:
         mod = module
     else:
@@ -591,7 +589,7 @@ def series_module(fn: Callable[..., Expr], module: "str | None", pkg: "JitPackag
 
 
 def series_impl(
-    fn: Callable[..., Expr], module: "str | None", pkg: "JitPackage"
+    fn: Callable[..., Expr], module: str | None, pkg: JitPackage
 ) -> Callable[..., Result]:
     fname = getattr(fn, "__name__", None)
     if not isinstance(fname, str):

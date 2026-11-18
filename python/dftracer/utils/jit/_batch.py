@@ -12,7 +12,7 @@ per-event loop in the emitted code.
 from __future__ import annotations
 
 import ast
-from typing import Any, Dict, Iterable, List, NoReturn, Optional, Tuple
+from typing import Any, Callable, Iterable, NoReturn
 
 from .._c_text import c_str_literal
 from .._eval import ARITH_CODE, COMPARE_CODE
@@ -89,7 +89,7 @@ HELPERS = [
 ]
 
 
-def _scalar_c(lit: "_V") -> str:
+def _scalar_c(lit: _V) -> str:
     """C text for a number literal as a ``dftu_scalar``."""
     value = lit.value
     assert isinstance(value, (int, float))
@@ -98,7 +98,7 @@ def _scalar_c(lit: "_V") -> str:
     return f"dftu_jb_sf({value!r})"
 
 
-def _fail(reason: str, node: "ast.AST | None") -> NoReturn:
+def _fail(reason: str, node: ast.AST | None) -> NoReturn:
     err = JitError(reason, locate=False)
     err.node = node
     raise err
@@ -131,7 +131,7 @@ class _V:
         shape: str,
         num: str,
         domain: int,
-        args: Tuple["_V", ...] = (),
+        args: tuple[_V, ...] = (),
         value: object = None,
         name: str = "",
     ) -> None:
@@ -150,45 +150,45 @@ class BatchHook:
     plain-state or descriptor fields it folds into."""
 
     def __init__(self) -> None:
-        self.lines: List[str] = []
-        self.columns: List[str] = []
-        self.rows: Dict[str, int] = {}
-        self.updated: List[str] = []
-        self.chan_uses: "set[str]" = set()
+        self.lines: list[str] = []
+        self.columns: list[str] = []
+        self.rows: dict[str, int] = {}
+        self.updated: list[str] = []
+        self.chan_uses: set[str] = set()
         self.sends = 0
 
 
 class _Lowering:
     def __init__(
         self,
-        maps: "Dict[str, object]",
-        plains: "Dict[str, object]",
-        monoids: "Tuple[type, ...]",
-        chans: "Dict[str, Any]",
+        maps: dict[str, object],
+        plains: dict[str, object],
+        monoids: tuple[type, ...],
+        chans: dict[str, Any],
     ) -> None:
         self.maps = maps
         self.plains = plains
         self.chans = chans
         self.self_name = "self"
         self.df_name = "df"
-        self.locals: Dict[str, _V] = {}
-        self.columns: List[str] = []
+        self.locals: dict[str, _V] = {}
+        self.columns: list[str] = []
         self.hook = BatchHook()
-        self.domains: Dict[Tuple[int, str], int] = {}
+        self.domains: dict[tuple[int, str], int] = {}
         # Emission state.
-        self.body: List[str] = []
-        self.leaf_of_col: Dict[str, int] = {}
+        self.body: list[str] = []
+        self.leaf_of_col: dict[str, int] = {}
         self.leaf_count = 0
-        self.leaf_series: Dict[str, int] = {}
-        self.exprs: Dict[str, str] = {}
-        self.series: Dict[str, str] = {}
+        self.leaf_series: dict[str, int] = {}
+        self.exprs: dict[str, str] = {}
+        self.series: dict[str, str] = {}
         self.expr_count = 0
         self.temp_count = 0
         self.fold_count = 0
-        self.cur: Optional[ast.AST] = None
+        self.cur: ast.AST | None = None
         # (attribute, element family, reduction) in statement order; emitted after
         # the whole body is read so independent column expressions share a program.
-        self.folds: List[Tuple[str, str, _V]] = []
+        self.folds: list[tuple[str, str, _V]] = []
 
     # ---- front end -------------------------------------------------------
 
@@ -209,7 +209,7 @@ class _Lowering:
                 self._emit_port(attr[len(_PORT_TAG) :], elem, v)
             else:
                 self._emit_fold(attr, elem, v)
-        prologue: List[str] = []
+        prologue: list[str] = []
         c_n = max(len(self.columns), 1)
         prologue.append(f"dftu_series* _C[{c_n}] = {{0}};")
         if self.leaf_count > 0:
@@ -276,7 +276,7 @@ class _Lowering:
                 cur = cur.value
         return False
 
-    def _assign(self, stmt: "ast.Assign | ast.AnnAssign") -> None:
+    def _assign(self, stmt: ast.Assign | ast.AnnAssign) -> None:
         if isinstance(stmt, ast.Assign):
             if len(stmt.targets) != 1:
                 _fail("chained assignment in a batch hook", stmt)
@@ -389,7 +389,7 @@ class _Lowering:
 
     # ---- fold targets ----------------------------------------------------
 
-    def _target(self, node: ast.expr, form: str) -> Tuple[str, str, str]:
+    def _target(self, node: ast.expr, form: str) -> tuple[str, str, str]:
         """(attribute, element family, monoid op) of a fold target."""
         if isinstance(node, ast.Attribute):
             base = node
@@ -494,7 +494,7 @@ class _Lowering:
         return self.domains[key]
 
     def _series_args(self, nodes: Iterable[_V], at: ast.AST) -> int:
-        domain: Optional[int] = None
+        domain: int | None = None
         for v in nodes:
             if v.shape == "lit":
                 continue
@@ -519,7 +519,7 @@ class _Lowering:
             return "any"
         return "int"
 
-    def _lit(self, node: ast.expr) -> Optional[_V]:
+    def _lit(self, node: ast.expr) -> _V | None:
         node = _unwrap(node)
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
             inner = self._lit(node.operand)
@@ -662,7 +662,7 @@ class _Lowering:
         _fail("unary operator in a column expression", node)
 
     def _compare(self, node: ast.Compare) -> _V:
-        parts: List[_V] = []
+        parts: list[_V] = []
         left = node.left
         for op, right in zip(node.ops, node.comparators):
             code = COMPARE_CODE.get(type(op))
@@ -907,7 +907,7 @@ class _Lowering:
             return False
         return all(_Lowering._over_columns(a) for a in v.args)
 
-    def _collect(self, v: _V, out: List[_V]) -> None:
+    def _collect(self, v: _V, out: list[_V]) -> None:
         if v.kind == "red":
             self._collect(v.args[0], out)
         elif v.kind == "filter":
@@ -922,11 +922,11 @@ class _Lowering:
             for a in v.args:
                 self._collect(a, out)
 
-    def _eval_independent(self, roots: List[_V]) -> None:
+    def _eval_independent(self, roots: list[_V]) -> None:
         """Evaluate every expression over scan columns that the folds need in one
         ``dftu_expr_eval_many`` program, so the engine compiles once and shares
         subexpressions."""
-        found: List[_V] = []
+        found: list[_V] = []
         for v in roots:
             self._collect(v, found)
         if len(found) < 2:
@@ -1082,10 +1082,10 @@ class _Lowering:
 
 
 def lower_batch(
-    fn: object,
-    maps: "Dict[str, object]",
-    plains: "Dict[str, object]",
-    chans: "Dict[str, object] | None" = None,
+    fn: Callable[..., object],
+    maps: dict[str, object],
+    plains: dict[str, object],
+    chans: dict[str, object] | None = None,
 ) -> BatchHook:
     """Lower an ``each_batch`` function to a :class:`BatchHook`; ``maps`` is
     the plugin's ``jit.map`` declarations and ``plains`` its plain fields."""

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import builtins
-from typing import Any, Dict, Generic, NamedTuple, TypeVar
+from typing import Generic, NamedTuple, TypeVar
 
 from .._jit_errors import JitError
 from ..enums import DType
@@ -20,7 +20,7 @@ K4 = TypeVar("K4")
 C = TypeVar("C")
 SK = TypeVar("SK")
 SV = TypeVar("SV")
-MISSING: Any = object()
+MISSING = object()
 
 
 class Str(str):
@@ -45,7 +45,7 @@ class TypeTag(Generic[T_co]):
 
 i64: TypeTag[int] = TypeTag("DFTU_T_I64")
 str_: TypeTag[Str] = TypeTag("DFTU_T_STR")
-bytes: "TypeTag[builtins.bytes]" = TypeTag("DFTU_T_BYTES")
+bytes: TypeTag[builtins.bytes] = TypeTag("DFTU_T_BYTES")
 
 i8: TypeTag[int] = TypeTag("DFTU_T_I8")
 i16: TypeTag[int] = TypeTag("DFTU_T_I16")
@@ -88,7 +88,7 @@ class CType(NamedTuple):
     """The ``DFTU_TYPE_*`` dtype of a batch column that holds the value."""
 
 
-C_TYPES: Dict[DType, CType] = {
+C_TYPES: dict[DType, CType] = {
     DType.INT64: CType("DFTU_T_I64", "int64_t", 8, "q", "DFTU_TYPE_INT64"),
     DType.INT32: CType("DFTU_T_I32", "int32_t", 4, "i", "DFTU_TYPE_INT32"),
     DType.INT16: CType("DFTU_T_I16", "int16_t", 2, "h", "DFTU_TYPE_INT16"),
@@ -105,10 +105,10 @@ C_TYPES: Dict[DType, CType] = {
     DType.STRING: CType("DFTU_T_STR", "dftu_str", 4, "I", "DFTU_TYPE_STRING"),
 }
 
-DFT_DTYPES: Dict[str, DType] = {c.dft: d for d, c in C_TYPES.items()}
+DFT_DTYPES: dict[str, DType] = {c.dft: d for d, c in C_TYPES.items()}
 
 # The value family each accumulator element is stored as.
-KIND_DTYPES: Dict[str, DType] = {
+KIND_DTYPES: dict[str, DType] = {
     "i64": DType.INT64,
     "f64": DType.FLOAT64,
     "str": DType.STRING,

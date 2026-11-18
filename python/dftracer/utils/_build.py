@@ -22,7 +22,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple, Union
+from typing import NamedTuple, Sequence, Tuple
 
 from .dftracer_utils_ext import PLUGIN_ABI_VERSION
 
@@ -83,7 +83,7 @@ def _cxx_version(cxx: str) -> str:
     return proc.stdout
 
 
-def _plugin_abi_headers(base: Path) -> List[Path]:
+def _plugin_abi_headers(base: Path) -> list[Path]:
     # plugins/abi.h plus every part header it includes (plugins/abi/*.h),
     # sorted so the cache key hashes them in a fixed order.
     plugins_dir = base / "plugins"
@@ -98,7 +98,7 @@ def _host_abi_version() -> int:
     return int(PLUGIN_ABI_VERSION)
 
 
-def _ensure_abi_version_header(include: str) -> Optional[str]:
+def _ensure_abi_version_header(include: str) -> str | None:
     """Write dftracer/utils/plugins/abi_version.h into the JIT cache when
     ``include`` has none (a source checkout, where CMake writes the header into
     its build tree), stamped with the loaded host's plugin ABI version. Returns
@@ -182,7 +182,7 @@ _TOOLCHAIN_ENV = (
     "DFTRACER_UTILS_PLUGIN_INCLUDE",
     "DFTRACER_UTILS_JIT_CACHE",
 )
-_TOOLCHAINS: Dict[Tuple[Optional[str], ...], Toolchain] = {}
+_TOOLCHAINS: dict[tuple[str | None, ...], Toolchain] = {}
 
 
 def toolchain() -> Toolchain:
@@ -196,7 +196,7 @@ def toolchain() -> Toolchain:
     return tc
 
 
-def cflags() -> List[str]:
+def cflags() -> list[str]:
     """Compile flags a plugin needs: C++20, position-independent, shared."""
     return list(toolchain().flags)
 
@@ -231,8 +231,8 @@ def compile_source(
     source: str,
     name: str,
     *,
-    out: Union[str, "os.PathLike[str]", None] = None,
-    cache: Union[str, "os.PathLike[str]", None] = None,
+    out: str | os.PathLike[str] | None = None,
+    cache: str | os.PathLike[str] | None = None,
     extra_flags: Sequence[str] = (),
     group: str = "",
 ) -> str:
@@ -263,9 +263,7 @@ def compile_source(
     return str(out_path)
 
 
-def compile_file(
-    src: Union[str, "os.PathLike[str]"], out: Union[str, "os.PathLike[str]", None] = None
-) -> str:
+def compile_file(src: str | os.PathLike[str], out: str | os.PathLike[str] | None = None) -> str:
     """Compile the source file ``src`` to a loadable ``.so`` and return its path.
 
     With ``out`` unset, the output is a content-hashed path in the cache dir named

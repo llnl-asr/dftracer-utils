@@ -4,7 +4,12 @@
 
 import html
 import math
-from typing import Any, List, Sequence, Tuple
+from typing import TYPE_CHECKING, List, Sequence, Tuple
+
+if TYPE_CHECKING:
+    from .dataframe import DataFrame
+    from .enums import DType
+    from .series import Series
 
 MAX_ROWS = 60
 EDGE_ROWS = 5
@@ -16,8 +21,8 @@ def _float_cells(values: Sequence[object]) -> List[str]:
     plain = all(v == 0 or 1e-6 <= abs(v) < 1e6 for v in finite)
     decimals = 1
     if plain:
-        for v in finite:
-            text = f"{v:.6f}".rstrip("0")
+        for x in finite:
+            text = f"{x:.6f}".rstrip("0")
             decimals = max(decimals, len(text) - text.index(".") - 1)
     out = []
     for v in values:
@@ -38,7 +43,7 @@ def _cells(values: Sequence[object], is_float: bool) -> List[str]:
     return ["None" if v is None else str(v) for v in values]
 
 
-def _is_float(dtype: Any) -> bool:
+def _is_float(dtype: "DType") -> bool:
     return str(getattr(dtype, "name", "")).startswith("FLOAT")
 
 
@@ -48,7 +53,7 @@ def _shown(n: int) -> "Tuple[bool, List[int]]":
     return True, list(range(EDGE_ROWS)) + list(range(n - EDGE_ROWS, n))
 
 
-def _column(series: Any, cut: bool) -> List[str]:
+def _column(series: "Series", cut: bool) -> List[str]:
     if cut:
         values = series.head(EDGE_ROWS).to_list() + series.tail(EDGE_ROWS).to_list()
     else:
@@ -91,7 +96,7 @@ def _table(
 
 
 def _frame_parts(
-    frame: Any,
+    frame: "DataFrame",
 ) -> "Tuple[bool, List[str], List[List[str]], List[str], List[List[str]]]":
     columns = list(frame.columns)
     cut, _ = _shown(len(frame))
@@ -111,7 +116,7 @@ def _frame_parts(
     return cut, index_names, index_cols, names, cols
 
 
-def frame_repr(frame: Any) -> str:
+def frame_repr(frame: "DataFrame") -> str:
     columns = list(frame.columns)
     n = len(frame)
     if n == 0 or not columns:
@@ -123,7 +128,7 @@ def frame_repr(frame: Any) -> str:
     return text
 
 
-def frame_html(frame: Any) -> str:
+def frame_html(frame: "DataFrame") -> str:
     columns = list(frame.columns)
     n = len(frame)
     if n == 0 or not columns:
@@ -147,7 +152,7 @@ def frame_html(frame: Any) -> str:
     return "\n".join(out)
 
 
-def series_repr(series: Any) -> str:
+def series_repr(series: "Series") -> str:
     n = len(series)
     dtype = str(series.dtype.name).lower()
     name = f"Name: {series.name}, " if series.name is not None else ""

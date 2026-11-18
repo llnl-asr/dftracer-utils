@@ -320,10 +320,7 @@ def test_decode_in_process_that_registered_but_never_encoded(tmp_path):
         "assert out[0].n == 5 and out[1] == 'x'\n"
     )
     subprocess.run([sys.executable, "-c", script, data.hex()], check=True)
-    bare = (
-        "from dftracer.utils.store.codec import decode\ntry:\n    decode(bytes.fromhex(%r))\nexcept ValueError as e:\n    assert 'register_type' in str(e)\n    raise SystemExit(0)\nraise SystemExit(1)\n"
-        % data.hex()
-    )
+    bare = f"from dftracer.utils.store.codec import decode\ntry:\n    decode(bytes.fromhex({data.hex()!r}))\nexcept ValueError as e:\n    assert 'register_type' in str(e)\n    raise SystemExit(0)\nraise SystemExit(1)\n"
     subprocess.run([sys.executable, "-c", bare], check=True)
 
 

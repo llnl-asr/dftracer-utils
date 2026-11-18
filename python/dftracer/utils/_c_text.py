@@ -3,14 +3,12 @@
 
 from __future__ import annotations
 
-from typing import List
-
 
 def c_str_literal(s: str) -> str:
     """A C string literal for ``s``: printable ASCII as is, a backslash and a
     quote escaped, every other byte (control, NUL, non-ASCII UTF-8) as a
     three-digit octal escape, which never merges with the next character."""
-    out: List[str] = []
+    out: list[str] = []
     for byte in s.encode("utf-8"):
         ch = chr(byte)
         if ch == "\\" or ch == '"':

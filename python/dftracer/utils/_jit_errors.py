@@ -13,7 +13,7 @@ import os
 import re
 import sys
 import textwrap
-from typing import TYPE_CHECKING, Any, List, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 if TYPE_CHECKING:
     from types import FrameType
@@ -53,7 +53,7 @@ class JitError(Exception):
             if site is not None:
                 self._set_location(*site)
 
-    def __reduce__(self) -> "Tuple[Any, ...]":
+    def __reduce__(self) -> tuple[Any, ...]:
         # Rebuilt from the parts, so a copy or a pickle does not look the
         # location up again and add a second one.
         state = (self.reason, self.file, self.line, self.col, self.source, self.precise)
@@ -68,12 +68,12 @@ class JitError(Exception):
 
 
 def _rebuild_error(
-    kind: "type[JitError]",
+    kind: type[JitError],
     reason: str,
-    file: "str | None",
-    line: "int | None",
-    col: "int | None",
-    source: "str | None",
+    file: str | None,
+    line: int | None,
+    col: int | None,
+    source: str | None,
     precise: bool,
 ) -> JitError:
     err = kind(reason, locate=False)
@@ -87,10 +87,10 @@ def _is_jit_file(filename: str) -> bool:
     return os.path.dirname(path) == _JIT_DIR or path in _JIT_FILES or path == __file__
 
 
-def _call_site() -> "Tuple[str, int, int, str] | None":
+def _call_site() -> tuple[str, int, int, str] | None:
     """The first frame outside the JIT: where the user wrote the construct
     that raised."""
-    frame: "FrameType | None" = sys._getframe(2)
+    frame: FrameType | None = sys._getframe(2)
     while frame is not None and _is_jit_file(frame.f_code.co_filename):
         frame = frame.f_back
     if frame is None:
@@ -109,7 +109,7 @@ def _call_site() -> "Tuple[str, int, int, str] | None":
     return file, line, col, source
 
 
-def _class_node(cls: type) -> "Tuple[str, List[str], ast.ClassDef]":
+def _class_node(cls: type) -> tuple[str, list[str], ast.ClassDef]:
     """The file, its lines and the ClassDef of ``cls``. ``inspect`` finds the
     first class of that name in the file, so the match is by qualified name, and
     by a method's line when two classes share one."""
@@ -118,9 +118,9 @@ def _class_node(cls: type) -> "Tuple[str, List[str], ast.ClassDef]":
     file = inspect.getsourcefile(cls) or "<unknown>"
     lines = linecache.getlines(file) or open(file, encoding="utf-8").read().splitlines(True)
     tree = ast.parse("".join(lines))
-    found: List[ast.ClassDef] = []
+    found: list[ast.ClassDef] = []
 
-    def walk(body: "List[ast.stmt]", prefix: str) -> None:
+    def walk(body: list[ast.stmt], prefix: str) -> None:
         for stmt in body:
             if isinstance(stmt, ast.ClassDef):
                 qual = prefix + stmt.name
@@ -159,7 +159,7 @@ class Source:
     to ``file:line:col``. For a function the nodes come from the dedented
     ``text``; for a class they are already file positions."""
 
-    def __init__(self, obj: Any) -> None:
+    def __init__(self, obj: type | Callable[..., object]) -> None:
         import inspect
 
         self.file = inspect.getsourcefile(obj) or "<unknown>"
@@ -172,7 +172,7 @@ class Source:
         self.cls_node: ast.ClassDef | None = None
 
     @classmethod
-    def of_class(cls, klass: type) -> "Source":
+    def of_class(cls, klass: type) -> Source:
         file, lines, node = _class_node(klass)
         src = cls.__new__(cls)
         src.file, src.lines, src.first, src.margin = file, lines, 1, 0
@@ -182,7 +182,7 @@ class Source:
         return src
 
     def error(
-        self, reason: str, node: "ast.AST | None", kind: "type[JitError] | None" = None
+        self, reason: str, node: ast.AST | None, kind: type[JitError] | None = None
     ) -> JitError:
         lineno = getattr(node, "lineno", 1)
         col = getattr(node, "col_offset", 0)
@@ -191,15 +191,15 @@ class Source:
         err._set_location(self.file, self.first + lineno - 1, col + self.margin + 1, source, True)
         return err
 
-    def relocate(self, exc: JitError, fallback: "ast.AST | None") -> JitError:
+    def relocate(self, exc: JitError, fallback: ast.AST | None) -> JitError:
         """``exc`` pointed at its node (or ``fallback``) in this source."""
         if exc.precise:
             return exc
         return self.error(exc.reason, exc.node if exc.node is not None else fallback, type(exc))
 
-    def find(self, name: "str | None") -> "ast.AST | None":
+    def find(self, name: str | None) -> ast.AST | None:
         """The class statement, or the first assignment to ``name`` in its body."""
-        cls_node = self.cls_node
+        cls_node: ast.AST | None = self.cls_node
         if cls_node is None:
             cls_node = ast.parse(self.text).body[0]
         if name is None or not isinstance(cls_node, ast.ClassDef):
@@ -218,7 +218,7 @@ class Source:
         return cls_node
 
 
-def class_error(cls: type, reason: str, attr: "str | None" = None) -> JitError:
+def class_error(cls: type, reason: str, attr: str | None = None) -> JitError:
     """A JitError located at ``cls``'s statement, or at its ``attr`` assignment."""
     try:
         src = Source.of_class(cls)
@@ -232,23 +232,21 @@ class _Located:
     and the ``file:line:col`` of the ``raise`` (or the call that failed)."""
 
     message: str
-    file: "str | None"
-    line: "int | None"
-    col: "int | None"
+    file: Optional[str]
+    line: Optional[int]
+    col: Optional[int]
 
-    def _locate(
-        self, message: str, file: "str | None", line: "int | None", col: "int | None"
-    ) -> None:
+    def _locate(self, message: str, file: str | None, line: int | None, col: int | None) -> None:
         self.message = message
         self.file = file
         self.line = line
         self.col = col
 
-    def __reduce__(self) -> "Tuple[Any, ...]":
+    def __reduce__(self) -> tuple[object, ...]:
         return (_rebuild_runtime, (type(self), self.message, self.file, self.line, self.col))
 
 
-def _runtime_text(message: str, file: "str | None", line: "int | None", col: "int | None") -> str:
+def _runtime_text(message: str, file: str | None, line: int | None, col: int | None) -> str:
     if file is None or line is None or col is None:
         return message
     return f"{file}:{line}:{col}: {message}"
@@ -264,9 +262,9 @@ class Error(_Located, Exception):
         self,
         message: str = "",
         *,
-        file: "str | None" = None,
-        line: "int | None" = None,
-        col: "int | None" = None,
+        file: str | None = None,
+        line: int | None = None,
+        col: int | None = None,
     ) -> None:
         Exception.__init__(self, _runtime_text(message, file, line, col))
         self._locate(message, file, line, col)
@@ -300,9 +298,9 @@ class Fatal(_Located, Exception):
         self,
         message: str = "",
         *,
-        file: "str | None" = None,
-        line: "int | None" = None,
-        col: "int | None" = None,
+        file: str | None = None,
+        line: int | None = None,
+        col: int | None = None,
     ) -> None:
         Exception.__init__(self, _runtime_text(message, file, line, col))
         self._locate(message, file, line, col)
@@ -317,9 +315,9 @@ class SkipRest(_Located, Exception):
         self,
         message: str = "",
         *,
-        file: "str | None" = None,
-        line: "int | None" = None,
-        col: "int | None" = None,
+        file: str | None = None,
+        line: int | None = None,
+        col: int | None = None,
     ) -> None:
         Exception.__init__(self, _runtime_text(message, file, line, col))
         self._locate(message, file, line, col)
@@ -334,21 +332,25 @@ class Cancelled(_Located, BaseException):
         self,
         message: str = "",
         *,
-        file: "str | None" = None,
-        line: "int | None" = None,
-        col: "int | None" = None,
+        file: str | None = None,
+        line: int | None = None,
+        col: int | None = None,
     ) -> None:
         BaseException.__init__(self, _runtime_text(message, file, line, col))
         self._locate(message, file, line, col)
 
 
 def _rebuild_runtime(
-    kind: "type[Any]", message: str, file: "str | None", line: "int | None", col: "int | None"
-) -> Any:
+    kind: type[Error] | type[Fatal] | type[Cancelled],
+    message: str,
+    file: str | None,
+    line: int | None,
+    col: int | None,
+) -> Error | Fatal | Cancelled:
     return kind(message, file=file, line=line, col=col)
 
 
-_RUNTIME_KINDS = {
+_RUNTIME_KINDS: dict[str, type[Error] | type[Fatal] | type[Cancelled]] = {
     "Fatal": Fatal,
     "Cancelled": Cancelled,
     "Error": Error,
@@ -367,7 +369,7 @@ _RUNTIME_TAG = re.compile(
 )
 
 
-def translate_run_error(exc: BaseException) -> "BaseException | None":
+def translate_run_error(exc: BaseException) -> BaseException | None:
     """The ``jit`` exception a failed run's native error stands for, or None for
     an error that no compiled plugin tagged."""
     found = _RUNTIME_TAG.search(str(exc))
@@ -377,7 +379,7 @@ def translate_run_error(exc: BaseException) -> "BaseException | None":
     return _RUNTIME_KINDS[kind](message, file=file, line=int(line), col=int(col))
 
 
-def check_port_wiring(plugins: "List[Any]") -> None:
+def check_port_wiring(plugins: list[Any]) -> None:
     """Raise a :class:`JitError`, located at the port, for a port that refers to
     another ``@jit.plugin``'s latest value or phase result when that plugin is not
     in ``plugins``: the host plans channels, but it has no way to know that a latest
@@ -419,7 +421,7 @@ def check_port_wiring(plugins: "List[Any]") -> None:
                 )
 
 
-def translate_plan_error(plugins: "List[Any]", exc: BaseException) -> "JitError | None":
+def translate_plan_error(plugins: list[Any], exc: BaseException) -> JitError | None:
     """The :class:`JitError` a failed plan stands for when the host's message names
     a port of one of the ``@jit.plugin`` classes in ``plugins`` (a receiver with no
     sender, options that differ between two ends, two plugins of one name), located

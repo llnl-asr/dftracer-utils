@@ -151,33 +151,52 @@ line-length = 100
 src = ["python", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
+select = ["E", "F", "W", "I", "UP", "B", "ANN"]
 ignore = ["E501"]
 
-[[tool.ty.overrides]]
-include = [
-  "python/dftracer/utils/_convert.py",
-  "python/dftracer/utils/_eval.py",
-  "python/dftracer/utils/_pandas_frame.py",
-  "python/dftracer/utils/_pandas_series.py",
-  "python/dftracer/utils/_polars_frame.py",
-  "python/dftracer/utils/_udf_lane.py",
-  "python/dftracer/utils/arrow.py",
-  "python/dftracer/utils/dask/*.py",
-  "python/dftracer/utils/dataframe.py",
-  "python/dftracer/utils/dfanalyzer/*.py",
-  "python/dftracer/utils/dftracer_utils_ext.pyi",
-  "python/dftracer/utils/expr.py",
-  "python/dftracer/utils/groupby.py",
-  "python/dftracer/utils/jit_op.py",
-  "python/dftracer/utils/plugins.py",
-  "python/dftracer/utils/series.py",
-]
+[tool.ruff.lint.per-file-ignores]
+# These set and read attributes on classes and objects by a computed or
+# decorator-attached name; the getattr/setattr form keeps the type checkers off
+# attributes that do not exist on the declared type.
+"python/dftracer/utils/_expr_ops.py" = ["B010"]
+"python/dftracer/utils/expr.py" = ["B010"]
+"python/dftracer/utils/_pandas_series.py" = ["B009"]
+"python/dftracer/utils/jit/*.py" = ["B009", "B010"]
+"python/dftracer/utils/store/codec.py" = ["B009"]
+# Class-level annotations that typing.get_type_hints reads on Python 3.8, where
+# `list[str]` and `X | None` fail when evaluated: the typing forms stay there.
+"python/dftracer/utils/_build.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/_eval.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/_jit_errors.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/_pandas_frame.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/_polars_frame.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/dask/index.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/dask/viewer.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/dfanalyzer/frames.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/groupby.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/jit/compiler.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/plugins.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/runtime.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/schemas.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/series.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/store/store.py" = ["UP006", "UP007", "UP045"]
+# Annotations are required for the shipped package only. Tests build trace text
+# with percent formats, probe lazy errors with bare expressions and loop for
+# side effects, and assert on the broad Exception class where the native error
+# type is not part of the contract.
+"tests/**" = ["ANN", "B007", "B017", "B018", "UP031"]
+"benchmarks/**" = ["ANN", "B018"]
 
-[tool.ty.overrides.rules]
-import-not-found = "ignore"
-missing-attribute = "ignore"
-unused-ignore-comment = "ignore"
+[tool.ty.analysis]
+# The optional dependencies are not installed in the checker's environment.
+allowed-unresolved-imports = [
+  "numpy", "numpy.**",
+  "pandas", "pandas.**",
+  "polars", "polars.**",
+  "pyarrow", "pyarrow.**",
+  "dask", "dask.**",
+  "distributed", "distributed.**",
+]
 
 # The public classes override native methods whose engine form takes codes
 # (cast, compare, rolling, ...) with the user-shaped spelling, until those
@@ -187,6 +206,7 @@ include = [
   "python/dftracer/utils/_pandas_frame.py",
   "python/dftracer/utils/trace/lazy.py",
   "python/dftracer/utils/dataframe.py",
+  "python/dftracer/utils/expr.py",
   "python/dftracer/utils/lazyframe.py",
   "python/dftracer/utils/series.py",
   "python/dftracer/utils/trace/viewer.py",
@@ -197,20 +217,91 @@ incompatible-method-override = "ignore"
 incompatible-property-override = "ignore"
 lost-keyword-for-regular-parameter = "ignore"
 
+# Comparison operators that build a mask or an expression, not a bool, as
+# pandas and polars do.
+[[tool.ty.overrides]]
+include = [
+  "python/dftracer/utils/dftracer_utils_ext.pyi",
+  "python/dftracer/utils/duql/col.py",
+  "python/dftracer/utils/jit/maps.py",
+]
+
+[tool.ty.overrides.rules]
+incompatible-method-override = "ignore"
+
+# `list[T_co | None]` as the return of a method of a covariant class.
+[[tool.ty.overrides]]
+include = [
+  "python/dftracer/utils/dftracer_utils_ext.pyi",
+  "python/dftracer/utils/series.py",
+]
+
+[tool.ty.overrides.rules]
+invalid-generic-class = "ignore"
+
+# distributed is not installed in the checker's environment, so the worker
+# plugin base class is unknown.
+[[tool.ty.overrides]]
+include = ["python/dftracer/utils/dask/worker.py"]
+
+[tool.ty.overrides.rules]
+unsupported-base = "ignore"
+
 [tool.mypy]
-# Used only by tests/python/test_jit_typing.py: `mypy --strict` on the typed JIT
-# fixtures and the JIT modules. The rest of the package is followed silently.
+# `mypy --strict python/dftracer` (tests/python/test_package_typing.py) and the
+# typed JIT fixtures (tests/python/test_jit_typing.py) read this table.
 mypy_path = "python"
 explicit_package_bases = true
-follow_imports = "silent"
 
+# The optional dependencies are not installed in the checker's environment, so
+# they are untyped here, once, instead of with an ignore comment per import.
 [[tool.mypy.overrides]]
-module = ["numpy", "numpy.*", "pandas", "pandas.*", "pyarrow", "pyarrow.*"]
+module = [
+  "numpy", "numpy.*",
+  "pandas", "pandas.*",
+  "polars", "polars.*",
+  "pyarrow", "pyarrow.*",
+  "dask", "dask.*",
+  "distributed", "distributed.*",
+]
 ignore_missing_imports = true
 
+# distributed is not installed in the checker's environment, so the plugin base
+# class is untyped here.
 [[tool.mypy.overrides]]
-module = "dftracer.utils.dftracer_utils_ext"
-ignore_errors = true
+module = "dftracer.utils.dask.worker"
+disallow_subclassing_any = false
+
+# The distributed Client methods (submit, gather, scatter, nthreads) are
+# untyped upstream.
+[[tool.mypy.overrides]]
+module = "dftracer.utils.dask.*"
+disallow_untyped_calls = false
+
+# The public classes override native methods whose engine form takes codes
+# (cast, compare, rolling, ...) with the user-shaped spelling, until those
+# methods take the user-shaped arguments natively (same list as the ty
+# overrides above).
+[[tool.mypy.overrides]]
+module = [
+  "dftracer.utils._pandas_frame",
+  "dftracer.utils.trace.lazy",
+  "dftracer.utils.dataframe",
+  "dftracer.utils.lazyframe",
+  "dftracer.utils.series",
+  "dftracer.utils.trace.viewer",
+  "dftracer.utils.expr",
+  "dftracer.utils.enums",
+  "dftracer.utils.duql.col",
+]
+disable_error_code = ["override"]
+
+# The comparison operators of `Column` build a mask, and `Frame.__getitem__`
+# overloads a Literal key before str; a native frame indexes by a name or by
+# names, and a Series is also a sequence of names.
+[[tool.mypy.overrides]]
+module = ["dftracer.utils.jit.maps", "dftracer.utils.dftracer_utils_ext"]
+disable_error_code = ["override", "overload-overlap"]
 
 [tool.setuptools_scm]
 version_scheme = "no-guess-dev"

@@ -8,8 +8,6 @@ from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Callable,
-    Dict,
-    List,
     overload,
 )
 
@@ -30,6 +28,8 @@ from .plugin import (
 from .types import C
 
 if TYPE_CHECKING:
+    from typing_extensions import TypeGuard
+
     from ..expr import Expr
     from .ops import Result
 
@@ -58,11 +58,11 @@ class JitPackage:
 
     def __init__(
         self,
-        namespace: "str | None" = None,
+        namespace: str | None = None,
         *,
-        cache_dir: "str | None" = None,
-        cflags: "List[str] | None" = None,
-        out: "str | None" = None,
+        cache_dir: str | None = None,
+        cflags: list[str] | None = None,
+        out: str | None = None,
     ) -> None:
         if namespace is not None:
             namespace = check_namespace("JitPackage", namespace.lower())
@@ -74,7 +74,7 @@ class JitPackage:
     def _namespace_for(self, module: str) -> str:
         return self.namespace if self.namespace is not None else top_level_package(module)
 
-    def identity(self, cls: type, attr: "str | None" = None) -> str:
+    def identity(self, cls: type, attr: str | None = None) -> str:
         """The qualified identity for ``attr`` on ``cls`` (or for ``cls``
         itself when ``attr`` is None), all lowercase."""
         module = module_of(cls)
@@ -91,28 +91,28 @@ class JitPackage:
     def plugin(self, cls: type[C]) -> type[C]: ...
     @overload
     def plugin(self, cls: None = None) -> Callable[[type[C]], type[C]]: ...
-    def plugin(self, cls: "type | None" = None) -> "type | Callable[[type], type]":
+    def plugin(self, cls: type | None = None) -> type | Callable[[type], type]:
         """Like :func:`plugin`, but names every map/port under this package."""
         if cls is None:
             return lambda c: build_plugin(c, self)
         return build_plugin(cls, self)
 
     @overload
-    def series(self, fn: "Callable[..., Expr]") -> "Callable[..., Result]": ...
+    def series(self, fn: Callable[..., Expr]) -> Callable[..., Result]: ...
     @overload
     def series(
-        self, fn: None = None, *, module: "str | None" = None
-    ) -> "Callable[[Callable[..., Expr]], Callable[..., Result]]": ...
+        self, fn: None = None, *, module: str | None = None
+    ) -> Callable[[Callable[..., Expr]], Callable[..., Result]]: ...
     def series(
-        self, fn: "Callable[..., Expr] | None" = None, *, module: "str | None" = None
-    ) -> "Callable[..., Result] | Callable[[Callable[..., Expr]], Callable[..., Result]]":
+        self, fn: Callable[..., Expr] | None = None, *, module: str | None = None
+    ) -> Callable[..., Result] | Callable[[Callable[..., Expr]], Callable[..., Result]]:
         """Like :func:`series`, but the default op name comes from this
         package instead of the raw ``__module__``."""
         if fn is None:
             return lambda f: series_impl(f, module, self)
         return series_impl(fn, module, self)
 
-    def build(self, cls: type, *, out: "str | None" = None) -> str:
+    def build(self, cls: type, *, out: str | None = None) -> str:
         """Compile ``cls`` (a :func:`plugin`-decorated class) to a shippable
         native ``.so`` and return its path.
 
@@ -141,14 +141,14 @@ DEFAULT_PACKAGE = JitPackage()
 
 
 @overload
-def series(fn: "Callable[..., Expr]") -> "Callable[..., Result]": ...
+def series(fn: Callable[..., Expr]) -> Callable[..., Result]: ...
 @overload
 def series(
-    fn: None = None, *, module: "str | None" = None
-) -> "Callable[[Callable[..., Expr]], Callable[..., Result]]": ...
+    fn: None = None, *, module: str | None = None
+) -> Callable[[Callable[..., Expr]], Callable[..., Result]]: ...
 def series(
-    fn: "Callable[..., Expr] | None" = None, *, module: "str | None" = None
-) -> "Callable[..., Result] | Callable[[Callable[..., Expr]], Callable[..., Result]]":
+    fn: Callable[..., Expr] | None = None, *, module: str | None = None
+) -> Callable[..., Result] | Callable[[Callable[..., Expr]], Callable[..., Result]]:
     """Author a reusable column op from an expression over its arguments.
 
     The body builds a lazy column expression from its Series arguments using the
@@ -193,7 +193,7 @@ def plugin(cls: type | None = None) -> type | Callable[[type], type]:
     return build_plugin(cls, DEFAULT_PACKAGE)
 
 
-def plugin_result_names(obj: object) -> Dict[str, str]:
+def plugin_result_names(obj: object) -> dict[str, str]:
     """``{wire id: attribute name}`` for a ``@jit.plugin`` class's maps, so a
     host can rewrite its package-qualified result keys back to the attribute
     name callers index ``results[...]`` with."""
@@ -206,9 +206,9 @@ def plugin_result_names(obj: object) -> Dict[str, str]:
 def compile_plugin(
     spec: JitPlugin,
     *,
-    cache_dir: "str | Path | None" = None,
-    extra_cflags: "List[str] | None" = None,
-    out: "str | None" = None,
+    cache_dir: str | Path | None = None,
+    extra_cflags: list[str] | None = None,
+    out: str | None = None,
 ) -> str:
     """Build ``spec`` to a native ``.so`` and return its path.
 
@@ -237,7 +237,7 @@ def compile_class(obj: object) -> str:
     return compile_plugin(spec)
 
 
-def build(cls: type, *, out: "str | None" = None) -> str:
+def build(cls: type, *, out: str | None = None) -> str:
     """Compile ``cls`` to a shippable native ``.so`` under the default package.
 
     Equivalent to ``JitPackage().build(cls, out=out)``; raises :class:`JitError`
@@ -246,19 +246,19 @@ def build(cls: type, *, out: "str | None" = None) -> str:
     return DEFAULT_PACKAGE.build(cls, out=out)
 
 
-def is_jit_plugin(obj: object) -> bool:
+def is_jit_plugin(obj: object) -> TypeGuard[type]:
     """True if ``obj`` is a ``@jit.plugin``-decorated class."""
     return isinstance(getattr(obj, "_jit_plugin", None), JitPlugin)
 
 
-def provided_names(cls: type) -> Dict[str, str]:
+def provided_names(cls: type) -> dict[str, str]:
     """``{attribute: qualified identity}`` for every name ``cls`` provides: each
     :func:`map` accumulator and each :func:`publish` port, already resolved
     under whichever :class:`JitPackage` decorated it."""
     spec = getattr(cls, "_jit_plugin", None)
     if not isinstance(spec, JitPlugin):
         raise TypeError("expected a @jit.plugin-decorated class")
-    names: Dict[str, str] = {attr: qid for qid, attr in spec.result_names.items()}
+    names: dict[str, str] = {attr: qid for qid, attr in spec.result_names.items()}
     for attr, val in vars(cls).items():
         if isinstance(val, PortHandle) and val.role == "publish" and val.name is not None:
             names[attr] = val.name

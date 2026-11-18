@@ -9,44 +9,51 @@ import time
 from collections import Counter
 from typing import (
     TYPE_CHECKING,
-    Dict,
+    Protocol,
+    cast,
 )
 
 if TYPE_CHECKING:
-    from distributed import Worker  # ty: ignore[import-not-found]
+    from distributed import Worker
 
 
-from dask.distributed import WorkerPlugin, get_client  # ty: ignore[import-not-found]
+from dask.distributed import WorkerPlugin, get_client
 
 from ..runtime import Runtime
 
 
-class DFTracerUtilsDaskWorkerPlugin(WorkerPlugin):  # ty: ignore[unsupported-base]
+class _RuntimeHolder(Protocol):
+    dftracer_utils_runtime: Runtime
+
+
+class DFTracerUtilsDaskWorkerPlugin(WorkerPlugin):
     """Configures the process runtime of each Dask worker."""
 
-    def __init__(self, threads=0, io_threads=0):
+    def __init__(self, threads: int = 0, io_threads: int = 0) -> None:
         self.threads = threads
         self.io_threads = io_threads
 
-    def setup(self, worker):
-        worker.dftracer_utils_runtime = Runtime(threads=self.threads, io_threads=self.io_threads)
+    def setup(self, worker: Worker) -> None:
+        holder = cast("_RuntimeHolder", worker)
+        holder.dftracer_utils_runtime = Runtime(threads=self.threads, io_threads=self.io_threads)
 
-    def teardown(self, worker):
-        if hasattr(worker, "dftracer_utils_runtime"):
+    def teardown(self, worker: Worker) -> None:
+        holder = cast("_RuntimeHolder", worker)
+        if hasattr(holder, "dftracer_utils_runtime"):
             # wait=False: don't block on pending tasks during teardown.
             # Dask may be tearing down because of timeout/cancel, and a
             # stuck task would hang the worker process indefinitely.
             try:
-                worker.dftracer_utils_runtime.shutdown(wait=False)
+                holder.dftracer_utils_runtime.shutdown(wait=False)
             except Exception:
                 pass
-            del worker.dftracer_utils_runtime
+            del holder.dftracer_utils_runtime
 
 
-_plugin_registered_schedulers: set = set()
+_plugin_registered_schedulers: set[str] = set()
 
 
-def runtime_threads(worker: "Worker", host_worker_counts: Dict[str, int], total_cpus: int) -> int:
+def runtime_threads(worker: Worker, host_worker_counts: dict[str, int], total_cpus: int) -> int:
     """C++ Runtime thread count for one Dask worker.
 
     Dask already divided the node between its workers and the Runtime is shared
@@ -105,11 +112,11 @@ def register_auto_thread_plugin() -> None:
         )
 
         class _AutoThreadPlugin(DFTracerUtilsDaskWorkerPlugin):
-            def __init__(self, host_worker_counts):
+            def __init__(self, host_worker_counts: dict[str, int]) -> None:
                 super().__init__(threads=0)
                 self._host_worker_counts = host_worker_counts
 
-            def setup(self, worker):
+            def setup(self, worker: Worker) -> None:
                 affinity = getattr(os, "sched_getaffinity", None)  # Linux only
                 total_cpus = len(affinity(0)) if affinity else (os.cpu_count() or 1)
                 my_host = worker.address.split("://")[-1].rsplit(":", 1)[0]

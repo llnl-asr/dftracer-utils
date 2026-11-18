@@ -17,12 +17,9 @@ from typing import (
     Any,
     AsyncIterator,
     Awaitable,
-    Dict,
-    List,
     Literal,
     NoReturn,
     Protocol,
-    Tuple,
     TypeVar,
     cast,
     overload,
@@ -130,11 +127,11 @@ class PortDecl:
         kind: str,
         role: str,
         *,
-        credits: "int | None" = None,
-        policy: "str | None" = None,
-        max_msg_bytes: "int | None" = None,
-        merge: "str | None" = None,
-        source: "PortDecl | str | None" = None,
+        credits: int | None = None,
+        policy: str | None = None,
+        max_msg_bytes: int | None = None,
+        merge: str | None = None,
+        source: PortDecl | str | None = None,
     ) -> None:
         self.kind = kind
         self.role = role
@@ -144,12 +141,12 @@ class PortDecl:
         self.merge = merge
         self.source = source
         self.attr = ""
-        self.elem: "str | None" = None
+        self.elem: str | None = None
         self.owner = True
         self.logical = ""
         self.full = ""
 
-    def __getattr__(self, name: str) -> "NoReturn":
+    def __getattr__(self, name: str) -> NoReturn:
         if name.startswith("__"):
             raise AttributeError(name)
         raise JitError(
@@ -159,8 +156,8 @@ class PortDecl:
 
 
 def _options(
-    fn: str, credits: int, policy: str, max_msg_bytes: "int | None"
-) -> "Tuple[int, str, int | None]":
+    fn: str, credits: int, policy: str, max_msg_bytes: int | None
+) -> tuple[int, str, int | None]:
     if not isinstance(credits, int) or isinstance(credits, bool) or credits < 1:
         raise JitError(f"jit.{fn}: credits is a count of at least 1, got {credits!r}")
     if policy not in POLICIES:
@@ -183,8 +180,8 @@ def _options(
 
 
 def sender(
-    *, credits: int = DEFAULT_CREDITS, policy: Policy = "fail", max_msg_bytes: "int | None" = None
-) -> "Sender[T]":
+    *, credits: int = DEFAULT_CREDITS, policy: Policy = "fail", max_msg_bytes: int | None = None
+) -> Sender[T]:
     """Declare the sending end of a channel owned by this plugin. ``credits`` is
     the number of messages the channel holds; ``policy`` is what a send does when
     it is full: ``"fail"`` reports it and ``"drop_oldest"`` drops the oldest
@@ -198,15 +195,15 @@ def sender(
 
 
 def channel(
-    *, credits: int = DEFAULT_CREDITS, policy: Policy = "fail", max_msg_bytes: "int | None" = None
-) -> "Channel[T]":
+    *, credits: int = DEFAULT_CREDITS, policy: Policy = "fail", max_msg_bytes: int | None = None
+) -> Channel[T]:
     """Declare both ends of a channel in this plugin (see :func:`sender`)."""
     c, p, m = _options("channel", credits, policy, max_msg_bytes)
     return cast("Channel[T]", PortDecl("channel", "both", credits=c, policy=p, max_msg_bytes=m))
 
 
 @overload
-def receiver(source: "Sender[T]", /) -> "Receiver[T]": ...
+def receiver(source: Sender[T], /) -> Receiver[T]: ...
 @overload
 def receiver(
     source: str,
@@ -214,16 +211,16 @@ def receiver(
     *,
     credits: int = DEFAULT_CREDITS,
     policy: Policy = "fail",
-    max_msg_bytes: "int | None" = None,
-) -> "Receiver[T]": ...
+    max_msg_bytes: int | None = None,
+) -> Receiver[T]: ...
 def receiver(
-    source: "Sender[Any] | str",
+    source: Sender[Any] | str,
     /,
     *,
     credits: int = DEFAULT_CREDITS,
     policy: Policy = "fail",
-    max_msg_bytes: "int | None" = None,
-) -> "Receiver[Any]":
+    max_msg_bytes: int | None = None,
+) -> Receiver[Any]:
     """Declare the receiving end of a channel another plugin owns: pass its
     :func:`sender` attribute (``jit.receiver(Producer.out)``), which carries the
     options and the element type, so a mismatch is a compile error. A string
@@ -245,12 +242,12 @@ def receiver(
 
 
 @overload
-def latest() -> "Latest[T]": ...
+def latest() -> Latest[T]: ...
 @overload
-def latest(source: "Latest[T]", /) -> "Latest[T]": ...
+def latest(source: Latest[T], /) -> Latest[T]: ...
 @overload
-def latest(source: str, /) -> "Latest[T]": ...
-def latest(source: "Latest[Any] | str | None" = None, /) -> "Latest[Any]":
+def latest(source: str, /) -> Latest[T]: ...
+def latest(source: Latest[Any] | str | None = None, /) -> Latest[Any]:
     """Declare a latest-value port. With no argument this plugin owns it; with the
     :func:`latest` attribute of another plugin (or a full name,
     ``"plugin.<owner>.<name>"``) it reads and sets that one."""
@@ -265,10 +262,10 @@ def latest(source: "Latest[Any] | str | None" = None, /) -> "Latest[Any]":
 
 
 @overload
-def phase(*, merge: Merge = "sum") -> "Phase[T]": ...
+def phase(*, merge: Merge = "sum") -> Phase[T]: ...
 @overload
-def phase(source: "Phase[T]", /) -> "Phase[T]": ...
-def phase(source: "Phase[Any] | None" = None, /, *, merge: Merge = "sum") -> "Phase[Any]":
+def phase(source: Phase[T], /) -> Phase[T]: ...
+def phase(source: Phase[Any] | None = None, /, *, merge: Merge = "sum") -> Phase[Any]:
     """Declare a phase result with a merge (``"sum"``, ``"min"`` or ``"max"``). With
     the :func:`phase` attribute of another plugin, it contributes to and reads that
     one."""
@@ -297,7 +294,7 @@ def check_logical(attr: str) -> str:
     return attr
 
 
-def elem_of(tp: object) -> "str | None":
+def elem_of(tp: object) -> str | None:
     """``i64`` or ``f64`` for an ``int`` or ``float`` annotation argument."""
     return ELEMS.get(tp) if isinstance(tp, type) else None
 
@@ -317,15 +314,15 @@ C_PORT_HELPERS = [
 ]
 
 
-def channels_of(chans: "Dict[str, PortDecl]") -> "List[PortDecl]":
+def channels_of(chans: dict[str, PortDecl]) -> list[PortDecl]:
     return [d for d in chans.values() if d.kind == "channel"]
 
 
-def senders_of(chans: "Dict[str, PortDecl]") -> "List[PortDecl]":
+def senders_of(chans: dict[str, PortDecl]) -> list[PortDecl]:
     return [d for d in channels_of(chans) if d.role in ("send", "both")]
 
 
-def factory_lines(chans: "Dict[str, PortDecl]") -> "List[str]":
+def factory_lines(chans: dict[str, PortDecl]) -> list[str]:
     """The plugin factory's declarations: each channel end and each phase this
     plugin owns. The host checks every end of a channel against the others at plan
     time, so a mismatch fails the load."""
@@ -380,15 +377,15 @@ def factory_lines(chans: "Dict[str, PortDecl]") -> "List[str]":
     return out
 
 
-def root_fields(chans: "Dict[str, PortDecl]") -> "List[str]":
+def root_fields(chans: dict[str, PortDecl]) -> list[str]:
     out = ["    const dftu_svc_ports* prt;"]
     out += [f"    uint64_t ch_{d.attr};" for d in channels_of(chans)]
     return out
 
 
-def root_open_lines(chans: "Dict[str, PortDecl]") -> "List[str]":
+def root_open_lines(chans: dict[str, PortDecl]) -> list[str]:
     """In ``on_finalize``: open every channel handle once for the frames."""
-    out: "List[str]" = []
+    out: list[str] = []
     for d in channels_of(chans):
         out += [
             "    {",
@@ -402,7 +399,7 @@ def root_open_lines(chans: "Dict[str, PortDecl]") -> "List[str]":
     return out
 
 
-def root_close_lines(chans: "Dict[str, PortDecl]") -> "List[str]":
+def root_close_lines(chans: dict[str, PortDecl]) -> list[str]:
     """At the end of the finalize frame: end the sends, so a receiver that runs
     after this plugin gets the end of the channel instead of waiting for it."""
     return [
@@ -411,9 +408,9 @@ def root_close_lines(chans: "Dict[str, PortDecl]") -> "List[str]":
     ]
 
 
-def event_open_lines(chans: "Dict[str, PortDecl]", uses: "builtins.set[str]") -> "List[str]":
+def event_open_lines(chans: dict[str, PortDecl], uses: builtins.set[str]) -> list[str]:
     """In ``on_batch``: the handles of the channels the per-event body uses."""
-    out: "List[str]" = []
+    out: list[str] = []
     for d in channels_of(chans):
         if d.attr not in uses:
             continue
@@ -426,7 +423,7 @@ def event_open_lines(chans: "Dict[str, PortDecl]", uses: "builtins.set[str]") ->
     return out
 
 
-def close_without_finalize(chans: "Dict[str, PortDecl]") -> "List[str]":
+def close_without_finalize(chans: dict[str, PortDecl]) -> list[str]:
     """The body of an ``on_finalize`` for a plugin that has no finalize method: it
     still ends its sends."""
     senders = senders_of(chans)
@@ -451,14 +448,14 @@ def close_without_finalize(chans: "Dict[str, PortDecl]") -> "List[str]":
     return out + ["    return DFTU_OK;", "}", ""]
 
 
-def provided_names(chans: "Dict[str, PortDecl]") -> "List[str]":
+def provided_names(chans: dict[str, PortDecl]) -> list[str]:
     """The channels this plugin owns a sending end of, as ``provides`` names: the
     host runs the sender's finalize before the receiver's, so a receiver that waits
     for the end of the channel is not started before the sender can close it."""
     return [d.full for d in senders_of(chans) if d.owner]
 
 
-def consumed_names(chans: "Dict[str, PortDecl]") -> "List[str]":
+def consumed_names(chans: dict[str, PortDecl]) -> list[str]:
     """Every channel this plugin receives, by full name, as ``consumes`` names, so
     the host runs the sender's plugin first. A hand-written sender lists the same
     name in its ``provides``; without it the host refuses the plan."""

@@ -10,29 +10,28 @@ import math
 import numbers
 from typing import (
     TYPE_CHECKING,
-    Any,
     Callable,
-    Dict,
     Iterator,
-    List,
     Literal,
     Mapping,
-    Optional,
     Sequence,
-    Tuple,
+    TypeVar,
     Union,
     cast,
-    overload,
 )
 
 from .enums import DType
 
 if TYPE_CHECKING:
+    import numpy as np
+    import pyarrow as pa
     from numpy import generic
     from pandas._libs.missing import NAType
+    from typing_extensions import Concatenate, ParamSpec
 
     from .dataframe import DataFrame
     from .dftracer_utils_ext import Scalar
+    from .groupby import GroupBy
     from .series import Series
 
     # A value of ``replace`` as the caller writes it, and as the engine takes it.
@@ -42,6 +41,9 @@ if TYPE_CHECKING:
     ReplaceKey = Union[ReplaceValue, Mapping[ReplaceScalar, ReplaceScalar]]
 
 _Scalar = Union[int, float]
+_R = TypeVar("_R")
+if TYPE_CHECKING:
+    _P = ParamSpec("_P")
 
 _CMP_NE = 5  # DFTU_CMP_NE, dataframe/c_api.h
 
@@ -74,7 +76,7 @@ _NATIVE_COMPARE = frozenset(
 )
 
 
-def _kernel_operand(s: "Series") -> "Series":
+def _kernel_operand(s: Series) -> Series:
     return s.astype("int8") if s.dtype == DType.BOOL else s
 
 
@@ -87,7 +89,7 @@ def _is_number(d: DType) -> bool:
     return d.is_numeric or d == DType.BOOL
 
 
-def _scaled_differs(a: "Series", b: "Series") -> "Series[bool]":
+def _scaled_differs(a: Series, b: Series) -> Series[bool]:
     """``differs`` for a duration or time in two units: the finer side ``f``
     times coarser equals the finer value exactly when it divides evenly and
     the quotient matches, so no value is scaled up and none can overflow."""
@@ -98,10 +100,10 @@ def _scaled_differs(a: "Series", b: "Series") -> "Series[bool]":
     same = ((fine % factor) == 0) & ((fine // factor) == coarse)
     ne = (~same).fillna(False)
     nulls = _kernel_operand(a.is_null()).compare_series(_kernel_operand(b.is_null()), _CMP_NE)
-    return ne | nulls
+    return cast("Series[bool]", ne | nulls)
 
 
-def differs(a: "Series", b: "Series") -> "Series[bool]":
+def differs(a: Series, b: Series) -> Series[bool]:
     """Bool, never null: true where the two Series (one length) hold different
     values; a null equals a null, a null differs from a value and a NaN equals
     a NaN only at the same position. A number against text differs on every
@@ -143,7 +145,7 @@ def differs(a: "Series", b: "Series") -> "Series[bool]":
     return ne | nulls
 
 
-def valid_edge(mask: "Series", first: bool) -> Optional[int]:
+def valid_edge(mask: Series, first: bool) -> int | None:
     """The position of the first (or last) true row of a Bool mask, ``None``
     when none is true."""
     if not mask.any():
@@ -161,14 +163,15 @@ class Omitted:
 OMITTED = Omitted()
 
 
-def _plain(v: "ReplaceScalar") -> "PlainScalar":
+def _plain(v: ReplaceScalar) -> PlainScalar:
     """A NumPy scalar as the Python number the engine accepts."""
     if type(v).__module__ == "numpy" and getattr(v, "ndim", 1) == 0:
         return cast("PlainScalar", getattr(v, "item")())
-    return cast("PlainScalar", v)
+    raw: object = v
+    return cast("PlainScalar", raw)
 
 
-def _kind(v: "PlainScalar") -> str:
+def _kind(v: PlainScalar) -> str:
     """What a replace value is: ``null``, ``nan``, ``str`` or ``num``."""
     if v is None or type(v).__name__ == "NAType":  # pd.NA, without importing pandas
         return "null"
@@ -182,8 +185,8 @@ def _kind(v: "PlainScalar") -> str:
 
 
 def replace_pairs(
-    to_replace: "ReplaceKey", value: "Union[ReplaceValue, Omitted]"
-) -> "List[Tuple[ReplaceScalar, ReplaceScalar]]":
+    to_replace: ReplaceKey, value: ReplaceValue | Omitted
+) -> list[tuple[ReplaceScalar, ReplaceScalar]]:
     """The (old, new) pairs of any replace form."""
     if isinstance(to_replace, dict):
         if value is not OMITTED:
@@ -206,11 +209,11 @@ def replace_pairs(
 
 
 def replace_in(
-    s: "Series",
-    pairs: "List[Tuple[ReplaceScalar, ReplaceScalar]]",
-    column: Optional[str],
+    s: Series,
+    pairs: list[tuple[ReplaceScalar, ReplaceScalar]],
+    column: str | None,
     strict: bool,
-) -> "Series":
+) -> Series:
     """``s`` with every pair applied together. ``column`` names a frame column in
     errors; ``strict`` False leaves a column of an unsupported type alone."""
     from .enums import DType
@@ -226,10 +229,11 @@ def replace_in(
     else:
         return s
     floats = dtype in (DType.FLOAT32, DType.FLOAT64)
-    steps: "List[Tuple[Series, Union[Series, int, float, None]]]" = []
+    steps: list[tuple[Series, Series | int | float | None]] = []
     for old, new in pairs:
         old, new = _plain(old), _plain(new)
         old_kind, new_kind = _kind(old), _kind(new)
+        hit: Series[bool] | None
         if old_kind == "null":
             hit = s.isna()
         elif old_kind == "nan":
@@ -241,7 +245,7 @@ def replace_in(
         if hit is None:
             continue
         if new_kind == "null":
-            other: Union[Series, int, float, None] = None
+            other: Series | int | float | None = None
         elif (new_kind == "str") != is_str:
             where = f" (column {column!r})" if column is not None else ""
             what = "a string" if new_kind == "str" else "a number"
@@ -249,9 +253,9 @@ def replace_in(
         else:
             other = Series.from_list([new] * len(s)) if is_str else cast(_Scalar, new)
         steps.append((hit, other))
-    out = s
-    for hit, other in steps:
-        out = out.mask(hit, other)
+    out: Series = s
+    for step_hit, step_other in steps:
+        out = out.mask(step_hit, step_other)
     return out
 
 
@@ -260,14 +264,14 @@ class SeriesPandasMixin:
 
     __slots__ = ()
 
-    def _s(self) -> "Series":
+    def _s(self) -> Series:
         from .series import Series
 
         assert isinstance(self, Series)
         return self
 
     # -- spellings -----------------------------------------------------------------
-    def between(self, left: _Scalar, right: _Scalar, inclusive: str = "both") -> "Series":
+    def between(self, left: _Scalar, right: _Scalar, inclusive: str = "both") -> Series:
         """``left <= x <= right`` as a Bool mask; ``inclusive`` is ``both``
         (default), ``neither``, ``left`` or ``right``."""
         s = self._s()
@@ -279,7 +283,7 @@ class SeriesPandasMixin:
             raise ValueError("between: inclusive must be both, neither, left or right")
         return lo.logical(0, hi)
 
-    def drop_duplicates(self, keep: Union[Literal["first", "last"], bool] = "first") -> "Series":
+    def drop_duplicates(self, keep: Literal["first", "last"] | bool = "first") -> Series:
         """The pandas ``drop_duplicates``: the values that are not a repeat,
         in order, one null kept. ``keep`` is ``"first"`` (default), ``"last"``
         or ``False`` (drop every value that repeats). See :meth:`unique`."""
@@ -307,17 +311,17 @@ class SeriesPandasMixin:
         return 1
 
     @property
-    def values(self) -> Any:
+    def values(self) -> np.ndarray:
         return self._s().to_numpy()
 
     @property
-    def array(self) -> Any:
+    def array(self) -> pa.Array:
         return self._s().to_arrow()
 
-    def items(self) -> Iterator[Tuple[int, object]]:
+    def items(self) -> Iterator[tuple[int, object]]:
         return enumerate(self._s().to_list())
 
-    def keys(self) -> List[int]:
+    def keys(self) -> list[int]:
         return list(range(len(self._s())))
 
     def get(self, key: int, default: object = None) -> object:
@@ -326,7 +330,7 @@ class SeriesPandasMixin:
             return s[key]
         return default
 
-    def copy(self, deep: bool = True) -> "Series":
+    def copy(self, deep: bool = True) -> Series:
         """A new handle on the same immutable buffers (:meth:`share`)."""
         return self._s().share()
 
@@ -337,7 +341,7 @@ class SeriesPandasMixin:
         convert_integer: bool = True,
         convert_boolean: bool = True,
         convert_floating: bool = True,
-    ) -> "Series":
+    ) -> Series:
         """The pandas rules that map to engine types. A column is typed and
         nullable already, so only ``convert_integer`` changes it: a Float64
         column whose valid values are all whole numbers (nulls allowed)
@@ -354,41 +358,35 @@ class SeriesPandasMixin:
             return self.copy()
         return s.astype("int64")
 
-    def infer_objects(self) -> "Series":
+    def infer_objects(self) -> Series:
         """:meth:`copy`: an engine column is already typed."""
         return self.copy()
 
-    @overload
-    def squeeze(self: "Series[int]") -> "Union[int, Series[int]]": ...
-    @overload
-    def squeeze(self: "Series[float]") -> "Union[float, Series[float]]": ...
-    @overload
-    def squeeze(self: "Series[str]") -> "Union[str, Series[str]]": ...
-    @overload
-    def squeeze(self: "Series[Scalar]") -> "Union[Scalar, Series[Scalar]]": ...
-    def squeeze(self) -> "Union[Scalar, Series]":
+    def squeeze(self) -> Scalar | Series:
         """The one element of a one-element Series, else the Series itself."""
         s = self._s()
-        return cast("Union[Scalar, Series]", s[0] if len(s) == 1 else s)
+        return cast("Scalar | Series", s[0] if len(s) == 1 else s)
 
     @property
-    def T(self) -> "Series":
+    def T(self) -> Series:
         """The Series itself (it has one dimension)."""
         return self._s()
 
-    def transpose(self) -> "Series":
+    def transpose(self) -> Series:
         """The Series itself (it has one dimension)."""
         return self._s()
 
     @property
-    def dtypes(self) -> "DType":
+    def dtypes(self) -> DType:
         """:attr:`dtype` (the pandas Series spelling)."""
         return self._s().dtype
 
-    def pipe(self, func: Callable[..., Any], *args: object, **kwargs: Any) -> Any:
-        return func(self, *args, **kwargs)
+    def pipe(
+        self, func: Callable[Concatenate[Series, _P], _R], *args: _P.args, **kwargs: _P.kwargs
+    ) -> _R:
+        return func(self._s(), *args, **kwargs)
 
-    def factorize(self) -> "Tuple[Series, Series]":
+    def factorize(self) -> tuple[Series, Series]:
         """``(codes, uniques)``: ``uniques`` is :meth:`unique` (the distinct
         values, sorted, nulls dropped) and ``codes`` each value's position in
         it, -1 for a null (pandas numbers uniques by first occurrence)."""
@@ -399,7 +397,7 @@ class SeriesPandasMixin:
             codes = codes.mask(s.isna(), -1)
         return codes, uniques
 
-    def repeat(self, repeats: int) -> "Series":
+    def repeat(self, repeats: int) -> Series:
         """Each element repeated ``repeats`` times, in place."""
         s = self._s()
         n = int(repeats)
@@ -413,9 +411,7 @@ class SeriesPandasMixin:
         out = frame.concat(*[frame] * (n - 1)).sort_values("_i")["v"]
         return out.rename(s.name)
 
-    def replace(
-        self, to_replace: "ReplaceKey", value: "Union[ReplaceValue, Omitted]" = OMITTED
-    ) -> "Series":
+    def replace(self, to_replace: ReplaceKey, value: ReplaceValue | Omitted = OMITTED) -> Series:
         """Replace values, pandas' forms: ``replace(old, new)``,
         ``replace([old, ...], new)``, ``replace([old, ...], [new, ...])`` (paired
         by position) and ``replace({old: new, ...})``. Every match is found on the
@@ -428,38 +424,37 @@ class SeriesPandasMixin:
         nothing. Bool, list and temporal columns raise ``TypeError``."""
         return replace_in(self._s(), replace_pairs(to_replace, value), None, True)
 
-    def to_frame(self, name: Optional[str] = None) -> "DataFrame":
+    def to_frame(self, name: str | None = None) -> DataFrame:
         """A one-column frame; the column is ``name``, else this Series' name,
         else ``"0"``."""
         from .dataframe import DataFrame
 
         if name is None:
-            name = self.name if self.name is not None else "0"
+            own = self._s().name
+            name = own if own is not None else "0"
         return DataFrame({name: self._s()})
 
-    def to_dict(self) -> Dict[int, object]:
+    def to_dict(self) -> dict[int, object]:
         return dict(enumerate(self._s().to_list()))
 
-    def reset_index(
-        self, drop: bool = False, name: Optional[str] = None
-    ) -> Union["Series", "DataFrame"]:
+    def reset_index(self, drop: bool = False, name: str | None = None) -> Series | DataFrame:
         """A frame of ``index`` (positions) and the values under ``name``
         (default as :meth:`to_frame`); with ``drop`` the Series itself."""
         if drop:
             return self._s()
         return self.to_frame(name).with_row_index("index")
 
-    def truncate(self, before: Optional[int] = None, after: Optional[int] = None) -> "Series":
+    def truncate(self, before: int | None = None, after: int | None = None) -> Series:
         """Elements at positions ``[before, after]``, both included."""
         s = self._s()
         lo = 0 if before is None else int(before)
         hi = len(s) - 1 if after is None else int(after)
         return s.slice(lo, max(hi - lo + 1, 0))
 
-    def first_valid_index(self) -> Optional[int]:
+    def first_valid_index(self) -> int | None:
         return valid_edge(self._s().notna(), first=True)
 
-    def last_valid_index(self) -> Optional[int]:
+    def last_valid_index(self) -> int | None:
         return valid_edge(self._s().notna(), first=False)
 
     def asof(self, where: int) -> object:
@@ -478,18 +473,18 @@ class SeriesPandasMixin:
         keep = shifted.notna()
         return s.filter(keep).corr(shifted.filter(keep))
 
-    def combine_first(self, other: "Series") -> "Series":
+    def combine_first(self, other: Series) -> Series:
         """This Series with nulls filled from ``other`` (positional)."""
         s = self._s()
         return s.where(s.notna(), other)
 
-    def update(self, other: "Series") -> "Series":
+    def update(self, other: Series) -> Series:
         """``other``'s present values over this Series (positional; pandas
         ``update`` mutates, this returns the new Series)."""
         s = self._s()
         return other.where(other.notna(), s)
 
-    def drop(self, positions: Union[int, Sequence[int]]) -> "Series":
+    def drop(self, positions: int | Sequence[int]) -> Series:
         """Every element except those at ``positions`` (the positional index),
         pandas ``Series.drop``."""
         s = self._s()
@@ -526,7 +521,7 @@ class SeriesPandasMixin:
         """The element at position ``key`` (a Series has one axis)."""
         return self._s()[key]
 
-    def sort_index(self, ascending: bool = True) -> "Series":
+    def sort_index(self, ascending: bool = True) -> Series:
         """The positional index is already sorted: this Series, or reversed
         for ``ascending=False``."""
         s = self._s()
@@ -534,19 +529,19 @@ class SeriesPandasMixin:
 
     def memory_usage(self, index: bool = False, deep: bool = False) -> int:
         """The bytes this column's Arrow buffers hold (``nbytes``)."""
-        return self.nbytes
+        return int(self._s().nbytes)
 
     # -- reductions and stats with a frame shape -------------------------------------
-    def corr(self, other: "Series") -> float:
+    def corr(self, other: Series) -> float:
         """Pearson correlation with ``other`` (positional; the group-by
         ``corr`` aggregate over one group). NaN below two complete pairs and
         when a column has no spread, as in pandas."""
         return self._pair(other, "corr")
 
-    def cov(self, other: "Series") -> float:
+    def cov(self, other: Series) -> float:
         return self._pair(other, "covar_samp")
 
-    def _pair(self, other: "Series", agg: str) -> float:
+    def _pair(self, other: Series, agg: str) -> float:
         from .dataframe import DataFrame
         from .expr import Agg, Col
         from .groupby import GroupBy
@@ -567,7 +562,7 @@ class SeriesPandasMixin:
         assert isinstance(value, float)
         return value
 
-    def describe(self) -> "DataFrame":
+    def describe(self) -> DataFrame:
         """count / mean / std / min / 25% / 50% / 75% / max as a two-column
         frame (``statistic``, ``value``); the quantiles are the engine's
         sketch."""
@@ -588,50 +583,50 @@ class SeriesPandasMixin:
             {"statistic": [r[0] for r in rows], "value": [float(cast(float, r[1])) for r in rows]}
         )
 
-    def agg(self, func: Union[str, Sequence[str]]) -> Union[object, "DataFrame"]:
+    def agg(self, func: str | Sequence[str]) -> Scalar | DataFrame:
         """A reduction by name (``"sum"``), or a list of names as a
         two-column frame."""
         s = self._s()
         if isinstance(func, str):
-            return getattr(s, func)()
+            return cast("Scalar", getattr(s, func)())
         from .dataframe import DataFrame
 
         names = list(func)
         return DataFrame({"statistic": names, "value": [getattr(s, n)() for n in names]})
 
-    def transform(self, func: Union[str, Callable[["Series"], "Series"]]) -> "Series":
+    def transform(self, func: str | Callable[[Series], Series]) -> Series:
         s = self._s()
         return getattr(s, func)() if isinstance(func, str) else func(s)
 
-    def radd(self, other: _Scalar) -> "Series":
-        return self._s() + other  # type: ignore[operator]
+    def radd(self, other: _Scalar) -> Series:
+        return self._s() + other
 
-    def rsub(self, other: _Scalar) -> "Series":
-        return other - self._s()  # type: ignore[operator]
+    def rsub(self, other: _Scalar) -> Series:
+        return other - self._s()
 
-    def rmul(self, other: _Scalar) -> "Series":
-        return self._s() * other  # type: ignore[operator]
+    def rmul(self, other: _Scalar) -> Series:
+        return self._s() * other
 
-    def rdiv(self, other: _Scalar) -> "Series":
+    def rdiv(self, other: _Scalar) -> Series:
         """``other / self``: a Series operand divides directly, a scalar is
         broadcast to a Series first."""
         s = self._s()
         if isinstance(other, type(s)):
             return other / s
-        return s.full_like(other) / s  # type: ignore[operator]
+        return s.full_like(other) / s
 
-    def __rtruediv__(self, other: _Scalar) -> "Series":
+    def __rtruediv__(self, other: _Scalar) -> Series:
         return self.rdiv(other)
 
-    def case_when(self, caselist: Sequence[Tuple["Series", Union["Series", _Scalar]]]) -> "Series":
+    def case_when(self, caselist: Sequence[tuple[Series, Series | _Scalar]]) -> Series:
         """Replace where each ``(condition, replacement)`` holds, first match
         wins (pandas ``case_when``)."""
         out = self._s()
         for cond, value in reversed(list(caselist)):
-            out = out.mask(cond, value)  # type: ignore[arg-type]
+            out = out.mask(cond, value)
         return out
 
-    def groupby(self, by: "Series") -> Any:
+    def groupby(self, by: Series) -> GroupBy:
         """Group this Series' values by ``by`` (positional): a frame
         ``GroupBy`` over columns ``key`` and ``value``."""
         from .dataframe import DataFrame
@@ -639,7 +634,7 @@ class SeriesPandasMixin:
         frame = DataFrame({"key": by, "value": self._s()})
         return frame.group_by("key")
 
-    def explode(self) -> "Series":
+    def explode(self) -> Series:
         """A List Series flattened to one row per element."""
         from .dataframe import DataFrame
 
@@ -647,17 +642,20 @@ class SeriesPandasMixin:
 
     # -- accessors: a Series is positional, so loc is iloc ----------------------------
     @property
-    def iloc(self) -> "_SeriesILoc":
+    def iloc(self) -> _SeriesILoc:
         return _SeriesILoc(self._s())
 
-    def to_csv(self, path: Optional[str] = None, **kwargs: Any) -> Optional[str]:
-        return self._s().to_pandas().to_csv(path, index=False, **kwargs)
+    def to_csv(self, path: str | None = None, **kwargs: object) -> str | None:
+        to_csv = cast("Callable[..., str | None]", self._s().to_pandas().to_csv)
+        return to_csv(path, index=False, **kwargs)
 
-    def to_json(self, path: Optional[str] = None, **kwargs: Any) -> Optional[str]:
-        return self._s().to_pandas().to_json(path, **kwargs)
+    def to_json(self, path: str | None = None, **kwargs: object) -> str | None:
+        to_json = cast("Callable[..., str | None]", self._s().to_pandas().to_json)
+        return to_json(path, **kwargs)
 
-    def to_string(self, **kwargs: Any) -> str:
-        return self._s().to_pandas().to_string(index=False, **kwargs)
+    def to_string(self, **kwargs: object) -> str:
+        to_string = cast("Callable[..., str]", self._s().to_pandas().to_string)
+        return to_string(index=False, **kwargs)
 
 
 class _SeriesILoc:
@@ -666,7 +664,7 @@ class _SeriesILoc:
 
     __slots__ = ("_s",)
 
-    def __init__(self, s: "Series") -> None:
+    def __init__(self, s: Series) -> None:
         self._s = s
 
     def __getitem__(self, key: object) -> object:

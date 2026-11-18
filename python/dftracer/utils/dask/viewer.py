@@ -4,24 +4,14 @@
 from __future__ import annotations
 
 import os
-from collections import namedtuple
 from dataclasses import dataclass, replace
 from importlib.util import find_spec
-from typing import (
-    TYPE_CHECKING,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
-)
+from typing import TYPE_CHECKING, Iterator, Literal, NamedTuple, Optional, Sequence, Tuple, Union
 
 if TYPE_CHECKING:
-    import pyarrow as pa  # ty: ignore[import-not-found]
-    from dask.distributed import Client  # ty: ignore[import-not-found]
-    from distributed import Future  # ty: ignore[import-not-found]
+    import pyarrow as pa
+    from dask.distributed import Client
+    from distributed import Future
 
 
 from ..dataframe import DataFrame, PhaseArg, TimeUnitArg
@@ -30,7 +20,12 @@ from ..enums import coerce_bytes, coerce_duration
 from ..trace.viewer import TraceViewer
 from .progress import worker_progress_forwarder
 
-QueryPage = namedtuple("QueryPage", ["table", "next_cursor"])
+
+class QueryPage(NamedTuple):
+    """One page of ``DaskTraceViewer.page``: the events and where to resume."""
+
+    table: Optional[pa.Table]
+    next_cursor: Optional[int]
 
 
 @dataclass(frozen=True)
@@ -99,17 +94,17 @@ def _apply_plan(tv: TraceViewer, plan: _Plan) -> TraceViewer:
     return tv
 
 
-def _make_viewer(files: List[str], index_dir: str, plan: _Plan) -> TraceViewer:
+def _make_viewer(files: list[str], index_dir: str, plan: _Plan) -> TraceViewer:
     return _apply_plan(TraceViewer(files, index_dir=index_dir or None), plan)
 
 
-def _dv_partial_task(files: List[str], index_dir: str, plan: _Plan) -> bytes:
+def _dv_partial_task(files: list[str], index_dir: str, plan: _Plan) -> bytes:
     """Worker: combinable aggregation partial for this shard (bytes)."""
     return _make_viewer(files, index_dir, plan).aggregate_partial().collect()
 
 
 def _dv_flamegraph_partial_task(
-    files: List[str],
+    files: list[str],
     index_dir: str,
     plan: _Plan,
     partition: Sequence[str],
@@ -127,12 +122,12 @@ def _dv_flamegraph_partial_task(
 
 
 def _dv_events_task(
-    files: List[str],
+    files: list[str],
     index_dir: str,
     plan: _Plan,
-    cursor: Optional[int],
+    cursor: int | None,
     page_size: int,
-) -> "Optional[pa.Table]":
+) -> pa.Table | None:
     """Worker: this shard's matching events at ts >= cursor, up to page_size."""
     if cursor is not None:
         # The page cursor is a lower bound on ts; chunk ts-stats still prune.
@@ -144,19 +139,19 @@ def _dv_events_task(
 
 
 def _dv_write_task(
-    files: List[str],
+    files: list[str],
     index_dir: str,
     plan: _Plan,
     output_path: str,
     build_index: bool,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Worker: export this shard to one re-indexable .pfw.gz."""
     _make_viewer(files, index_dir, plan).export_trace(output_path, compress=True, index=build_index)
     return {"path": output_path}
 
 
 def _dv_materialize_shard_task(
-    files: List[str],
+    files: list[str],
     index_dir: str,
     plan: _Plan,
     subdir: str,
@@ -177,12 +172,12 @@ def _dv_materialize_shard_task(
 
 
 def _dv_collect_typed_task(
-    files: List[str],
+    files: list[str],
     index_dir: str,
     plan: _Plan,
     shard_begin: int,
     shard_end: int,
-) -> "Dict[str, Optional[pa.Table]]":
+) -> dict[str, pa.Table | None]:
     """Worker: one CF shard range of the typed read. The tier is index-wide, so
     every worker sees all files but a distinct shard range of the aggregation
     CF - returns {regular, aggregated, counters} pyarrow Tables.
@@ -201,16 +196,16 @@ def _dv_collect_typed_task(
 
 
 def _dv_typed_ipc_task(
-    files: List[str],
+    files: list[str],
     index_dir: str,
     time_granularity: float,
     time_resolution: float,
-    query: Optional[str],
+    query: str | None,
     shard_begin: int,
     shard_end: int,
-    group_keys: Optional[Tuple[str, ...]] = None,
-    drop_file_patterns: Tuple[str, ...] = (),
-) -> Dict[str, Optional[bytes]]:
+    group_keys: tuple[str, ...] | None = None,
+    drop_file_patterns: tuple[str, ...] = (),
+) -> dict[str, bytes | None]:
     """Worker: one CF shard range read + mapped to the dfanalyzer frame schema,
     returned as ``{events, profiles, system}`` Arrow IPC bytes. Time columns are
     absolute (origin 0); the HLM derives the global origin and rebuckets
@@ -259,12 +254,12 @@ class DaskTraceViewer:
 
     def __init__(
         self,
-        files: List[str],
+        files: list[str],
         index_dir: str = "",
         *,
-        client: "Optional[Client]" = None,
+        client: Client | None = None,
         files_per_task: int = 1,
-        _plan: Optional[_Plan] = None,
+        _plan: _Plan | None = None,
     ) -> None:
         if find_spec("dask") is None:
             raise ImportError("dask is required for DaskTraceViewer")
@@ -274,7 +269,7 @@ class DaskTraceViewer:
         self._files_per_task = files_per_task
         self._plan: _Plan = _plan if _plan is not None else _Plan()
 
-    def _clone(self, plan: _Plan) -> "DaskTraceViewer":
+    def _clone(self, plan: _Plan) -> DaskTraceViewer:
         # type(self) keeps a DaskAggregatedTraceViewer aggregated across a chain.
         return type(self)(
             self._files,
@@ -284,7 +279,7 @@ class DaskTraceViewer:
             _plan=plan,
         )
 
-    def _agg_clone(self, plan: _Plan) -> "DaskAggregatedTraceViewer":
+    def _agg_clone(self, plan: _Plan) -> DaskAggregatedTraceViewer:
         # group_by/agg promote a plain viewer to the aggregation type that alone
         # exposes the cache terminals (persist/reconstruct/collect(cache=...)).
         return DaskAggregatedTraceViewer(
@@ -295,84 +290,84 @@ class DaskTraceViewer:
             _plan=plan,
         )
 
-    def filter(self, dsl: str) -> "DaskTraceViewer":
+    def filter(self, dsl: str) -> DaskTraceViewer:
         return self._clone(replace(self._plan, filters=self._plan.filters + (dsl,)))
 
-    def duql(self, dsl: str) -> "DaskTraceViewer":
+    def duql(self, dsl: str) -> DaskTraceViewer:
         return self.filter(dsl)
 
-    def phase(self, phase: PhaseArg) -> "DaskTraceViewer":
+    def phase(self, phase: PhaseArg) -> DaskTraceViewer:
         return self._clone(replace(self._plan, phase=phase))
 
-    def time_range(self, begin: float, end: float) -> "DaskTraceViewer":
+    def time_range(self, begin: float, end: float) -> DaskTraceViewer:
         return self._clone(replace(self._plan, time_range=(begin, end)))
 
-    def time_unit(self, unit: TimeUnitArg) -> "DaskTraceViewer":
+    def time_unit(self, unit: TimeUnitArg) -> DaskTraceViewer:
         return self._clone(replace(self._plan, time_unit=unit))
 
-    def time_scale(self, ns_ratio: float) -> "DaskTraceViewer":
+    def time_scale(self, ns_ratio: float) -> DaskTraceViewer:
         return self._clone(replace(self._plan, time_scale=float(ns_ratio)))
 
     def time_bucket(
         self,
-        interval_us: Union[int, float, str],
-        normalize_to: Union[int, Literal["min"], None] = None,
-    ) -> "DaskTraceViewer":
+        interval_us: int | float | str,
+        normalize_to: int | Literal["min"] | None = None,
+    ) -> DaskTraceViewer:
         bucket = int(round(coerce_duration(interval_us, 1e6, "interval_us")))
         return self._clone(
             replace(self._plan, time_bucket=bucket, time_bucket_normalize=normalize_to)
         )
 
-    def resolution(self, cell: Union[int, float, str]) -> "DaskTraceViewer":
+    def resolution(self, cell: int | float | str) -> DaskTraceViewer:
         """The occupancy grid, as TraceViewer.resolution; a bare number is
         microseconds."""
         us = int(round(coerce_duration(cell, 1e6, "resolution")))
         return self._clone(replace(self._plan, resolution=us))
 
-    def group_by(self, *keys: str) -> "DaskAggregatedTraceViewer":
+    def group_by(self, *keys: str) -> DaskAggregatedTraceViewer:
         return self._agg_clone(replace(self._plan, group_by=tuple(keys)))
 
-    def agg(self, *specs: str) -> "DaskAggregatedTraceViewer":
+    def agg(self, *specs: str) -> DaskAggregatedTraceViewer:
         return self._agg_clone(replace(self._plan, agg=tuple(specs)))
 
-    def select(self, *cols: str) -> "DaskTraceViewer":
+    def select(self, *cols: str) -> DaskTraceViewer:
         return self._clone(replace(self._plan, select=tuple(cols)))
 
-    def memory_budget(self, nbytes: Union[int, str]) -> "DaskTraceViewer":
+    def memory_budget(self, nbytes: int | str) -> DaskTraceViewer:
         return self._clone(replace(self._plan, memory_budget=coerce_bytes(nbytes, "nbytes")))
 
-    def auto_spill(self) -> "DaskTraceViewer":
+    def auto_spill(self) -> DaskTraceViewer:
         return self._clone(replace(self._plan, auto_spill=True))
 
-    def head(self, n: int) -> "DaskTraceViewer":
+    def head(self, n: int) -> DaskTraceViewer:
         return self._clone(replace(self._plan, limit=int(n)))
 
-    def offset(self, n: int) -> "DaskTraceViewer":
+    def offset(self, n: int) -> DaskTraceViewer:
         return self._clone(replace(self._plan, offset=int(n)))
 
-    def rollup_root(self, path: str) -> "DaskTraceViewer":
+    def rollup_root(self, path: str) -> DaskTraceViewer:
         """Override the aggregation-cache root (default: derive from index)."""
         return self._clone(replace(self._plan, rollup_root=path))
 
-    def views_root(self, path: str) -> "DaskTraceViewer":
+    def views_root(self, path: str) -> DaskTraceViewer:
         """Override the materialized-view root (default: derive from index)."""
         return self._clone(replace(self._plan, views_root=path))
 
-    def agg_numeric_args(self) -> "DaskAggregatedTraceViewer":
+    def agg_numeric_args(self) -> DaskAggregatedTraceViewer:
         return self._agg_clone(replace(self._plan, auto_numeric=True))
 
-    def _shards(self) -> List[List[str]]:
+    def _shards(self) -> list[list[str]]:
         step = max(1, self._files_per_task)
         return [self._files[i : i + step] for i in range(0, len(self._files), step)]
 
-    def _resolve_client(self) -> "Client":
+    def _resolve_client(self) -> Client:
         if self._client is not None:
             return self._client
         from dask.distributed import get_client
 
         return get_client()
 
-    def collect(self):
+    def collect(self) -> DataFrame:
         """Distributed group_by+agg -> one native DataFrame.
 
         Each file shard returns a combinable partial (aggregate_partial),
@@ -390,7 +385,7 @@ class DaskTraceViewer:
         dur: str = "dur",
         name: str = "name",
         group: Sequence[str] = (),
-    ):
+    ) -> DataFrame:
         """Distributed flamegraph -> folded node DataFrame.
 
         Each file shard folds a serialized arena partial (flamegraph_partial);
@@ -418,7 +413,7 @@ class DaskTraceViewer:
         partials = [p for p in client.gather(futures) if p]
         return TraceViewer.merge_flamegraph_partials(partials)
 
-    def collect_typed(self):
+    def collect_typed(self) -> dict[str, pa.Table | None]:
         """Distributed one-pass typed read -> {regular, aggregated, counters}
         pyarrow Tables, fanning disjoint group ranges (hash shards) of the partials across
         workers (the index-wide tier can't be file-sharded)."""
@@ -445,7 +440,7 @@ class DaskTraceViewer:
             )
         parts = client.gather(futures)
 
-        def cat(key):
+        def cat(key: str) -> pa.Table | None:
             # Workers already adopted the capsules into pyarrow Tables; permissive
             # promotion unifies system's dynamic per-metric columns across shards.
             tables = [p[key] for p in parts if p is not None and p.get(key) is not None]
@@ -457,9 +452,9 @@ class DaskTraceViewer:
         self,
         time_granularity: float,
         time_resolution: float,
-        group_keys: Optional[Tuple[str, ...]] = None,
-        drop_file_patterns: Tuple[str, ...] = (),
-    ) -> "Tuple[List[Future], List[Optional[str]]]":
+        group_keys: tuple[str, ...] | None = None,
+        drop_file_patterns: tuple[str, ...] = (),
+    ) -> tuple[list[Future[dict[str, bytes | None]]], list[str | None]]:
         """Distributed typed read as per-worker IPC futures.
 
         Fans the CF shard space across the cluster (the index-wide tier can't be
@@ -510,7 +505,7 @@ class DaskTraceViewer:
         plan = replace(self._plan, offset=None, limit=None)
         return _make_viewer(self._files, self._index_dir, plan)
 
-    def _gather_partials(self, client: "Client") -> List[bytes]:
+    def _gather_partials(self, client: Client) -> list[bytes]:
         """Fan the aggregation across shards, gather combinable partials."""
         plan = replace(self._plan, offset=None, limit=None)
         futures = [
@@ -519,7 +514,7 @@ class DaskTraceViewer:
         ]
         return [p for p in client.gather(futures) if p]
 
-    def page(self, page_size: int = 100_000, cursor: Optional[int] = None) -> QueryPage:
+    def page(self, page_size: int = 100_000, cursor: int | None = None) -> QueryPage:
         """One page of matching events as a pyarrow Table, cursored by ts.
 
         `cursor` is a ts; the page holds the next `page_size` events at ts >=
@@ -549,7 +544,7 @@ class DaskTraceViewer:
             next_cursor = int(page.column("ts")[-1].as_py()) + 1
         return QueryPage(page, next_cursor)
 
-    def pages(self, page_size: int = 100_000):
+    def pages(self, page_size: int = 100_000) -> Iterator[pa.Table]:
         """Iterate all matching events page by page (cursored by ts)."""
         cursor = None
         while True:
@@ -561,7 +556,7 @@ class DaskTraceViewer:
                 break
             cursor = pg.next_cursor
 
-    def export_trace(self, output_dir: str, *, build_index: bool = False) -> Dict[str, List[str]]:
+    def export_trace(self, output_dir: str, *, build_index: bool = False) -> dict[str, list[str]]:
         """Export per-shard re-indexable ``<output_dir>/part-<n>.pfw.gz`` files."""
         client = self._resolve_client()
         os.makedirs(output_dir, exist_ok=True)
@@ -583,9 +578,9 @@ class DaskTraceViewer:
     def materialize(
         self,
         *,
-        checkpoint_size: Union[int, str] = 0,
-        part_size: Union[int, str] = 0,
-    ) -> "DaskTraceViewer":
+        checkpoint_size: int | str = 0,
+        part_size: int | str = 0,
+    ) -> DaskTraceViewer:
         """Distributed row-MV materialize: each shard writes its filtered events
         into its own subdir of the shared MV directory (a self-contained part +
         index), then the coordinator writes one manifest over the full base set.
@@ -629,9 +624,9 @@ class DaskAggregatedTraceViewer(DaskTraceViewer):
     def materialize(
         self,
         *,
-        checkpoint_size: Union[int, str] = 0,
-        part_size: Union[int, str] = 0,
-    ) -> "DaskAggregatedTraceViewer":
+        checkpoint_size: int | str = 0,
+        part_size: int | str = 0,
+    ) -> DaskAggregatedTraceViewer:
         """Distributed materialize of the rollup: ingest the MV from per-shard
         partials, no re-scan. A later collect() reads it back."""
         # checkpoint_size/part_size are row-MV knobs; accepted only to match the
@@ -641,22 +636,22 @@ class DaskAggregatedTraceViewer(DaskTraceViewer):
         self._coordinator().materialize_partials(self._gather_partials(client))
         return self
 
-    def reconstruct_if_cached(self):
+    def reconstruct_if_cached(self) -> DataFrame | None:
         """The materialized aggregation as a native DataFrame, or None on a miss."""
         out = self._coordinator().reconstruct_if_cached()
         return None if out is None else _slice_rows(out, self._plan)
 
 
 def distributed_write_trace(
-    files: List[str],
+    files: list[str],
     output_dir: str,
     *,
     index_dir: str = "",
-    view: Optional[str] = None,
+    view: str | None = None,
     files_per_task: int = 1,
     build_index: bool = False,
-    client: "Optional[Client]" = None,
-) -> Dict[str, List[str]]:
+    client: Client | None = None,
+) -> dict[str, list[str]]:
     """Thin wrapper over ``DaskTraceViewer(...).filter(view).export_trace(...)``."""
     dv = DaskTraceViewer(files, index_dir, client=client, files_per_task=files_per_task)
     if view:

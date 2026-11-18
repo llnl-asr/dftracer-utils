@@ -3,23 +3,26 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Sequence, cast
 
 from ..agg import UdafAgg
 from ..dataframe import DataFrame
 from ..expr import Agg, Col, Wildcard
 
+if TYPE_CHECKING:
+    from ..schemas import JsonValue
+
 _OCCUPANCY = ("busy", "concurrency", "utilization", "active")
 _WILDCARD_OPS = ("sum", "min", "max", "var", "std", "skew", "kurt")
 
 
-def agg_specs(specs: Sequence[Union[str, Agg]]) -> "tuple[List[str], List[str], Optional[int]]":
+def agg_specs(specs: Sequence[str | Agg]) -> tuple[list[str], list[str], int | None]:
     """Trace agg spec strings, ``F.any`` reductions and the occupancy grid of
     ``specs``: spec strings pass through, a bare-field ``Agg`` becomes
     ``"op:field"``, and ``F.any.<op>()`` becomes a numeric-args reduction."""
 
-    strings: List[str] = []
-    wildcard: List[str] = []
+    strings: list[str] = []
+    wildcard: list[str] = []
     grids = set()
     for s in specs:
         if isinstance(s, str):
@@ -68,19 +71,20 @@ def agg_specs(specs: Sequence[Union[str, Agg]]) -> "tuple[List[str], List[str], 
     return strings, wildcard, (grids.pop() if grids else None)
 
 
-def stats_row(frame: DataFrame) -> Dict[str, object]:
+def stats_row(frame: DataFrame) -> dict[str, JsonValue]:
     row = {c: v[0] for c, v in frame.to_dict().items()} if frame.height else {}
-    return {
+    out = {
         "duration_count": row.get("count", 0),
         "duration_mean_us": row.get("mean_dur", 0.0),
         "duration_stddev_us": row.get("std_dur", 0.0),
         "min_timestamp_us": row.get("min_ts", 0),
         "max_timestamp_us": row.get("max_ts", 0),
     }
+    return cast("dict[str, JsonValue]", out)
 
 
-def export_stats(frame: DataFrame) -> Dict[str, object]:
-    return {c: v[0] for c, v in frame.to_dict().items()}
+def export_stats(frame: DataFrame) -> dict[str, JsonValue]:
+    return cast("dict[str, JsonValue]", {c: v[0] for c, v in frame.to_dict().items()})
 
 
 def partial_bytes(frame: DataFrame) -> bytes:

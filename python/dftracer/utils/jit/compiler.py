@@ -9,12 +9,11 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    Dict,
     Iterator,
     List,
     NamedTuple,
     NoReturn,
-    Tuple,
+    Optional,
     cast,
 )
 
@@ -49,7 +48,7 @@ def unwrap_index(node: ast.expr) -> ast.expr:
 
 
 # per-field default (0 / DFTU_STR_NONE), matching dftu_jit_resolve/accessors.
-_FIELD_EXPR: Dict[str, str] = {
+_FIELD_EXPR: dict[str, str] = {
     "pid": "dftu_jit_u64(&_col_pid, i)",
     "tid": "dftu_jit_u64(&_col_tid, i)",
     "ts": "dftu_jit_u64(&_col_ts, i)",
@@ -66,7 +65,7 @@ _FIELD_EXPR: Dict[str, str] = {
 
 # event field -> the batch column name it reads (the "_col_<name>" resolved in
 # on_batch).
-_FIELD_COLUMN: Dict[str, str] = {
+_FIELD_COLUMN: dict[str, str] = {
     "pid": "pid",
     "tid": "tid",
     "ts": "ts",
@@ -83,13 +82,13 @@ _FIELD_COLUMN: Dict[str, str] = {
 # not AST-analyzable, so a raw plugin resolves all of them unconditionally.
 ALL_FIXED_FIELDS = frozenset(_FIELD_COLUMN.values())
 
-_ARG_METHODS: Dict[str, Tuple[str, str]] = {
+_ARG_METHODS: dict[str, tuple[str, str]] = {
     "arg_i64": ("dftu_jit_arg_i64", "0"),
     "arg_f64": ("dftu_jit_arg_f64", "0.0"),
     "arg_str": ("dftu_jit_arg_str", "DFTU_STR_NONE"),
 }
 
-ARG_HELPER_DEFS: Dict[str, List[str]] = {
+ARG_HELPER_DEFS: dict[str, list[str]] = {
     "arg_i64": [
         "static int64_t dftu_jit_arg_i64(const dftu_jit_col* c, int64_t i) {",
         "    if (c->type != DFTU_TYPE_INT64 || !c->data || dftu_series_is_null(c->handle, i))",
@@ -120,7 +119,7 @@ ARG_HELPER_DEFS: Dict[str, List[str]] = {
 # of this): NULL/-1 fields when the named column is absent from the batch, so
 # every accessor below reads that as the field's old default rather than
 # re-resolving it.
-COLBUF_HELPERS: List[str] = [
+COLBUF_HELPERS: list[str] = [
     "typedef struct {",
     "    dftu_series* handle;",
     "    int32_t type;",
@@ -164,7 +163,7 @@ COLBUF_HELPERS: List[str] = [
 # A raw each_event body is spliced verbatim and cannot be re-lowered against
 # _col_*, so it gets a per-row shim struct populated from every fixed column
 # up front, preserving the old e->field spelling.
-RAW_EVENT_SHIM_TYPE: List[str] = [
+RAW_EVENT_SHIM_TYPE: list[str] = [
     "typedef struct {",
     "    uint64_t pid, tid, ts, dur;",
     "    int64_t phase;",
@@ -174,7 +173,7 @@ RAW_EVENT_SHIM_TYPE: List[str] = [
     "",
 ]
 
-RAW_EVENT_SHIM_POPULATE: List[str] = [
+RAW_EVENT_SHIM_POPULATE: list[str] = [
     "dftu_jit_event _ev;",
     "_ev.pid = dftu_jit_u64(&_col_pid, i);",
     "_ev.tid = dftu_jit_u64(&_col_tid, i);",
@@ -206,7 +205,7 @@ _LIST_OPS = frozenset({"DFTU_AGG_LIST_SORTED"})
 # matching static-inline helper in prims.h so a body reads jit.ilog2(e.dur)
 # instead of a raw compiler builtin. Value is (c_function, arity, arg_cast); all
 # return an integer.
-_PRIM_C: Dict[str, Tuple[str, int, str]] = {
+_PRIM_C: dict[str, tuple[str, int, str]] = {
     # bit / log-scale bucketing (unsigned)
     "ilog2": ("dftu_ilog2_u64", 1, "uint64_t"),
     "clz": ("dftu_clz_u64", 1, "uint64_t"),
@@ -261,14 +260,14 @@ def _describe(node: ast.AST) -> str:
     return _CONSTRUCT.get(type(node), type(node).__name__)
 
 
-def _reject_at(reason: str, node: "ast.AST | None" = None) -> NoReturn:
+def _reject_at(reason: str, node: ast.AST | None = None) -> NoReturn:
     """Fail the compile at ``node``; the compiler turns it into file:line:col."""
     err = JitError(reason, locate=False)
     err.node = node
     raise err
 
 
-def _reject(what: str, node: "ast.AST | None" = None) -> NoReturn:
+def _reject(what: str, node: ast.AST | None = None) -> NoReturn:
     _reject_at(f"unsupported in @jit.each_event: {what}; use a raw C++ plugin", node)
 
 
@@ -305,7 +304,7 @@ _STATE_FORMS = {
 _STATE_PY = {"i64": "int", "f64": "float"}
 
 
-def _child_blocks(stmt: ast.stmt) -> "List[List[ast.stmt]] | None":
+def _child_blocks(stmt: ast.stmt) -> list[list[ast.stmt]] | None:
     """The statement lists a compound statement runs, None for a simple one."""
     if isinstance(stmt, ast.If):
         return [stmt.body, stmt.orelse]
@@ -327,7 +326,7 @@ class _Local:
     def __init__(self, kind: str, cname: str, depth: int = 0) -> None:
         self.kind = kind
         self.cname = cname
-        self.origins: List[Tuple[Any, ...]] = []
+        self.origins: list[tuple[Any, ...]] = []
         self.depth = depth
 
 
@@ -336,7 +335,7 @@ def _unconditional_nodes(root: ast.AST) -> Iterator[ast.AST]:
     the first, and a link of a chained comparison after the first, only run when
     the earlier ones allow it, so hoisting one above its guard would run it for
     a row the guard excludes."""
-    stack: List[ast.AST] = [root]
+    stack: list[ast.AST] = [root]
     while stack:
         node = stack.pop()
         yield node
@@ -395,13 +394,13 @@ ERROR_HELPER = [
 class Compiler:
     def __init__(
         self,
-        maps: Dict[str, AnyMap],
-        ops: Dict[str, Op] | None = None,
-        ports: Dict[str, PortHandle] | None = None,
-        config_fields: "Dict[str, CfgField] | None" = None,
-        plain: "Dict[str, PlainField] | None" = None,
-        stores: "Dict[str, StoreField] | None" = None,
-        chans: "Dict[str, _PortDecl] | None" = None,
+        maps: dict[str, AnyMap],
+        ops: dict[str, Op] | None = None,
+        ports: dict[str, PortHandle] | None = None,
+        config_fields: dict[str, CfgField] | None = None,
+        plain: dict[str, PlainField] | None = None,
+        stores: dict[str, StoreField] | None = None,
+        chans: dict[str, _PortDecl] | None = None,
     ) -> None:
         self.maps = maps
         self.plain = plain if plain is not None else {}
@@ -412,7 +411,7 @@ class Compiler:
         self.chan_uses: builtins.set[str] = builtins.set()
         self._port_frame = False
         # Per plain field: the (form, identity) its updates agree on.
-        self.plain_forms: Dict[str, Tuple[str, bool]] = {}
+        self.plain_forms: dict[str, tuple[str, bool]] = {}
         self.store_gets: builtins.set[str] = builtins.set()
         self.store_puts: builtins.set[str] = builtins.set()
         self.ports = ports if ports is not None else {}
@@ -423,22 +422,22 @@ class Compiler:
         # Referenced @jit.op transforms, inlined into the plugin as static C
         # functions the moment the body calls one.
         self.ops = ops if ops is not None else {}
-        self.op_defs: List[str] = []
+        self.op_defs: list[str] = []
         self.op_emitted: builtins.set[str] = builtins.set()
         # Physical batch columns ("pid", "cat", "ph", ...) the body actually
         # reads; on_batch resolves exactly these once per batch.
         self.fields_used: builtins.set[str] = builtins.set()
-        self.str_literals: List[str] = []
-        self.arg_keys: List[str] = []
+        self.str_literals: list[str] = []
+        self.arg_keys: list[str] = []
         self.arg_helpers: builtins.set[str] = builtins.set()
         self.self_name = "self"
         self.event_name = "e"
         # Contribution statements per accumulator; the emitted row buffers hold
         # this many rows per scanned event.
-        self.rows_per_event: Dict[str, int] = {}
+        self.rows_per_event: dict[str, int] = {}
         # CSE: ast.dump(node) -> (local name, is_float) for a hoisted expression
         # shared within the current scope.
-        self._cse: Dict[str, Tuple[str, bool]] = {}
+        self._cse: dict[str, tuple[str, bool]] = {}
         self._cse_n = 0
         # The statement being compiled, where an error without a node points.
         self._cur: ast.AST | None = None
@@ -449,7 +448,7 @@ class Compiler:
         # raise / try: whether the body unwinds, the stack of labels a failing
         # statement jumps to (innermost last), and the label past the loop.
         self.can_raise = False
-        self._targets: List[str] = []
+        self._targets: list[str] = []
         self._label_n = 0
         self._source: Source | None = None
         self._store_read = False
@@ -458,14 +457,14 @@ class Compiler:
         self.flow = False
         self.is_async = False
         self.in_task = False
-        self.locals: Dict[str, _Local] = {}
-        self.local_decls: List[str] = []
-        self.res_decls: List[str] = []
-        self.res_frees: List[str] = []
-        self.files: Dict[str, Tuple[str, str]] = {}
+        self.locals: dict[str, _Local] = {}
+        self.local_decls: list[str] = []
+        self.res_decls: list[str] = []
+        self.res_frees: list[str] = []
+        self.files: dict[str, tuple[str, str]] = {}
         self.uses: builtins.set[str] = builtins.set()
-        self.tasks: Dict[str, _TaskSig] = {}
-        self.emit_names: List[str] = []
+        self.tasks: dict[str, _TaskSig] = {}
+        self.emit_names: list[str] = []
         self.ob_size = 8
         self._res_n = 0
         self._await_n = 0
@@ -473,16 +472,16 @@ class Compiler:
         self._cse_ok = True
         self._loops = 0
         self._has_loops = False
-        self.doc_gen: Dict[str, int] = {}
-        self.file_gen: Dict[str, int] = {}
-        self._active_loops: List[int] = []
+        self.doc_gen: dict[str, int] = {}
+        self.file_gen: dict[str, int] = {}
+        self._active_loops: list[int] = []
         self._loop_seq = 0
-        self._iter_files: List[str] = []
-        self.docs: Dict[str, str] = {}
-        self.file_path: Dict[str, str] = {}
-        self._rhs_node: "ast.expr | None" = None
+        self._iter_files: list[str] = []
+        self.docs: dict[str, str] = {}
+        self.file_path: dict[str, str] = {}
+        self._rhs_node: ast.expr | None = None
 
-    def lower(self, fn: Callable[..., object]) -> List[str]:
+    def lower(self, fn: Callable[..., object]) -> list[str]:
         source = Source(fn)
         self._source = source
         try:
@@ -490,7 +489,7 @@ class Compiler:
         except JitError as exc:
             raise source.relocate(exc, self._cur) from None
 
-    def _lower(self, fn: Callable[..., object], source: Source) -> List[str]:
+    def _lower(self, fn: Callable[..., object], source: Source) -> list[str]:
         mod = ast.parse(source.text)
         funcs = [n for n in mod.body if isinstance(n, ast.FunctionDef)]
         if len(funcs) != 1:
@@ -527,7 +526,7 @@ class Compiler:
 
     # ---- flow bodies: @jit.finalize and @jit.task ----------------------------
 
-    def lower_flow(self, fn: Callable[..., object], sig: "_TaskSig | None") -> "_FlowFn":
+    def lower_flow(self, fn: Callable[..., object], sig: _TaskSig | None) -> _FlowFn:
         source = Source(fn)
         self._source = source
         try:
@@ -536,8 +535,8 @@ class Compiler:
             raise source.relocate(exc, self._cur) from None
 
     def _lower_flow(
-        self, fn: Callable[..., object], source: Source, sig: "_TaskSig | None"
-    ) -> "_FlowFn":
+        self, fn: Callable[..., object], source: Source, sig: _TaskSig | None
+    ) -> _FlowFn:
         mod = ast.parse(source.text)
         funcs = [n for n in mod.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
         if len(funcs) != 1:
@@ -563,7 +562,7 @@ class Compiler:
             )
         self.self_name = params[0].arg
         if sig is not None:
-            for arg, (pname, pkind) in zip(params[1:], sig.params):
+            for arg, (_pname, pkind) in zip(params[1:], sig.params):
                 self.local_decls.append(f"{_CTYPE[pkind]} v_{arg.arg};")
                 self.locals[arg.arg] = _Local(pkind, f"S->v_{arg.arg}")
         defs, lines = self._compile_scope(fn_ast.body)
@@ -619,7 +618,7 @@ class Compiler:
                         node,
                     )
 
-    def _origins_of(self, node: ast.expr) -> List[Tuple[Any, ...]]:
+    def _origins_of(self, node: ast.expr) -> list[tuple[Any, ...]]:
         node = unwrap_index(node)
         if isinstance(node, ast.Name):
             loc = self.locals.get(node.id)
@@ -629,7 +628,7 @@ class Compiler:
         return []
 
     def _bind_origins(
-        self, name: str, loc: _Local, fresh: bool, origins: List[Tuple[Any, ...]], node: ast.AST
+        self, name: str, loc: _Local, fresh: bool, origins: list[tuple[Any, ...]], node: ast.AST
     ) -> None:
         if loc.kind == "view" and not fresh:
             old = {o[:2] for o in loc.origins}
@@ -690,7 +689,7 @@ class Compiler:
 
     # A JSON / YAML value: a local of kind ``val`` or a find() chain of one. Its
     # C form is a `const dftu_value*` that is NULL for a missing key.
-    def _val_expr(self, node: ast.expr) -> "str | None":
+    def _val_expr(self, node: ast.expr) -> str | None:
         node = unwrap_index(node)
         if isinstance(node, ast.Name):
             loc = self.locals.get(node.id)
@@ -719,7 +718,7 @@ class Compiler:
             return f"dftu_obj_get({base}, {text})"
         return None
 
-    def _val_call(self, node: ast.expr) -> "Tuple[str, str] | None":
+    def _val_call(self, node: ast.expr) -> tuple[str, str] | None:
         node = unwrap_index(node)
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
             return None
@@ -771,7 +770,7 @@ class Compiler:
         dflt = f"(double)({self._arith(args[0])[0]})" if args else "0.0"
         return "f64", f"dftu_as_f64({base}, {dflt})"
 
-    def _len_call(self, node: ast.expr) -> "str | None":
+    def _len_call(self, node: ast.expr) -> str | None:
         if not (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
@@ -871,14 +870,14 @@ class Compiler:
         expr, _ = self._arith(node)
         return expr
 
-    def _is_parse_call(self, node: ast.expr) -> "str | None":
+    def _is_parse_call(self, node: ast.expr) -> str | None:
         if isinstance(node, ast.Call):
             name = self._jit_name(node.func)
             if name in ("json", "yaml"):
                 return name
         return None
 
-    def _flow_stmt(self, stmt: ast.stmt) -> "List[str] | None":
+    def _flow_stmt(self, stmt: ast.stmt) -> list[str] | None:
         if isinstance(stmt, ast.AsyncFor):
             return self._async_for(stmt)
         if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
@@ -926,7 +925,7 @@ class Compiler:
                     )
         return None
 
-    def _assign(self, target: ast.expr, value: ast.expr, stmt: ast.stmt) -> List[str]:
+    def _assign(self, target: ast.expr, value: ast.expr, stmt: ast.stmt) -> list[str]:
         if isinstance(value, ast.Await):
             return self._await_stmt(target, value, stmt)
         port = self._chan_call(value)
@@ -974,7 +973,7 @@ class Compiler:
             self._bind_origins(name, loc, fresh, self._origins_of(value), target)
         return [f"{loc.cname} = {rhs};"]
 
-    def _aug_local(self, stmt: ast.AugAssign) -> List[str]:
+    def _aug_local(self, stmt: ast.AugAssign) -> list[str]:
         assert isinstance(stmt.target, ast.Name)
         loc = self._local(stmt.target)
         sym = ENGINE_ARITH_SYMBOL.get(type(stmt.op))
@@ -993,7 +992,7 @@ class Compiler:
             _reject_at("a float expression cannot be added into an int local", stmt)
         return [f"{loc.cname} {sym}= {expr};"]
 
-    def _parse(self, name: str, fmt: str, call: ast.Call, target: ast.expr) -> List[str]:
+    def _parse(self, name: str, fmt: str, call: ast.Call, target: ast.expr) -> list[str]:
         if len(call.args) != 1 or call.keywords:
             _reject_at(f"jit.{fmt} takes one text", call)
         if self._expr_kind(call.args[0]) != "str":
@@ -1052,13 +1051,13 @@ class Compiler:
             "}",
         ]
 
-    def _no_await(self, body: List[ast.stmt], what: str) -> None:
+    def _no_await(self, body: list[ast.stmt], what: str) -> None:
         for stmt in body:
             for sub in ast.walk(stmt):
                 if isinstance(sub, (ast.Await, ast.AsyncFor)):
                     _reject_at(f"await inside {what}; await before or after it", sub)
 
-    def _path_text(self, node: ast.expr) -> Tuple[str, str]:
+    def _path_text(self, node: ast.expr) -> tuple[str, str]:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             if "\0" in node.value:
                 _reject_at("a path has no NUL byte", node)
@@ -1069,7 +1068,7 @@ class Compiler:
             return f"_c->v_{cfg.name}", f"_c->v_{cfg.name}"
         _reject_at("the path of jit.open is a string literal or a str config field", node)
 
-    def _with(self, stmt: ast.With) -> List[str]:
+    def _with(self, stmt: ast.With) -> list[str]:
         if len(stmt.items) != 1:
             _reject_at("`with` takes one jit.open(path) as f", stmt)
         item = stmt.items[0]
@@ -1085,7 +1084,7 @@ class Compiler:
             _reject_at(f"{fname} is already a name of this body", item.optional_vars)
         self._no_await(stmt.body, "a with block")
         path_c, _ = self._path_text(call.args[0])
-        reads: List[int] = []
+        reads: list[int] = []
         iterated = False
         for sub in ast.walk(ast.Module(body=stmt.body, type_ignores=[])):
             if isinstance(sub, ast.For) and isinstance(sub.iter, ast.Name) and sub.iter.id == fname:
@@ -1161,7 +1160,7 @@ class Compiler:
         ]
         return lines
 
-    def _for(self, stmt: ast.For) -> List[str]:
+    def _for(self, stmt: ast.For) -> list[str]:
         if stmt.orelse:
             _reject_at("`for` with `else`", stmt)
         it = stmt.iter
@@ -1278,7 +1277,7 @@ class Compiler:
         head.extend("        " + ln for ln in defs + body)
         return head + ["    }", "}"]
 
-    def _read_stmt(self, name: str, call: ast.Call, target: ast.expr) -> List[str]:
+    def _read_stmt(self, name: str, call: ast.Call, target: ast.expr) -> list[str]:
         assert isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name)
         fname = call.func.value.id
         handle, mode = self.files[fname]
@@ -1307,7 +1306,7 @@ class Compiler:
             "}",
         ]
 
-    def _emit_call(self, call: ast.Call) -> List[str]:
+    def _emit_call(self, call: ast.Call) -> list[str]:
         if not self.flow or self.in_task:
             _reject_at("jit.emit is a statement of a @jit.finalize body", call)
         if len(call.args) != 2 or call.keywords:
@@ -1325,7 +1324,7 @@ class Compiler:
             _reject_at("a JSON value is emitted through as_int, as_str, ...", call.args[1])
         value = self._rhs_of_kind(call.args[1], kind)
         self.uses.add("result")
-        body: List[str]
+        body: list[str]
         if kind == "str" and self._is_view_node(call.args[1]):
             body = [
                 f"    DftuView _ev = {self._view_expr(call.args[1])};",
@@ -1360,10 +1359,10 @@ class Compiler:
             "}",
         ]
 
-    def _return(self, stmt: ast.Return) -> List[str]:
+    def _return(self, stmt: ast.Return) -> list[str]:
         if not self.flow:
             _reject(_describe(stmt), stmt)
-        lines: List[str] = []
+        lines: list[str] = []
         if stmt.value is not None:
             if self.task_ret is None:
                 _reject_at("this body returns nothing; use a bare `return`", stmt)
@@ -1380,7 +1379,7 @@ class Compiler:
         lines.append(f"_unw = 1; goto {self._target()};")
         return ["{"] + ["    " + ln for ln in lines] + ["}"]
 
-    def _task_call(self, node: ast.expr) -> "Tuple[_TaskSig, List[ast.expr]] | None":
+    def _task_call(self, node: ast.expr) -> tuple[_TaskSig, list[ast.expr]] | None:
         if not (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -1392,8 +1391,8 @@ class Compiler:
         return self.tasks[node.func.attr], builtins.list(node.args)
 
     def _job_of(
-        self, node: ast.expr, lines: List[str], nested: bool
-    ) -> "Tuple[str, List[str | None], bool]":
+        self, node: ast.expr, lines: list[str], nested: bool
+    ) -> tuple[str, list[str | None], bool]:
         """Build the job of an awaitable into ``lines``: its C variable, the kinds
         of its outputs and whether it is a bare sleep."""
         node = unwrap_index(node)
@@ -1427,7 +1426,7 @@ class Compiler:
             sig, args = call
             if len(args) != len(sig.params) or node.keywords:
                 _reject_at(f"{sig.name} takes {len(sig.params)} argument(s), got {len(args)}", node)
-            cargs: List[str] = []
+            cargs: list[str] = []
             for arg, (pname, pkind) in zip(args, sig.params):
                 expr, is_float = self._arith(arg)
                 if is_float and pkind == "i64":
@@ -1449,8 +1448,8 @@ class Compiler:
                 _reject_at(f"jit.{name} inside jit.all or jit.any", node)
             if len(node.args) < 2 or node.keywords:
                 _reject_at(f"jit.{name} takes two or more task calls", node)
-            kids: List[str] = []
-            kinds: List[str | None] = []
+            kids: list[str] = []
+            kinds: list[str | None] = []
             for arg in node.args:
                 kid, kk, _ = self._job_of(arg, lines, True)
                 if kk[0] is None:
@@ -1474,7 +1473,7 @@ class Compiler:
             node,
         )
 
-    def _await_stmt(self, target: "ast.expr | None", aw: ast.Await, stmt: ast.stmt) -> List[str]:
+    def _await_stmt(self, target: ast.expr | None, aw: ast.Await, stmt: ast.stmt) -> list[str]:
         if not self.flow or not self.is_async:
             _reject_at("await outside an `async def` @jit.finalize or @jit.task body", aw)
         inner = unwrap_index(aw.value)
@@ -1485,7 +1484,7 @@ class Compiler:
             if not isinstance(target, ast.Name):
                 _reject_at("assign the value of a store get: x = await self.<store>.get(k, d)", aw)
             return self._assign(target, inner, stmt)
-        jl: List[str] = []
+        jl: list[str] = []
         var, kinds, sleeping = self._job_of(inner, jl, False)
         self._await_n += 1
         k = self._await_n
@@ -1493,11 +1492,11 @@ class Compiler:
         has_out = builtins.any(kd is not None for kd in kinds)
         if has_out:
             self.ob_size = builtins.max(self.ob_size, 8 * len(kinds))
-        decode: List[str] = []
+        decode: list[str] = []
         if target is not None:
             if not has_out:
                 _reject_at("this awaitable gives no value to assign", target)
-            names: List[ast.expr] = (
+            names: list[ast.expr] = (
                 builtins.list(target.elts) if isinstance(target, ast.Tuple) else [target]
             )
             if len(names) != len(kinds):
@@ -1542,9 +1541,9 @@ class Compiler:
         file, line, col = self._loc(node)
         return f"{file}:{line}:{col}"
 
-    task_ret: "str | None" = None
+    task_ret: Optional[str] = None
 
-    def _cfg_field(self, node: ast.expr) -> "CfgField | None":
+    def _cfg_field(self, node: ast.expr) -> CfgField | None:
         """The config field ``self.config.<name>`` names, else None."""
         if not (
             self.config_fields
@@ -1562,7 +1561,7 @@ class Compiler:
 
     # ---- plain-container scan state and jit.Store ----------------------------
 
-    def _self_base(self, node: ast.expr) -> "str | None":
+    def _self_base(self, node: ast.expr) -> str | None:
         """The attribute name of the ``self.<attr>`` at the base of a chain of
         subscripts, attributes and calls, else None."""
         cur: ast.expr = node
@@ -1578,7 +1577,7 @@ class Compiler:
             else:
                 return None
 
-    def _plain_attr(self, node: ast.expr) -> "str | None":
+    def _plain_attr(self, node: ast.expr) -> str | None:
         base = self._self_base(node)
         return base if base is not None and base in self.plain else None
 
@@ -1629,7 +1628,7 @@ class Compiler:
             )
         _reject(_describe(node), node)
 
-    def _dict_keys(self, field: PlainField, target: ast.expr) -> List[ast.expr]:
+    def _dict_keys(self, field: PlainField, target: ast.expr) -> list[ast.expr]:
         if not (
             isinstance(target, ast.Subscript)
             and isinstance(target.value, ast.Attribute)
@@ -1646,7 +1645,7 @@ class Compiler:
 
     def _state_call(
         self, field: PlainField, node: ast.expr, method: str, key_dump: str
-    ) -> "List[ast.expr] | None":
+    ) -> list[ast.expr] | None:
         """The arguments of ``self.<field>.<method>(key, ...)`` for that key."""
         if not (
             isinstance(node, ast.Call)
@@ -1661,7 +1660,7 @@ class Compiler:
             return None
         return builtins.list(node.args)
 
-    def _dict_assign(self, field: PlainField, stmt: ast.Assign) -> "_Update":
+    def _dict_assign(self, field: PlainField, stmt: ast.Assign) -> _Update:
         target = stmt.targets[0]
         keys = self._dict_keys(field, target)
         assert isinstance(target, ast.Subscript)
@@ -1710,7 +1709,7 @@ class Compiler:
                     return _Update(field.name, form, keys, other, False)
         self._merge_error(field, stmt, "this assignment")
 
-    def _plain_update(self, stmt: ast.stmt) -> "_Update | None":
+    def _plain_update(self, stmt: ast.stmt) -> _Update | None:
         """The merge-inferable update ``stmt`` makes to a plain-container
         field, None when ``stmt`` touches none, and a compile error when it
         touches one in a form whose merge cannot be inferred."""
@@ -1773,14 +1772,14 @@ class Compiler:
                 self._merge_error(self.plain[attr], stmt, "this statement")
         return None
 
-    def _plain_attr_in(self, node: ast.AST) -> "str | None":
+    def _plain_attr_in(self, node: ast.AST) -> str | None:
         for sub in ast.walk(node):
             if isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name):
                 if sub.value.id == self.self_name and sub.attr in self.plain:
                     return sub.attr
         return None
 
-    def _infer_plain(self, stmts: List[ast.stmt]) -> None:
+    def _infer_plain(self, stmts: list[ast.stmt]) -> None:
         """Pass one: the merge of each plain field from its updates, which must
         agree, then its accumulator declaration."""
         for stmt in stmts:
@@ -1830,7 +1829,7 @@ class Compiler:
         if kind != "str" and is_str:
             _reject_at(f"{what} is a number and cannot be a string field", node)
 
-    def _plain_stmt(self, stmt: ast.stmt) -> "List[str] | None":
+    def _plain_stmt(self, stmt: ast.stmt) -> list[str] | None:
         """Pass two: the contribution rows of one plain-container update."""
         update = self._plain_update(stmt)
         if update is None:
@@ -1842,7 +1841,7 @@ class Compiler:
             self._check_family(kn, "str" if kt.dft == "DFTU_T_STR" else "i64", "this key component")
         if update.form in ("add", "append"):
             self._check_family(update.value, field.elem, "this element")
-        lines: List[str] = []
+        lines: list[str] = []
         if update.identity:
             zero = ast.copy_location(ast.Constant(0), update.value)
             lines += self._emit_row(update.attr, update.keys, 0, monoid, zero, None)
@@ -1855,7 +1854,7 @@ class Compiler:
         lines += self._emit_row(update.attr, update.keys, 0, monoid, update.value, by)
         return lines
 
-    def _store_method(self, node: ast.expr) -> "Tuple[StoreField, str] | None":
+    def _store_method(self, node: ast.expr) -> tuple[StoreField, str] | None:
         if not (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -1867,14 +1866,14 @@ class Compiler:
             return None
         return self.stores[node.func.value.attr], node.func.attr
 
-    def _store_key_args(self, field: StoreField, node: ast.expr) -> List[str]:
+    def _store_key_args(self, field: StoreField, node: ast.expr) -> list[str]:
         keys = self._keys(node)
         if len(keys) != len(field.key_kinds):
             _reject_at(
                 f"self.{field.name} takes {len(field.key_kinds)} key components, got {len(keys)}",
                 node,
             )
-        out: List[str] = []
+        out: list[str] = []
         for kn, kind in zip(keys, field.key_kinds):
             self._check_family(kn, kind, "this key component")
             if kind == "str":
@@ -1886,7 +1885,7 @@ class Compiler:
                 out.append(f"(int64_t)({expr})")
         return out
 
-    def _store_get(self, node: ast.expr) -> "Tuple[str, bool] | None":
+    def _store_get(self, node: ast.expr) -> tuple[str, bool] | None:
         found = self._store_method(node)
         if found is None:
             return None
@@ -1918,7 +1917,7 @@ class Compiler:
         args = ", ".join(["&_se", "host", *keys, default])
         return f"_st_get_{field.name}({args})", field.value_kind == "f64"
 
-    def _store_put(self, call: ast.Call) -> "List[str] | None":
+    def _store_put(self, call: ast.Call) -> list[str] | None:
         found = self._store_method(call)
         if found is None:
             return None
@@ -1944,7 +1943,7 @@ class Compiler:
 
     # ---- ports: channels, latest values and phase results --------------------
 
-    def _chan_call(self, node: ast.expr) -> "Tuple[_PortDecl, str, ast.Call] | None":
+    def _chan_call(self, node: ast.expr) -> tuple[_PortDecl, str, ast.Call] | None:
         """``(port, method, call)`` for ``self.<port>.<method>(...)``, else None."""
         node = unwrap_index(node)
         if not (
@@ -1967,12 +1966,12 @@ class Compiler:
         msg = _c_str_literal(f"jit.Error [{self._loc_text_plain(node)}]: {text}")
         return f"_st = dftu_fail(ctx, DFTU_E_INVALID, {msg}); _unw = 1; goto {self._target()};"
 
-    def _port_handle(self, decl: "_PortDecl") -> str:
+    def _port_handle(self, decl: _PortDecl) -> str:
         self.chan_uses.add(decl.attr)
         self.uses.add("ports")
         return f"R->ch_{decl.attr}" if self.flow else f"_ch_{decl.attr}"
 
-    def _port_value(self, decl: "_PortDecl", node: ast.expr, what: str) -> str:
+    def _port_value(self, decl: _PortDecl, node: ast.expr, what: str) -> str:
         self._check_family(node, "i64", what)
         expr, is_float = self._arith(node)
         if decl.elem == "i64":
@@ -1983,7 +1982,7 @@ class Compiler:
             return f"(int64_t)({expr})"
         return f"(double)({expr})"
 
-    def _port_args(self, decl: "_PortDecl", method: str, call: ast.Call, count: int) -> None:
+    def _port_args(self, decl: _PortDecl, method: str, call: ast.Call, count: int) -> None:
         if call.keywords or len(call.args) != count:
             _reject_at(
                 f"self.{decl.attr}.{method}() takes "
@@ -1991,7 +1990,7 @@ class Compiler:
                 call,
             )
 
-    def _port_checks(self, decl: "_PortDecl", method: str, call: ast.Call, awaited: bool) -> None:
+    def _port_checks(self, decl: _PortDecl, method: str, call: ast.Call, awaited: bool) -> None:
         """The rules a call of ``method`` on ``decl`` follows in this body."""
         attr = decl.attr
         methods = {
@@ -2050,7 +2049,7 @@ class Compiler:
             self._port_frame = True
             self.local_decls += ["int32_t pst;", "uint32_t plen;", "int64_t pval;"]
 
-    def _port_stmt(self, call_info: "Tuple[_PortDecl, str, ast.Call]") -> List[str]:
+    def _port_stmt(self, call_info: tuple[_PortDecl, str, ast.Call]) -> list[str]:
         """A statement that is a port call whose value, if any, is unused."""
         decl, method, call = call_info
         self._port_checks(decl, method, call, False)
@@ -2059,8 +2058,8 @@ class Compiler:
         return self._port_lines(decl, method, call, None)
 
     def _port_assign(
-        self, target: ast.expr, call_info: "Tuple[_PortDecl, str, ast.Call]", stmt: ast.stmt
-    ) -> List[str]:
+        self, target: ast.expr, call_info: tuple[_PortDecl, str, ast.Call], stmt: ast.stmt
+    ) -> list[str]:
         decl, method, call = call_info
         self._port_checks(decl, method, call, False)
         if method not in ("try_send", "get", "result"):
@@ -2073,8 +2072,8 @@ class Compiler:
         return self._port_lines(decl, method, call, loc.cname)
 
     def _port_lines(
-        self, decl: "_PortDecl", method: str, call: ast.Call, dest: "str | None"
-    ) -> List[str]:
+        self, decl: _PortDecl, method: str, call: ast.Call, dest: str | None
+    ) -> list[str]:
         self.uses.add("ports")
         attr, name = decl.attr, decl.full
         tgt = self._target()
@@ -2196,7 +2195,7 @@ class Compiler:
             ]
         return lines + ["}"]
 
-    def _port_wait(self, start: List[str], resume: List[str], node: ast.AST) -> List[str]:
+    def _port_wait(self, start: list[str], resume: list[str], node: ast.AST) -> list[str]:
         """The lines of one await on a task the ports service started: start it,
         park the frame, and on resume check the cancel, take the status and run
         ``resume``."""
@@ -2230,7 +2229,7 @@ class Compiler:
             "}",
         ]
 
-    def _port_recv_start(self, decl: "_PortDecl") -> List[str]:
+    def _port_recv_start(self, decl: _PortDecl) -> list[str]:
         h = self._port_handle(decl)
         return [
             "S->pst = DFTU_PORT_OK;",
@@ -2242,10 +2241,10 @@ class Compiler:
 
     def _port_await(
         self,
-        target: "ast.expr | None",
-        call_info: "Tuple[_PortDecl, str, ast.Call]",
+        target: ast.expr | None,
+        call_info: tuple[_PortDecl, str, ast.Call],
         stmt: ast.stmt,
-    ) -> List[str]:
+    ) -> list[str]:
         decl, method, call = call_info
         self._port_checks(decl, method, call, True)
         if decl.kind != "channel" or method not in ("send", "recv"):
@@ -2275,7 +2274,7 @@ class Compiler:
             ]
             return self._port_wait(start, resume, stmt)
         self._port_args(decl, method, call, 0)
-        decode: List[str] = []
+        decode: list[str] = []
         if target is not None:
             if not isinstance(target, ast.Name):
                 _reject_at("a result is assigned to a name", target)
@@ -2298,7 +2297,7 @@ class Compiler:
         ]
         return self._port_wait(start, resume, stmt)
 
-    def _async_for(self, stmt: ast.AsyncFor) -> List[str]:
+    def _async_for(self, stmt: ast.AsyncFor) -> list[str]:
         if not (self.flow and self.is_async):
             _reject_at("`async for` needs an `async def` @jit.finalize or @jit.task body", stmt)
         if stmt.orelse:
@@ -2343,7 +2342,7 @@ class Compiler:
         lines.append("}")
         return lines
 
-    def _slice_elts(self, sl: ast.expr) -> List[ast.expr]:
+    def _slice_elts(self, sl: ast.expr) -> list[ast.expr]:
         sl = unwrap_index(sl)
         return builtins.list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
 
@@ -2351,11 +2350,11 @@ class Compiler:
     # a local computed once, then compile the scope's statements against those
     # locals. Nested guard bodies are their own scopes (a guarded expression is
     # not hoisted above its guard, preserving its execution condition).
-    def _compile_scope(self, stmts: List[ast.stmt]) -> Tuple[List[str], List[str]]:
+    def _compile_scope(self, stmts: list[ast.stmt]) -> tuple[list[str], list[str]]:
         outer = self._cse
         self._cse = dict(outer)
-        counts: Dict[str, int] = {}
-        reps: Dict[str, ast.expr] = {}
+        counts: dict[str, int] = {}
+        reps: dict[str, ast.expr] = {}
         for stmt in stmts:
             root = stmt.test if isinstance(stmt, ast.If) else stmt
             for node in _unconditional_nodes(root):
@@ -2368,7 +2367,7 @@ class Compiler:
         # them.
         order = sorted(range(len(cands)), key=lambda i: builtins.sum(1 for _ in ast.walk(cands[i])))
         shared = [cands[i] for i in order]
-        defs: List[str] = []
+        defs: list[str] = []
         for node in shared:
             d = ast.dump(node)
             if d in self._cse:
@@ -2379,7 +2378,7 @@ class Compiler:
             self._cse_n += 1
             defs.append(f"{'double' if is_float else 'int64_t'} {name} = ({expr});")
             self._cse[d] = (name, is_float)
-        lines: List[str] = []
+        lines: list[str] = []
         for stmt in stmts:
             lines.extend(self._stmt(stmt))
         self._cse = outer
@@ -2413,7 +2412,7 @@ class Compiler:
 
     _exit_label = "_ev_exit"
 
-    def _loc(self, node: ast.AST) -> Tuple[str, int, int]:
+    def _loc(self, node: ast.AST) -> tuple[str, int, int]:
         src = self._source
         assert src is not None
         return (
@@ -2422,7 +2421,7 @@ class Compiler:
             getattr(node, "col_offset", 0) + src.margin + 1,
         )
 
-    def _jit_name(self, node: ast.expr) -> "str | None":
+    def _jit_name(self, node: ast.expr) -> str | None:
         if (
             isinstance(node, ast.Attribute)
             and isinstance(node.value, ast.Name)
@@ -2431,7 +2430,7 @@ class Compiler:
             return node.attr
         return None
 
-    def _raise(self, stmt: ast.Raise) -> List[str]:
+    def _raise(self, stmt: ast.Raise) -> list[str]:
         if stmt.exc is None:
             _reject_at("a bare `raise` re-raises a caught exception; raise jit.Fatal(...)", stmt)
         if stmt.cause is not None:
@@ -2473,7 +2472,7 @@ class Compiler:
             if isinstance(node, ast.Tuple)
             else [self._jit_name(node)]
         )
-        conds: List[str] = []
+        conds: list[str] = []
         for name, at in zip(names, node.elts if isinstance(node, ast.Tuple) else [node]):
             if name is None:
                 _reject_at(
@@ -2501,7 +2500,7 @@ class Compiler:
             conds.append(cond)
         return " || ".join(conds)
 
-    def _try(self, stmt: ast.Try) -> List[str]:
+    def _try(self, stmt: ast.Try) -> list[str]:
         if stmt.orelse or stmt.finalbody:
             _reject_at("`try` with `else` or `finally`; use try and except only", stmt)
         if not stmt.handlers:
@@ -2539,7 +2538,7 @@ class Compiler:
         lines += [f"        else goto {outer};", "    }", f"{end}: ;", "}"]
         return lines
 
-    def _stmt(self, stmt: ast.stmt) -> List[str]:
+    def _stmt(self, stmt: ast.stmt) -> list[str]:
         self._cur = stmt
         if isinstance(stmt, ast.Raise):
             return self._raise(stmt)
@@ -2556,7 +2555,7 @@ class Compiler:
             return lines
         return self._stmt_plain(stmt)
 
-    def _stmt_plain(self, stmt: ast.stmt) -> List[str]:
+    def _stmt_plain(self, stmt: ast.stmt) -> list[str]:
         if isinstance(stmt, ast.If):
             guard = self._cond(stmt.test)
             defs, body = self._compile_scope(stmt.body)
@@ -2579,7 +2578,7 @@ class Compiler:
             return lines
         return self._add_stmt(stmt)
 
-    def _add_stmt(self, stmt: ast.stmt) -> List[str]:
+    def _add_stmt(self, stmt: ast.stmt) -> list[str]:
         if self.plain:
             plain_lines = self._plain_stmt(stmt)
             if plain_lines is not None:
@@ -2756,7 +2755,7 @@ class Compiler:
             return expr
         return None
 
-    def _arg_call(self, node: ast.expr) -> Tuple[str, str] | None:
+    def _arg_call(self, node: ast.expr) -> tuple[str, str] | None:
         """(method, arg-name) for an ``e.arg_*("NAME")`` call; None if not an event
         method call, JitError for an unknown method or a non-literal name."""
         if not (
@@ -2776,7 +2775,7 @@ class Compiler:
             _reject(f"e.{method} arg name must be a string literal", name_node)
         return method, name_node.value
 
-    def _prim_call(self, node: ast.expr) -> Tuple[str, str, List[ast.expr]] | None:
+    def _prim_call(self, node: ast.expr) -> tuple[str, str, list[ast.expr]] | None:
         """(c-function, arg-cast, arg-nodes) for a ``jit.<prim>(...)`` numeric
         primitive; None when not a ``jit.`` call at all, JitError for a bad
         prim or arity."""
@@ -2796,7 +2795,7 @@ class Compiler:
             _reject(f"jit.{prim}() takes exactly {arity} argument(s)", node)
         return c_fn, cast, builtins.list(node.args)
 
-    def _op_call(self, node: ast.expr) -> Tuple[str, bool] | None:
+    def _op_call(self, node: ast.expr) -> tuple[str, bool] | None:
         """(c-expr, is_float) for a call to a referenced ``@jit.op`` transform,
         inlining its C body on first use; None when not an op call. A
         ``self.<store>.get(...)`` call is lowered here too."""
@@ -2822,7 +2821,7 @@ class Compiler:
         in_ct = jit_op.c_type(op_obj.in_type)
         return f"{c_name}(({in_ct})({arg_expr}))", jit_op.is_float_type(op_obj.out_type)
 
-    def _lower_arg(self, method: str, name: str) -> Tuple[str, bool]:
+    def _lower_arg(self, method: str, name: str) -> tuple[str, bool]:
         """Lower ``e.arg_*("NAME")`` to a read of the batch-resolved "args.NAME"
         dyn column, returning (expr, is_float); the column is resolved once per
         batch in on_batch, by name, not re-scanned per row."""
@@ -2842,7 +2841,7 @@ class Compiler:
             self.str_literals.append(s)
         return f"lit_{self.str_literals.index(s)}"
 
-    def _resolve_accum(self, target: ast.expr) -> Tuple[str, List[ast.expr], int, Monoid]:
+    def _resolve_accum(self, target: ast.expr) -> tuple[str, list[ast.expr], int, Monoid]:
         comp_name: str | None = None
         node = target
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Subscript):
@@ -2850,7 +2849,7 @@ class Compiler:
             node = node.value
         if not isinstance(node, ast.Subscript):
             _reject("assignment target (expected self.<map>[(...)])", target)
-        subs: List[ast.expr] = []
+        subs: list[ast.expr] = []
         cur: ast.expr = node
         while isinstance(cur, ast.Subscript):
             subs.append(cur.slice)
@@ -2869,8 +2868,8 @@ class Compiler:
         return self._resolve_flat(base.attr, decl, subs, comp_name)
 
     def _resolve_flat(
-        self, attr: str, decl: AnyMap, subs: List[ast.expr], comp_name: str | None
-    ) -> Tuple[str, List[ast.expr], int, Monoid]:
+        self, attr: str, decl: AnyMap, subs: list[ast.expr], comp_name: str | None
+    ) -> tuple[str, list[ast.expr], int, Monoid]:
         if decl.is_product:
             keys = self._keys(subs[0])
             comp_node = subs[1] if len(subs) > 1 else None
@@ -2905,7 +2904,7 @@ class Compiler:
             return target.attr
         return None
 
-    def _publish(self, name: str, value: ast.expr) -> List[str]:
+    def _publish(self, name: str, value: ast.expr) -> list[str]:
         port = self.ports[name]
         if port.role != "publish":
             _reject(f"self.{name} is a jit.consume port; read its value, do not += into it", value)
@@ -2921,7 +2920,7 @@ class Compiler:
             _reject(f"self.{name} is a jit.publish port; publish into it with +=, do not read it")
         return f"_sub_{name}"
 
-    def _aug(self, stmt: ast.AugAssign) -> List[str]:
+    def _aug(self, stmt: ast.AugAssign) -> list[str]:
         if not isinstance(stmt.op, ast.Add):
             _reject("augmented operator other than +=", stmt)
         pub = self._publish_target(stmt.target)
@@ -2934,7 +2933,7 @@ class Compiler:
             _reject(f"+= on the non-additive monoid {monoid.dft}; use .observe(v) instead", stmt)
         return self._emit_row(attr, keys, comp, monoid, stmt.value, None)
 
-    def _observe(self, call: ast.Call) -> List[str]:
+    def _observe(self, call: ast.Call) -> list[str]:
         func = call.func
         if not (isinstance(func, ast.Attribute) and func.attr == "observe"):
             _reject("method call other than .observe(v)", call)
@@ -2959,7 +2958,7 @@ class Compiler:
         self._check_element(call.args[0], monoid)
         return self._emit_row(attr, keys, comp, monoid, call.args[0], by)
 
-    def _append(self, call: ast.Call) -> List[str]:
+    def _append(self, call: ast.Call) -> list[str]:
         func = call.func
         assert isinstance(func, ast.Attribute)
         if len(call.args) != 1:
@@ -3021,12 +3020,12 @@ class Compiler:
     def _emit_row(
         self,
         attr: str,
-        keys: List[ast.expr],
+        keys: list[ast.expr],
         comp: int,
         monoid: Monoid,
         value: ast.expr,
         by: ast.expr | None,
-    ) -> List[str]:
+    ) -> list[str]:
         """Append one contribution row to ``attr``'s per-batch column buffers;
         the buffers are folded into the DFTU_SVC_AGG accumulator after the loop."""
         decl = self.maps[attr]
@@ -3063,10 +3062,10 @@ class Compiler:
         lines.append("}")
         return lines
 
-    def _grow_rows(self, attr: str, decl: AnyMap) -> List[str]:
+    def _grow_rows(self, attr: str, decl: AnyMap) -> list[str]:
         """Room for one more row of ``attr``: a loop appends an unknown number of
         rows per event, so the batch-sized buffers grow when they fill."""
-        bufs: List[Tuple[str, str]] = []
+        bufs: list[tuple[str, str]] = []
         for idx, kt in enumerate(decl.key_types):
             bufs.append((f"_k{idx}_{attr}", key_type(kt.dft).ctype))
         for c, m in enumerate(decl.values):
@@ -3113,7 +3112,7 @@ class Compiler:
             _reject(f"unknown value component .{name} for self.{attr}")
         return names.index(name)
 
-    def _keys(self, sl: ast.expr) -> List[ast.expr]:
+    def _keys(self, sl: ast.expr) -> list[ast.expr]:
         sl = unwrap_index(sl)
         if isinstance(sl, ast.Tuple):
             return builtins.list(sl.elts)
@@ -3174,7 +3173,7 @@ class Compiler:
             _reject("float value into a u64 monoid component", node)
         return f"({'double' if elem == 'f64' else 'int64_t'})({expr})"
 
-    def _arith(self, node: ast.expr) -> Tuple[str, bool]:
+    def _arith(self, node: ast.expr) -> tuple[str, bool]:
         node = unwrap_index(node)
         hoisted = self._cse.get(ast.dump(node))
         if hoisted is not None:

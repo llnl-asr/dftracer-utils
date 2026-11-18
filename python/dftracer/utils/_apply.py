@@ -24,7 +24,7 @@ arm) on the engine tiers and ``None`` values on the Python tier.
 from __future__ import annotations
 
 import ast
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Sequence, cast
+from typing import TYPE_CHECKING, Callable, Iterator, Mapping, Sequence, cast
 
 from . import dftracer_utils_ext as _ext
 from ._eval import Columnar
@@ -32,12 +32,15 @@ from .expr import Expr, col, collect_columns, has_column_op
 from .series import Series
 
 if TYPE_CHECKING:
+    from typing_extensions import TypeGuard
+
     from .dataframe import DataFrame
+    from .jit_op import Op
 
 _TRACE_INPUT = "__x0__"
 
 
-def trace_errors() -> tuple:
+def trace_errors() -> tuple[type[Exception], ...]:
     from .jit import JitError
 
     return (TypeError, AttributeError, ValueError, KeyError, NotImplementedError, JitError)
@@ -47,7 +50,7 @@ def _is_jit_series(func: object) -> bool:
     return callable(func) and str(getattr(func, "__qualname__", "")).startswith("ops.")
 
 
-def _is_jit_op(func: object) -> bool:
+def _is_jit_op(func: object) -> TypeGuard[Op]:
     from .jit_op import Op
 
     return isinstance(func, Op)
@@ -68,21 +71,21 @@ def warn_fallback(what: str, func: object, reason: str) -> None:
     )
 
 
-def _eval_expr(expr: "Expr", source: Mapping[str, "Series"]) -> "Series":
+def _eval_expr(expr: Expr, source: Mapping[str, Series]) -> Series:
 
     return Columnar(expr).apply(dict(source))
 
 
-def _from_python(values: Sequence[object]) -> "Series":
+def _from_python(values: Sequence[object]) -> Series:
     return Series.from_list(list(values))
 
 
-def _column(frame: "DataFrame", name: str) -> "Series":
+def _column(frame: DataFrame, name: str) -> Series:
 
     return frame[name]
 
 
-def apply_series(series: "Series", func: Callable[..., object], what: str) -> "Series":
+def apply_series(series: Series, func: Callable[..., object], what: str) -> Series:
     """Elementwise ``func`` over ``series`` (pandas ``Series.apply`` / ``map``)."""
 
     if _is_jit_series(func):
@@ -108,7 +111,7 @@ def apply_series(series: "Series", func: Callable[..., object], what: str) -> "S
     return _from_python(values)
 
 
-def _null_where_input_is(out: "Series", series: "Series") -> "Series":
+def _null_where_input_is(out: Series, series: Series) -> Series:
     """A null element maps to a null result on every tier. The engine's own
     rule (a null test takes the else arm) would otherwise let a branch turn a
     missing value into a present one."""
@@ -118,8 +121,8 @@ def _null_where_input_is(out: "Series", series: "Series") -> "Series":
 
 
 def _trace(
-    func: Callable[..., object], arg: object, source: Mapping[str, "Series"]
-) -> "tuple[Optional[Expr], str]":
+    func: Callable[..., object], arg: object, source: Mapping[str, Series]
+) -> tuple[Expr | None, str]:
     """Tier 1: run ``func`` once on a symbolic argument. The Expr it built, or
     None and the reason."""
     if uses_identity_test(func):
@@ -160,9 +163,9 @@ def uses_identity_test(func: Callable[..., object]) -> bool:
 
 def _transpile(
     func: Callable[..., object],
-    columns: Optional[Sequence[str]],
-    source: Mapping[str, "Series"],
-) -> "tuple[Optional[Expr], str]":
+    columns: Sequence[str] | None,
+    source: Mapping[str, Series],
+) -> tuple[Expr | None, str]:
     """Tier 2: lower the function's own source, control flow included."""
     from ._transpile import TranspileError, transpile
 
@@ -177,21 +180,21 @@ def _transpile(
     return expr, ""
 
 
-def _check_columns(expr: "Expr", source: Mapping[str, "Series"]) -> None:
+def _check_columns(expr: Expr, source: Mapping[str, Series]) -> None:
 
     for name in collect_columns(expr):
         if name not in source:
             raise KeyError(f"no column named {name!r}")
 
 
-def _apply_jit_op(series: "Series", op_obj: Any, what: str) -> "Series":
+def _apply_jit_op(series: Series, op_obj: Op, what: str) -> Series:
     from .jit_op import lower_to_expr, run_op
 
     tokens = lower_to_expr(op_obj)
     if tokens is not None:
         return _ext.vec_eval(tokens, [series])
     warn_fallback(what, op_obj, "the @jit.op body has no columnar Expr form")
-    values: List[object] = [
+    values: list[object] = [
         None if v is None else run_op(op_obj, cast(float, v)) for v in series.to_list()
     ]
     return _from_python(values)
@@ -217,7 +220,7 @@ class _RowTrace:
             raise AttributeError(name)
         return self[name]
 
-    def keys(self) -> List[str]:
+    def keys(self) -> list[str]:
         return list(self._columns)
 
     def __contains__(self, name: object) -> bool:
@@ -230,7 +233,7 @@ class Row(Mapping[str, object]):
 
     __slots__ = ("_values",)
 
-    def __init__(self, values: Dict[str, object]) -> None:
+    def __init__(self, values: dict[str, object]) -> None:
         self._values = values
 
     def __getitem__(self, name: str) -> object:
@@ -244,7 +247,7 @@ class Row(Mapping[str, object]):
         except KeyError:
             raise AttributeError(name) from None
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(self._values)
 
     def __len__(self) -> int:
@@ -254,7 +257,7 @@ class Row(Mapping[str, object]):
         return f"Row({self._values!r})"
 
 
-def apply_rows(frame: "DataFrame", func: Callable[..., object], what: str) -> "Series":
+def apply_rows(frame: DataFrame, func: Callable[..., object], what: str) -> Series:
     """``func`` once per row (pandas ``DataFrame.apply(axis=1)``)."""
 
     columns = frame.columns

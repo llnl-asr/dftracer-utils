@@ -8,9 +8,7 @@ import builtins
 from typing import (
     TYPE_CHECKING,
     Callable,
-    Dict,
     List,
-    Tuple,
     cast,
 )
 
@@ -55,7 +53,7 @@ def _vfold_df_field(node: ast.expr) -> str:
     return key.value
 
 
-def _vfold_specs(opd: Dict[str, object]) -> List[Tuple[str, str, str, str, str]]:
+def _vfold_specs(opd: dict[str, object]) -> list[tuple[str, str, str, str, str]]:
     """The (op, value, out, param, by) dftu_agg_col rows for one vfold op."""
     mon = cast(Monoid, opd["mon"])
     vfield = opd["vfield"]
@@ -74,9 +72,9 @@ def _vfold_specs(opd: Dict[str, object]) -> List[Tuple[str, str, str, str, str]]
 
 def _compile_vfold(
     fn: Callable[..., object],
-    accums: Dict[str, Monoid],
-    maps: Dict[str, AnyMap],
-) -> Tuple[List[Dict[str, object]], "builtins.set[str]"]:
+    accums: dict[str, Monoid],
+    maps: dict[str, AnyMap],
+) -> tuple[list[dict[str, object]], builtins.set[str]]:
     source = Source(fn)
     try:
         return _compile_vfold_body(source, accums, maps)
@@ -86,16 +84,16 @@ def _compile_vfold(
 
 def _compile_vfold_body(
     source: Source,
-    accums: Dict[str, Monoid],
-    maps: Dict[str, AnyMap],
-) -> Tuple[List[Dict[str, object]], "builtins.set[str]"]:
+    accums: dict[str, Monoid],
+    maps: dict[str, AnyMap],
+) -> tuple[list[dict[str, object]], builtins.set[str]]:
     tree = ast.parse(source.text)
     func = tree.body[0]
     source.cur = func
     if not isinstance(func, ast.FunctionDef):
         raise JitError("@jit.each_batch must decorate a function")
-    ops: List[Dict[str, object]] = []
-    fields: "builtins.set[str]" = builtins.set()
+    ops: list[dict[str, object]] = []
+    fields: builtins.set[str] = builtins.set()
     shape = (
         '@jit.vfold body must be self.<acc> += df["f"].<reducer>() '
         'or self.<map>[df["k"]] += df["v"]'
@@ -108,7 +106,7 @@ def _compile_vfold_body(
             raise JitError(shape)
         tgt = stmt.target
         rhs = stmt.value
-        keyfields: List[str] = []
+        keyfields: list[str] = []
         if (
             isinstance(tgt, ast.Subscript)
             and isinstance(tgt.value, ast.Attribute)
@@ -217,11 +215,11 @@ def _compile_vfold_body(
 
 
 def _emit_vfold(
-    ops: List[Dict[str, object]],
+    ops: list[dict[str, object]],
     plan_duql: str | None,
 ) -> str:
     plan_duql_field = "plan_duql" if plan_duql is not None else "NULL"
-    out: List[str] = [
+    out: list[str] = [
         "#include <dftracer/utils/plugins/abi.h>",
         "#include <dftracer/utils/dataframe/c_api.h>",
         "",
@@ -335,9 +333,9 @@ def _emit_vfold(
 
 
 def _build_vfold(cls: type[C]) -> type[C]:
-    accums: Dict[str, Monoid] = {}
-    maps: Dict[str, AnyMap] = {}
-    batch: List[EachBatch] = []
+    accums: dict[str, Monoid] = {}
+    maps: dict[str, AnyMap] = {}
+    batch: list[EachBatch] = []
     for attr, val in vars(cls).items():
         if isinstance(val, Map):
             maps[attr] = val

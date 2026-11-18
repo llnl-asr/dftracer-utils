@@ -43,24 +43,24 @@ ALIAS_END = "# END GENERATED aliases"
 
 RESULT_TYPES: Dict[str, str] = {
     "SAME": "Self",
-    "BOOL": '"PublicSeries[bool]"',
-    "INT": '"PublicSeries[int]"',
-    "FLOAT": '"PublicSeries[float]"',
-    "STR": '"PublicSeries[str]"',
-    "ANY": '"PublicSeries[Scalar]"',
+    "BOOL": "PublicSeries[bool]",
+    "INT": "PublicSeries[int]",
+    "FLOAT": "PublicSeries[float]",
+    "STR": "PublicSeries[str]",
+    "ANY": "PublicSeries[Scalar]",
 }
 
 
 VALUE_RESULTS: Dict[str, List[str]] = {
     "I64": ["int"],
     "F64": ["float"],
-    "ELEMENT": ["Optional[T_co]"],
+    "ELEMENT": ["T_co | None"],
 }
 # SCALAR: a number of the column's own type, int or float, else either.
 SCALAR_OVERLOADS = (
-    ('self: "Series[int]"', "int"),
-    ('self: "Series[float]"', "float"),
-    ('self: "Series[Scalar]"', "Union[int, float]"),
+    ("self: Series[int]", "int"),
+    ("self: Series[float]", "float"),
+    ("self: Series[Scalar]", "int | float"),
 )
 
 
@@ -77,9 +77,9 @@ def series_lines(rows: List[api_def.Row]) -> List[str]:
         if r.args == "NONE":
             params = ""
         elif r.args == "SCALAR":
-            params = f", {r.keywords[0]}: Union[bool, int, float, str]"
+            params = f", {r.keywords[0]}: bool | int | float | str"
         elif r.args == "NUMBER2":
-            params = "".join(f", {k}: Union[int, float]" for k in r.keywords)
+            params = "".join(f", {k}: int | float" for k in r.keywords)
         elif r.args in ("STR", "STR2"):
             params = "".join(f", {k}: str" for k in r.keywords)
         elif r.args == "INT":
@@ -172,7 +172,7 @@ def expr_lines(rows: List[api_def.Row]) -> List[str]:
         if r.on_expr:
             if r.args != "NONE":
                 raise ValueError(f"{r.name}: Expr takes only no-argument rows")
-            out.append(f'        def {r.name}(self) -> "Expr": ...')
+            out.append(f"        def {r.name}(self) -> Expr: ...")
     return out
 
 
@@ -209,7 +209,7 @@ TARGETS: List[Tuple[str, Callable, Callable, str, str, str]] = [
         BEGIN,
         END,
     ),
-    ("expr.py", expr_lines, lambda r: r.on_expr, "class Expr:", BEGIN, END),
+    ("expr.py", expr_lines, lambda r: r.on_expr, "class Expr(", BEGIN, END),
     (
         "series.py",
         alias_lines("Series", "series.py"),
@@ -222,7 +222,7 @@ TARGETS: List[Tuple[str, Callable, Callable, str, str, str]] = [
         "expr.py",
         alias_lines("Expr", "expr.py"),
         lambda r: False,
-        "class Expr:",
+        "class Expr(",
         ALIAS_BEGIN,
         ALIAS_END,
     ),

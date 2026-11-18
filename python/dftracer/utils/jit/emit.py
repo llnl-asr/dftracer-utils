@@ -10,9 +10,6 @@ import textwrap
 from typing import (
     TYPE_CHECKING,
     Callable,
-    Dict,
-    List,
-    Tuple,
 )
 
 from .._c_text import c_str_literal as _c_str_literal
@@ -36,7 +33,7 @@ if TYPE_CHECKING:
     from ._batch import BatchHook
 
 
-def _port_ctype(port: PortHandle) -> Tuple[str, str]:
+def _port_ctype(port: PortHandle) -> tuple[str, str]:
     return ("double", "0.0") if port.is_f64 else ("uint64_t", "0")
 
 
@@ -48,13 +45,13 @@ def _wire_id(port: PortHandle) -> str:
     return port.name
 
 
-def emit_name_lists(provides: List[str], consumes: List[str]) -> Tuple[List[str], List[str]]:
+def emit_name_lists(provides: list[str], consumes: list[str]) -> tuple[list[str], list[str]]:
     """The dftu_plugin::provides / ::consumes definitions and the two factory
     assignment lines. Both lists are derived, never author-declared: a plugin
     produces the ports it publishes and the accumulators it creates, and reads
     the ports it consumes."""
-    defs: List[str] = []
-    assigns: List[str] = []
+    defs: list[str] = []
+    assigns: list[str] = []
     for slot, names in (("provides", provides), ("consumes", consumes)):
         if not names:
             assigns.append(f"    g_plugin.{slot} = NULL;")
@@ -73,12 +70,12 @@ def emit_name_lists(provides: List[str], consumes: List[str]) -> Tuple[List[str]
 
 
 def _emit_port_pre(
-    pub_ports: List[Tuple[str, PortHandle]], sub_ports: List[Tuple[str, PortHandle]]
-) -> List[str]:
+    pub_ports: list[tuple[str, PortHandle]], sub_ports: list[tuple[str, PortHandle]]
+) -> list[str]:
     """Batch-scoped port setup emitted before the event loop: fetch the ports
     extension, read each consume port's value for this batch, and zero each
     publish port's per-batch accumulator."""
-    out: List[str] = [
+    out: list[str] = [
         "    const dftu_svc_ports* _ports =",
         "        (const dftu_svc_ports*)host->get_service(host->h, DFTU_SVC_PORTS);",
         "    (void)_ports;",
@@ -101,9 +98,9 @@ def _emit_port_pre(
     return out
 
 
-def _emit_port_flush(pub_ports: List[Tuple[str, PortHandle]]) -> List[str]:
+def _emit_port_flush(pub_ports: list[tuple[str, PortHandle]]) -> list[str]:
     """Publish each publish port's per-batch accumulator after the event loop."""
-    out: List[str] = []
+    out: list[str] = []
     for name, port in pub_ports:
         cap = _c_str_literal(_wire_id(port))
         out += [
@@ -160,9 +157,9 @@ def quantile_name(q: float) -> str:
     return f"p{q * 100:g}"
 
 
-def _agg_specs(decl: AnyMap) -> List[Tuple[str, str, str, str, str]]:
+def _agg_specs(decl: AnyMap) -> list[tuple[str, str, str, str, str]]:
     """The (op, value, out, param, by) dftu_agg_col rows for one accumulator."""
-    specs: List[Tuple[str, str, str, str, str]] = []
+    specs: list[tuple[str, str, str, str, str]] = []
     for c, m in enumerate(decl.values):
         if isinstance(m, Quantiles):
             specs.append(("DFTU_AGG_COUNT", "NULL", _c_str_literal("count"), "0.0", "NULL"))
@@ -189,7 +186,7 @@ def _agg_specs(decl: AnyMap) -> List[Tuple[str, str, str, str, str]]:
     return specs
 
 
-def _emit_buffers(attr: str, decl: AnyMap, rows: int) -> List[str]:
+def _emit_buffers(attr: str, decl: AnyMap, rows: int) -> list[str]:
     """Per-batch row buffers for one accumulator, sized to the batch."""
     out = [
         f"    uint32_t _cap_{attr} = (uint32_t)n * {rows}u;",
@@ -224,11 +221,11 @@ def _emit_buffers(attr: str, decl: AnyMap, rows: int) -> List[str]:
     return out
 
 
-def _emit_flush(attr: str, decl: AnyMap, wire_name: str) -> List[str]:
+def _emit_flush(attr: str, decl: AnyMap, wire_name: str) -> list[str]:
     """Build one batch frame from the row buffers and fold it into the
     DFTU_SVC_AGG accumulator named ``wire_name`` (the package-qualified id;
     ``attr`` only ever names local C buffers)."""
-    cols: List[Tuple[str, List[str]]] = []
+    cols: list[tuple[str, list[str]]] = []
     for idx, kt in enumerate(decl.key_types):
         dtype = key_type(kt.dft).column
         if kt.dft == "DFTU_T_STR":
@@ -328,7 +325,7 @@ def _emit_flush(attr: str, decl: AnyMap, wire_name: str) -> List[str]:
     return out
 
 
-def _emit_frees(attr: str, decl: AnyMap) -> List[str]:
+def _emit_frees(attr: str, decl: AnyMap) -> list[str]:
     out = [f"    free(_k{idx}_{attr});" for idx in range(len(decl.key_types))]
     for c, m in enumerate(decl.values):
         out.append(f"    free(_v{c}_{attr});")
@@ -455,7 +452,7 @@ _STORE_HELPERS = [
 ]
 
 
-def _store_key_lines(field: "StoreField", buf: str) -> List[str]:
+def _store_key_lines(field: StoreField, buf: str) -> list[str]:
     lines = [f"    dftu_buf_byte({buf}, 0x05);"] if field.is_tuple else []
     for idx, kind in enumerate(field.key_kinds):
         if kind == "str":
@@ -468,10 +465,10 @@ def _store_key_lines(field: "StoreField", buf: str) -> List[str]:
 
 
 def _emit_store_defs(
-    stores: "Dict[str, StoreField]",
-    gets: "builtins.set[str]",
-    puts: "builtins.set[str]",
-) -> List[str]:
+    stores: dict[str, StoreField],
+    gets: builtins.set[str],
+    puts: builtins.set[str],
+) -> list[str]:
     """File-scope C for the plugin's :class:`Store` fields: the codec, one typed
     ``get`` and ``put`` per field the body uses, and the per-batch open/close."""
     count = len(stores)
@@ -595,32 +592,32 @@ def _emit_store_defs(
 
 
 def emit_plugin(
-    maps: Dict[str, AnyMap],
-    body: List[str],
+    maps: dict[str, AnyMap],
+    body: list[str],
     fields_used: builtins.set[str],
     plan_duql: str | None,
-    str_literals: List[str],
-    arg_keys: List[str],
+    str_literals: list[str],
+    arg_keys: list[str],
     arg_helpers: builtins.set[str],
-    rows_per_event: Dict[str, int],
-    op_defs: List[str] | None = None,
-    ports: Dict[str, PortHandle] | None = None,
-    config_fields: "Dict[str, CfgField] | None" = None,
+    rows_per_event: dict[str, int],
+    op_defs: list[str] | None = None,
+    ports: dict[str, PortHandle] | None = None,
+    config_fields: dict[str, CfgField] | None = None,
     raw_event: bool = False,
-    map_ids: "Dict[str, str] | None" = None,
-    stores: "Dict[str, StoreField] | None" = None,
-    store_gets: "builtins.set[str] | None" = None,
-    store_puts: "builtins.set[str] | None" = None,
-    mask_guard: "str | None" = None,
-    batch: "BatchHook | None" = None,
+    map_ids: dict[str, str] | None = None,
+    stores: dict[str, StoreField] | None = None,
+    store_gets: builtins.set[str] | None = None,
+    store_puts: builtins.set[str] | None = None,
+    mask_guard: str | None = None,
+    batch: BatchHook | None = None,
     can_raise: bool = False,
-    flow_uses: "builtins.set[str] | None" = None,
-    res_decls: "List[str] | None" = None,
-    res_frees: "List[str] | None" = None,
-    flow_defs: "List[str] | None" = None,
-    finalize_lines: "List[str] | None" = None,
-    chans: "Dict[str, _PortDecl] | None" = None,
-    chan_uses: "builtins.set[str] | None" = None,
+    flow_uses: builtins.set[str] | None = None,
+    res_decls: list[str] | None = None,
+    res_frees: list[str] | None = None,
+    flow_defs: list[str] | None = None,
+    finalize_lines: list[str] | None = None,
+    chans: dict[str, _PortDecl] | None = None,
+    chan_uses: builtins.set[str] | None = None,
     plugin_name: str = "dftracer.jit",
 ) -> str:
     op_defs = op_defs or []
@@ -645,7 +642,7 @@ def emit_plugin(
     ) or builtins.any(m.elem == "str" for decl in maps.values() for m in decl.values)
     needs_bitmap = builtins.any(decl.is_product for decl in maps.values())
     plan_duql_field = "plan_duql" if plan_duql is not None else "NULL"
-    out: List[str] = [
+    out: list[str] = [
         "#include <dftracer/utils/plugins/abi.h>",
         "#include <dftracer/utils/plugins/prims.h>",
         "#include <dftracer/utils/dataframe/c_api.h>",
@@ -890,7 +887,7 @@ def emit_plugin(
     for attr, decl in maps.items():
         out += _emit_buffers(attr, decl, builtins.max(1, rows_per_event.get(attr, 1)))
     out.append("    if (_alloc_ok && _st >= 0) {")
-    inner: List[str] = []
+    inner: list[str] = []
     if ports:
         inner += _emit_port_pre(pub_ports, sub_ports)
     inner += _channels.event_open_lines(chans, chan_uses)
@@ -926,7 +923,7 @@ def emit_plugin(
             inner += ["    " + ln for ln in res_frees]
         if mask_guard is not None:
             inner.append("    free(_sel);")
-    tail: List[str] = []
+    tail: list[str] = []
     if ports:
         tail += _emit_port_flush(pub_ports)
     for attr, decl in maps.items():
@@ -1023,7 +1020,7 @@ def emit_plugin(
 RAW_ROWS_PER_EVENT = 4
 
 
-def raw_body(fn: Callable[..., object]) -> List[str]:
+def raw_body(fn: Callable[..., object]) -> list[str]:
     argc = getattr(fn, "__code__").co_argcount
     result = fn(*([None] * argc))
     if not isinstance(result, str):
@@ -1035,7 +1032,7 @@ def raw_body(fn: Callable[..., object]) -> List[str]:
     return textwrap.dedent(result).splitlines()
 
 
-def referenced_ops(fn: Callable[..., object]) -> Dict[str, Op]:
+def referenced_ops(fn: Callable[..., object]) -> dict[str, Op]:
     """The ``@jit.op`` transforms the each_event body can reach by name, from its
     globals and closure - so calling one inlines that op into the plugin."""
     try:

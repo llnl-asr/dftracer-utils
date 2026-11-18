@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Union, cast
+from typing import TYPE_CHECKING, Dict, List, NamedTuple, Union, cast
 
 from ._jit_errors import check_port_wiring, translate_plan_error, translate_run_error
 from .dataframe import DataFrame
@@ -29,7 +29,7 @@ from .dftracer_utils_ext import DataFrame as _NativeDataFrame
 from .dftracer_utils_ext import Plugins as _NativePlugins
 
 if TYPE_CHECKING:
-    import pyarrow as pa  # ty: ignore[import-not-found]
+    import pyarrow as pa
 
     from .dftracer_utils_ext import PluginRecord
     from .lazyframe import LazyFrame
@@ -45,10 +45,10 @@ _RunResult = Union[bytes, "DataFrame", "LazyFrame"]
 
 
 def unnest(
-    result: "Union[pa.Table, pa.RecordBatchReader, pa.RecordBatch]",
+    result: pa.Table | pa.RecordBatchReader | pa.RecordBatch,
     column: str,
     keep_empty: bool = False,
-) -> "pa.Table":
+) -> pa.Table:
     """Explode a list-typed ``column`` of a ``run()`` map result into one row per
     element, repeating the other columns; the inverse of the set/list/top-k
     aggregates.
@@ -69,7 +69,7 @@ def unnest(
     return DataFrame.from_arrow(pa.table(result)).unnest(column, keep_empty).to_arrow()
 
 
-def _plugin_key(plugin: Union[str, type]) -> str:
+def _plugin_key(plugin: str | type) -> str:
     """The name a caller's ``config`` mapping keys this plugin by: a compiled
     ``.so``'s stem, or a ``@jit.plugin`` class's name."""
     if isinstance(plugin, str):
@@ -124,7 +124,7 @@ class PluginRun:
 
     __slots__ = ("results", "stats")
 
-    def __init__(self, results: "Dict[str, _RunResult]", stats: Dict[str, int]) -> None:
+    def __init__(self, results: dict[str, _RunResult], stats: dict[str, int]) -> None:
         self.results = results
         self.stats = stats
 
@@ -142,9 +142,9 @@ class Plugins:
 
     def __init__(
         self,
-        plugins: "List[Union[str, type]]",
-        config: "Optional[Dict[str, Dict[str, JSONValue]]]" = None,
-        runtime: "Optional[Runtime]" = None,
+        plugins: list[str | type],
+        config: dict[str, dict[str, JSONValue]] | None = None,
+        runtime: Runtime | None = None,
     ) -> None:
         """Build ``plugins`` (each a compiled ``.so`` path or a ``@jit.plugin``
         class, AST-compiled to a cached native ``.so`` first) into one set bound
@@ -157,7 +157,7 @@ class Plugins:
         DFTUtilsValueError on a bad config.
         """
         config = config or {}
-        result_names: Dict[str, str] = {}
+        result_names: dict[str, str] = {}
         specs = []
         for plugin in plugins:
             cfg = config.get(_plugin_key(plugin))
@@ -180,7 +180,7 @@ class Plugins:
                 raise
             raise translated from exc
 
-    def describe(self) -> "List[PluginInfo]":
+    def describe(self) -> list[PluginInfo]:
         """What each plugin in the set is, in the order it was given: its path,
         its ABI version, whether it declares a ``plan_duql`` and whether it
         carries a fold, and the names it registered per kind (ops, udfs,
@@ -189,7 +189,7 @@ class Plugins:
 
         Static: nothing is scanned and no plugin callback runs.
         """
-        raw: "List[PluginRecord]" = self._native.describe()
+        raw: list[PluginRecord] = self._native.describe()
         return [
             PluginInfo(
                 path=info["path"],
@@ -215,8 +215,8 @@ class Plugins:
 
     def run(
         self,
-        traces: Union[str, List[str]],
-        index_dir: Optional[str] = None,
+        traces: str | list[str],
+        index_dir: str | None = None,
         auto_index: bool = True,
     ) -> PluginRun:
         """Fold every plugin in the set over one fused scan of ``traces`` (a
@@ -248,7 +248,7 @@ class Plugins:
         results = {name: self._shape(obj) for name, obj in raw_results.items()}
         return PluginRun(results, stats)
 
-    def _shape(self, obj: object) -> "_RunResult":
+    def _shape(self, obj: object) -> _RunResult:
         """Return one native result in the shape its emit kind implies.
 
         The native layer already hands back one Python type per emit kind and

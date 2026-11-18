@@ -437,5 +437,5 @@ def test_schema_stats_share_is_listed_and_validated():
     for bad in ("0", "1.5"):
         with pytest.raises(dftu.DFTUtilsValueError, match="index.stats_share"):
             schemas.register(
-                "id: py_share_bad\nindex: {stats_share: %s}\n" % bad, source="bad.yaml"
+                f"id: py_share_bad\nindex: {{stats_share: {bad}}}\n", source="bad.yaml"
             )

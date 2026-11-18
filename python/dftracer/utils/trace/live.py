@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Iterator, List, NamedTuple, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Iterator, NamedTuple, Sequence
 
 from .. import dftracer_utils_ext as _ext
-from ..schemas import schema_id
+from ..schemas import RecordSchema, schema_id
 from .viewer import TraceViewer
+
+if TYPE_CHECKING:
+    from ..runtime import Runtime
 
 
 class LiveFileStatus(NamedTuple):
@@ -43,10 +46,10 @@ class LiveTraceViewer:
 
     def __init__(
         self,
-        files: Union[str, "os.PathLike[str]", Sequence[Union[str, "os.PathLike[str]"]]],
-        index_dir: Optional[str] = None,
-        runtime: Any = None,
-        record_schema: Any = None,
+        files: str | os.PathLike[str] | Sequence[str | os.PathLike[str]],
+        index_dir: str | None = None,
+        runtime: Runtime | None = None,
+        record_schema: str | type[RecordSchema] | None = None,
     ) -> None:
         paths = (
             [os.fspath(files)]
@@ -63,7 +66,7 @@ class LiveTraceViewer:
         short or bad member."""
         return self._viewer(self._live.snapshot())
 
-    def new_rows(self) -> Optional[TraceViewer]:
+    def new_rows(self) -> TraceViewer | None:
         """As :meth:`snapshot`, and return a viewer of only the rows that no
         earlier call of this method returned, or ``None`` when there are none. A
         file that a new file replaced starts over. A file whose last whole member
@@ -84,13 +87,13 @@ class LiveTraceViewer:
             else:
                 yield viewer
 
-    def _viewer(self, native: Any) -> TraceViewer:
+    def _viewer(self, native: _ext.TraceViewer) -> TraceViewer:
         if self._record_schema is not None:
             native = native.record_schema(schema_id(self._record_schema))
         viewer = TraceViewer(native)
         viewer._runtime = self._runtime
         return viewer
 
-    def status(self) -> List[LiveFileStatus]:
+    def status(self) -> list[LiveFileStatus]:
         """One entry per file, from the last :meth:`snapshot`."""
         return [LiveFileStatus(*entry) for entry in self._live.status()]

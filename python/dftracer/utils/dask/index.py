@@ -10,21 +10,10 @@ import time
 import zlib
 from collections import defaultdict
 from importlib.util import find_spec
-from typing import (
-    TYPE_CHECKING,
-    Callable,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Sequence,
-    Set,
-    TypedDict,
-    Union,
-)
+from typing import TYPE_CHECKING, Callable, List, Literal, Sequence, TypedDict
 
 if TYPE_CHECKING:
-    from dask.distributed import Client  # ty: ignore[import-not-found]
+    from dask.distributed import Client
 
 from ..dftracer_utils_ext import (
     INPUT_FILE_PATTERNS,
@@ -50,9 +39,9 @@ class DistributedIndexResult(TypedDict):
 
 
 def assign_files_by_pid(
-    file_pids: Dict[str, Set[int]],
+    file_pids: dict[str, set[int]],
     n_workers: int,
-) -> Dict[int, List[str]]:
+) -> dict[int, list[str]]:
     """Assign files to workers based on majority PID affinity.
 
     Files with overlapping PIDs are assigned to the same worker to minimize
@@ -70,7 +59,7 @@ def assign_files_by_pid(
     if n_workers <= 0:
         n_workers = 1
 
-    worker_assignments: Dict[int, List[str]] = defaultdict(list)
+    worker_assignments: dict[int, list[str]] = defaultdict(list)
 
     for path, pids in file_pids.items():
         if not pids:
@@ -86,15 +75,15 @@ def assign_files_by_pid(
 
 
 def _build_index_task(
-    files: List[str],
+    files: list[str],
     batch_id: str,
     shard_root: str,
     checkpoint_size: int,
-    bloom_dimensions: Optional[List[str]],
+    bloom_dimensions: list[str] | None,
     force: bool,
     parallelism: int,
     build_bloom: bool = True,
-    aggregation_config: "Optional[AggregationConfig]" = None,
+    aggregation_config: AggregationConfig | None = None,
 ) -> None:
     """Dask worker task: index `files` as the shard at `shard_root`.
 
@@ -133,17 +122,17 @@ def _build_index_task(
 
 
 def distributed_index(
-    files: "Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]]",
+    files: str | os.PathLike[str] | Sequence[str | os.PathLike[str]],
     index_dir: str = "",
-    client: "Optional[Client]" = None,
-    checkpoint_size: Union[int, str] = 32 * 1024 * 1024,
-    bloom_dimensions: Optional[List[str]] = None,
+    client: Client | None = None,
+    checkpoint_size: int | str = 32 * 1024 * 1024,
+    bloom_dimensions: list[str] | None = None,
     force: bool = False,
     build_bloom: bool = True,
     partition: Literal["lpt", "round_robin"] = "lpt",
     parallelism_per_worker: int = 0,
-    aggregation_config: "Optional[AggregationConfig]" = None,
-    progress: Optional[Callable[[int, int, str], None]] = None,
+    aggregation_config: AggregationConfig | None = None,
+    progress: Callable[[int, int, str], None] | None = None,
 ) -> DistributedIndexResult:
     """Index a set of trace files using Dask workers that write in parallel.
 
@@ -267,13 +256,13 @@ def distributed_index(
     )
 
     index_dir = index_dir.rstrip("/")
-    worker_file_lists: List[List[str]] = [
+    worker_file_lists: list[list[str]] = [
         [all_paths[i] for i in files_w] for files_w in per_worker_files
     ]
     shard_dirs = [os.path.join(index_dir, "shards", str(w)) for w in range(len(worker_file_lists))]
 
     _t_build = time.monotonic()
-    worker_ids: List[int] = []
+    worker_ids: list[int] = []
     if client is None:
         for w, paths_w in enumerate(worker_file_lists):
             if not paths_w:

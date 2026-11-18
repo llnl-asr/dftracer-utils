@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import copy
 import re
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, cast
 
 from . import dftracer_utils_ext as _ext
 from ._eval import Columnar, Source, unwrap_source_columns
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from .lazyframe import LazyFrame, LazyGroupBy
 
 
-def _tokens(op: str) -> Tuple[List[str], str]:
+def _tokens(op: str) -> tuple[list[str], str]:
     info = _ext.op_info(op)
     m = re.match(r"\((.*)\) -> (\w+)", str(info["signature"]))
     assert m is not None
@@ -62,7 +62,7 @@ def is_epoch(spec: ColumnOp) -> bool:
     return spec.kind == "epoch"
 
 
-def epoch_steps(spec: ColumnOp, own: str) -> "List[ColumnOp]":
+def epoch_steps(spec: ColumnOp, own: str) -> list[ColumnOp]:
     """The column ops that turn a temporal column counted in ``own`` ("d" for
     a date32) into integers of the unit ``spec.text``: a cast to Int64, then a
     multiplication or a floor division by the ratio of the two units."""
@@ -76,13 +76,13 @@ def epoch_steps(spec: ColumnOp, own: str) -> "List[ColumnOp]":
     return steps
 
 
-def _own_unit(kind: int, time_unit: int, given: Optional[str]) -> str:
+def _own_unit(kind: int, time_unit: int, given: str | None) -> str:
     if given is None and kind == DType.DATE32:
         return "d"
     return dt_unit(kind, time_unit, given)
 
 
-def _plan_column(plan: "LazyFrame", name: str) -> "Tuple[int, int]":
+def _plan_column(plan: LazyFrame, name: str) -> tuple[int, int]:
     """The type code and the time unit code of column ``name`` of a plan."""
     for column, kind, time_unit, _zone in _ext.LazyFrame.output_schema(plan):
         if column == name:
@@ -93,7 +93,7 @@ def _plan_column(plan: "LazyFrame", name: str) -> "Tuple[int, int]":
     )
 
 
-def run_column_op(series: Series, spec: ColumnOp, series2: Optional[Series]) -> Series:
+def run_column_op(series: Series, spec: ColumnOp, series2: Series | None) -> Series:
     """``spec`` over ``series`` through the registry, the operands placed by
     the op's signature tokens exactly as the lazy ``column_op`` step places
     them."""
@@ -107,7 +107,7 @@ def run_column_op(series: Series, spec: ColumnOp, series2: Optional[Series]) -> 
     if spec.op == "dftu.series.dt_round" and spec.text is not None:
         spec = resolve_round(spec, dt_unit(series.type, series.time_unit, spec.unit))
     scalars = [spec.a, spec.b]
-    args: List[object] = []
+    args: list[object] = []
     used_text = False
     for tok in tokens[1:]:
         if tok == "series":
@@ -153,11 +153,11 @@ def run_column_op(series: Series, spec: ColumnOp, series2: Optional[Series]) -> 
 # ---- eager -----------------------------------------------------------------
 
 
-def _as_columns(source: object) -> Dict[str, Series]:
+def _as_columns(source: object) -> dict[str, Series]:
     return unwrap_source_columns(source)
 
 
-def eval_with_column_ops(expr: "Expr", source: object) -> Series:
+def eval_with_column_ops(expr: Expr, source: object) -> Series:
     """``Expr.apply`` for an expression holding column ops: each op's value
     joins the source under its temporary name, then the rest evaluates."""
     columns = _as_columns(source)
@@ -185,7 +185,7 @@ def eval_with_column_ops(expr: "Expr", source: object) -> Series:
 
 
 def _eager_over(
-    columns: Dict[str, Series], value: Series, spec: ColumnOp, second: Optional[Series]
+    columns: dict[str, Series], value: Series, spec: ColumnOp, second: Series | None
 ) -> Series:
     keys = spec.over or []
     if spec.kind is None:
@@ -195,7 +195,7 @@ def _eager_over(
     return out["__dftu_v__"]
 
 
-def _eager_agg_over(columns: Dict[str, Series], spec: ColumnOp) -> Series:
+def _eager_agg_over(columns: dict[str, Series], spec: ColumnOp) -> Series:
     assert spec.agg is not None
     keys = spec.over or []
     frame = DataFrame({k: v for k, v in columns.items() if not k.startswith("__dftu_cop_")})
@@ -229,13 +229,13 @@ def _ascending(spec: ColumnOp) -> bool:
 # ---- lazy ------------------------------------------------------------------
 
 
-def lower_column_ops(plan: "LazyFrame", expr: "Expr") -> "Tuple[LazyFrame, Expr, List[str]]":
+def lower_column_ops(plan: LazyFrame, expr: Expr) -> tuple[LazyFrame, Expr, list[str]]:
     """The plan with every column op of ``expr`` appended as steps (each
     argument computed into a temporary column, the op run over it in
     place), the expression rewritten over those temporaries, and the
     temporaries to drop once the caller has used the expression."""
     rewritten, ops = split_column_ops(expr)
-    temps: List[str] = []
+    temps: list[str] = []
     for name, arg, spec in ops:
         if spec.agg is not None:
             plan = _lazy_agg_over(plan, name, spec)
@@ -270,7 +270,7 @@ def lower_column_ops(plan: "LazyFrame", expr: "Expr") -> "Tuple[LazyFrame, Expr,
     return plan, rewritten, temps
 
 
-def _lazy_agg_over(plan: "LazyFrame", name: str, spec: ColumnOp) -> "LazyFrame":
+def _lazy_agg_over(plan: LazyFrame, name: str, spec: ColumnOp) -> LazyFrame:
     assert spec.agg is not None
     keys = spec.over or []
     if not keys:
@@ -283,7 +283,7 @@ def _lazy_agg_over(plan: "LazyFrame", name: str, spec: ColumnOp) -> "LazyFrame":
     value = f"{name}_value"
     computed = agg.value is not None and not isinstance(agg.value, Col)
     if computed:
-        indexed = indexed.with_column(value, agg.value)
+        indexed = indexed.with_column(value, cast("Expr", agg.value))
         agg = copy.copy(agg)
         agg.value = Col(value)
     grouped = cast("LazyGroupBy", indexed.group_by(keys, dropna=False)).agg(agg.alias(name))
@@ -291,7 +291,7 @@ def _lazy_agg_over(plan: "LazyFrame", name: str, spec: ColumnOp) -> "LazyFrame":
     return joined.drop(row, value) if computed else joined.drop(row)
 
 
-def _lazy_over(plan: "LazyFrame", name: str, spec: ColumnOp) -> "LazyFrame":
+def _lazy_over(plan: LazyFrame, name: str, spec: ColumnOp) -> LazyFrame:
     if spec.kind is None:
         raise TypeError(f"{spec.op}: over() has no group-wise form for this op")
     keys = spec.over or []

@@ -10,16 +10,12 @@ from typing import (
     TYPE_CHECKING,
     Callable,
     ClassVar,
-    Dict,
     Generic,
     Iterator,
     List,
     Literal,
     NamedTuple,
-    Optional,
     Sequence,
-    Tuple,
-    Type,
     TypeVar,
     Union,
     cast,
@@ -49,7 +45,7 @@ _B = TypeVar("_B", bound="_BatchBase")
 Path = Union[str, "os.PathLike[str]"]
 Scope = Union[None, Path, Sequence[Path]]
 
-_FOLDS: Dict[str, int] = {
+_FOLDS: dict[str, int] = {
     "sum_i64": 1,
     "sum_f64": 2,
     "min_i64": 3,
@@ -149,8 +145,8 @@ class Namespace(_NamespaceBase, Generic[K, V]):
     def __init__(
         self,
         native: _NativeNamespace,
-        key_type: Optional[Type[K]] = None,
-        value_type: Optional[Type[V]] = None,
+        key_type: type[K] | None = None,
+        value_type: type[V] | None = None,
     ) -> None:
         super().__init__(native)
         self._key_type = key_type
@@ -177,23 +173,23 @@ _RAW = (bytes, bytearray, memoryview)
 def _raw_arg(obj: BytesLike) -> BytesLike:
     if not isinstance(obj, _RAW):
         raise TypeError(
-            "a raw namespace takes bytes, bytearray or memoryview, not %s" % type(obj).__name__
+            f"a raw namespace takes bytes, bytearray or memoryview, not {type(obj).__name__}"
         )
     return obj
 
 
-def _check(obj: object, expected: Optional[Type[T]], what: str) -> None:
+def _check(obj: object, expected: type[T] | None, what: str) -> None:
     if expected is not None and not isinstance(obj, expected):
-        raise TypeError("the %s must be %s, not %s" % (what, expected.__name__, type(obj).__name__))
+        raise TypeError(f"the {what} must be {expected.__name__}, not {type(obj).__name__}")
 
 
-def _decode_as(data: bytes, expected: Optional[Type[T]], what: str) -> T:
+def _decode_as(data: bytes, expected: type[T] | None, what: str) -> T:
     try:
         value = decode(data)
     except ValueError as exc:
         raise ValueError(
-            "cannot decode the stored bytes (%s); if the namespace holds raw bytes, "
-            "open it with raw=True" % exc
+            f"cannot decode the stored bytes ({exc}); if the namespace holds raw bytes, "
+            "open it with raw=True"
         ) from None
     _check(value, expected, "stored " + what)
     return cast("T", value)
@@ -225,9 +221,9 @@ class _BatchBase:
 
     def __exit__(
         self,
-        exc_type: Optional[type],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional["TracebackType"],
+        exc_type: type | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         if self._done:
             return
@@ -258,7 +254,7 @@ class Batch(_BatchBase, Generic[K, V]):
         """Hide ``key`` in the copy of this batch's scope."""
         self._native.erase(self._encode_key(key))
 
-    def erase_range(self, begin: K, end: Optional[K] = None) -> None:
+    def erase_range(self, begin: K, end: K | None = None) -> None:
         """Hide every key in ``[begin, end)``; ``None`` means to the last key."""
         self._native.erase_range(
             self._encode_key(begin), None if end is None else self._encode_key(end)
@@ -283,14 +279,14 @@ class Snapshot:
         self._native = native
 
     @overload
-    def get(self, ns: RawNamespace, scope: Scope, key: BytesLike) -> Optional[bytes]: ...
+    def get(self, ns: RawNamespace, scope: Scope, key: BytesLike) -> bytes | None: ...
 
     @overload
-    def get(self, ns: Namespace[K, V], scope: Scope, key: K) -> Optional[V]: ...
+    def get(self, ns: Namespace[K, V], scope: Scope, key: K) -> V | None: ...
 
     def get(
-        self, ns: Union[RawNamespace, Namespace[K, V]], scope: Scope, key: Union[BytesLike, K]
-    ) -> Union[None, bytes, V]:
+        self, ns: RawNamespace | Namespace[K, V], scope: Scope, key: BytesLike | K
+    ) -> None | bytes | V:
         """The value of ``key``, or ``None`` when it is missing.
 
         A raw namespace returns bytes. Any other returns the decoded object.
@@ -303,19 +299,17 @@ class Snapshot:
     @overload
     def multi_get(
         self, ns: RawNamespace, scope: Scope, keys: Sequence[BytesLike]
-    ) -> List[Optional[bytes]]: ...
+    ) -> list[bytes | None]: ...
 
     @overload
-    def multi_get(
-        self, ns: Namespace[K, V], scope: Scope, keys: Sequence[K]
-    ) -> List[Optional[V]]: ...
+    def multi_get(self, ns: Namespace[K, V], scope: Scope, keys: Sequence[K]) -> list[V | None]: ...
 
     def multi_get(
         self,
-        ns: Union[RawNamespace, Namespace[K, V]],
+        ns: RawNamespace | Namespace[K, V],
         scope: Scope,
-        keys: Union[Sequence[BytesLike], Sequence[K]],
-    ) -> Union[List[Optional[bytes]], List[Optional[V]]]:
+        keys: Sequence[BytesLike] | Sequence[K],
+    ) -> list[bytes | None] | list[V | None]:
         """One value or ``None`` per key, in the order of ``keys``."""
         if isinstance(ns, RawNamespace):
             raw_keys = [_raw_arg(cast(BytesLike, key)) for key in keys]
@@ -327,23 +321,23 @@ class Snapshot:
 
     @overload
     def scan(
-        self, ns: RawNamespace, scope: Scope, prefix: Optional[BytesLike] = None
-    ) -> Iterator[Tuple[bytes, bytes]]: ...
+        self, ns: RawNamespace, scope: Scope, prefix: BytesLike | None = None
+    ) -> Iterator[tuple[bytes, bytes]]: ...
 
     @overload
     def scan(
         self,
         ns: Namespace[K, V],
         scope: Scope,
-        prefix: Union[None, str, bytes, Tuple[Encodable, ...]] = None,
-    ) -> Iterator[Tuple[K, V]]: ...
+        prefix: None | str | bytes | tuple[Encodable, ...] = None,
+    ) -> Iterator[tuple[K, V]]: ...
 
     def scan(
         self,
-        ns: Union[RawNamespace, Namespace[K, V]],
+        ns: RawNamespace | Namespace[K, V],
         scope: Scope,
-        prefix: Union[None, str, BytesLike, Tuple[Encodable, ...]] = None,
-    ) -> Union[Iterator[Tuple[bytes, bytes]], Iterator[Tuple[K, V]]]:
+        prefix: None | str | BytesLike | tuple[Encodable, ...] = None,
+    ) -> Iterator[tuple[bytes, bytes]] | Iterator[tuple[K, V]]:
         """Iterate ``(key, value)`` in key order over the keys with ``prefix``.
 
         ``None`` means every key. In a raw namespace the prefix is bytes-like.
@@ -353,12 +347,12 @@ class Snapshot:
             raw_prefix = b"" if prefix is None else _raw_arg(cast(BytesLike, prefix))
             return self._native.scan(ns.native, scope, raw_prefix)
         encoded = b"" if prefix is None else encode_prefix(prefix)
-        rows: Iterator[Tuple[bytes, bytes]] = self._native.scan(ns.native, scope, encoded)
+        rows: Iterator[tuple[bytes, bytes]] = self._native.scan(ns.native, scope, encoded)
         if isinstance(prefix, tuple):
             rows = (row for row in rows if matches_prefix(encoded, row[0]))
         return ((ns._decode_key(key), ns._decode_value(value)) for key, value in rows)
 
-    def copy_info(self, ns: Union[RawNamespace, Namespace[K, V]], scope: Scope) -> CopyInfo:
+    def copy_info(self, ns: RawNamespace | Namespace[K, V], scope: Scope) -> CopyInfo:
         """The current copy of ``scope``."""
         state, generation, params_hash, sources = self._native.copy_info(ns.native, scope)
         return CopyInfo(
@@ -382,7 +376,7 @@ class Store:
         self._native = native
 
     @classmethod
-    def open(cls, path: Path) -> "Store":
+    def open(cls, path: Path) -> Store:
         """Open the store in ``path``, creating the directory when needed."""
         return cls(_NativeStore(path))
 
@@ -391,7 +385,7 @@ class Store:
         self,
         name: str,
         format_version: int = ...,
-        fold: Optional[str] = ...,
+        fold: str | None = ...,
         durable: bool = ...,
         shared: bool = ...,
         *,
@@ -420,8 +414,8 @@ class Store:
         shared: bool = ...,
         raw: Literal[False] = ...,
         *,
-        key_type: Type[K],
-        value_type: Type[V],
+        key_type: type[K],
+        value_type: type[V],
     ) -> Namespace[K, V]: ...
 
     @overload
@@ -439,14 +433,14 @@ class Store:
         self,
         name: str,
         format_version: int = 0,
-        fold: Optional[str] = None,
+        fold: str | None = None,
         durable: bool = False,
         shared: bool = False,
         raw: bool = False,
         *,
-        key_type: Optional[Type[K]] = None,
-        value_type: Optional[Type[V]] = None,
-    ) -> Union[RawNamespace, Namespace[K, V]]:
+        key_type: type[K] | None = None,
+        value_type: type[V] | None = None,
+    ) -> RawNamespace | Namespace[K, V]:
         """Register a namespace with this process's writer.
 
         ``fold`` is ``None`` or one of ``sum_i64``, ``sum_f64``, ``min_i64``,
@@ -481,7 +475,7 @@ class Store:
             try:
                 kind = _FOLDS[fold]
             except KeyError:
-                raise ValueError("unknown fold %r" % (fold,)) from None
+                raise ValueError(f"unknown fold {fold!r}") from None
         native = self._native.namespace(name, format_version, kind, durable, shared)
         if raw or fold is not None:
             if key_type is not None:
@@ -495,7 +489,7 @@ class Store:
         ns: RawNamespace,
         scope: Scope,
         params_hash: int = ...,
-        sources: Optional[Sequence[Tuple[int, int, int]]] = ...,
+        sources: Sequence[tuple[int, int, int]] | None = ...,
     ) -> RawBatch: ...
 
     @overload
@@ -504,16 +498,16 @@ class Store:
         ns: Namespace[K, V],
         scope: Scope,
         params_hash: int = ...,
-        sources: Optional[Sequence[Tuple[int, int, int]]] = ...,
+        sources: Sequence[tuple[int, int, int]] | None = ...,
     ) -> Batch[K, V]: ...
 
     def batch(
         self,
-        ns: Union[RawNamespace, Namespace[K, V]],
+        ns: RawNamespace | Namespace[K, V],
         scope: Scope,
         params_hash: int = 0,
-        sources: Optional[Sequence[Tuple[int, int, int]]] = None,
-    ) -> Union[RawBatch, Batch[K, V]]:
+        sources: Sequence[tuple[int, int, int]] | None = None,
+    ) -> RawBatch | Batch[K, V]:
         """Start a batch of writes for ``scope``.
 
         ``sources`` holds one ``(mtime, size, hash)`` per path of the scope
@@ -537,15 +531,15 @@ class Store:
         """Flush and close this process's writer; a later write opens a new one."""
         self._native.close()
 
-    def drop(self, ns: Union[RawNamespace, Namespace[K, V]], scope: Scope) -> None:
+    def drop(self, ns: RawNamespace | Namespace[K, V], scope: Scope) -> None:
         """Hide the whole scope."""
         self._native.drop(ns.native, scope)
 
     def pack(
         self,
-        small_file_bytes: Optional[int] = None,
-        dead_ratio: Optional[float] = None,
-        keep_seconds: Optional[int] = None,
+        small_file_bytes: int | None = None,
+        dead_ratio: float | None = None,
+        keep_seconds: int | None = None,
     ) -> PackReport:
         """Rewrite the chosen data files; run it with no other writer active."""
         return PackReport(*self._native.pack(small_file_bytes, dead_ratio, keep_seconds))

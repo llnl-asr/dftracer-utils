@@ -7,10 +7,18 @@ class itself is in :mod:`dftracer.utils.expr`, because ``Expr`` builds it."""
 from __future__ import annotations
 
 import copy
-from typing import TYPE_CHECKING, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Iterator,
+    Mapping,
+    Protocol,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 from . import dftracer_utils_ext as _ext
-from .expr import AGG_CODE, Agg, AggLeaf, Col, Expr, Lit, emit_ast, wrap
+from .expr import AGG_CODE, Agg, AggLeaf, Col, Expr, Lit, SelectItem, emit_ast, wrap
 
 if TYPE_CHECKING:
     from .dataframe import DataFrame
@@ -19,12 +27,33 @@ if TYPE_CHECKING:
 __all__ = ["Udaf", "count", "udaf"]
 
 
-def select_aggs(items: Sequence[object]) -> "List[Agg]":
+class NamedAggLike(Protocol):
+    """``pandas.NamedAgg``: a column and the name of its aggregate."""
+
+    @property
+    def column(self) -> str: ...
+    @property
+    def aggfunc(self) -> str: ...
+
+
+#: A pandas ``agg`` argument: a name, an ``Agg``, a list of them, or a dict
+#: from column to a name, an ``Agg`` or a list of names.
+AggForm = Union[
+    str,
+    Agg,
+    Sequence[Union[str, Agg]],
+    Mapping[str, Union[str, Agg, Sequence[str]]],
+]
+#: A keyword ``agg(out=...)``: ``("column", name)``, ``NamedAgg`` or an ``Agg``.
+AggKeyword = Union[Agg, Tuple[str, str], NamedAggLike]
+
+
+def select_aggs(items: Sequence[SelectItem]) -> list[Agg]:
     """The aggregates of a ``select(col("a").sum(), ...)``, named as polars
     names them: an unaliased aggregate of a bare column is output under that
     column's name; two outputs under one name are refused."""
-    out: List[Agg] = []
-    seen: set = set()
+    out: list[Agg] = []
+    seen: set[str] = set()
     for item in items:
         if not isinstance(item, Agg):
             raise TypeError("select: mix of aggregates and columns")
@@ -37,10 +66,10 @@ def select_aggs(items: Sequence[object]) -> "List[Agg]":
     return out
 
 
-def split_aggs(expr: Expr) -> "Tuple[Expr, List[Agg]]":
+def split_aggs(expr: Expr) -> tuple[Expr, list[Agg]]:
     """The expression with every aggregate leaf replaced by a column
     reference ``__dftu_agg_<i>__``, and the aggregates so aliased, in order."""
-    aggs: List[Agg] = []
+    aggs: list[Agg] = []
 
     def rewrite(e: Expr) -> Expr:
         if isinstance(e, AggLeaf):
@@ -72,7 +101,7 @@ class Udaf:
     __slots__ = ("_name", "_handle", "_min_args", "_max_args", "_flags")
 
     def __init__(
-        self, name: str, handle: "_ext._UdafHandle", min_args: int, max_args: int, flags: int
+        self, name: str, handle: _ext._UdafHandle, min_args: int, max_args: int, flags: int
     ) -> None:
         self._name = name
         self._handle = handle
@@ -97,7 +126,7 @@ class Udaf:
         """The ``DFTU_AGG_*`` flag bits the UDAF registered with."""
         return self._flags
 
-    def __call__(self, *args: Expr) -> "Agg":
+    def __call__(self, *args: Expr) -> Agg:
         if not self._min_args <= len(args) <= self._max_args:
             want = (
                 str(self._min_args)
@@ -145,16 +174,16 @@ class UdafAgg(Agg):
     def __init__(
         self,
         name: str,
-        handle: "_ext._UdafHandle",
-        args: Tuple[Expr, ...],
-        out: "Optional[str]" = None,
+        handle: _ext._UdafHandle,
+        args: tuple[Expr, ...],
+        out: str | None = None,
     ) -> None:
         super().__init__("udaf", args[0] if args else None, out)
         self.name = name
         self.handle = handle
         self.args = args
 
-    def alias(self, name: str) -> "Agg":
+    def alias(self, name: str) -> Agg:
         return UdafAgg(self.name, self.handle, self.args, name)
 
     @property
@@ -165,10 +194,10 @@ class UdafAgg(Agg):
             return f"{self.name}_{self.args[0].name}"
         return self.name
 
-    def _spec(self, names: List[str]) -> tuple:
-        asts: List[List[tuple]] = []
+    def _spec(self, names: list[str]) -> tuple[object, ...]:
+        asts: list[list[tuple[object, ...]]] = []
         for arg in self.args:
-            ast: List[tuple] = []
+            ast: list[tuple[object, ...]] = []
             emit_ast(arg, names.index, ast)
             asts.append(ast)
         return (
@@ -186,7 +215,7 @@ def count() -> Agg:
     return Agg("count", None)
 
 
-def to_agg(spec: object) -> Agg:
+def to_agg(spec: str | Agg) -> Agg:
     if isinstance(spec, Agg):
         return spec
     if isinstance(spec, str):
@@ -246,7 +275,7 @@ def _named_agg(column: str, name: str, out: str) -> Agg:
     return Agg(op, Col(column), out)
 
 
-def reduce_specs(frame: "Union[DataFrame, LazyFrame]", agg: str, keys: Sequence[str]) -> List[str]:
+def reduce_specs(frame: DataFrame | LazyFrame, agg: str, keys: Sequence[str]) -> list[str]:
     """The group-by spec strings of the engine aggregate ``agg`` over the
     non-key columns of ``frame``, a frame or a plan."""
     if isinstance(frame, _ext.LazyFrame):
@@ -254,12 +283,33 @@ def reduce_specs(frame: "Union[DataFrame, LazyFrame]", agg: str, keys: Sequence[
     return _ext.DataFrame._reduce_specs(frame, agg, list(keys))
 
 
-def agg_specs_from_pandas_forms(
-    frame: "Union[DataFrame, LazyFrame]",
+def flatten_agg_specs(
+    frame: DataFrame | LazyFrame,
     keys: Sequence[str],
-    func: object,
-    named: "Dict[str, object]",
-) -> "List[Union[str, Agg]]":
+    specs: Sequence[AggForm],
+    named: Mapping[str, AggKeyword],
+) -> list[str | Agg]:
+    """The flat ``Agg`` and ``"op:column"`` specs of the positional and
+    keyword arguments of an ``agg`` call; at least one is required."""
+    flat: list[str | Agg] = []
+    for spec in specs:
+        if isinstance(spec, Agg) or (isinstance(spec, str) and ":" in spec):
+            flat.append(spec)
+        else:
+            flat.extend(agg_specs_from_pandas_forms(frame, keys, spec, {}))
+    if named:
+        flat.extend(agg_specs_from_pandas_forms(frame, keys, None, named))
+    if not flat:
+        raise TypeError("agg() needs at least one aggregate")
+    return flat
+
+
+def agg_specs_from_pandas_forms(
+    frame: DataFrame | LazyFrame,
+    keys: Sequence[str],
+    func: AggForm | None,
+    named: Mapping[str, AggKeyword],
+) -> list[str | Agg]:
     """Lower the pandas ``agg`` argument forms to engine specs, flat names.
     ``frame`` is a DataFrame or LazyFrame;
     only its ``reduce_specs`` is used.
@@ -274,7 +324,7 @@ def agg_specs_from_pandas_forms(
     """
     if func is None and not named:
         raise TypeError("agg() needs at least one aggregate")
-    specs: "List[Union[str, Agg]]" = []
+    specs: list[str | Agg] = []
     if isinstance(func, str):
         specs.extend(reduce_specs(frame, _agg_op_name(func), keys))
     elif isinstance(func, Agg):
@@ -301,13 +351,17 @@ def agg_specs_from_pandas_forms(
                 specs.append(_named_agg(column, item, f"{column}_{item}"))
     elif func is not None:
         raise TypeError(f"agg() takes a name, a list, a dict or an Agg, got {type(func).__name__}")
-    for out, spec in named.items():
-        if isinstance(spec, Agg):
-            specs.append(spec.alias(out))
-        elif isinstance(spec, tuple) and len(spec) == 2 and isinstance(spec[1], str):
-            specs.append(_named_agg(str(spec[0]), spec[1], out))
-        elif hasattr(spec, "column") and hasattr(spec, "aggfunc"):
-            specs.append(_named_agg(str(spec.column), str(spec.aggfunc), out))
+    for out, named_spec in named.items():
+        if isinstance(named_spec, Agg):
+            specs.append(named_spec.alias(out))
+        elif (
+            isinstance(named_spec, tuple)
+            and len(named_spec) == 2
+            and isinstance(named_spec[1], str)
+        ):
+            specs.append(_named_agg(str(named_spec[0]), named_spec[1], out))
+        elif hasattr(named_spec, "column") and hasattr(named_spec, "aggfunc"):
+            specs.append(_named_agg(str(named_spec.column), str(named_spec.aggfunc), out))
         else:
             raise TypeError(f"agg() keyword {out!r} must be (column, name) or an Agg")
     return specs

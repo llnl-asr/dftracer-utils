@@ -4,25 +4,16 @@ resamples and traces that run per group."""
 
 from __future__ import annotations
 
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Callable, List, Optional, Sequence, Tuple, TypeVar, Union, cast
 
 from . import dftracer_utils_ext as _ext
 from ._aliases import install as _install_aliases
 from ._apply import trace_errors, uses_identity_test, warn_fallback
 from .agg import (
     PANDAS_AGG_NAMES,
-    agg_specs_from_pandas_forms,
+    AggForm,
+    AggKeyword,
+    flatten_agg_specs,
     has_agg_leaf,
     reduce_specs,
     split_aggs,
@@ -34,9 +25,15 @@ from .expr import Agg, AggLeaf, Col, Expr, check_quantile, collect_columns
 from .series import Series
 
 if TYPE_CHECKING:
+    from .dftracer_utils_ext import Scalar
     from .lazyframe import LazyFrame, LazyGroupBy
 
 __all__ = ["GroupBy"]
+
+_T = TypeVar("_T")
+
+#: The value of a group key: one scalar, or a tuple of them for several keys.
+GroupKey = Union["Scalar", None, Tuple[Union["Scalar", None], ...]]
 
 
 class GroupBy:
@@ -49,19 +46,19 @@ class GroupBy:
 
     def __init__(
         self,
-        batch: "DataFrame",
-        keys: "Union[str, Sequence[str], None]" = None,
+        batch: DataFrame,
+        keys: str | Sequence[str] | None = None,
     ) -> None:
         self._batch = batch
-        self._keys: List[str] = (
+        self._keys: list[str] = (
             [] if keys is None else [keys] if isinstance(keys, str) else list(keys)
         )
 
     @property
-    def keys(self) -> List[str]:
+    def keys(self) -> list[str]:
         return list(self._keys)
 
-    def __getitem__(self, columns: "Union[str, Sequence[str]]") -> "GroupBy":
+    def __getitem__(self, columns: str | Sequence[str]) -> GroupBy:
         """``groupby(k)["v"]`` / ``groupby(k)[["v", "w"]]``: the same groups
         over only those value columns (the pandas column selection). With
         one column, a list of aggregate names labels the outputs by name
@@ -79,8 +76,8 @@ class GroupBy:
         out._rows = self._rows
         return out
 
-    _single: "Optional[str]" = None
-    _rows: "Optional[Series]" = None
+    _single: Optional[str] = None
+    _rows: Optional[Series] = None
     _sort: bool = False
 
     def _sorted(self, out: DataFrame) -> DataFrame:
@@ -88,18 +85,8 @@ class GroupBy:
             return out.sort_by_multi(self._keys)
         return out
 
-    def agg(self, *specs: object, **named: object) -> DataFrame:
-        frame = self._batch
-        flat: "List[Union[str, Agg]]" = []
-        for spec in specs:
-            if isinstance(spec, Agg) or (isinstance(spec, str) and ":" in spec):
-                flat.append(spec)
-            else:
-                flat.extend(agg_specs_from_pandas_forms(frame, self._keys, spec, {}))
-        if named:
-            flat.extend(agg_specs_from_pandas_forms(frame, self._keys, None, named))
-        if not flat:
-            raise TypeError("agg() needs at least one aggregate")
+    def agg(self, *specs: AggForm, **named: AggKeyword) -> DataFrame:
+        flat = flatten_agg_specs(self._batch, self._keys, specs, named)
         native = self._batch
         aggs = [to_agg(s) for s in flat]
         # Plain aggregates over plain columns take the engine's group_by
@@ -113,9 +100,13 @@ class GroupBy:
             for a in aggs
         )
         if plain:
-            legacy = ["count" if a.value is None else f"{a.op}:{a.value.name}" for a in aggs]
+            legacy = [
+                "count" if a.value is None else f"{a.op}:{cast(Col, a.value).name}" for a in aggs
+            ]
             out = _ext.DataFrame.group_by(native, *self._keys, *legacy)
-            engine_names = ["count" if a.value is None else f"{a.op}_{a.value.name}" for a in aggs]
+            engine_names = [
+                "count" if a.value is None else f"{a.op}_{cast(Col, a.value).name}" for a in aggs
+            ]
             if engine_names != [a.out for a in aggs]:
                 out = DataFrame(
                     {
@@ -228,7 +219,7 @@ class GroupBy:
     def tail(self, n: int = 5) -> DataFrame:
         return self._transform("tail", n)
 
-    def nth(self, n: "Union[int, Sequence[int]]") -> DataFrame:
+    def nth(self, n: int | Sequence[int]) -> DataFrame:
         """The ``n``-th row of each group (0-based; negative from the end), or
         of each position in a list, in input order."""
         if isinstance(n, int):
@@ -270,7 +261,7 @@ class GroupBy:
     def bfill(self) -> DataFrame:
         return self._transform("bfill")
 
-    def rolling(self, window: int) -> "GroupRolling":
+    def rolling(self, window: int) -> GroupRolling:
         """A trailing window of ``window`` rows within each group (pandas
         ``GroupBy.rolling``): ``.sum() .mean() .min() .max()`` are one engine
         transform each, null until the window holds ``window`` present values;
@@ -279,7 +270,7 @@ class GroupBy:
         order."""
         return GroupRolling(self, int(window))
 
-    def expanding(self) -> "_GroupSeriesWindow":
+    def expanding(self) -> _GroupSeriesWindow:
         """The expanding window within each group (pandas
         ``GroupBy.expanding``): ``.sum() .mean() .min() .max() .count() .var()
         .std()``, the Series kernel per group, one value per input row in
@@ -288,12 +279,12 @@ class GroupBy:
 
     def ewm(
         self,
-        alpha: Optional[float] = None,
+        alpha: float | None = None,
         *,
-        span: Optional[float] = None,
-        com: Optional[float] = None,
-        halflife: Optional[float] = None,
-    ) -> "_GroupSeriesWindow":
+        span: float | None = None,
+        com: float | None = None,
+        halflife: float | None = None,
+    ) -> _GroupSeriesWindow:
         """The exponentially weighted window within each group (pandas
         ``GroupBy.ewm``): ``.mean() .std()``, the Series kernel per group."""
         a = _ext._ewm_alpha(alpha, span=span, com=com, halflife=halflife)
@@ -314,7 +305,7 @@ class GroupBy:
         cols = self._value_columns()
         specs = [Agg(agg, Col(b), f"__dftu_{a}__{b}__", by=Col(a)) for a in cols for b in cols]
         wide = self.agg(*specs)
-        parts: List[DataFrame] = []
+        parts: list[DataFrame] = []
         for a in cols:
             for b in cols:
                 one = wide.select(*self._keys, f"__dftu_{a}__{b}__").rename(
@@ -338,7 +329,7 @@ class GroupBy:
         out = picked[0].concat(*picked[1:]) if len(picked) > 1 else picked[0]
         return out.unique(row).sort_by(row).select(*frame.columns)
 
-    def sample(self, n: int, seed: int = 0, *, random_state: Optional[int] = None) -> DataFrame:
+    def sample(self, n: int, seed: int = 0, *, random_state: int | None = None) -> DataFrame:
         """A deterministic sample of ``n`` rows per group (fewer for a smaller
         group), in input order: the rows whose salted row hash ranks lowest
         within the group (pandas ``GroupBy.sample``; ``random_state`` is the
@@ -353,9 +344,7 @@ class GroupBy:
         picked = GroupBy(ordered, self._keys).head(int(n))
         return picked.sort_by(row).select(*frame.columns)
 
-    def resample(
-        self, rule: "Union[int, str]", on: Optional[str] = None, unit: str = "us"
-    ) -> "GroupResample":
+    def resample(self, rule: int | str, on: str | None = None, unit: str = "us") -> GroupResample:
         """Tumbling time windows of ``rule`` within each group (pandas
         ``GroupBy.resample``): the time column (the index column or ``on``)
         floored to its bucket joins the keys, and the aggregate family
@@ -377,7 +366,7 @@ class GroupBy:
     def _frame(self) -> DataFrame:
         return self._batch
 
-    def _value_columns(self, agg: str = "sum") -> List[str]:
+    def _value_columns(self, agg: str = "sum") -> list[str]:
         return [s.split(":")[1] for s in reduce_specs(self._batch, agg, self._keys)]
 
     @staticmethod
@@ -388,7 +377,7 @@ class GroupBy:
     def ngroups(self) -> int:
         return len(self.size())
 
-    def get_group(self, key: object) -> DataFrame:
+    def get_group(self, key: GroupKey) -> DataFrame:
         """The rows of one group, by its key value (a tuple for several
         keys), in input order."""
         if not self._keys:
@@ -398,7 +387,7 @@ class GroupBy:
         return out
 
     @property
-    def groups(self) -> Dict[object, List[int]]:
+    def groups(self) -> dict[GroupKey, list[int]]:
         """``{key: [row positions]}`` (``indices`` likewise)."""
         frame = self._frame()
         if not self._keys:
@@ -420,7 +409,7 @@ class GroupBy:
             for k in self._keys
         ]
         counts = cast("List[int]", sizes["size"].to_list())
-        out: Dict[object, List[int]] = {}
+        out: dict[GroupKey, list[int]] = {}
         start = 0
         for g, n in enumerate(counts):
             label = labels[0][g] if len(labels) == 1 else tuple(c[g] for c in labels)
@@ -430,14 +419,14 @@ class GroupBy:
 
     indices = groups
 
-    def pipe(self, func: Callable[..., object], *args: object, **kwargs: object) -> object:
+    def pipe(self, func: Callable[..., _T], *args: object, **kwargs: object) -> _T:
         return func(self, *args, **kwargs)
 
     def nunique(self) -> DataFrame:
         """Distinct present values per group and non-key column, exact: a
         group-by over the keys plus the column, then a count per key."""
         frame = self._frame()
-        out: Optional[DataFrame] = None
+        out: DataFrame | None = None
         for c in [n for n in frame.columns if n not in self._keys]:
             present = frame.filter(self._col(frame, c).notna())
             pairs = GroupBy(present, self._keys + [c]).size()
@@ -525,8 +514,8 @@ class GroupBy:
         cols = self._value_columns("sum")
         for c in cols:
             for name in ("count_valid", "mean", "std", "min", "max"):
-                out = f"{c}_{'count' if name == 'count_valid' else name}"
-                specs.append(Agg(name, Col(c), out))
+                label = f"{c}_{'count' if name == 'count_valid' else name}"
+                specs.append(Agg(name, Col(c), label))
         out = self.agg(*specs)
         for q in (0.25, 0.5, 0.75):
             quant = self.quantile(q)
@@ -579,7 +568,7 @@ class GroupBy:
         return joined.select(*cols)
 
     # -- user functions: traced into the engine, else run per group -----------
-    def apply(self, func: "Callable[[Any], object]") -> "Union[DataFrame, Series]":
+    def apply(self, func: Callable[[DataFrame], object]) -> DataFrame | Series:
         """``func`` over each group (pandas ``GroupBy.apply``). It is first
         run once on a symbolic group whose columns are expressions, so a body
         like ``lambda g: g["v"].sum() / g["n"].sum()`` lowers to one group-by
@@ -593,7 +582,7 @@ class GroupBy:
             return self._lower_apply(traced)
         return self._apply_python(func)
 
-    def filter(self, func: "Callable[[Any], object]") -> DataFrame:
+    def filter(self, func: Callable[[DataFrame], object]) -> DataFrame:
         """The rows of the groups for which ``func`` holds (pandas
         ``GroupBy.filter``): ``lambda g: g["v"].sum() > 10`` lowers to one
         group-by and a join; a body the trace cannot follow runs in Python per
@@ -603,7 +592,7 @@ class GroupBy:
             return self._lower_filter(traced)
         return self._filter_python(func)
 
-    def _group_values(self, expr: Expr) -> "Tuple[DataFrame, Expr]":
+    def _group_values(self, expr: Expr) -> tuple[DataFrame, Expr]:
         """The per-group frame holding every aggregate leaf of ``expr`` (keys
         plus ``__dftu_agg_<i>__`` columns) and the expression rewritten over
         it."""
@@ -612,7 +601,7 @@ class GroupBy:
             raise TypeError("the group function must reduce (sum, mean, ...) at least once")
         return self.agg(*aggs), rewritten
 
-    def _lower_apply(self, traced: object) -> "Union[DataFrame, Series]":
+    def _lower_apply(self, traced: object) -> DataFrame | Series:
         frame = self._frame()
         if isinstance(traced, Agg):
             return self.agg(traced.alias("value"))
@@ -657,12 +646,12 @@ class GroupBy:
         out = indexed.join(keep.select(*self._keys), on=self._keys).sort_values(row)
         return out.select(*frame.columns)
 
-    def _groups_in_order(self) -> "List[Tuple[object, List[int]]]":
+    def _groups_in_order(self) -> list[tuple[object, list[int]]]:
         return list(self.groups.items())
 
-    def _apply_python(self, func: "Callable[[Any], object]") -> "Union[DataFrame, Series]":
+    def _apply_python(self, func: Callable[[DataFrame], object]) -> DataFrame | Series:
         frame = self._frame()
-        results: List[Tuple[object, object]] = []
+        results: list[tuple[object, object]] = []
         for label, rows in self._groups_in_order():
             results.append((label, func(frame.take(rows))))
         if not results:
@@ -676,21 +665,21 @@ class GroupBy:
                 out = out.concat(r)
             return out
         if isinstance(first, Series):
-            values: List[object] = []
+            values: list[object] = []
             for _, r in results:
                 assert isinstance(r, Series)
                 values.extend(r.to_list())
             return Series.from_list(values)
-        keys: Dict[str, List[object]] = {k: [] for k in self._keys}
+        keys: dict[str, list[object]] = {k: [] for k in self._keys}
         for label, _ in results:
             parts = label if isinstance(label, tuple) else (label,)
             for k, v in zip(self._keys, parts):
                 keys[k].append(v)
         return DataFrame({**keys, "value": [r for _, r in results]})
 
-    def _filter_python(self, func: "Callable[[Any], object]") -> DataFrame:
+    def _filter_python(self, func: Callable[[DataFrame], object]) -> DataFrame:
         frame = self._frame()
-        keep: List[int] = []
+        keep: list[int] = []
         for _, rows in self._groups_in_order():
             if func(frame.take(rows)):
                 keep.extend(rows)
@@ -703,22 +692,22 @@ class GroupRolling:
 
     __slots__ = ("_grouped", "_window")
 
-    def __init__(self, grouped: "Union[GroupBy, LazyGroupBy]", window: int) -> None:
+    def __init__(self, grouped: GroupBy | LazyGroupBy, window: int) -> None:
         if window < 1:
             raise ValueError("rolling: the window must be at least 1")
         self._grouped = grouped
         self._window = window
 
-    def sum(self) -> "Union[DataFrame, LazyFrame]":
+    def sum(self) -> DataFrame | LazyFrame:
         return self._grouped._transform("rolling_sum", self._window)
 
-    def mean(self) -> "Union[DataFrame, LazyFrame]":
+    def mean(self) -> DataFrame | LazyFrame:
         return self._grouped._transform("rolling_mean", self._window)
 
-    def min(self) -> "Union[DataFrame, LazyFrame]":
+    def min(self) -> DataFrame | LazyFrame:
         return self._grouped._transform("rolling_min", self._window)
 
-    def max(self) -> "Union[DataFrame, LazyFrame]":
+    def max(self) -> DataFrame | LazyFrame:
         return self._grouped._transform("rolling_max", self._window)
 
     def var(self) -> DataFrame:
@@ -733,7 +722,7 @@ class GroupRolling:
     def quantile(self, q: float) -> DataFrame:
         return self._series_kernel(lambda s: s.rolling_quantile(self._window, q))
 
-    def _series_kernel(self, kernel: "Callable[[Series], Series]") -> DataFrame:
+    def _series_kernel(self, kernel: Callable[[Series], Series]) -> DataFrame:
         # The Series rolling kernel over the frame sorted by group (stable, so
         # each group keeps its input order), then the rows back in input order.
         if not isinstance(self._grouped, GroupBy):
@@ -760,7 +749,7 @@ class _GroupSeriesWindow:
 
     __slots__ = ("_grouped", "_window")
 
-    def __init__(self, grouped: GroupBy, window: "Callable[[Series], object]") -> None:
+    def __init__(self, grouped: GroupBy, window: Callable[[Series], object]) -> None:
         self._grouped = grouped
         self._window = window
 
@@ -769,7 +758,7 @@ class _GroupSeriesWindow:
         frame = g._frame()
         cols = g._value_columns()
         row = "__dftu_group_row__"
-        parts: List[DataFrame] = []
+        parts: list[DataFrame] = []
         for _, rows in g._groups_in_order():
             part = frame.take(rows).with_column(row, Series.from_list(rows))
             for c in cols:
@@ -809,7 +798,7 @@ class GroupResample:
 
     __slots__ = ("_grouped", "_order")
 
-    def __init__(self, grouped: "Union[GroupBy, LazyGroupBy]", order: List[str]) -> None:
+    def __init__(self, grouped: GroupBy | LazyGroupBy, order: list[str]) -> None:
         self._grouped = grouped
         self._order = order
 
@@ -854,7 +843,7 @@ class _GroupTrace:
         return Col(name)
 
     @property
-    def columns(self) -> List[str]:
+    def columns(self) -> list[str]:
         return list(self._columns)
 
     def size(self) -> Agg:
@@ -865,8 +854,8 @@ class _GroupTrace:
 
 
 def trace_group(
-    func: "Callable[[Any], object]", columns: Sequence[str], what: str = "GroupBy.apply"
-) -> Optional[object]:
+    func: Callable[..., object], columns: Sequence[str], what: str = "GroupBy.apply"
+) -> object | None:
     """Run ``func`` on a symbolic group; the aggregate / expression it built,
     or None (with the fallback warning logged) when the body cannot be
     followed."""
@@ -892,8 +881,8 @@ def trace_group(
 
 def group_quantile(
     plan: LazyFrame,
-    keys: List[str],
-    columns: List[str],
+    keys: list[str],
+    columns: list[str],
     q: float,
     interpolation: str = "linear",
 ) -> LazyFrame:

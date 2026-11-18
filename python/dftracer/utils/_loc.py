@@ -14,11 +14,11 @@ handle, the pandas 3 copy-on-write behaviour. A handle taken earlier
 from __future__ import annotations
 
 import builtins
-from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Sequence
 
 from . import dftracer_utils_ext as _ext
 from ._apply import Row
-from .agg import reduce_specs
+from .agg import AggForm, AggKeyword, reduce_specs
 from .enums import DType
 from .expr import Expr, col, collect_columns, lit, when
 from .series import Series
@@ -45,7 +45,7 @@ class Rows:
         kind: str,
         offset: int = 0,
         length: int = 0,
-        positions: Optional[List[int]] = None,
+        positions: list[int] | None = None,
         mask: object = None,
     ) -> None:
         self.kind = kind
@@ -55,19 +55,19 @@ class Rows:
         self.mask = mask
 
     @classmethod
-    def all(cls) -> "Rows":
+    def all(cls) -> Rows:
         return cls("all")
 
     @classmethod
-    def slice(cls, offset: int, length: int) -> "Rows":
+    def slice(cls, offset: int, length: int) -> Rows:
         return cls("slice", offset=offset, length=length)
 
     @classmethod
-    def take(cls, positions: List[int]) -> "Rows":
+    def take(cls, positions: list[int]) -> Rows:
         return cls("take", positions=positions)
 
     @classmethod
-    def masked(cls, mask: object) -> "Rows":
+    def masked(cls, mask: object) -> Rows:
         return cls("mask", mask=mask)
 
 
@@ -84,8 +84,8 @@ def _bool_list(values: Sequence[object]) -> bool:
     return len(values) > 0 and all(isinstance(v, bool) for v in values)
 
 
-def _positions(n: int, values: Sequence[object]) -> List[int]:
-    out: List[int] = []
+def _positions(n: int, values: Sequence[object]) -> list[int]:
+    out: list[int] = []
     for v in values:
         if isinstance(v, bool) or not isinstance(v, int):
             raise TypeError("iloc: positions must be ints")
@@ -100,7 +100,7 @@ def _is_bool(series: Series) -> bool:
     return series.dtype == DType.BOOL
 
 
-def rows_by_position(n: int, key: object) -> Tuple[Rows, bool]:
+def rows_by_position(n: int, key: object) -> tuple[Rows, bool]:
     """``iloc`` rows: the selection and whether it names one row."""
     if _is_all(key):
         return Rows.all(), False
@@ -133,7 +133,7 @@ def _label_eq(index: Series, value: object) -> Series:
     return index.eq(value)
 
 
-def _numeric_bounds(key: builtins.slice) -> Tuple[Optional[float], Optional[float]]:
+def _numeric_bounds(key: builtins.slice) -> tuple[float | None, float | None]:
     if key.step is not None:
         raise TypeError("loc: a label slice takes no step")
     for bound in (key.start, key.stop):
@@ -160,7 +160,7 @@ def _or(a: Series, b: Series) -> Series:
     return a.logical(1, b)
 
 
-def _label_tuple(levels: List[Series], key: tuple) -> Series:
+def _label_tuple(levels: list[Series], key: tuple[object, ...]) -> Series:
     """A label tuple matches the leading levels it names (pandas' partial
     indexing on a MultiIndex)."""
     if not key or len(key) > len(levels):
@@ -171,7 +171,7 @@ def _label_tuple(levels: List[Series], key: tuple) -> Series:
     return mask
 
 
-def rows_by_label(levels: List[Series], key: object) -> Rows:
+def rows_by_label(levels: list[Series], key: object) -> Rows:
     """``loc`` rows against the index levels (labels are inclusive on both
     ends of a slice, as pandas). One level takes a value, a slice or a list;
     several take a tuple (or a list of tuples) matching the leading levels,
@@ -204,7 +204,7 @@ def rows_by_label(levels: List[Series], key: object) -> Rows:
     return Rows.masked(_label_eq(index, key))
 
 
-def columns_by_position(names: List[str], key: object) -> Tuple[List[str], bool]:
+def columns_by_position(names: list[str], key: object) -> tuple[list[str], bool]:
     if _is_all(key):
         return list(names), False
     if isinstance(key, bool):
@@ -220,7 +220,7 @@ def columns_by_position(names: List[str], key: object) -> Tuple[List[str], bool]
     raise TypeError(f"iloc: cannot select columns with {type(key).__name__}")
 
 
-def columns_by_name(names: List[str], key: object, new_ok: bool = False) -> Tuple[List[str], bool]:
+def columns_by_name(names: list[str], key: object, new_ok: bool = False) -> tuple[list[str], bool]:
     if _is_all(key):
         return list(names), False
     if isinstance(key, str):
@@ -240,7 +240,7 @@ def columns_by_name(names: List[str], key: object, new_ok: bool = False) -> Tupl
     raise TypeError(f"loc: cannot select columns with {type(key).__name__}")
 
 
-def _split(key: object, levels: int = 1, names: Sequence[str] = ()) -> Tuple[object, object]:
+def _split(key: object, levels: int = 1, names: Sequence[str] = ()) -> tuple[object, object]:
     """``[rows]`` or ``[rows, columns]``. On a several-column index a tuple
     of plain labels whose second item is not a column name is one row label
     (pandas reads ``loc[(a, b)]`` the same way); ``loc[(a, b), :]`` is the
@@ -262,7 +262,7 @@ def _split(key: object, levels: int = 1, names: Sequence[str] = ()) -> Tuple[obj
 # ---- eager --------------------------------------------------------------------
 
 
-def _eager_mask(df: "DataFrame", mask: object) -> Series:
+def _eager_mask(df: DataFrame, mask: object) -> Series:
 
     if isinstance(mask, Expr):
         return mask.apply(df)
@@ -270,7 +270,7 @@ def _eager_mask(df: "DataFrame", mask: object) -> Series:
     return mask
 
 
-def _apply_rows(df: "DataFrame", rows: Rows) -> "DataFrame":
+def _apply_rows(df: DataFrame, rows: Rows) -> DataFrame:
     if rows.kind == "all":
         return df
     if rows.kind == "slice":
@@ -280,7 +280,7 @@ def _apply_rows(df: "DataFrame", rows: Rows) -> "DataFrame":
     return df.filter(_eager_mask(df, rows.mask))
 
 
-def _mask_of(df: "DataFrame", rows: Rows) -> Optional[Series]:
+def _mask_of(df: DataFrame, rows: Rows) -> Series | None:
     """The full-length Bool mask a selection names, or None for every row."""
     if rows.kind == "all":
         return None
@@ -332,7 +332,7 @@ def _fill(value: object, n: int, like: Series) -> Series:
     return Series.from_list([value] * n, dtype=column)
 
 
-def _broadcast(value: object, n: int, like: Optional[Series]) -> Series:
+def _broadcast(value: object, n: int, like: Series | None) -> Series:
     """``value`` as an n-row Series of ``like``'s type (or the value's own)."""
     if isinstance(value, Series):
         if len(value) != n:
@@ -361,7 +361,7 @@ def _scatter(value: object, mask: Series, n: int) -> object:
     return [next(it) if h else None for h in hits]
 
 
-def _per_column(value: object) -> Optional[List[Series]]:
+def _per_column(value: object) -> list[Series] | None:
     """The columns of a frame, or the Series of a non-empty list or tuple of
     Series: one per target column, by position. None for any other value."""
     from .dataframe import DataFrame
@@ -374,7 +374,7 @@ def _per_column(value: object) -> Optional[List[Series]]:
 
 
 def _check_per_column(
-    columns: List[str], series: List[Series], n: int, mask: Optional[Series]
+    columns: list[str], series: list[Series], n: int, mask: Series | None
 ) -> None:
     """The counts and row counts of a multi-column assignment, before any write."""
     if len(columns) != len(series):
@@ -388,7 +388,7 @@ def _check_per_column(
             raise ValueError(f"assign: column {name!r} gets {len(s)} rows; {what} {selected}")
 
 
-def assign_rows(df: "DataFrame", rows: Rows, columns: List[str], value: object) -> None:
+def assign_rows(df: DataFrame, rows: Rows, columns: list[str], value: object) -> None:
     """``df.loc[rows, columns] = value``: each column rebuilt where the rows
     select, the handle rebound to the new frame. A frame or a list of Series
     gives each target column the value at the same position."""
@@ -438,7 +438,7 @@ class ILoc:
 
     __slots__ = ("_df",)
 
-    def __init__(self, df: "DataFrame") -> None:
+    def __init__(self, df: DataFrame) -> None:
         self._df = df
 
     def __getitem__(self, key: object) -> object:
@@ -468,10 +468,10 @@ class Loc:
 
     __slots__ = ("_df",)
 
-    def __init__(self, df: "DataFrame") -> None:
+    def __init__(self, df: DataFrame) -> None:
         self._df = df
 
-    def _rows(self, key: object) -> Tuple[Rows, object]:
+    def _rows(self, key: object) -> tuple[Rows, object]:
         df = self._df
         levels = df.index_levels()
         rk, ck = _split(key, len(levels), df.columns)
@@ -498,11 +498,11 @@ class At:
 
     __slots__ = ("_df", "_by_position")
 
-    def __init__(self, df: "DataFrame", by_position: bool) -> None:
+    def __init__(self, df: DataFrame, by_position: bool) -> None:
         self._df = df
         self._by_position = by_position
 
-    def _cell(self, key: object) -> Tuple[Rows, str]:
+    def _cell(self, key: object) -> tuple[Rows, str]:
         if not isinstance(key, tuple) or len(key) != 2:
             raise TypeError("at / iat take [row, column]")
         rk, ck = key
@@ -531,7 +531,7 @@ class At:
 # ---- lazy ---------------------------------------------------------------------
 
 
-def _lazy_rows(lf: "LazyFrame", rows: Rows) -> "LazyFrame":
+def _lazy_rows(lf: LazyFrame, rows: Rows) -> LazyFrame:
 
     if rows.kind == "all":
         return lf
@@ -545,7 +545,7 @@ def _lazy_rows(lf: "LazyFrame", rows: Rows) -> "LazyFrame":
     return lf.filter_mask(rows.mask)
 
 
-def lazy_rows_by_label(lf: "LazyFrame", key: object) -> Rows:
+def lazy_rows_by_label(lf: LazyFrame, key: object) -> Rows:
     """``loc`` rows on a plan: an Expr mask over the index column."""
 
     if _is_all(key):
@@ -564,7 +564,7 @@ def lazy_rows_by_label(lf: "LazyFrame", key: object) -> Rows:
             raise TypeError(f"loc: a label must be a number or a str, not {type(value).__name__}")
         return index == value
 
-    def label_tuple(values: tuple) -> Expr:
+    def label_tuple(values: tuple[object, ...]) -> Expr:
         if not values or len(values) > len(names):
             raise KeyError(
                 f"loc: a label tuple names 1 to {len(names)} index levels, got {len(values)}"
@@ -610,7 +610,7 @@ def _reads_row(mask: object) -> bool:
     return isinstance(mask, Expr) and _ROW in collect_columns(mask)
 
 
-def _lazy_mask_expr(lf: "LazyFrame", rows: Rows) -> "Tuple[LazyFrame, Optional[Expr]]":
+def _lazy_mask_expr(lf: LazyFrame, rows: Rows) -> tuple[LazyFrame, Expr | None]:
     """The plan (with a row index when the selection is positional) and the
     Expr mask the selection names; None for every row."""
 
@@ -626,7 +626,7 @@ def _lazy_mask_expr(lf: "LazyFrame", rows: Rows) -> "Tuple[LazyFrame, Optional[E
     raise TypeError("a lazy assignment takes its rows as labels or an expression, not a Series")
 
 
-def lazy_assign_rows(lf: "LazyFrame", rows: Rows, columns: List[str], value: object) -> None:
+def lazy_assign_rows(lf: LazyFrame, rows: Rows, columns: list[str], value: object) -> None:
     """``lf.loc[rows, columns] = value`` as ``with_column`` plan steps, the
     handle rebound to the longer plan."""
 
@@ -691,10 +691,10 @@ def lazy_rows_by_position(key: object) -> Rows:
 class LazyILoc:
     __slots__ = ("_lf",)
 
-    def __init__(self, lf: "LazyFrame") -> None:
+    def __init__(self, lf: LazyFrame) -> None:
         self._lf = lf
 
-    def __getitem__(self, key: object) -> "LazyFrame":
+    def __getitem__(self, key: object) -> LazyFrame:
         rk, ck = _split(key)
         out = _lazy_rows(self._lf, lazy_rows_by_position(rk))
         if ck is None:
@@ -711,15 +711,15 @@ class LazyILoc:
 class LazyLoc:
     __slots__ = ("_lf",)
 
-    def __init__(self, lf: "LazyFrame") -> None:
+    def __init__(self, lf: LazyFrame) -> None:
         self._lf = lf
 
-    def _rows(self, key: object) -> Tuple[Rows, object]:
+    def _rows(self, key: object) -> tuple[Rows, object]:
         lf = self._lf
         rk, ck = _split(key, len(lf._index_names()), lf.columns)
         return lazy_rows_by_label(lf, rk), ck
 
-    def __getitem__(self, key: object) -> "LazyFrame":
+    def __getitem__(self, key: object) -> LazyFrame:
         lf = self._lf
         rows, ck = self._rows(key)
         cols, _ = columns_by_name(lf.columns, ck)
@@ -746,57 +746,55 @@ class Resampler:
 
     __slots__ = ("_frame", "_time", "_every")
 
-    def __init__(self, frame: "Union[DataFrame, LazyFrame]", time: str, every: int) -> None:
+    def __init__(self, frame: DataFrame | LazyFrame, time: str, every: int) -> None:
         self._frame = frame
         self._time = time
         self._every = every
 
-    def _run(
-        self, specs: "Sequence[Union[str, Tuple[str, str, List[str]]]]"
-    ) -> "Union[DataFrame, LazyFrame]":
+    def _run(self, specs: Sequence[str | tuple[str, str, list[str]]]) -> DataFrame | LazyFrame:
         return self._frame.sort_by(self._time).group_by_dynamic(
             self._time, self._every, None, specs
         )
 
-    def agg(self, *specs: object, **named: object) -> "Union[DataFrame, LazyFrame]":
+    def agg(self, *specs: AggForm, **named: AggKeyword) -> DataFrame | LazyFrame:
         from .lazyframe import agg_spec_strings
 
         return self._run(agg_spec_strings(self._frame, [self._time], specs, named))
 
     aggregate = agg
 
-    def reduce(self, agg: str) -> "Union[DataFrame, LazyFrame]":
+    def reduce(self, agg: str) -> DataFrame | LazyFrame:
 
         return self._run(reduce_specs(self._frame, agg, [self._time]))
 
-    def sum(self) -> "Union[DataFrame, LazyFrame]":
+    def sum(self) -> DataFrame | LazyFrame:
         return self.reduce("sum")
 
-    def mean(self) -> "Union[DataFrame, LazyFrame]":
+    def mean(self) -> DataFrame | LazyFrame:
         return self.reduce("mean")
 
-    def min(self) -> "Union[DataFrame, LazyFrame]":
+    def min(self) -> DataFrame | LazyFrame:
         return self.reduce("min")
 
-    def max(self) -> "Union[DataFrame, LazyFrame]":
+    def max(self) -> DataFrame | LazyFrame:
         return self.reduce("max")
 
-    def count(self) -> "Union[DataFrame, LazyFrame]":
+    def count(self) -> DataFrame | LazyFrame:
         return self.reduce("count_valid")
 
-    def var(self) -> "Union[DataFrame, LazyFrame]":
+    def var(self) -> DataFrame | LazyFrame:
         return self.reduce("var")
 
-    def std(self) -> "Union[DataFrame, LazyFrame]":
+    def std(self) -> DataFrame | LazyFrame:
         return self.reduce("std")
 
-    def first(self) -> "Union[DataFrame, LazyFrame]":
+    def first(self) -> DataFrame | LazyFrame:
         return self.reduce("first")
 
-    def last(self) -> "Union[DataFrame, LazyFrame]":
+    def last(self) -> DataFrame | LazyFrame:
         return self.reduce("last")
 
-    def size(self) -> "Union[DataFrame, LazyFrame]":
+    def size(self) -> DataFrame | LazyFrame:
         return self._run(["count::size"])
 
 

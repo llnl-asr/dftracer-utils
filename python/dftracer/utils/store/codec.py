@@ -12,12 +12,9 @@ from typing import (
     Iterable,
     List,
     Mapping,
-    Optional,
     Protocol,
     Sequence,
-    Set,
     Tuple,
-    Type,
     TypeVar,
     Union,
     cast,
@@ -51,7 +48,7 @@ class StoreAware(Protocol):
     def to_store(self) -> Encodable: ...
 
     @classmethod
-    def from_store(cls, value: Encodable) -> "StoreAware": ...
+    def from_store(cls, value: Encodable) -> StoreAware: ...
 
 
 T = TypeVar("T")
@@ -80,9 +77,9 @@ _BITS = struct.Struct(">Q")
 _ToValue = Callable[[object], Encodable]
 _FromValue = Callable[[Encodable], object]
 
-_by_class: Dict[type, Tuple[int, _ToValue]] = {}
-_by_id: Dict[int, Tuple[type, _FromValue]] = {}
-_unaware: Set[type] = set()
+_by_class: dict[type, tuple[int, _ToValue]] = {}
+_by_id: dict[int, tuple[type, _FromValue]] = {}
+_unaware: set[type] = set()
 _lock = threading.Lock()
 _BUILTIN_TYPES = frozenset(
     (type(None), bool, int, float, str, bytes, bytearray, memoryview, tuple, list, dict)
@@ -97,17 +94,17 @@ def _register_unlocked(
     from_value: _FromValue,
 ) -> None:
     if not isinstance(type_id, int) or isinstance(type_id, bool) or type_id < 0:
-        raise ValueError("type_id must be a non-negative int, got %r" % (type_id,))
+        raise ValueError(f"type_id must be a non-negative int, got {type_id!r}")
     known = _by_class.get(cls)
     if known is not None:
         same = known[0] == type_id and known[1] == to_value
         entry = _by_id[known[0]]
         if same and entry[1] == from_value:
             return
-        raise ValueError("%s is already registered" % cls.__name__)
+        raise ValueError(f"{cls.__name__} is already registered")
     if type_id in _by_id:
         raise ValueError(
-            "type_id %d is already registered for %s" % (type_id, _by_id[type_id][0].__name__)
+            f"type_id {type_id} is already registered for {_by_id[type_id][0].__name__}"
         )
     _by_id[type_id] = (cls, from_value)
     _by_class[cls] = (type_id, to_value)
@@ -124,7 +121,7 @@ def _register(
         _register_unlocked(cls, type_id, to_value, from_value)
 
 
-def _detect(cls: type) -> Optional[Tuple[int, _ToValue]]:
+def _detect(cls: type) -> tuple[int, _ToValue] | None:
     with _lock:
         known = _by_class.get(cls)
         if known is not None:
@@ -137,7 +134,7 @@ def _detect(cls: type) -> Optional[Tuple[int, _ToValue]]:
         return _by_class[cls]
 
 
-def _protocol(cls: type) -> Optional[Tuple[int, _ToValue, _FromValue]]:
+def _protocol(cls: type) -> tuple[int, _ToValue, _FromValue] | None:
     # Method detection after cereal, https://uscilab.github.io/cereal/serialization_functions.html, BSD-style 3-clause.
     present = [name for name in _PROTOCOL if hasattr(cls, name)]
     if not present:
@@ -145,35 +142,36 @@ def _protocol(cls: type) -> Optional[Tuple[int, _ToValue, _FromValue]]:
     missing = [name for name in _PROTOCOL if name not in present]
     if missing:
         raise TypeError(
-            "%s defines %s but not %s; a store-aware class needs all of %s"
-            % (cls.__name__, ", ".join(present), ", ".join(missing), ", ".join(_PROTOCOL))
+            "{} defines {} but not {}; a store-aware class needs all of {}".format(
+                cls.__name__, ", ".join(present), ", ".join(missing), ", ".join(_PROTOCOL)
+            )
         )
     if "store_type_id" not in cls.__dict__:
         raise TypeError(
-            "%s inherits store_type_id; give the subclass its own store_type_id" % cls.__name__
+            f"{cls.__name__} inherits store_type_id; give the subclass its own store_type_id"
         )
     return getattr(cls, "store_type_id"), getattr(cls, "to_store"), getattr(cls, "from_store")
 
 
 @overload
-def register_type(cls: Type[S]) -> Type[S]: ...
+def register_type(cls: type[S]) -> type[S]: ...
 
 
 @overload
 def register_type(
-    cls: Type[T],
+    cls: type[T],
     type_id: int,
     to_value: Callable[[T], Encodable],
     from_value: Callable[[Encodable], T],
-) -> Type[T]: ...
+) -> type[T]: ...
 
 
 def register_type(
-    cls: Type[T],
-    type_id: Optional[int] = None,
-    to_value: Optional[Callable[[T], Encodable]] = None,
-    from_value: Optional[Callable[[Encodable], T]] = None,
-) -> Type[T]:
+    cls: type[T],
+    type_id: int | None = None,
+    to_value: Callable[[T], Encodable] | None = None,
+    from_value: Callable[[Encodable], T] | None = None,
+) -> type[T]:
     """Make ``encode`` and ``decode`` handle ``cls``, and return ``cls``.
 
     With one argument, ``cls`` defines ``store_type_id``, ``to_store`` and
@@ -185,7 +183,7 @@ def register_type(
     if type_id is None and to_value is None and from_value is None:
         found = _protocol(cls)
         if found is None:
-            raise TypeError("%s defines none of %s" % (cls.__name__, ", ".join(_PROTOCOL)))
+            raise TypeError("{} defines none of {}".format(cls.__name__, ", ".join(_PROTOCOL)))
         _register(cls, *found)
         return cls
     if type_id is None or to_value is None or from_value is None:
@@ -205,7 +203,7 @@ def _encode_int(value: int, out: bytearray) -> None:
     magnitude = -value if value < 0 else value
     size = (magnitude.bit_length() + 7) // 8
     if size > _MAX_LONG:
-        raise ValueError("int needs %d bytes, the limit is %d" % (size, _MAX_LONG))
+        raise ValueError(f"int needs {size} bytes, the limit is {_MAX_LONG}")
     if value > 0:
         if size <= 8:
             out.append(_INT_ZERO + size)
@@ -234,7 +232,7 @@ def _encode_float(value: float, out: bytearray) -> None:
 
 def _check_depth(depth: int) -> None:
     if depth >= MAX_DEPTH:
-        raise ValueError("nesting is deeper than %d levels" % MAX_DEPTH)
+        raise ValueError(f"nesting is deeper than {MAX_DEPTH} levels")
 
 
 def _encode_items(tag: int, items: Iterable[object], out: bytearray, depth: int) -> None:
@@ -280,7 +278,7 @@ def _encode_into(obj: object, out: bytearray, nested: bool, depth: int) -> None:
             return
         if cls is dict:
             _check_depth(depth)
-            entries: List[Tuple[bytes, bytes]] = []
+            entries: list[tuple[bytes, bytes]] = []
             for key, value in cast(Dict[object, object], obj).items():
                 key_bytes = bytearray()
                 _encode_into(key, key_bytes, True, depth + 1)
@@ -298,8 +296,8 @@ def _encode_into(obj: object, out: bytearray, nested: bool, depth: int) -> None:
             registered = _detect(cls)
     if registered is None:
         raise TypeError(
-            "cannot encode %s; register that exact class with "
-            "dftracer.utils.store.register_type" % cls.__name__
+            f"cannot encode {cls.__name__}; register that exact class with "
+            "dftracer.utils.store.register_type"
         )
     _check_depth(depth)
     type_id, to_value = registered
@@ -316,7 +314,7 @@ def encode(obj: object) -> bytes:
     return bytes(out)
 
 
-def encode_prefix(obj: Union[str, BytesLike, Tuple[Encodable, ...]]) -> bytes:
+def encode_prefix(obj: str | BytesLike | tuple[Encodable, ...]) -> bytes:
     """The encoding of a ``str``, ``bytes`` or ``tuple`` without its terminator.
 
     It is a prefix of the encoding of each longer value that starts the same.
@@ -327,7 +325,7 @@ def encode_prefix(obj: Union[str, BytesLike, Tuple[Encodable, ...]]) -> bytes:
     """
     if isinstance(obj, (str, bytes, bytearray, memoryview, tuple)):
         return encode(obj)[:-1]
-    raise TypeError("encode_prefix takes a str, bytes or tuple, not %s" % type(obj).__name__)
+    raise TypeError(f"encode_prefix takes a str, bytes or tuple, not {type(obj).__name__}")
 
 
 def matches_prefix(prefix: bytes, key: bytes) -> bool:
@@ -345,7 +343,7 @@ def _truncated() -> ValueError:
     return ValueError("truncated data")
 
 
-def _decode_text(data: bytes, pos: int) -> Tuple[bytes, int]:
+def _decode_text(data: bytes, pos: int) -> tuple[bytes, int]:
     out = bytearray()
     size = len(data)
     while True:
@@ -360,8 +358,8 @@ def _decode_text(data: bytes, pos: int) -> Tuple[bytes, int]:
             return bytes(out), end + 1
 
 
-def _decode_items(data: bytes, pos: int, depth: int) -> Tuple[List[object], int]:
-    items: List[object] = []
+def _decode_items(data: bytes, pos: int, depth: int) -> tuple[list[object], int]:
+    items: list[object] = []
     size = len(data)
     while True:
         if pos >= size:
@@ -376,7 +374,7 @@ def _decode_items(data: bytes, pos: int, depth: int) -> Tuple[List[object], int]
         items.append(item)
 
 
-def _decode_at(data: bytes, pos: int, nested: bool, depth: int) -> Tuple[object, int]:
+def _decode_at(data: bytes, pos: int, nested: bool, depth: int) -> tuple[object, int]:
     size = len(data)
     if pos >= size:
         raise _truncated()
@@ -395,7 +393,7 @@ def _decode_at(data: bytes, pos: int, nested: bool, depth: int) -> Tuple[object,
         try:
             return raw.decode("utf-8"), pos
         except UnicodeDecodeError as exc:
-            raise ValueError("invalid UTF-8 in str: %s" % exc) from None
+            raise ValueError(f"invalid UTF-8 in str: {exc}") from None
     if tag == _TUPLE or tag == _LIST or tag == _DICT or tag == _REGISTERED:
         _check_depth(depth)
     if tag == _TUPLE:
@@ -410,7 +408,7 @@ def _decode_at(data: bytes, pos: int, nested: bool, depth: int) -> Tuple[object,
         try:
             return dict(zip(items[0::2], items[1::2])), pos
         except TypeError as exc:
-            raise ValueError("unhashable dict key: %s" % exc) from None
+            raise ValueError(f"unhashable dict key: {exc}") from None
     if tag == _INT_ZERO:
         return 0, pos
     if _INT_ZERO < tag <= _INT_ZERO + 8 or _INT_ZERO - 8 <= tag < _INT_ZERO:
@@ -444,12 +442,12 @@ def _decode_at(data: bytes, pos: int, nested: bool, depth: int) -> Tuple[object,
         entry = _by_id.get(type_id)
         if entry is None:
             raise ValueError(
-                "type id %d is not registered; import the class and apply register_type" % type_id
+                f"type id {type_id} is not registered; import the class and apply register_type"
             )
         value, pos = _decode_at(data, pos, nested, depth + 1)
         return entry[1](cast(Encodable, value)), pos
     else:
-        raise ValueError("unknown tag 0x%02x" % tag)
+        raise ValueError(f"unknown tag 0x{tag:02x}")
     if pos + count > size:
         raise _truncated()
     number = int.from_bytes(data[pos : pos + count], "big")
@@ -471,7 +469,7 @@ def decode(data: BytesLike) -> object:
     raw = bytes(data)
     value, pos = _decode_at(raw, 0, False, 0)
     if pos != len(raw):
-        raise ValueError("%d trailing bytes" % (len(raw) - pos))
+        raise ValueError(f"{len(raw) - pos} trailing bytes")
     return value
 
 

@@ -4,35 +4,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import (
-    TYPE_CHECKING,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Sequence,
-    Tuple,
-    TypedDict,
-    Union,
-)
+from typing import TYPE_CHECKING, Callable, Mapping, Optional, Sequence, Tuple, TypedDict, cast
 
 import pandas as pd
 import pyarrow as pa
 
 from ..arrow import decode_dictionary_columns, ipc_to_table
 from ..dask.viewer import DaskAggregatedTraceViewer, DaskTraceViewer
+from ..dataframe import DataFrame
 from ..trace.viewer import TraceViewer
 
 if TYPE_CHECKING:
-    from dask.distributed import Client  # ty: ignore[import-not-found]
+    from dask.distributed import Client
+
+    from ..dask.viewer import _Plan
 
 
-def _capsule_to_pandas(table):
+def _capsule_to_pandas(table: object) -> pd.DataFrame:
     """Arrow table/capsule to pandas; empty DataFrame when None."""
     return pa.table(table).to_pandas() if table is not None else pd.DataFrame()
 
 
-def _ipc_to_pandas(ipc_bytes: bytes):
+def _ipc_to_pandas(ipc_bytes: bytes) -> pd.DataFrame:
     """Decode Arrow IPC bytes to pandas, casting dictionary columns to string."""
     return decode_dictionary_columns(ipc_to_table(ipc_bytes)).to_pandas()
 
@@ -74,7 +67,7 @@ _FILE_GROUP_KEYS = ("fhash", "file_path")
 _TYPED_AGGS = _VIEW_METRIC_AGGS + ("min:offset", "max:offset")
 
 
-def typed_group_keys(file_buckets: Tuple[str, ...] = ()) -> Tuple[str, ...]:
+def typed_group_keys(file_buckets: tuple[str, ...] = ()) -> tuple[str, ...]:
     """Group keys for the typed read.
 
     With no `file_buckets` this is the per-file grain. Given substrings,
@@ -84,9 +77,9 @@ def typed_group_keys(file_buckets: Tuple[str, ...] = ()) -> Tuple[str, ...]:
     """
     if not file_buckets:
         return _TYPED_GROUP_KEYS
-    args = ", ".join("'%s'" % b.replace("'", "") for b in file_buckets)
+    args = ", ".join("'{}'".format(b.replace("'", "")) for b in file_buckets)
     return tuple(
-        "bucket(file_path, %s)" % args if k == "file_path" else k
+        f"bucket(file_path, {args})" if k == "file_path" else k
         for k in _TYPED_GROUP_KEYS
         if k != "fhash"
     )
@@ -198,13 +191,13 @@ def _typed_event_frame(
 
 
 def view_typed_frames(
-    files: List[str],
+    files: list[str],
     index_dir: str,
     time_granularity: float = 1.0,
     time_resolution: float = 1e6,
-    duql: Optional[str] = None,
-    client: "Optional[Client]" = None,
-    group_keys: Optional[Tuple[str, ...]] = None,
+    duql: str | None = None,
+    client: Client | None = None,
+    group_keys: tuple[str, ...] | None = None,
 ) -> TypedFrames:
     """One-pass read of the aggregation index's three record families, each
     mapped to the dfanalyzer frame schema.
@@ -223,7 +216,7 @@ def view_typed_frames(
     bucket_us = int(time_granularity * time_resolution)
     keys = group_keys or _TYPED_GROUP_KEYS
     if client is None:
-        tv: "Union[TraceViewer, DaskTraceViewer]" = TraceViewer(files, index_dir=index_dir or None)
+        tv: TraceViewer | DaskTraceViewer = TraceViewer(files, index_dir=index_dir or None)
     else:
         tv = DaskTraceViewer(files, index_dir or "", client=client)
     if duql:
@@ -249,8 +242,8 @@ def view_typed_frames(
 
 
 def _drop_ignored_files(
-    df: "pd.DataFrame", ignored_file_patterns: Tuple[str, ...] = ()
-) -> "pd.DataFrame":
+    df: pd.DataFrame, ignored_file_patterns: tuple[str, ...] = ()
+) -> pd.DataFrame:
     """Drop rows whose `file_name` contains one of `ignored_file_patterns`.
 
     Pass the patterns as bucket() arguments ahead of any other bucket, so a
@@ -262,7 +255,7 @@ def _drop_ignored_files(
     return df[~df["file_name"].fillna("").str.contains(pattern, regex=True, na=False)]
 
 
-def _frame_to_ipc(df: "pd.DataFrame") -> Optional[bytes]:
+def _frame_to_ipc(df: pd.DataFrame) -> bytes | None:
     """Serialize one pandas frame to Arrow IPC-stream bytes (None if empty)."""
     if df is None or getattr(df, "empty", True):
         return None
@@ -271,21 +264,21 @@ def _frame_to_ipc(df: "pd.DataFrame") -> Optional[bytes]:
     writer = pa.ipc.new_stream(sink, table.schema)
     writer.write_table(table)
     writer.close()
-    return sink.getvalue().to_pybytes()
+    return cast("bytes", sink.getvalue().to_pybytes())
 
 
 def typed_read_to_ipc(
-    files: List[str],
+    files: list[str],
     index_dir: str,
     time_granularity: float,
     time_resolution: float,
-    duql: Optional[str] = None,
+    duql: str | None = None,
     shard_begin: int = 0,
     shard_end: int = 0,
-    group_keys: Optional[Tuple[str, ...]] = None,
-    drop_file_patterns: Tuple[str, ...] = (),
-    progress: Optional[Callable[[int, int], None]] = None,
-) -> Dict[str, Optional[bytes]]:
+    group_keys: tuple[str, ...] | None = None,
+    drop_file_patterns: tuple[str, ...] = (),
+    progress: Callable[[int, int], None] | None = None,
+) -> dict[str, bytes | None]:
     """One-pass typed read of the aggregation index mapped to the dfanalyzer
     {events, profiles, system} frames, as Arrow IPC bytes.
 
@@ -295,7 +288,7 @@ def typed_read_to_ipc(
     so the two read paths never diverge. `shard_end <= 0` reads all shards.
     """
     bucket_us = int(time_granularity * time_resolution)
-    tv: "TraceViewer" = TraceViewer(files, index_dir=index_dir or None)
+    tv: TraceViewer = TraceViewer(files, index_dir=index_dir or None)
     if duql:
         tv = tv.filter(duql)
     typed = (
@@ -324,16 +317,16 @@ class ReadFrames(TypedDict):
     """Decoded read-path frames: traces (always present), profiles/system (or
     None), and the origins the caller needs to build a ReadTraceResult."""
 
-    traces: "pd.DataFrame"
-    profiles: Optional["pd.DataFrame"]
-    system: Optional["pd.DataFrame"]
+    traces: pd.DataFrame
+    profiles: Optional[pd.DataFrame]
+    system: Optional[pd.DataFrame]
     time_origin: Optional[int]
     system_time_origin: Optional[int]
 
 
 def build_read_frames(
-    results: List[Dict[str, Optional[bytes]]],
-    profile_output_columns: Dict[str, str],
+    results: list[dict[str, bytes | None]],
+    profile_output_columns: dict[str, str],
     time_granularity: float,
     time_resolution: float,
     profile_time_granularity: float,
@@ -348,7 +341,7 @@ def build_read_frames(
     """
     results = [r for r in results if r]
 
-    def _decode(key: str) -> List["pd.DataFrame"]:
+    def _decode(key: str) -> list[pd.DataFrame]:
         out = []
         for r in results:
             b = r.get(key) if isinstance(r, dict) else None
@@ -370,7 +363,7 @@ def build_read_frames(
     origin = min(buckets) if buckets else None
     bucket_us = int(time_granularity * time_resolution)
 
-    def _relativize(f: "pd.DataFrame") -> None:
+    def _relativize(f: pd.DataFrame) -> None:
         if origin is None:
             return
         f["time_start"] = f["time_start"].astype("int64") - origin
@@ -386,7 +379,7 @@ def build_read_frames(
     else:
         traces = pd.DataFrame({c: pd.Series(dtype=dt) for c, dt in profile_output_columns.items()})
 
-    profiles: Optional["pd.DataFrame"] = None
+    profiles: pd.DataFrame | None = None
     if raw_prof is not None:
         _relativize(raw_prof)
         window = int(profile_time_granularity * time_resolution)
@@ -394,8 +387,8 @@ def build_read_frames(
         profiles = _coerce_profile_dtypes(raw_prof, profile_output_columns, profile_window=window)
 
     sys = _decode("system")
-    system_pd: Optional["pd.DataFrame"] = None
-    sys_origin: Optional[int] = None
+    system_pd: pd.DataFrame | None = None
+    sys_origin: int | None = None
     if sys:
         system_pd = pd.concat(sys, ignore_index=True)
         system_pd["ts"] = system_pd["time_bucket"].astype("int64")
@@ -410,7 +403,7 @@ def build_read_frames(
     }
 
 
-def coerce_arrow_numerics_to_pandas_native(df):
+def coerce_arrow_numerics_to_pandas_native(df: pd.DataFrame) -> pd.DataFrame:
     """Map pd.ArrowDtype int/float columns to pandas Int64/Float64."""
     if df.empty:
         return df
@@ -425,7 +418,11 @@ def coerce_arrow_numerics_to_pandas_native(df):
     return df
 
 
-def _coerce_profile_dtypes(df, output_columns, profile_window=None):
+def _coerce_profile_dtypes(
+    df: pd.DataFrame,
+    output_columns: Mapping[str, str],
+    profile_window: int | float | None = None,
+) -> pd.DataFrame:
     """Normalize C++ aggregator profile output to the `output_columns` schema.
 
     `output_columns` maps column name -> pandas dtype. When `profile_window` is
@@ -475,8 +472,8 @@ class HLMConfig:
     time_granularity: float = 1.0
     time_resolution: float = 1e6
 
-    def ignored_func_predicate(self) -> Optional[str]:
-        clauses: List[str] = []
+    def ignored_func_predicate(self) -> str | None:
+        clauses: list[str] = []
         if self.ignored_func_names:
             names = ", ".join(f'"{n.replace(chr(34), "")}"' for n in self.ignored_func_names)
             clauses.append(f"name not in [{names}]")
@@ -495,14 +492,14 @@ class DFAnalyzerAggregatedTraceViewer(DaskAggregatedTraceViewer):
 
     def __init__(
         self,
-        files,
+        files: list[str],
         index_dir: str = "",
         *,
-        client=None,
+        client: Client | None = None,
         files_per_task: int = 1,
-        _plan=None,
-        hlm_config: Optional[HLMConfig] = None,
-    ):
+        _plan: _Plan | None = None,
+        hlm_config: HLMConfig | None = None,
+    ) -> None:
         super().__init__(
             files, index_dir, client=client, files_per_task=files_per_task, _plan=_plan
         )
@@ -510,7 +507,7 @@ class DFAnalyzerAggregatedTraceViewer(DaskAggregatedTraceViewer):
 
     # Both clone paths thread hlm_config: the base _agg_clone hardcodes
     # DaskAggregatedTraceViewer, so group_by()/agg() would otherwise drop it.
-    def _clone(self, plan):
+    def _clone(self, plan: _Plan) -> DFAnalyzerAggregatedTraceViewer:
         return type(self)(
             self._files,
             self._index_dir,
@@ -520,7 +517,7 @@ class DFAnalyzerAggregatedTraceViewer(DaskAggregatedTraceViewer):
             hlm_config=self._hlm_config,
         )
 
-    def _agg_clone(self, plan):
+    def _agg_clone(self, plan: _Plan) -> DFAnalyzerAggregatedTraceViewer:
         return type(self)(
             self._files,
             self._index_dir,
@@ -530,15 +527,15 @@ class DFAnalyzerAggregatedTraceViewer(DaskAggregatedTraceViewer):
             hlm_config=self._hlm_config,
         )
 
-    def hlm(self, view_types: Sequence[str]) -> "pd.DataFrame":
+    def hlm(self, view_types: Sequence[str]) -> pd.DataFrame:
         df, vts = self._hlm_frame(view_types, "regular")
         return self._to_hlm(df, vts)
 
-    def profile_hlm(self, view_types: Sequence[str]) -> "pd.DataFrame":
+    def profile_hlm(self, view_types: Sequence[str]) -> pd.DataFrame:
         df, vts = self._hlm_frame(view_types, "aggregated")
         return self._to_hlm(df, vts)
 
-    def _hlm_frame(self, view_types, family):
+    def _hlm_frame(self, view_types: Sequence[str], family: str) -> tuple[pd.DataFrame, list[str]]:
         cfg = self._hlm_config
         vts = list(view_types)
         temporal = "time_range" in vts
@@ -557,17 +554,18 @@ class DFAnalyzerAggregatedTraceViewer(DaskAggregatedTraceViewer):
                 args = ", ".join(f"'{s.replace(chr(39), '')}'" for s in subs)
                 keys.append(f"bucket(file_path, {args})")
 
-        aggs: List[str] = list(_HLM_METRIC_AGGS)
+        aggs: list[str] = list(_HLM_METRIC_AGGS)
         if temporal:
             aggs.append("min:ts")
 
-        v = self.phase("events") if family == "regular" else self
+        v: DaskTraceViewer = self.phase("events") if family == "regular" else self
         pred = cfg.ignored_func_predicate()
         if pred:
             v = v.filter(pred)
-        agg_view = v.group_by(*keys)
+        agg_view: DaskTraceViewer = v.group_by(*keys)
         if temporal:
             agg_view = agg_view.time_bucket(bucket_us)
+        tbl: pa.Table | DataFrame | None
         if family == "regular":
             tbl = agg_view.agg(*aggs).collect()
         else:
@@ -598,7 +596,7 @@ class DFAnalyzerAggregatedTraceViewer(DaskAggregatedTraceViewer):
     )
     _INT_COLS = frozenset({"count", "size", "size_call_min", "size_call_max"})
 
-    def _to_hlm(self, df, vts) -> "pd.DataFrame":
+    def _to_hlm(self, df: pd.DataFrame, vts: Sequence[str]) -> pd.DataFrame:
         cfg = self._hlm_config
         idx_names = list(vts) + ["cat", "io_cat", "acc_pat", "func_name"]
         if df.empty or "count" not in df.columns:
@@ -654,7 +652,7 @@ class DFAnalyzerAggregatedTraceViewer(DaskAggregatedTraceViewer):
         return out.set_index(idx_names)
 
     @staticmethod
-    def _compose_proc_name(df: "pd.DataFrame") -> "pd.Series":
+    def _compose_proc_name(df: pd.DataFrame) -> pd.Series:
         if "host_name" in df.columns:
             host = df["host_name"].astype("string")
         else:
@@ -664,7 +662,7 @@ class DFAnalyzerAggregatedTraceViewer(DaskAggregatedTraceViewer):
         host = host.fillna("unknown").replace("", "unknown")
         return "app#" + host + "#" + df["pid"].astype(str) + "#" + df["tid"].astype(str)
 
-    def _apply_cat_suffix(self, cat: "pd.Series", path: "pd.Series") -> "pd.Series":
+    def _apply_cat_suffix(self, cat: pd.Series, path: pd.Series) -> pd.Series:
         rules = self._hlm_config.posix_cat_rules
         if not rules:
             return cat

@@ -19,13 +19,11 @@ import math
 from typing import (
     TYPE_CHECKING,
     Callable,
-    Dict,
-    List,
     Literal,
     Mapping,
+    NoReturn,
     Optional,
     Sequence,
-    Tuple,
     TypeVar,
     Union,
     cast,
@@ -61,10 +59,10 @@ from .enums import (
 )
 
 if TYPE_CHECKING:
-    import numpy as np  # ty: ignore[import-not-found]
-    import pandas as pd  # ty: ignore[import-not-found]
-    import polars as pl  # ty: ignore[import-not-found]
-    import pyarrow as pa  # ty: ignore[import-not-found]
+    import numpy as np
+    import pandas as pd
+    import polars as pl
+    import pyarrow as pa
     from typing_extensions import Self
 
     from .dataframe import DataFrame
@@ -74,7 +72,7 @@ else:
     T_co = TypeVar("T_co", covariant=True)
 
 # Python types and the NumPy names that differ from a DType member name.
-_PY_DTYPES: Dict[type, DType] = {
+_PY_DTYPES: dict[type, DType] = {
     str: DType.STRING,
     int: DType.INT64,
     float: DType.FLOAT64,
@@ -83,7 +81,7 @@ _PY_DTYPES: Dict[type, DType] = {
 _NUMPY_NAMES = {"str": "string", "str_": "string", "bool_": "bool"}
 
 
-def _dtype_limits(dtype: DType) -> "Optional[Tuple[Union[int, float], Union[int, float]]]":
+def _dtype_limits(dtype: DType) -> tuple[int | float, int | float] | None:
     """The lowest and highest value a numeric column of ``dtype`` can hold (the
     missing bound of a one-sided ``clip``); ``None`` for a type with no limits
     here."""
@@ -94,7 +92,7 @@ def _dtype_limits(dtype: DType) -> "Optional[Tuple[Union[int, float], Union[int,
     return None
 
 
-def _resolve_dtype(dtype: "Union[str, int, DType, type]") -> int:
+def _resolve_dtype(dtype: str | int | DType | type) -> int:
     """A dtype spelled as a name, a DType member, a raw int code, a Python type
     (``str``, ``int``, ``float``, ``bool``) or a NumPy scalar type or dtype that
     names a supported type -> int code. Raises ValueError on an unrecognized
@@ -108,9 +106,8 @@ def _resolve_dtype(dtype: "Union[str, int, DType, type]") -> int:
         py_dtype = _PY_DTYPES.get(cast(type, dtype))
         if py_dtype is not None:
             return int(py_dtype)
-        name = getattr(dtype, "name", None)
-        if not isinstance(name, str):
-            name = getattr(dtype, "__name__", "")
+        raw_name = getattr(dtype, "name", None)
+        name = raw_name if isinstance(raw_name, str) else getattr(dtype, "__name__", "")
         name = _NUMPY_NAMES.get(name, name)
         try:
             return int(DTYPE_BY_NAME[name.lower()])
@@ -140,7 +137,7 @@ _LOGICAL_OR = 1
 
 NormForm = Literal["NFC", "NFKC", "NFD", "NFKD"]
 # c_api.h DFTU_NORM_* and DFTU_WRAP_*.
-_NORM_FORMS: Dict[str, int] = {"NFC": 0, "NFKC": 1, "NFD": 2, "NFKD": 3}
+_NORM_FORMS: dict[str, int] = {"NFC": 0, "NFKC": 1, "NFD": 2, "NFKD": 3}
 _WRAP_FLAG_BITS = (1, 2, 4, 8, 16)
 
 
@@ -152,12 +149,12 @@ def norm_form_code(form: str) -> int:
 
 
 def translate_pairs(
-    table: Mapping[Union[int, str], Union[str, int, None]],
-) -> Tuple[List[str], List[Optional[str]]]:
+    table: Mapping[int | str, str | int | None],
+) -> tuple[list[str], list[str | None]]:
     """The keys (one codepoint each) and the replacements (``None`` deletes) of
     a ``str.translate`` table: an int key or value is a codepoint."""
-    keys: List[str] = []
-    values: List[Optional[str]] = []
+    keys: list[str] = []
+    values: list[str | None] = []
     for key, value in table.items():
         if isinstance(key, int) and not isinstance(key, bool):
             key = chr(key)
@@ -200,7 +197,7 @@ class _OpsAccessor:
 
     __slots__ = ("_series", "_prefix")
 
-    def __init__(self, series: "Series", prefix: str = "") -> None:
+    def __init__(self, series: Series, prefix: str = "") -> None:
         self._series = series
         self._prefix = prefix
 
@@ -213,7 +210,7 @@ class _OpsAccessor:
             return _OpsAccessor(self._series, full)
         resolved = key if key is not None else full
 
-        def call(*rest: "Union[Series, int, float, str]") -> object:
+        def call(*rest: Series | int | float | str) -> object:
             return _ops.run(resolved, self._series, *rest)
 
         call.__name__ = name
@@ -242,10 +239,10 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
     # here, and __new__ hands back the Series a native importer built.
     def __new__(
         cls,
-        data: "Union[Series[Scalar], Sequence[object]]" = (),
-        name: Optional[builtins.str] = None,
-        dtype: "Union[DType, int, pa.DataType, None]" = None,
-    ) -> "Series[Scalar]":
+        data: Series[Scalar] | Sequence[object] = (),
+        name: builtins.str | None = None,
+        dtype: DType | int | pa.DataType | None = None,
+    ) -> Series[Scalar]:
         if cls is not Series:
             raise TypeError(
                 "Series cannot be subclassed: the native calls build the class bound by "
@@ -265,56 +262,56 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
     # left to do after __new__.
     @overload
     def __init__(
-        self: "Series[bool]",
+        self: Series[bool],
         data: Sequence[bool],
-        name: Optional[builtins.str] = None,
-        dtype: "Union[DType, int, pa.DataType, None]" = None,
+        name: builtins.str | None = None,
+        dtype: DType | int | pa.DataType | None = None,
     ) -> None: ...
     @overload
     def __init__(
-        self: "Series[int]",
+        self: Series[int],
         data: Sequence[int],
-        name: Optional[builtins.str] = None,
-        dtype: "Union[DType, int, pa.DataType, None]" = None,
+        name: builtins.str | None = None,
+        dtype: DType | int | pa.DataType | None = None,
     ) -> None: ...
     @overload
     def __init__(
-        self: "Series[float]",
+        self: Series[float],
         data: Sequence[float],
-        name: Optional[builtins.str] = None,
-        dtype: "Union[DType, int, pa.DataType, None]" = None,
+        name: builtins.str | None = None,
+        dtype: DType | int | pa.DataType | None = None,
     ) -> None: ...
     @overload
     def __init__(
-        self: "Series[builtins.str]",
+        self: Series[builtins.str],
         data: Sequence[builtins.str],
-        name: Optional[builtins.str] = None,
-        dtype: "Union[DType, int, pa.DataType, None]" = None,
+        name: builtins.str | None = None,
+        dtype: DType | int | pa.DataType | None = None,
     ) -> None: ...
     @overload
     def __init__(
         self,
-        data: "Union[Series[Scalar], Sequence[object]]" = (),
-        name: Optional[builtins.str] = None,
-        dtype: "Union[DType, int, pa.DataType, None]" = None,
+        data: Series[Scalar] | Sequence[object] = (),
+        name: builtins.str | None = None,
+        dtype: DType | int | pa.DataType | None = None,
     ) -> None: ...
     def __init__(
         self,
-        data: "Union[Series[Scalar], Sequence[object]]" = (),
-        name: Optional[builtins.str] = None,
-        dtype: "Union[DType, int, pa.DataType, None]" = None,
+        data: Series[Scalar] | Sequence[object] = (),
+        name: builtins.str | None = None,
+        dtype: DType | int | pa.DataType | None = None,
     ) -> None:
         pass
 
     @classmethod
-    def from_arrow(cls, arr: "Union[pa.Array, pa.ChunkedArray]") -> "Series":
+    def from_arrow(cls, arr: pa.Array | pa.ChunkedArray) -> Series:
         """Import a ``pyarrow.Array`` (or any ``__arrow_c_array__`` provider),
         zero-copy via the Arrow C Data Interface. A ``pyarrow.ChunkedArray``
         (or any ``__arrow_c_stream__`` provider) keeps one chunk per batch."""
         return _series_from_arrow(arr)
 
     @classmethod
-    def from_pandas(cls, s: "pd.Series") -> "Series":
+    def from_pandas(cls, s: pd.Series) -> Series:
         """Import a ``pandas.Series`` through NumPy, with no pyarrow: a NaN in a
         float column and a ``NaT`` or ``NA`` read as null, a categorical as its
         values, a zoned ``datetime64`` as a zoned timestamp. An Arrow-backed
@@ -329,7 +326,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         return out
 
     @classmethod
-    def from_polars(cls, s: "pl.Series") -> "Series":
+    def from_polars(cls, s: pl.Series) -> Series:
         """Import a ``polars.Series`` with no pyarrow. The name is ``s.name``;
         polars' default name ``""`` means no name."""
         try:
@@ -342,7 +339,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         return out
 
     @classmethod
-    def from_numpy(cls, a: "np.ndarray") -> "Series":
+    def from_numpy(cls, a: np.ndarray) -> Series:
         """Import a NumPy array with no pyarrow: a 1-D C-contiguous fixed-width
         numeric array borrows the array's buffer; other numbers, bools,
         ``datetime64``, ``timedelta64``, text, bytes and object arrays are
@@ -360,8 +357,8 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
 
     @classmethod
     def from_list(
-        cls, values: Sequence[object], dtype: "Union[DType, int, pa.DataType, None]" = None
-    ) -> "Series":
+        cls, values: Sequence[object], dtype: DType | int | pa.DataType | None = None
+    ) -> Series:
         """Import a Python sequence with no pyarrow: bool, int, float, str,
         bytes, ``datetime.datetime`` (naive or aware), ``date``, ``time``,
         ``timedelta`` and ``decimal.Decimal`` values, ``None`` for null. Int
@@ -386,12 +383,12 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         pa = _require_pyarrow()
         return _series_from_arrow(pa.array(values, type=dtype))
 
-    def to_arrow(self) -> "pa.Array":
+    def to_arrow(self) -> pa.Array:
         """This column as a ``pyarrow.Array`` (zero-copy via the C Data
         Interface)."""
         return _require_pyarrow().array(self)
 
-    def to_pandas(self, *, arrow: bool = False, nullable: bool = False) -> "pd.Series":
+    def to_pandas(self, *, arrow: bool = False, nullable: bool = False) -> pd.Series:
         """This column as a pandas Series: a NumPy dtype by default (a copy,
         built natively with no pyarrow), except that a dictionary-encoded string
         column is ``category`` and an integer, bool or string column that holds
@@ -410,9 +407,9 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         if arrow and nullable:
             raise ValueError("to_pandas: pass either arrow=True or nullable=True, not both")
         if arrow:
-            out = _to_pandas(self.to_arrow(), arrow)
+            out = cast("pd.Series", _to_pandas(self.to_arrow(), arrow))
         else:
-            import pandas as pd  # ty: ignore[import-not-found]
+            import pandas as pd
 
             values = _pandas_nullable(self) if nullable else None
             if values is None:
@@ -421,7 +418,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         out.name = self.name
         return out
 
-    def to_numpy(self) -> "np.ndarray":
+    def to_numpy(self) -> np.ndarray:
         """This column as a NumPy array, built natively with no pyarrow.
 
         A flat, non-null, fixed-width numeric column is a zero-copy view of the
@@ -434,7 +431,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         and maps are object arrays of Python objects."""
         return _native_numpy(self)
 
-    def to_polars(self) -> "pl.Series":
+    def to_polars(self) -> pl.Series:
         """This column as a polars Series. Where the extension has Arrow
         support, every column but a Float16 or decimal one comes through the
         Arrow PyCapsule interface (polars >= 1.3; an older polars raises its own
@@ -443,22 +440,20 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         38). A dictionary column becomes ``Categorical``. The polars Series
         takes this name, ``""`` when there is none."""
         try:
-            import polars as pl  # ty: ignore[import-not-found]
+            import polars as pl
         except ImportError:
             raise ImportError(
                 "polars is required for to_polars(). Install with: pip install polars"
             ) from None
         if _polars_via_arrow(self):
-            out = pl.Series(self)  # type: ignore[arg-type]
+            out = pl.Series(self)
         else:
             out = _polars_native(self, pl)
         return out.alias(self.name or "")
 
-    def __array__(
-        self, dtype: "Optional[np.dtype]" = None, copy: Optional[bool] = None
-    ) -> "np.ndarray":
+    def __array__(self, dtype: np.dtype | None = None, copy: bool | None = None) -> np.ndarray:
         """NumPy array protocol, so ``np.asarray(series)`` works."""
-        import numpy as np  # ty: ignore[import-not-found]
+        import numpy as np
 
         return np.asarray(self.to_numpy(), dtype=dtype)
 
@@ -469,10 +464,10 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
 
     # builtins.slice (not bare `slice`): ty otherwise binds it to Series.slice.
     @overload
-    def __getitem__(self, key: int) -> Optional[T_co]: ...
+    def __getitem__(self, key: int) -> T_co | None: ...
     @overload
     def __getitem__(self, key: builtins.slice) -> Self: ...
-    def __getitem__(self, key: "Union[int, builtins.slice]") -> "Union[Self, Optional[T_co]]":
+    def __getitem__(self, key: int | builtins.slice) -> Self | T_co | None:
         """``s[i]`` returns the element as a Python scalar; ``s[a:b]`` returns a
         Series (step-1 slices only)."""
         if isinstance(key, slice):
@@ -487,7 +482,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         idx = key + len(self) if key < 0 else key
         return super().item(idx)
 
-    def item(self, i: Optional[int] = None) -> Optional[T_co]:
+    def item(self, i: int | None = None) -> T_co | None:
         """The element at row ``i``; with no ``i`` the only element of a
         one-element Series (pandas ``item()``)."""
         if i is None:
@@ -496,71 +491,75 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             i = 0
         return super().item(i)
 
-    def rfloordiv(self, other: _Scalar) -> "Series[Scalar]":
+    def rfloordiv(self, other: _Scalar) -> Series[Scalar]:
         return other // self if isinstance(other, Series) else self.__rfloordiv__(other)
 
-    def rmod(self, other: _Scalar) -> "Series[Scalar]":
+    def rmod(self, other: _Scalar) -> Series[Scalar]:
         return other % self if isinstance(other, Series) else self.__rmod__(other)
 
-    def rpow(self, other: _Scalar) -> "Series[Scalar]":
+    def rpow(self, other: _Scalar) -> Series[Scalar]:
         return other**self if isinstance(other, Series) else self.__rpow__(other)
 
-    def divmod(self, other: _SeriesOrScalar) -> "Tuple[Series[Scalar], Series[Scalar]]":
+    def divmod(self, other: _SeriesOrScalar) -> tuple[Series[Scalar], Series[Scalar]]:
         return self // other, self % other
 
-    def rdivmod(self, other: _Scalar) -> "Tuple[Series[Scalar], Series[Scalar]]":
+    def rdivmod(self, other: _Scalar) -> tuple[Series[Scalar], Series[Scalar]]:
         return other // self, other % self
 
     # Comparisons return a boolean mask Series, ``==`` and ``!=`` included,
     # as pandas and polars; a Series is therefore unhashable, as theirs are.
     # A string scalar compares the text of a String column.
-    __hash__ = None  # type: ignore[assignment]
+    if TYPE_CHECKING:
 
-    def gt(self, value: _Scalar) -> "Series[bool]":
+        def __hash__(self) -> NoReturn: ...
+    else:
+        __hash__ = None
+
+    def gt(self, value: _Scalar) -> Series[bool]:
         """Boolean mask where the value is greater than ``value``."""
         return self > value
 
-    def ge(self, value: _Scalar) -> "Series[bool]":
+    def ge(self, value: _Scalar) -> Series[bool]:
         """Boolean mask where the value is greater than or equal to ``value``."""
         return self >= value
 
-    def lt(self, value: _Scalar) -> "Series[bool]":
+    def lt(self, value: _Scalar) -> Series[bool]:
         """Boolean mask where the value is less than ``value``."""
         return self < value
 
-    def le(self, value: _Scalar) -> "Series[bool]":
+    def le(self, value: _Scalar) -> Series[bool]:
         """Boolean mask where the value is less than or equal to ``value``."""
         return self <= value
 
-    def eq(self, value: _Scalar) -> "Series[bool]":
+    def eq(self, value: _Scalar) -> Series[bool]:
         """Boolean mask where the value equals ``value``."""
         return self == value
 
-    def ne(self, value: _Scalar) -> "Series[bool]":
+    def ne(self, value: _Scalar) -> Series[bool]:
         """Boolean mask where the value does not equal ``value``."""
         return self != value
 
     # -- native engine ops (SIMD kernels, wrapped from the C extension) --------
 
-    def truediv(self, other: "Union[Series, int, float]") -> "Series[float]":
+    def truediv(self, other: Series | int | float) -> Series[float]:
         """True division (the polars name; ``div`` and ``divide`` are the
         pandas ones): integer operands widen to Float64 first. The engine's
         integer-truncating kernel is ``ops.series.div``."""
         return self / other
 
-    def add(self, other: "_SeriesOrScalar") -> "Series":
+    def add(self, other: _SeriesOrScalar) -> Series:
         """``self + other``; ``other`` is a Series or a scalar."""
-        return self + other  # type: ignore[operator]
+        return self + other
 
-    def sub(self, other: "_SeriesOrScalar") -> "Series":
+    def sub(self, other: _SeriesOrScalar) -> Series:
         """``self - other``; ``other`` is a Series or a scalar."""
-        return self - other  # type: ignore[operator]
+        return self - other
 
-    def mul(self, other: "_SeriesOrScalar") -> "Series":
+    def mul(self, other: _SeriesOrScalar) -> Series:
         """``self * other``; ``other`` is a Series or a scalar."""
-        return self * other  # type: ignore[operator]
+        return self * other
 
-    def apply(self, func: "Callable[[T_co], _R]") -> "Series[_R]":
+    def apply(self, func: Callable[[T_co], _R]) -> Series[_R]:
         """``func`` over each element (pandas ``Series.apply``), engine-first:
         the function is traced once with a symbolic column and, when it builds
         a column expression, runs fused in the engine; a ``@jit.series`` or
@@ -570,7 +569,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
 
         return cast("Series[_R]", apply_series(self, func, "Series.apply"))
 
-    def map(self, func: "Callable[[T_co], _R]") -> "Series[_R]":
+    def map(self, func: Callable[[T_co], _R]) -> Series[_R]:
         """``func`` over each element; the pandas ``Series.map`` spelling of
         :meth:`apply`."""
         from ._apply import apply_series
@@ -590,24 +589,24 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             DType.UINT32,
             DType.UINT64,
         ],
-    ) -> "Series[int]": ...
+    ) -> Series[int]: ...
     @overload
-    def cast(self, dtype: Literal[DType.FLOAT32, DType.FLOAT64]) -> "Series[float]": ...
+    def cast(self, dtype: Literal[DType.FLOAT32, DType.FLOAT64]) -> Series[float]: ...
     @overload
-    def cast(self, dtype: Literal[DType.BOOL]) -> "Series[bool]": ...
+    def cast(self, dtype: Literal[DType.BOOL]) -> Series[bool]: ...
     @overload
-    def cast(self, dtype: Literal[DType.STRING, DType.LARGE_STRING]) -> "Series[builtins.str]": ...
+    def cast(self, dtype: Literal[DType.STRING, DType.LARGE_STRING]) -> Series[builtins.str]: ...
     @overload
-    def cast(self, dtype: "builtins.type[int]") -> "Series[int]": ...
+    def cast(self, dtype: builtins.type[bool]) -> Series[bool]: ...
     @overload
-    def cast(self, dtype: "builtins.type[float]") -> "Series[float]": ...
+    def cast(self, dtype: builtins.type[int]) -> Series[int]: ...
     @overload
-    def cast(self, dtype: "builtins.type[bool]") -> "Series[bool]": ...
+    def cast(self, dtype: builtins.type[float]) -> Series[float]: ...
     @overload
-    def cast(self, dtype: "builtins.type[builtins.str]") -> "Series[builtins.str]": ...
+    def cast(self, dtype: builtins.type[builtins.str]) -> Series[builtins.str]: ...
     @overload
-    def cast(self, dtype: "Union[builtins.str, int, DType, builtins.type]") -> "Series[Scalar]": ...
-    def cast(self, dtype: "Union[builtins.str, int, DType, builtins.type]") -> "Series[Scalar]":
+    def cast(self, dtype: builtins.str | int | DType | builtins.type) -> Series[Scalar]: ...
+    def cast(self, dtype: builtins.str | int | DType | builtins.type) -> Series[Scalar]:
         """Cast to ``dtype``: a :class:`~dftracer.utils.enums.DType`, its
         int code, a dtype name (``"int64"``, ``"Float64"``, case-insensitive;
         matches the ``DType`` member names), a Python type (``str``, ``int``,
@@ -627,15 +626,15 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             ).capitalize()  # the engine says true/false; Python says True/False
         return out
 
-    def compare_series(self, other: "Series", op: int) -> "Series[bool]":
+    def compare_series(self, other: Series, op: int) -> Series[bool]:
         """Row by row against ``other`` (``op`` a ``_CMP_*`` code): a Bool
         mask, null where either side is null; the engine's
         ``dftu.series.compare_series``. ``==`` / ``<`` / ... spell it."""
         return cast("Series[bool]", _ext.op_run("dftu.series.compare_series", self, other, op))
 
     def compare(
-        self, other: "Series", keep_shape: bool = False, keep_equal: bool = False
-    ) -> "DataFrame":
+        self, other: Series, keep_shape: bool = False, keep_equal: bool = False
+    ) -> DataFrame:
         """The rows where this Series and ``other`` differ, as a frame with
         ``index`` (the row position), ``self`` and ``other`` columns, as pandas
         ``Series.compare``. ``keep_shape`` keeps every row; ``keep_equal``
@@ -656,13 +655,13 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             left, right = left.where(mask), right.where(mask)
         return DataFrame({"index": frame["index"], "self": left, "other": right})
 
-    def __and__(self, other: "Series") -> "Series[bool]":
+    def __and__(self, other: Series) -> Series[bool]:
         return self.logical(_LOGICAL_AND, other)
 
-    def __or__(self, other: "Series") -> "Series[bool]":
+    def __or__(self, other: Series) -> Series[bool]:
         return self.logical(_LOGICAL_OR, other)
 
-    def __invert__(self) -> "Series[bool]":
+    def __invert__(self) -> Series[bool]:
         return self.logical_not()
 
     def clear(self, n: int = 0) -> Self:
@@ -674,17 +673,17 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             return self.head(0)
         return self.take([-1] * n)
 
-    def radians(self) -> "Series[float]":
+    def radians(self) -> Series[float]:
         """Each value, in degrees, as radians (Float64; polars ``radians``)."""
         return cast("Series[float]", self.astype("float64") * (math.pi / 180.0))
 
-    def degrees(self) -> "Series[float]":
+    def degrees(self) -> Series[float]:
         """Each value, in radians, as degrees (Float64; polars ``degrees``)."""
         return cast("Series[float]", self.astype("float64") * (180.0 / math.pi))
 
     def value_counts(
         self, normalize: bool = False, sort: bool = True, ascending: bool = False
-    ) -> "DataFrame":
+    ) -> DataFrame:
         """A ``value`` / ``count`` frame of the distinct values, most frequent
         first (the pandas arguments: ``normalize`` reports a ``proportion``
         column instead, ``ascending`` flips the order, ``sort=False`` keeps
@@ -704,11 +703,11 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
 
     def clip(
         self,
-        lower: Union[int, float, None] = None,
-        upper: Union[int, float, None] = None,
+        lower: int | float | None = None,
+        upper: int | float | None = None,
         *,
-        lower_bound: Union[int, float, None] = None,
-        upper_bound: Union[int, float, None] = None,
+        lower_bound: int | float | None = None,
+        upper_bound: int | float | None = None,
     ) -> Self:
         """Clamp to ``[lower, upper]`` (``lower_bound`` / ``upper_bound``, the
         polars keywords, name the same two bounds). One bound is enough:
@@ -748,9 +747,9 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         method: Literal["average", "min", "max", "dense", "ordinal", "first"] = "average",
         descending: bool = False,
         *,
-        ascending: Optional[bool] = None,
+        ascending: bool | None = None,
         pct: bool = False,
-    ) -> "Series[float]":
+    ) -> Series[float]:
         """Rank each element (1-based); ties per ``method``. Always returns a
         Float64 Series, matching pandas ``rank()`` (even ``method="dense"``,
         which pandas also returns as float). Call ``.astype("int64")`` on the
@@ -764,13 +763,13 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             descending = not ascending
         return super().rank(method, descending, pct)
 
-    def expanding(self) -> "_Expanding":
+    def expanding(self) -> _Expanding:
         """The window from the first row to each row (pandas ``expanding``):
         ``.sum() .mean() .min() .max() .count() .var() .std()``, each from
         the cumulative kernels."""
         return _Expanding(self)
 
-    def cut(self, breaks: "Series", right: bool = False, outer: bool = True) -> "Series[int]":
+    def cut(self, breaks: Series, right: bool = False, outer: bool = True) -> Series[int]:
         """Bin each value by the ascending ``breaks``. By default the intervals are
         ``[a, b)`` and the bin is the count of breaks at or below the value
         (0 to ``len(breaks)``). ``right=True`` closes each interval on the right,
@@ -780,9 +779,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         flags = (1 if right else 0) | (0 if outer else 2)
         return super().cut(breaks, flags)
 
-    def where(
-        self, cond: "Series", other: "Union[Series, int, float, None]" = None
-    ) -> "Series[Scalar]":
+    def where(self, cond: Series, other: Series | int | float | None = None) -> Series[Scalar]:
         """This value where ``cond`` is true, else ``other`` (pandas
         ``Series.where``; a scalar ``other`` broadcasts, a float one widens
         the result to Float64; a null ``other`` (``None`` or ``pd.NA``, the
@@ -791,29 +788,25 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         a, b = self._arms(other)
         return _ext.Series.where(a, cond, b)
 
-    def mask(
-        self, cond: "Series", other: "Union[Series, int, float, None]" = None
-    ) -> "Series[Scalar]":
+    def mask(self, cond: Series, other: Series | int | float | None = None) -> Series[Scalar]:
         """``other`` where ``cond`` is true (null by default), else this value
         (pandas ``Series.mask``)."""
         a, b = self._arms(other)
         return _ext.Series.where(b, cond, a)
 
-    def _arms(
-        self, other: "Union[Series, int, float, None]"
-    ) -> "Tuple[Series[Scalar], Series[Scalar]]":
+    def _arms(self, other: Series | int | float | None) -> tuple[Series[Scalar], Series[Scalar]]:
         if isinstance(other, Series):
             return self, other
         if other is None or type(other).__name__ == "NAType":
             return self, _ext._series_nulls(int(self.dtype), len(self))
         if isinstance(other, bool) or not isinstance(other, (int, float)):
             raise TypeError("other must be a Series, a number or null")
-        me = self
+        me: Series[Scalar] = self
         if isinstance(other, float) and self.dtype not in (DType.FLOAT32, DType.FLOAT64):
             me = self.astype(DType.FLOAT64)
         return me, me.full_like(other)
 
-    def full_like(self, value: Union[int, float]) -> "Series[Scalar]":
+    def full_like(self, value: int | float) -> Series[Scalar]:
         """A Series of this length holding ``value`` on every row, in this
         Series' numeric type (Float64 for a float value, Int64 when this
         Series is not numeric). The constant rides the null mask (0 / 1,
@@ -823,12 +816,12 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             target = DType.FLOAT64 if isinstance(value, float) else DType.INT64
         return self.is_null().cast(target).mul_scalar(0).add_scalar(value)
 
-    def mode(self) -> "Series[Scalar]":
+    def mode(self) -> Series[Scalar]:
         """The most frequent value as a one-element Series (pandas returns every
         mode; the engine keeps one)."""
         return Series([super().mode()])
 
-    def gather(self, indices: "Union[Series, Sequence[int]]") -> Self:
+    def gather(self, indices: Series | Sequence[int]) -> Self:
         """The rows at ``indices`` (a Series or a list; any order, repeats
         allowed); ``take`` is the pandas name."""
         return super().take(_indices(indices))
@@ -850,22 +843,22 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         """Whether the Series has no elements (polars ``is_empty``)."""
         return len(self) == 0
 
-    def first(self) -> "Optional[T_co]":
+    def first(self) -> T_co | None:
         """The first element, ``None`` when the Series is empty (polars
         ``first``)."""
         return self[0] if len(self) else None
 
-    def last(self) -> "Optional[T_co]":
+    def last(self) -> T_co | None:
         """The last element, ``None`` when the Series is empty (polars
         ``last``)."""
         return self[len(self) - 1] if len(self) else None
 
-    def is_not_nan(self) -> "Series[bool]":
+    def is_not_nan(self) -> Series[bool]:
         """Bool mask of the values that are not NaN (a null stays null; polars
         ``is_not_nan``)."""
         return self.is_nan().logical_not()
 
-    def is_in(self, values: "Union[Series, Sequence[object]]") -> "Series[bool]":
+    def is_in(self, values: Series | Sequence[object]) -> Series[bool]:
         """Bool mask: the value is one of ``values`` (a Series or a list; an
         empty list matches nothing)."""
         if not isinstance(values, Series):
@@ -876,13 +869,13 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             values = Series.from_list(items)
         return super().is_in(values)
 
-    def shift(self, n: int = 1, *, periods: Optional[int] = None) -> Self:
+    def shift(self, n: int = 1, *, periods: int | None = None) -> Self:
         """Shift by ``n`` rows (``periods`` is the pandas spelling)."""
         if periods is not None:
             n = periods
         return super().shift(n)
 
-    def diff(self, n: int = 1, *, periods: Optional[int] = None) -> Self:
+    def diff(self, n: int = 1, *, periods: int | None = None) -> Self:
         """Each value minus the one ``n`` rows before it (after it for a
         negative ``n``); the first ``n`` rows are null. ``periods`` is the
         pandas spelling."""
@@ -892,7 +885,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             return super().diff()
         return cast("Self", self - self.shift(n))
 
-    def sample(self, n: int, seed: int = 0, *, random_state: Optional[int] = None) -> Self:
+    def sample(self, n: int, seed: int = 0, *, random_state: int | None = None) -> Self:
         """A deterministic ``n``-row sample (``random_state`` is the pandas
         spelling of ``seed``)."""
         if random_state is not None:
@@ -900,7 +893,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         return super().sample(n, seed)
 
     @property
-    def ops(self: "Series[Scalar]") -> "_OpsAccessor":
+    def ops(self: Series[Scalar]) -> _OpsAccessor:
         """Call any registered op (built-in or @jit.series user op) as a method,
         e.g. ``s.ops.series.add(other)``, ``s.ops.series.count()``, ``s.ops.stats.zscore()``."""
         return _OpsAccessor(self)
@@ -919,29 +912,29 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         return self.length
 
     @property
-    def shape(self) -> Tuple[int]:
+    def shape(self) -> tuple[int]:
         return (self.length,)
 
     def len(self) -> int:
         return self.length
 
-    def to_list(self) -> List[Optional[T_co]]:  # ty: ignore[invalid-generic-class]
+    def to_list(self) -> builtins.list[T_co | None]:
         values = self._to_pylist()
         if self.is_json:
             return [None if v is None else json.loads(cast(str, v)) for v in values]
         return values
 
-    def var(self, ddof: int = 1) -> Optional[float]:
+    def var(self, ddof: int = 1) -> float | None:
         """Variance with ``ddof`` degrees of freedom (0 = population, 1 =
         sample, the pandas default); the engine has kernels for those two.
         None for a column with no present value; NaN below ``ddof + 1``
         present values, as pandas."""
         return self.variance(_ddof_sample(ddof))
 
-    def std(self, ddof: int = 1) -> Optional[float]:
+    def std(self, ddof: int = 1) -> float | None:
         return self.stddev(_ddof_sample(ddof))
 
-    def skew(self, bias: bool = False) -> Optional[float]:
+    def skew(self, bias: bool = False) -> float | None:
         """The pandas ``skew`` (unbiased; NaN below three values and for a
         constant column, as pandas 3) by default; ``bias=True`` is the polars population
         skewness (NaN for a constant column, null for no values)."""
@@ -949,7 +942,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             return _population(self, self.count(), _ext.Series.skew(self))
         return _ext.Series.skew_unbiased(self)
 
-    def kurtosis(self, fisher: bool = True, bias: bool = True) -> Optional[float]:
+    def kurtosis(self, fisher: bool = True, bias: bool = True) -> float | None:
         """The polars ``kurtosis``, with the polars defaults: the population
         excess kurtosis (NaN for one value or a constant column, null for no
         values); ``fisher=False`` adds 3, ``bias=False`` is the unbiased
@@ -993,18 +986,18 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
     # ``str`` and ``list`` shadow the builtins in this class's annotations, so
     # they read ``builtins.str`` and ``builtins.list`` here.
     @property
-    def str(self: "Series[builtins.str]") -> "_StrAccessor":
+    def str(self: Series[builtins.str]) -> _StrAccessor:
         return _StrAccessor(self)
 
     @property
-    def list(self: "Series[Scalar]") -> "_ListAccessor":
+    def list(self: Series[Scalar]) -> _ListAccessor:
         return _ListAccessor(self)
 
     @property
-    def dt(self: "Series[Scalar]") -> "_DtAccessor":
+    def dt(self: Series[Scalar]) -> _DtAccessor:
         return _DtAccessor(self)
 
-    def __reduce__(self) -> "Tuple[Callable[[bytes], Series], Tuple[bytes, ...]]":
+    def __reduce__(self) -> tuple[Callable[[bytes], Series], tuple[bytes, ...]]:
         return (_series_from_bytes, (self.to_bytes(),))
 
     # BEGIN GENERATED aliases from _aliases.py by scripts/gen_pyi.py
@@ -1051,11 +1044,11 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
     # END GENERATED aliases
 
 
-def _is_constant(s: "Series") -> bool:
+def _is_constant(s: Series) -> bool:
     return s.min() == s.max()
 
 
-def _population(s: "Series", n: int, value: float) -> Optional[float]:
+def _population(s: Series, n: int, value: float) -> float | None:
     """The polars population moment: null with no values, NaN for one value or
     a constant column."""
     if n == 0:
@@ -1065,7 +1058,7 @@ def _population(s: "Series", n: int, value: float) -> Optional[float]:
     return value
 
 
-def _first_set(*values: "Optional[Union[int, float]]") -> "Optional[Union[int, float]]":
+def _first_set(*values: int | float | None) -> int | float | None:
     for v in values:
         if v is not None:
             return v
@@ -1100,13 +1093,13 @@ class _Expanding:
     def max(self) -> Series:
         return self._series.cummax().ffill()
 
-    def count(self) -> "Series[int]":
+    def count(self) -> Series[int]:
         return self._series.notna().astype(DType.INT64).cumsum()
 
-    def mean(self) -> "Series[float]":
+    def mean(self) -> Series[float]:
         return self.sum().astype("float64") / self.count()
 
-    def var(self) -> "Series[float]":
+    def var(self) -> Series[float]:
         s = self._series.astype("float64")
         n = self.count()
         total = s.cumsum().ffill()
@@ -1115,7 +1108,7 @@ class _Expanding:
         divisor = n.sub_scalar(1).where(n.ge(2), n.shift(len(n)))
         return (squares - total * total / n) / divisor
 
-    def std(self) -> "Series[float]":
+    def std(self) -> Series[float]:
         return self.var().sqrt()
 
 
@@ -1132,8 +1125,10 @@ class _DtAccessor(_ext.DtAccessor):
     every part is UTC, as pandas on a tz-naive column."""
 
     __slots__ = ("_unit", "_given")
+    _unit: str
+    _given: Optional[str]
 
-    def __new__(cls, series: Series, unit: Optional[str] = None) -> "_DtAccessor":
+    def __new__(cls, series: Series, unit: str | None = None) -> _DtAccessor:
         self = _dt_accessor_new(cls, series)
         self._given = unit
         unit = dt_unit(series.type, series.time_unit, unit)
@@ -1142,7 +1137,7 @@ class _DtAccessor(_ext.DtAccessor):
         self._unit = unit
         return self
 
-    def __call__(self, unit: str) -> "_DtAccessor":
+    def __call__(self, unit: str) -> _DtAccessor:
         return _DtAccessor(self._s, unit)
 
     def _part(self, code: int) -> Series:
@@ -1267,7 +1262,7 @@ class _DtAccessor(_ext.DtAccessor):
         """The ISO 8601 week number, from 1."""
         return self._part(14)
 
-    def epoch(self, time_unit: str = "us") -> "Series[int]":
+    def epoch(self, time_unit: str = "us") -> Series[int]:
         """Each instant as an integer count of ``time_unit`` (``"ns"``,
         ``"us"``, ``"ms"``, ``"s"`` or ``"d"``) since the epoch, from the
         column's own unit; a coarser unit floors."""
@@ -1281,7 +1276,7 @@ class _DtAccessor(_ext.DtAccessor):
         )
         return cast("Series[int]", run_column_op(self._s, spec, None))
 
-    def isocalendar(self) -> "DataFrame":
+    def isocalendar(self) -> DataFrame:
         """A frame of ISO ``year``, ``week`` and ``day`` (Monday = 1)."""
         from .dataframe import DataFrame
 
@@ -1293,23 +1288,23 @@ class _DtAccessor(_ext.DtAccessor):
             }
         )
 
-    def _every(self, freq: "Union[int, str]") -> int:
+    def _every(self, freq: int | str) -> int:
         return rule_to_units(freq, self._unit)
 
-    def floor(self, freq: "Union[int, str]") -> Series:
+    def floor(self, freq: int | str) -> Series:
         """Each instant floored to a multiple of ``freq`` (``"5min"``, ``"1h"``,
         ``"D"``, or a count of the column's units); ``ceil`` and ``round``
         (half to even) likewise."""
         return self._s.dt_round(self._every(freq), 0)
 
-    def truncate(self, every: "Union[int, str]") -> Series:
+    def truncate(self, every: int | str) -> Series:
         """As :meth:`floor` (the polars name)."""
         return self.floor(every)
 
-    def ceil(self, freq: "Union[int, str]") -> Series:
+    def ceil(self, freq: int | str) -> Series:
         return self._s.dt_round(self._every(freq), 1)
 
-    def round(self, freq: "Union[int, str]") -> Series:
+    def round(self, freq: int | str) -> Series:
         return self._s.dt_round(self._every(freq), 2)
 
     def normalize(self) -> Series:
@@ -1322,7 +1317,7 @@ class _DtAccessor(_ext.DtAccessor):
         per_second = 1_000_000_000 / FREQ_NS[self._unit]
         return self._s.astype("float64") / per_second
 
-    def _total(self, ns_per_result: int) -> "Series[int]":
+    def _total(self, ns_per_result: int) -> Series[int]:
         # Whole units, truncated toward zero as polars does, in integer
         # arithmetic from the column's ticks.
         ticks = self._s.astype("int64")
@@ -1335,26 +1330,26 @@ class _DtAccessor(_ext.DtAccessor):
             "Series[int]", floored + ((ticks < 0) & (floored * step != ticks)).astype("int64")
         )
 
-    def total_days(self) -> "Series[int]":
+    def total_days(self) -> Series[int]:
         """Whole days of each Duration (truncated toward zero, Int64)."""
         return self._total(86_400_000_000_000)
 
-    def total_hours(self) -> "Series[int]":
+    def total_hours(self) -> Series[int]:
         return self._total(3_600_000_000_000)
 
-    def total_minutes(self) -> "Series[int]":
+    def total_minutes(self) -> Series[int]:
         return self._total(60_000_000_000)
 
-    def total_milliseconds(self) -> "Series[int]":
+    def total_milliseconds(self) -> Series[int]:
         return self._total(1_000_000)
 
-    def total_microseconds(self) -> "Series[int]":
+    def total_microseconds(self) -> Series[int]:
         return self._total(1_000)
 
-    def total_nanoseconds(self) -> "Series[int]":
+    def total_nanoseconds(self) -> Series[int]:
         return self._total(1)
 
-    def timestamp(self, time_unit: str = "us") -> "Series[int]":
+    def timestamp(self, time_unit: str = "us") -> Series[int]:
         """The polars name of :meth:`epoch`."""
         return self.epoch(time_unit)
 
@@ -1362,23 +1357,23 @@ class _DtAccessor(_ext.DtAccessor):
         """The polars name of :meth:`strftime`."""
         return self.strftime(format)
 
-    def min(self) -> "Optional[_Temporal]":
+    def min(self) -> _Temporal | None:
         """The earliest instant as a ``datetime`` (or the value ``to_list``
         gives for the column's type), None when no value is valid."""
         at = self._s.arg_min()
         return None if at < 0 else cast("_Temporal", self._s.gather([at]).to_list()[0])
 
-    def max(self) -> "Optional[_Temporal]":
+    def max(self) -> _Temporal | None:
         """The latest instant, as :meth:`min`."""
         at = self._s.arg_max()
         return None if at < 0 else cast("_Temporal", self._s.gather([at]).to_list()[0])
 
     @property
-    def tz(self) -> Optional[str]:
+    def tz(self) -> str | None:
         """The zone name of a Timestamp column, or None when naive."""
         return self._s.timezone or None
 
-    def tz_localize(self, tz: Optional[str]) -> Series:
+    def tz_localize(self, tz: str | None) -> Series:
         """A naive Timestamp column marked as ``tz`` (pandas
         ``tz_localize``); ``None`` strips the zone of an aware one. The
         engine has no zone database, so only ``"UTC"`` (and its spellings)
@@ -1394,7 +1389,7 @@ class _DtAccessor(_ext.DtAccessor):
             )
         return self._s.with_timezone(tz)
 
-    def tz_convert(self, tz: Optional[str]) -> Series:
+    def tz_convert(self, tz: str | None) -> Series:
         """The same instants shown in zone ``tz`` (pandas ``tz_convert``):
         the type's zone changes, no tick moves. Needs a tz-aware column;
         ``None`` gives the naive UTC column. The ``.dt`` calendar parts
@@ -1430,11 +1425,11 @@ class _StrAccessor(_ext.StrAccessor):
         pat: str,
         case: bool = True,
         flags: int = 0,
-        na: Optional[bool] = None,
+        na: bool | None = None,
         regex: bool = True,
         *,
-        literal: Optional[bool] = None,
-    ) -> "Series[bool]":
+        literal: bool | None = None,
+    ) -> Series[bool]:
         """Whether each value contains ``pat``: a regex search by default (the
         pandas and Polars default), the substring kernel with ``regex=False``
         or ``literal=True``. ``na`` replaces a null result. ``flags`` has no
@@ -1451,7 +1446,7 @@ class _StrAccessor(_ext.StrAccessor):
             out = self._s.to_lowercase().str_contains(pat.lower())
         return out if na is None else out.fill_null(na)
 
-    def match(self, pat: str) -> "Series[bool]":
+    def match(self, pat: str) -> Series[bool]:
         """Regex anchored at the start, as pandas ``str.match``."""
         return self._s.str_search("^(?:" + pat + ")")
 
@@ -1462,8 +1457,8 @@ class _StrAccessor(_ext.StrAccessor):
         n: int = -1,
         regex: bool = False,
         *,
-        literal: Optional[bool] = None,
-    ) -> "Series[builtins.str]":
+        literal: bool | None = None,
+    ) -> Series[builtins.str]:
         """Replace every occurrence (``n=-1``) or the first (``n=1``) of the
         literal ``pat``; with ``regex=True`` (or ``literal=False``) ``pat`` is
         a regex and ``repl`` may use ``$n`` / ``${name}`` group references, for
@@ -1480,7 +1475,7 @@ class _StrAccessor(_ext.StrAccessor):
             return self._s.str_replace(pat, repl)
         raise NotImplementedError("replace() supports n=-1 (all) or n=1 (first)")
 
-    def replace_all(self, pat: str, repl: str, *, literal: bool = False) -> "Series[builtins.str]":
+    def replace_all(self, pat: str, repl: str, *, literal: bool = False) -> Series[builtins.str]:
         """Replace every match of the regex ``pat`` (the Polars default; ``repl``
         may use ``$n`` / ``${name}``), or every occurrence of the literal ``pat``
         with ``literal=True``."""
@@ -1488,29 +1483,29 @@ class _StrAccessor(_ext.StrAccessor):
             return self._s.str_replace_all(pat, repl)
         return self._s.str_regex_replace(pat, repl)
 
-    def head(self, n: int) -> "Series[builtins.str]":
+    def head(self, n: int) -> Series[builtins.str]:
         """The first ``n`` bytes of each value (polars ``head``)."""
         return self._s.str_slice(0, n)
 
-    def tail(self, n: int) -> "Series[builtins.str]":
+    def tail(self, n: int) -> Series[builtins.str]:
         """The last ``n`` bytes of each value (polars ``tail``)."""
         return self._s.str_slice(-n, n)
 
-    def slice(self, start: int = 0, stop: Optional[int] = None) -> "Series[builtins.str]":
+    def slice(self, start: int = 0, stop: int | None = None) -> Series[builtins.str]:
         """Byte substring ``[start, stop)``, as pandas ``str.slice``."""
         length = -1 if stop is None else max(stop - start, 0)
         return self._s.str_slice(start, length)
 
     def pad(
         self, width: int, side: Literal["left", "right"] = "left", fillchar: str = " "
-    ) -> "Series[builtins.str]":
+    ) -> Series[builtins.str]:
         if side == "left":
             return self._s.str_pad_start(width, fillchar)
         if side == "right":
             return self._s.str_pad_end(width, fillchar)
         raise ValueError("side must be 'left' or 'right'")
 
-    def split(self, pat: str, expand: bool = False) -> "Union[Series, DataFrame]":
+    def split(self, pat: str, expand: bool = False) -> Series | DataFrame:
         """Split on the literal ``pat``: a ``list<string>`` Series, or with
         ``expand=True`` one String column per piece named ``"0"``, ``"1"``,
         ... (a short row's missing pieces are null), as pandas."""
@@ -1523,38 +1518,38 @@ class _StrAccessor(_ext.StrAccessor):
         n = int(width) if width is not None else 0
         return DataFrame.from_dict({str(i): parts.list_get(i) for i in range(n)})
 
-    def regex_replace(self, pat: str, to: str) -> "Series[builtins.str]":
+    def regex_replace(self, pat: str, to: str) -> Series[builtins.str]:
         """:meth:`Series.str_regex_replace`: ``$n``/``${name}`` group references."""
         return self._s.str_regex_replace(pat, to)
 
-    def extract(self, pat: str, group: int = 1) -> "Series[builtins.str]":
+    def extract(self, pat: str, group: int = 1) -> Series[builtins.str]:
         """The capture ``group`` of the first regex ``pat`` match per row, null
         where there is no match (pandas ``str.extract`` for one group)."""
         return self._s.str_extract(pat, group)
 
     # polars
-    def pad_start(self, width: int, fill: str = " ") -> "Series[builtins.str]":
+    def pad_start(self, width: int, fill: str = " ") -> Series[builtins.str]:
         return self._s.str_pad_start(width, fill)
 
-    def pad_end(self, width: int, fill: str = " ") -> "Series[builtins.str]":
+    def pad_end(self, width: int, fill: str = " ") -> Series[builtins.str]:
         return self._s.str_pad_end(width, fill)
 
     # pandas, the rest of the surface (ASCII; a byte outside ASCII is left as
     # it is by the case forms and fails the character classes).
-    def capitalize(self) -> "Series[builtins.str]":
+    def capitalize(self) -> Series[builtins.str]:
         return self._s.str_case(0)
 
-    def to_titlecase(self) -> "Series[builtins.str]":
+    def to_titlecase(self) -> Series[builtins.str]:
         """As :meth:`title` (the polars name)."""
         return self._s.str_case(1)
 
-    def title(self) -> "Series[builtins.str]":
+    def title(self) -> Series[builtins.str]:
         return self._s.str_case(1)
 
-    def swapcase(self) -> "Series[builtins.str]":
+    def swapcase(self) -> Series[builtins.str]:
         return self._s.str_case(2)
 
-    def isalnum(self) -> "Series[bool]":
+    def isalnum(self) -> Series[bool]:
         return self._s.str_is(0)
 
     def encode(self, encoding: str = "utf-8", errors: str = "strict") -> Series:
@@ -1575,36 +1570,36 @@ class _StrAccessor(_ext.StrAccessor):
             raise ValueError("decode: a value is not valid utf-8")
         return out
 
-    def isascii(self) -> "Series[bool]":
+    def isascii(self) -> Series[bool]:
         """True where every character is ASCII, as ``str.isascii`` (an empty
         string too)."""
         return self.fullmatch("[\\x00-\\x7f]*")
 
-    def isalpha(self) -> "Series[bool]":
+    def isalpha(self) -> Series[bool]:
         return self._s.str_is(1)
 
-    def isdigit(self) -> "Series[bool]":
+    def isdigit(self) -> Series[bool]:
         return self._s.str_is(2)
 
-    def isdecimal(self) -> "Series[bool]":
+    def isdecimal(self) -> Series[bool]:
         return self._s.str_is(3)
 
-    def isnumeric(self) -> "Series[bool]":
+    def isnumeric(self) -> Series[bool]:
         return self._s.str_is(4)
 
-    def isspace(self) -> "Series[bool]":
+    def isspace(self) -> Series[bool]:
         return self._s.str_is(5)
 
-    def islower(self) -> "Series[bool]":
+    def islower(self) -> Series[bool]:
         return self._s.str_is(6)
 
-    def isupper(self) -> "Series[bool]":
+    def isupper(self) -> Series[bool]:
         return self._s.str_is(7)
 
-    def istitle(self) -> "Series[bool]":
+    def istitle(self) -> Series[bool]:
         return self._s.str_is(8)
 
-    def index(self, sub: str) -> "Series[int]":
+    def index(self, sub: str) -> Series[int]:
         """As :meth:`find`, but a row without ``sub`` raises (``ValueError``),
         as Python's ``str.index``."""
         out = self._s.str_find(sub)
@@ -1612,25 +1607,25 @@ class _StrAccessor(_ext.StrAccessor):
             raise ValueError(f"index: substring {sub!r} not found in every row")
         return out
 
-    def rindex(self, sub: str) -> "Series[int]":
+    def rindex(self, sub: str) -> Series[int]:
         out = self._s.str_rfind(sub)
         if out.eq(-1).any():
             raise ValueError(f"rindex: substring {sub!r} not found in every row")
         return out
 
-    def repeat(self, repeats: int) -> "Series[builtins.str]":
+    def repeat(self, repeats: int) -> Series[builtins.str]:
         return self._s.str_repeat(repeats)
 
-    def center(self, width: int, fillchar: str = " ") -> "Series[builtins.str]":
+    def center(self, width: int, fillchar: str = " ") -> Series[builtins.str]:
         return self._s.str_center(width, fillchar)
 
-    def ljust(self, width: int, fillchar: str = " ") -> "Series[builtins.str]":
+    def ljust(self, width: int, fillchar: str = " ") -> Series[builtins.str]:
         return self._s.str_pad_end(width, fillchar)
 
-    def rjust(self, width: int, fillchar: str = " ") -> "Series[builtins.str]":
+    def rjust(self, width: int, fillchar: str = " ") -> Series[builtins.str]:
         return self._s.str_pad_start(width, fillchar)
 
-    def cat(self, others: "Union[Series, str, None]" = None, sep: str = "") -> "Union[Series, str]":
+    def cat(self, others: Series | str | None = None, sep: str = "") -> Series | str:
         """Row-wise concatenation with ``others`` (a Series or one string),
         ``sep`` between; with no ``others`` the rows joined into one string,
         as pandas."""
@@ -1647,15 +1642,13 @@ class _StrAccessor(_ext.StrAccessor):
         """Every regex match per row, as a List<String>."""
         return self._s.str_findall(pat)
 
-    def normalize(self, form: NormForm) -> "Series[builtins.str]":
+    def normalize(self, form: NormForm) -> Series[builtins.str]:
         """Each string in the Unicode normalization ``form`` (``"NFC"``,
         ``"NFKC"``, ``"NFD"`` or ``"NFKD"``); a value that is not valid UTF-8
         is null."""
         return self._s.str_normalize(norm_form_code(form))
 
-    def translate(
-        self, table: Mapping[Union[int, str], Union[str, int, None]]
-    ) -> "Series[builtins.str]":
+    def translate(self, table: Mapping[int | str, str | int | None]) -> Series[builtins.str]:
         """Each codepoint replaced by ``table`` (as ``str.translate``): a key is
         a codepoint or a one-character string, a value a string, a codepoint or
         ``None`` to delete it. A codepoint not in the table is kept."""
@@ -1684,7 +1677,7 @@ class _StrAccessor(_ext.StrAccessor):
         )
         return self._s.str_wrap(width, flags)
 
-    def extractall(self, pat: str) -> "DataFrame":
+    def extractall(self, pat: str) -> DataFrame:
         """Every regex ``pat`` match per row, one output row per match: the
         columns ``row`` (input position) and ``match`` (0-based order within
         the row), then one per capture group, named as in ``pat`` or
@@ -1711,23 +1704,23 @@ class _StrAccessor(_ext.StrAccessor):
         groups = {c: _StrAccessor(m).extract(pat, g) for g, c in enumerate(labels, 1)}
         return DataFrame.from_dict({"row": rows["row"], "match": rows["match"], **groups})
 
-    def partition(self, sep: str = " ", expand: bool = True) -> "Union[Series, DataFrame]":
+    def partition(self, sep: str = " ", expand: bool = True) -> Series | DataFrame:
         """Split at the first ``sep`` into (head, sep, tail): a frame of
         columns ``"0"``, ``"1"``, ``"2"`` (or with ``expand=False`` the
         List<String>); ``rpartition`` splits at the last."""
         return self._expand3(self._s.str_partition(sep, False), expand)
 
-    def rpartition(self, sep: str = " ", expand: bool = True) -> "Union[Series, DataFrame]":
+    def rpartition(self, sep: str = " ", expand: bool = True) -> Series | DataFrame:
         return self._expand3(self._s.str_partition(sep, True), expand)
 
-    def _expand3(self, parts: Series, expand: bool) -> "Union[Series, DataFrame]":
+    def _expand3(self, parts: Series, expand: bool) -> Series | DataFrame:
         if not expand:
             return parts
         from .dataframe import DataFrame
 
         return DataFrame.from_dict({str(i): parts.list_get(i) for i in range(3)})
 
-    def rsplit(self, pat: str, expand: bool = False) -> "Union[Series, DataFrame]":
+    def rsplit(self, pat: str, expand: bool = False) -> Series | DataFrame:
         """As :meth:`split` (every occurrence, so the same parts)."""
         return self.split(pat, expand)
 
@@ -1746,15 +1739,15 @@ class _StrAccessor(_ext.StrAccessor):
         return s.str_slice(i, 1).where(s.str_len_bytes().gt(i), nulls)
 
     def slice_replace(
-        self, start: int = 0, stop: Optional[int] = None, repl: str = ""
-    ) -> "Series[builtins.str]":
+        self, start: int = 0, stop: int | None = None, repl: str = ""
+    ) -> Series[builtins.str]:
         """Bytes ``[start, stop)`` of each row replaced with ``repl``."""
         s = self._s
         head = s.str_slice(0, start)
         tail = s.str_slice(stop, 1 << 62) if stop is not None else s.str_slice(0, 0)
         return head.str_cat(Series.from_list([repl] * len(s))).str_cat(tail)
 
-    def get_dummies(self, sep: str = "|") -> "DataFrame":
+    def get_dummies(self, sep: str = "|") -> DataFrame:
         """One column per distinct ``sep``-separated token, 1 where a row
         holds it (pandas ``str.get_dummies``)."""
         from .dataframe import DataFrame
@@ -1772,9 +1765,9 @@ def _series_from_bytes(data: bytes) -> Series:
     return _ext._series_from_bytes(data)
 
 
-def _series_from_arrow(array: "Union[pa.Array, pa.ChunkedArray]") -> Series:
+def _series_from_arrow(array: pa.Array | pa.ChunkedArray) -> Series:
     """Import a pyarrow Array into a native Series wrapper."""
-    return _arrow_native("_series_from_arrow")(array)
+    return cast("Series", _arrow_native("_series_from_arrow")(array))
 
 
 _install_aliases("Series", Series)

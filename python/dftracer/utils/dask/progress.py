@@ -6,14 +6,11 @@ from __future__ import annotations
 from typing import (
     TYPE_CHECKING,
     Callable,
-    Dict,
-    Optional,
-    Tuple,
     TypedDict,
 )
 
 if TYPE_CHECKING:
-    from dask.distributed import Client  # ty: ignore[import-not-found]
+    from dask.distributed import Client
 
 
 # All worker-side progress (parse, scan, ...) is published to one topic with a
@@ -66,15 +63,13 @@ class ProgressAggregator:
     """Subscribe to the progress topic and forward aggregated
     (done, total, phase) to `callback`, summing per (phase, batch)."""
 
-    def __init__(
-        self, client: "Client", callback: Optional[Callable[[int, int, str], None]]
-    ) -> None:
+    def __init__(self, client: Client, callback: Callable[[int, int, str], None] | None) -> None:
         self._client = client
         self._callback = callback
-        self._state: Dict[Tuple[str, str], Tuple[int, int]] = {}
+        self._state: dict[tuple[str, str], tuple[int, int]] = {}
 
     # event is a distributed topic payload: (timestamp, msg).
-    def _handler(self, event: "Tuple[float, _ProgressMsg]") -> None:
+    def _handler(self, event: tuple[float, _ProgressMsg]) -> None:
         if self._callback is None:
             return
         try:
@@ -87,16 +82,15 @@ class ProgressAggregator:
         except Exception:
             pass
 
-    def __enter__(self) -> "ProgressAggregator":
+    def __enter__(self) -> ProgressAggregator:
         # NullClient (in-process) has no pub/sub topic; skip quietly.
         if self._callback is not None and hasattr(self._client, "subscribe_topic"):
             self._client.subscribe_topic(_PROGRESS_TOPIC, self._handler)
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc: object) -> None:
         if self._callback is not None and hasattr(self._client, "unsubscribe_topic"):
             try:
                 self._client.unsubscribe_topic(_PROGRESS_TOPIC)
             except Exception:
                 pass
-        return False

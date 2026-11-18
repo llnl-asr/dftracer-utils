@@ -10,23 +10,21 @@ import os
 from typing import (
     TYPE_CHECKING,
     Callable,
-    List,
-    Optional,
-    Tuple,
+    Sequence,
 )
 
-from ..dask.index import distributed_index
+from ..dask.index import DistributedIndexResult, distributed_index
 from ..dftracer_utils_ext import INPUT_FILE_PATTERNS
 from ..index import AggregationConfig, open_readonly_indexer
 
 if TYPE_CHECKING:
-    from dask.distributed import Client  # ty: ignore[import-not-found]
+    from dask.distributed import Client
 
 
 def resolve_trace_inputs(
     trace_path: str,
-    trace_groups: Optional[List[str]],
-) -> Tuple[str, Optional[List[str]]]:
+    trace_groups: list[str] | None,
+) -> tuple[str, list[str] | None]:
     """Resolve a trace path into (directory, files) for the Indexer.
 
     If trace_path is a directory containing manifest.json and trace_groups is
@@ -35,12 +33,12 @@ def resolve_trace_inputs(
     """
     if not os.path.isdir(trace_path):
         matched = glob.glob(trace_path) if "*" in trace_path else [trace_path]
-        files = [
+        found = [
             f
             for f in matched
             if any(fnmatch.fnmatchcase(os.path.basename(f), p) for p in INPUT_FILE_PATTERNS)
         ]
-        return "", files
+        return "", found
 
     manifest_path = os.path.join(trace_path, "manifest.json")
     if not os.path.isfile(manifest_path):
@@ -52,7 +50,7 @@ def resolve_trace_inputs(
             )
         return trace_path, None
 
-    with open(manifest_path, "r") as f:
+    with open(manifest_path) as f:
         manifest = json.load(f)
     group_map = manifest.get("groups") or {}
 
@@ -64,7 +62,7 @@ def resolve_trace_inputs(
             f"available groups: {sorted(group_map.keys())}"
         )
 
-    files: List[str] = []
+    files: list[str] = []
     for g in selected:
         subdir = os.path.join(trace_path, group_map[g])
         for pattern in INPUT_FILE_PATTERNS:
@@ -72,7 +70,7 @@ def resolve_trace_inputs(
     return "", files
 
 
-def active_client() -> "Optional[Client]":
+def active_client() -> Client | None:
     """The active Dask client, or None when ``dask.distributed`` is not installed
     or no client is active."""
     try:
@@ -86,7 +84,7 @@ def active_client() -> "Optional[Client]":
 
 
 def count_index_files(
-    files: List[str], index_dir: str, ignored_patterns: Tuple[str, ...] = ()
+    files: list[str], index_dir: str, ignored_patterns: tuple[str, ...] = ()
 ) -> int:
     """Distinct data files in the index, skipping paths containing any of
     `ignored_patterns`.
@@ -119,12 +117,12 @@ def index_dir_for(trace_path: str) -> str:
 
 
 def build_index_distributed(
-    files,
-    index_dir="",
-    client=None,
-    aggregation=None,
-    progress: Optional[Callable[[int, int, str], None]] = None,
-):
+    files: str | os.PathLike[str] | Sequence[str | os.PathLike[str]],
+    index_dir: str = "",
+    client: Client | None = None,
+    aggregation: AggregationConfig | None = None,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> DistributedIndexResult:
     """Build the dftracer index across a Dask cluster.
 
     Workers write their files straight into the index. Every build fills in the
@@ -153,13 +151,13 @@ def build_index_distributed(
 
 
 def ensure_index(
-    trace_path,
-    trace_groups,
-    time_interval_ms,
-    client=None,
-    progress: Optional[Callable[[int, int, str], None]] = None,
+    trace_path: str,
+    trace_groups: list[str] | None,
+    time_interval_ms: float | str,
+    client: Client | None = None,
+    progress: Callable[[int, int, str], None] | None = None,
     group_by_file: bool = True,
-):
+) -> None:
     """Build (or refresh) the dftracer index for `trace_path` via Dask.
 
     Idempotent: dftracer-utils skips files whose tiers already exist, so repeat
@@ -178,7 +176,7 @@ def ensure_index(
         return
     index_dir = index_dir_for(trace_path)
     build_index_distributed(
-        directory or files,
+        directory or files or [],
         index_dir=index_dir,
         client=client,
         aggregation=AggregationConfig(

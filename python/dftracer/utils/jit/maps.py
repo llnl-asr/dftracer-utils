@@ -15,14 +15,10 @@ from typing import (
     Any,
     Callable,
     ClassVar,
-    Dict,
     Generic,
-    List,
     Literal,
     Mapping,
-    Optional,
     Protocol,
-    Tuple,
     TypeVar,
     Union,
     cast,
@@ -68,10 +64,10 @@ class Map(Generic[K, V]):
 
     def __init__(
         self,
-        key_types: "Tuple[TypeTag[object], ...]",
-        values: Tuple[Monoid, ...],
+        key_types: tuple[TypeTag[object], ...],
+        values: tuple[Monoid, ...],
         is_product: bool,
-        value_names: Tuple[str, ...] | None = None,
+        value_names: tuple[str, ...] | None = None,
     ) -> None:
         self.key_types = key_types
         self.values = values
@@ -119,9 +115,9 @@ class Mask(Protocol):
     """A Bool column built from comparisons in an ``@jit.each_batch`` body.
     Authoring-only: the body is AST-compiled, never executed."""
 
-    def __and__(self, other: "Mask") -> "Mask": ...
-    def __or__(self, other: "Mask") -> "Mask": ...
-    def __invert__(self) -> "Mask": ...
+    def __and__(self, other: Mask) -> Mask: ...
+    def __or__(self, other: Mask) -> Mask: ...
+    def __invert__(self) -> Mask: ...
     def sum(self) -> int: ...
     def count(self) -> int: ...
 
@@ -133,50 +129,46 @@ class Column(Protocol[N]):
     scan state. Authoring-only: the body is AST-compiled, never executed."""
 
     @overload
-    def __add__(self, other: "int | Column[int]") -> "Column[N]": ...
+    def __add__(self, other: int | Column[int]) -> Column[N]: ...
     @overload
-    def __add__(self, other: "float | Column[float]") -> "Column[float]": ...
+    def __add__(self, other: float | Column[float]) -> Column[float]: ...
     @overload
-    def __sub__(self, other: "int | Column[int]") -> "Column[N]": ...
+    def __sub__(self, other: int | Column[int]) -> Column[N]: ...
     @overload
-    def __sub__(self, other: "float | Column[float]") -> "Column[float]": ...
+    def __sub__(self, other: float | Column[float]) -> Column[float]: ...
     @overload
-    def __mul__(self, other: "int | Column[int]") -> "Column[N]": ...
+    def __mul__(self, other: int | Column[int]) -> Column[N]: ...
     @overload
-    def __mul__(self, other: "float | Column[float]") -> "Column[float]": ...
+    def __mul__(self, other: float | Column[float]) -> Column[float]: ...
     @overload
-    def __radd__(self, other: int) -> "Column[N]": ...
+    def __radd__(self, other: int) -> Column[N]: ...
     @overload
-    def __radd__(self, other: float) -> "Column[float]": ...
+    def __radd__(self, other: float) -> Column[float]: ...
     @overload
-    def __rsub__(self, other: int) -> "Column[N]": ...
+    def __rsub__(self, other: int) -> Column[N]: ...
     @overload
-    def __rsub__(self, other: float) -> "Column[float]": ...
+    def __rsub__(self, other: float) -> Column[float]: ...
     @overload
-    def __rmul__(self, other: int) -> "Column[N]": ...
+    def __rmul__(self, other: int) -> Column[N]: ...
     @overload
-    def __rmul__(self, other: float) -> "Column[float]": ...
-    def __truediv__(self, other: "float | Column[int] | Column[float]") -> "Column[float]": ...
-    def __rtruediv__(self, other: float) -> "Column[float]": ...
-    def __neg__(self) -> "Column[N]": ...
-    def __abs__(self) -> "Column[N]": ...
-    def __lt__(self, other: "float | Column[int] | Column[float]") -> Mask: ...
-    def __le__(self, other: "float | Column[int] | Column[float]") -> Mask: ...
-    def __gt__(self, other: "float | Column[int] | Column[float]") -> Mask: ...
-    def __ge__(self, other: "float | Column[int] | Column[float]") -> Mask: ...
-    def __eq__(  # type: ignore[override]  # ty: ignore[incompatible-method-override]
-        self, other: "float | Column[int] | Column[float]"
-    ) -> Mask: ...
-    def __ne__(  # type: ignore[override]  # ty: ignore[incompatible-method-override]
-        self, other: "float | Column[int] | Column[float]"
-    ) -> Mask: ...
-    def __getitem__(self, mask: Mask) -> "Column[N]": ...
-    def abs(self) -> "Column[N]": ...
-    def clip(self, lo: N, hi: N) -> "Column[N]": ...
+    def __rmul__(self, other: float) -> Column[float]: ...
+    def __truediv__(self, other: float | Column[int] | Column[float]) -> Column[float]: ...
+    def __rtruediv__(self, other: float) -> Column[float]: ...
+    def __neg__(self) -> Column[N]: ...
+    def __abs__(self) -> Column[N]: ...
+    def __lt__(self, other: float | Column[int] | Column[float]) -> Mask: ...
+    def __le__(self, other: float | Column[int] | Column[float]) -> Mask: ...
+    def __gt__(self, other: float | Column[int] | Column[float]) -> Mask: ...
+    def __ge__(self, other: float | Column[int] | Column[float]) -> Mask: ...
+    def __eq__(self, other: float | Column[int] | Column[float]) -> Mask: ...
+    def __ne__(self, other: float | Column[int] | Column[float]) -> Mask: ...
+    def __getitem__(self, mask: Mask) -> Column[N]: ...
+    def abs(self) -> Column[N]: ...
+    def clip(self, lo: N, hi: N) -> Column[N]: ...
     def isnull(self) -> Mask: ...
     def notnull(self) -> Mask: ...
-    def fill_null(self, value: N) -> "Column[N]": ...
-    def where(self, mask: Mask, other: "N | Column[N]") -> "Column[N]": ...
+    def fill_null(self, value: N) -> Column[N]: ...
+    def where(self, mask: Mask, other: N | Column[N]) -> Column[N]: ...
     def sum(self) -> N: ...
     def min(self) -> N: ...
     def max(self) -> N: ...
@@ -192,9 +184,7 @@ class Frame(Protocol):
     column holds integers at run time."""
 
     @overload
-    def __getitem__(  # type: ignore[overload-overlap]
-        self, name: Literal["pid", "tid", "ts", "dur", "ph"]
-    ) -> Column[int]: ...
+    def __getitem__(self, name: Literal["pid", "tid", "ts", "dur", "ph"]) -> Column[int]: ...
     @overload
     def __getitem__(self, name: str) -> Column[float]: ...
 
@@ -202,7 +192,7 @@ class Frame(Protocol):
 class _Record:
     __slots__ = ("names", "monoids")
 
-    def __init__(self, names: Tuple[str, ...], monoids: Tuple[Monoid, ...]) -> None:
+    def __init__(self, names: tuple[str, ...], monoids: tuple[Monoid, ...]) -> None:
         self.names = names
         self.monoids = monoids
 
@@ -219,7 +209,7 @@ def record(cls: type[C]) -> type[C]:
     return cls
 
 
-def _value_spec(value: object) -> Tuple[Tuple[Monoid, ...], bool, Tuple[str, ...] | None]:
+def _value_spec(value: object) -> tuple[tuple[Monoid, ...], bool, tuple[str, ...] | None]:
     if isinstance(value, Monoid):
         return (value,), False, None
     rec = getattr(value, "_jit_record", None)
@@ -237,62 +227,62 @@ def _value_spec(value: object) -> Tuple[Tuple[Monoid, ...], bool, Tuple[str, ...
 # A dict/tuple of monoids is a product (value type Product); these precede the
 # generic `value: V` forms so it is not typed as a bare dict/tuple.
 @overload
-def map(*, key: "TypeTag[K1]", value: "Dict[str, Monoid]") -> "Map[Tuple[K1], Product]": ...
+def map(*, key: TypeTag[K1], value: dict[str, Monoid]) -> Map[tuple[K1], Product]: ...
 @overload
-def map(*, key: "TypeTag[K1]", value: "Tuple[Monoid, ...]") -> "Map[Tuple[K1], Product]": ...
+def map(*, key: TypeTag[K1], value: tuple[Monoid, ...]) -> Map[tuple[K1], Product]: ...
 @overload
-def map(*, key: "Tuple[TypeTag[K1]]", value: "Dict[str, Monoid]") -> "Map[Tuple[K1], Product]": ...
+def map(*, key: tuple[TypeTag[K1]], value: dict[str, Monoid]) -> Map[tuple[K1], Product]: ...
 @overload
-def map(*, key: "Tuple[TypeTag[K1]]", value: "Tuple[Monoid, ...]") -> "Map[Tuple[K1], Product]": ...
-@overload
-def map(
-    *, key: "Tuple[TypeTag[K1], TypeTag[K2]]", value: "Dict[str, Monoid]"
-) -> "Map[Tuple[K1, K2], Product]": ...
+def map(*, key: tuple[TypeTag[K1]], value: tuple[Monoid, ...]) -> Map[tuple[K1], Product]: ...
 @overload
 def map(
-    *, key: "Tuple[TypeTag[K1], TypeTag[K2]]", value: "Tuple[Monoid, ...]"
-) -> "Map[Tuple[K1, K2], Product]": ...
+    *, key: tuple[TypeTag[K1], TypeTag[K2]], value: dict[str, Monoid]
+) -> Map[tuple[K1, K2], Product]: ...
 @overload
 def map(
-    *, key: "Tuple[TypeTag[K1], TypeTag[K2], TypeTag[K3]]", value: "Dict[str, Monoid]"
-) -> "Map[Tuple[K1, K2, K3], Product]": ...
+    *, key: tuple[TypeTag[K1], TypeTag[K2]], value: tuple[Monoid, ...]
+) -> Map[tuple[K1, K2], Product]: ...
 @overload
 def map(
-    *, key: "Tuple[TypeTag[K1], TypeTag[K2], TypeTag[K3]]", value: "Tuple[Monoid, ...]"
-) -> "Map[Tuple[K1, K2, K3], Product]": ...
+    *, key: tuple[TypeTag[K1], TypeTag[K2], TypeTag[K3]], value: dict[str, Monoid]
+) -> Map[tuple[K1, K2, K3], Product]: ...
 @overload
 def map(
-    *, key: "Tuple[TypeTag[K1], TypeTag[K2], TypeTag[K3], TypeTag[K4]]", value: "Dict[str, Monoid]"
-) -> "Map[Tuple[K1, K2, K3, K4], Product]": ...
+    *, key: tuple[TypeTag[K1], TypeTag[K2], TypeTag[K3]], value: tuple[Monoid, ...]
+) -> Map[tuple[K1, K2, K3], Product]: ...
 @overload
 def map(
-    *, key: "Tuple[TypeTag[K1], TypeTag[K2], TypeTag[K3], TypeTag[K4]]", value: "Tuple[Monoid, ...]"
-) -> "Map[Tuple[K1, K2, K3, K4], Product]": ...
-@overload
-def map(*, key: "TypeTag[K1]", value: V) -> "Map[Tuple[K1], V]": ...
-@overload
-def map(*, key: "Tuple[TypeTag[K1]]", value: V) -> "Map[Tuple[K1], V]": ...
-@overload
-def map(*, key: "Tuple[TypeTag[K1], TypeTag[K2]]", value: V) -> "Map[Tuple[K1, K2], V]": ...
+    *, key: tuple[TypeTag[K1], TypeTag[K2], TypeTag[K3], TypeTag[K4]], value: dict[str, Monoid]
+) -> Map[tuple[K1, K2, K3, K4], Product]: ...
 @overload
 def map(
-    *, key: "Tuple[TypeTag[K1], TypeTag[K2], TypeTag[K3]]", value: V
-) -> "Map[Tuple[K1, K2, K3], V]": ...
+    *, key: tuple[TypeTag[K1], TypeTag[K2], TypeTag[K3], TypeTag[K4]], value: tuple[Monoid, ...]
+) -> Map[tuple[K1, K2, K3, K4], Product]: ...
+@overload
+def map(*, key: TypeTag[K1], value: V) -> Map[tuple[K1], V]: ...
+@overload
+def map(*, key: tuple[TypeTag[K1]], value: V) -> Map[tuple[K1], V]: ...
+@overload
+def map(*, key: tuple[TypeTag[K1], TypeTag[K2]], value: V) -> Map[tuple[K1, K2], V]: ...
 @overload
 def map(
-    *, key: "Tuple[TypeTag[K1], TypeTag[K2], TypeTag[K3], TypeTag[K4]]", value: V
-) -> "Map[Tuple[K1, K2, K3, K4], V]": ...
+    *, key: tuple[TypeTag[K1], TypeTag[K2], TypeTag[K3]], value: V
+) -> Map[tuple[K1, K2, K3], V]: ...
 @overload
 def map(
-    *, key: "Tuple[TypeTag[object], ...]", value: "Dict[str, Monoid]"
-) -> "Map[Tuple[object, ...], Product]": ...
+    *, key: tuple[TypeTag[K1], TypeTag[K2], TypeTag[K3], TypeTag[K4]], value: V
+) -> Map[tuple[K1, K2, K3, K4], V]: ...
 @overload
 def map(
-    *, key: "Tuple[TypeTag[object], ...]", value: "Tuple[Monoid, ...]"
-) -> "Map[Tuple[object, ...], Product]": ...
+    *, key: tuple[TypeTag[object], ...], value: dict[str, Monoid]
+) -> Map[tuple[object, ...], Product]: ...
 @overload
-def map(*, key: "Tuple[TypeTag[object], ...]", value: V) -> "Map[Tuple[object, ...], V]": ...
-def map(key: "Tuple[TypeTag[Any], ...] | TypeTag[Any]", value: object) -> "Map[Any, Any]":
+def map(
+    *, key: tuple[TypeTag[object], ...], value: tuple[Monoid, ...]
+) -> Map[tuple[object, ...], Product]: ...
+@overload
+def map(*, key: tuple[TypeTag[object], ...], value: V) -> Map[tuple[object, ...], V]: ...
+def map(key: tuple[TypeTag[Any], ...] | TypeTag[Any], value: object) -> Map[Any, Any]:
     """Declare a keyed accumulator: a typed-tuple key, and either one value
     reduction, a tuple of reductions (a positional product), a dict of
     name->reduction, or a :func:`record` class (both named products).
@@ -330,7 +320,7 @@ class Port(Protocol):
     to it; a :func:`consume` port reads that value as a plain scalar
     (``self.<port>``, 0 when no producer published this batch). Never instantiated."""
 
-    def __iadd__(self, x: float) -> "Port": ...
+    def __iadd__(self, x: float) -> Port: ...
 
 
 class Store(Generic[SK, SV]):
@@ -376,7 +366,7 @@ class StoreField:
     def __init__(
         self,
         name: str,
-        key_kinds: Tuple[str, ...],
+        key_kinds: tuple[str, ...],
         value_kind: str,
         index: int,
         is_tuple: bool,
@@ -399,7 +389,7 @@ class PlainField:
         self,
         name: str,
         kind: str,
-        key_types: "Tuple[TypeTag[object], ...]",
+        key_types: tuple[TypeTag[object], ...],
         elem: str,
         factory: bool,
     ) -> None:
@@ -413,7 +403,7 @@ class PlainField:
 _STATE_SKIP = frozenset({"config", "plan_duql"})
 
 
-def _state_elem(tp: object) -> "str | None":
+def _state_elem(tp: object) -> str | None:
     if tp is int:
         return "i64"
     if tp is float:
@@ -423,15 +413,15 @@ def _state_elem(tp: object) -> "str | None":
     return None
 
 
-def _state_key(tp: object) -> "Tuple[str, ...] | None":
+def _state_key(tp: object) -> tuple[str, ...] | None:
     """The key components (``"i64"`` or ``"str"``) of a state key annotation: an
     ``int``, a ``str`` or a non-empty ``Tuple`` of those."""
-    parts: Tuple[object, ...] = (tp,)
+    parts: tuple[object, ...] = (tp,)
     if get_origin(tp) is tuple:
         parts = get_args(tp)
         if not parts or parts == ((),) or parts[-1] is Ellipsis:
             return None
-    kinds: List[str] = []
+    kinds: list[str] = []
     for part in parts:
         kind = _state_elem(part)
         if kind is None or kind == "f64":
@@ -588,18 +578,18 @@ def _store_field(cls: type, attr: str, tp: object, index: int) -> StoreField:
     return StoreField(attr, keys, value, index, get_origin(args[0]) is tuple)
 
 
-def own_annotations(cls: type) -> Dict[str, object]:
+def own_annotations(cls: type) -> dict[str, object]:
     get = getattr(inspect, "get_annotations", None)
     if get is not None:
         return dict(get(cls))
     return dict(cls.__dict__.get("__annotations__", {}))
 
 
-def state_fields(cls: type) -> "Tuple[Dict[str, PlainField], Dict[str, StoreField]]":
+def state_fields(cls: type) -> tuple[dict[str, PlainField], dict[str, StoreField]]:
     """The plain-container scan-state and :class:`Store` fields ``cls`` declares
     by annotation."""
-    plains: Dict[str, PlainField] = {}
-    stores: Dict[str, StoreField] = {}
+    plains: dict[str, PlainField] = {}
+    stores: dict[str, StoreField] = {}
     own = own_annotations(cls)
     hints = type_hints(cls)
     for attr in own:
@@ -627,7 +617,7 @@ RESERVED_NAMESPACE = "dftu"
 class PortHandle:
     __slots__ = ("is_f64", "name", "role")
 
-    def __init__(self, name: "str | None", is_f64: bool, role: str) -> None:
+    def __init__(self, name: str | None, is_f64: bool, role: str) -> None:
         self.name = name
         self.is_f64 = is_f64
         self.role = role
@@ -646,7 +636,7 @@ def _check_port_name(fn: str, name: object) -> str:
     return name
 
 
-def _port_is_f64(fn: str, of: "TypeTag[object]") -> bool:
+def _port_is_f64(fn: str, of: TypeTag[object]) -> bool:
     if of is f64:
         return True
     if of is u64 or of is i64:
@@ -654,7 +644,7 @@ def _port_is_f64(fn: str, of: "TypeTag[object]") -> bool:
     raise JitError(f"jit.{fn}(of=...) must be jit.u64, jit.i64, or jit.f64")
 
 
-def publish(of: "TypeTag[object]" = u64) -> Port:
+def publish(of: TypeTag[object] = u64) -> Port:
     """Declare a batch-scoped publish port.
 
     Its wire id is derived from the attribute it is assigned to (package +
@@ -667,7 +657,7 @@ def publish(of: "TypeTag[object]" = u64) -> Port:
     return cast(Port, PortHandle(None, _port_is_f64("publish", of), "publish"))
 
 
-def consume(producer: "Port | str", of: "TypeTag[object]" = u64) -> Port:
+def consume(producer: Port | str, of: TypeTag[object] = u64) -> Port:
     """Declare a batch-scoped consume port wired to ``producer``.
 
     ``producer`` is the other plugin's :func:`publish` attribute itself
@@ -697,7 +687,7 @@ def consume(producer: "Port | str", of: "TypeTag[object]" = u64) -> Port:
 
 # ---- dataclass config ------------------------------------------------------
 
-_CFG_KINDS: Dict[type, str] = {bool: "bool", int: "int", float: "float", str: "str"}
+_CFG_KINDS: dict[type, str] = {bool: "bool", int: "int", float: "float", str: "str"}
 _CFG_NATIVE_KIND = {
     "bool": "DFTU_VAL_BOOL",
     "int": "DFTU_VAL_I64",
@@ -717,7 +707,7 @@ class CfgField:
         name: str,
         kind: str,
         optional: bool,
-        default: "Union[int, float, bool, str, None]",
+        default: int | float | bool | str | None,
         required: bool,
     ) -> None:
         self.name = name
@@ -730,7 +720,7 @@ class CfgField:
         # An optional field may be sent as null, so only the key is declared.
         return "DFTU_CONFIG_ANY" if self.optional else _CFG_NATIVE_KIND[self.kind]
 
-    def members(self) -> List[str]:
+    def members(self) -> list[str]:
         """The DftuCfg members of one loaded instance. A prefix per member kind
         keeps every name apart: ``v_`` value, ``l_`` string length, ``h_`` set."""
         n = self.name
@@ -744,11 +734,11 @@ class CfgField:
             out.append(f"int h_{n};")
         return out
 
-    def locals_(self) -> List[str]:
+    def locals_(self) -> list[str]:
         """The on_batch locals the body reads (``_cfg_``, ``_has_``); a string's
         interned id is ``_cfgs_`` and is declared where it is resolved."""
         n = self.name
-        out: List[str] = []
+        out: list[str] = []
         if self.kind != "str":
             ctype = "double" if self.kind == "float" else "int64_t"
             out += [f"    const {ctype} _cfg_{n} = _c->v_{n};", f"    (void)_cfg_{n};"]
@@ -766,7 +756,7 @@ class CfgField:
             return "1" if d else "0"
         return int_literal(int(d))
 
-    def factory_reads(self) -> List[str]:
+    def factory_reads(self) -> list[str]:
         """The factory statements that load the field into the instance's
         DftuCfg, falling back to the dataclass default when the key is absent
         and to unset when it is null."""
@@ -819,7 +809,7 @@ class CfgField:
         return out
 
 
-def _cfg_kind(tp: object) -> "Tuple[str, bool] | None":
+def _cfg_kind(tp: object) -> tuple[str, bool] | None:
     """(kind, is_optional) for a supported config field type, else None."""
     if isinstance(tp, type) and tp in _CFG_KINDS:
         return _CFG_KINDS[tp], False
@@ -832,14 +822,14 @@ def _cfg_kind(tp: object) -> "Tuple[str, bool] | None":
     return None
 
 
-def type_hints(obj: type) -> Dict[str, object]:
+def type_hints(obj: type) -> dict[str, object]:
     try:
         return get_type_hints(obj)
     except (NameError, TypeError):
         return dict(getattr(obj, "__dict__", {}).get("__annotations__", {}))
 
 
-def config_fields(cls: type) -> Dict[str, CfgField]:
+def config_fields(cls: type) -> dict[str, CfgField]:
     """The fields of the dataclass ``cls`` declares as ``config: Cfg``; empty
     when it declares none. Raises :class:`JitError` at the offending annotation
     for a config type that is not a dataclass or a field type that has no
@@ -854,7 +844,7 @@ def config_fields(cls: type) -> Dict[str, CfgField]:
             "config",
         )
     hints = type_hints(cfg_type)
-    fields: Dict[str, CfgField] = {}
+    fields: dict[str, CfgField] = {}
     for f in dataclasses.fields(cfg_type):
         if not f.name.isascii():
             raise class_error(cfg_type, f"config field '{f.name}' must have an ASCII name", f.name)
@@ -884,7 +874,7 @@ def config_fields(cls: type) -> Dict[str, CfgField]:
                 f"config field '{f.name}' has default {f.default!r}, not a {kind[0]}",
                 f.name,
             )
-        default = cast("Union[int, float, bool, str, None]", f.default) if has_default else None
+        default = cast("int | float | bool | str | None", f.default) if has_default else None
         if kind[0] == "float" and isinstance(default, float) and not math.isfinite(default):
             raise class_error(cfg_type, f"config field '{f.name}' default must be finite", f.name)
         fields[f.name] = CfgField(f.name, kind[0], kind[1], default, not has_default)
@@ -902,8 +892,8 @@ def _cfg_value_ok(kind: str, value: object) -> bool:
 
 
 def _check_cfg_value(
-    plugin: str, field: CfgField, value: "JSONValue"
-) -> "Union[int, float, bool, str, None]":
+    plugin: str, field: CfgField, value: JSONValue
+) -> int | float | bool | str | None:
     if value is None and field.optional:
         return None
     if not _cfg_value_ok(field.kind, value):
@@ -914,12 +904,10 @@ def _check_cfg_value(
         )
     if field.kind == "float":
         return float(cast(float, value))
-    return cast("Union[int, bool, str]", value)
+    return cast("int | bool | str", value)
 
 
-def plugin_config(
-    cls: type, config: "Optional[Mapping[str, JSONValue]]"
-) -> "Optional[Dict[str, JSONValue]]":
+def plugin_config(cls: type, config: Mapping[str, JSONValue] | None) -> dict[str, JSONValue] | None:
     """The load config for ``cls``, checked against its config dataclass.
 
     A plugin without a ``config: Cfg`` annotation gets ``config`` back as is.
@@ -938,7 +926,7 @@ def plugin_config(
             raise JitError(
                 f"{name} has no config field '{key}'; its fields are {', '.join(fields) or 'none'}"
             )
-    out: Dict[str, JSONValue] = {}
+    out: dict[str, JSONValue] = {}
     for fname, field in fields.items():
         if fname in given:
             value = given[fname]

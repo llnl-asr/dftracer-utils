@@ -7,7 +7,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Generic,
-    Tuple,
     overload,
 )
 
@@ -40,7 +39,7 @@ class Monoid:
 class Counter(Monoid):
     __slots__ = ()
 
-    def __iadd__(self, x: int) -> "Counter":
+    def __iadd__(self, x: int) -> Counter:
         raise NotImplementedError
 
     def observe(self, x: int) -> None: ...
@@ -49,7 +48,7 @@ class Counter(Monoid):
 class Sum(Monoid):
     __slots__ = ()
 
-    def __iadd__(self, x: float) -> "Sum":
+    def __iadd__(self, x: float) -> Sum:
         raise NotImplementedError
 
     def observe(self, x: float) -> None: ...
@@ -117,7 +116,7 @@ class Quantiles(Monoid):
 
     __slots__ = ("qs",)
 
-    def __init__(self, qs: "Tuple[float, ...]") -> None:
+    def __init__(self, qs: tuple[float, ...]) -> None:
         super().__init__("DFTU_AGG_PCT", param=qs[0], elem="f64")
         self.qs = qs
 
@@ -167,7 +166,7 @@ class _Accum(Monoid):
 
     __slots__ = ()
 
-    def __iadd__(self, x: "int | float") -> "_Accum":
+    def __iadd__(self, x: int | float) -> _Accum:
         raise NotImplementedError
 
     def observe(self, *args: object, **kwargs: object) -> None: ...
@@ -197,7 +196,7 @@ def sum() -> Sum:
     return Sum("DFTU_AGG_SUM", elem="f64")
 
 
-def _minmax_elem(op: str, of: "TypeTag[object]") -> str:
+def _minmax_elem(op: str, of: TypeTag[object]) -> str:
     dtype = DFT_DTYPES.get(of.dft)
     if dtype is None or not dtype.is_numeric:
         raise JitError(f"jit.{op}(of=...) must be a fixed-width int or float type")
@@ -205,10 +204,10 @@ def _minmax_elem(op: str, of: "TypeTag[object]") -> str:
 
 
 @overload
-def min() -> "Min[int]": ...
+def min() -> Min[int]: ...
 @overload
-def min(of: "TypeTag[T]") -> "Min[T]": ...
-def min(of: "TypeTag[Any]" = u64) -> "Min[Any]":
+def min(of: TypeTag[T]) -> Min[T]: ...
+def min(of: TypeTag[Any] = u64) -> Min[Any]:
     """A typed min value (default u64); ``of=`` picks the int or float element.
 
     ``.observe(v)`` contributes."""
@@ -216,22 +215,22 @@ def min(of: "TypeTag[Any]" = u64) -> "Min[Any]":
 
 
 @overload
-def max() -> "Max[int]": ...
+def max() -> Max[int]: ...
 @overload
-def max(of: "TypeTag[T]") -> "Max[T]": ...
-def max(of: "TypeTag[Any]" = u64) -> "Max[Any]":
+def max(of: TypeTag[T]) -> Max[T]: ...
+def max(of: TypeTag[Any] = u64) -> Max[Any]:
     """A typed max value (default u64); ``of=`` picks the int or float element.
 
     ``.observe(v)`` contributes."""
     return Max("DFTU_AGG_MAX", elem=_minmax_elem("max", of))
 
 
-def minf() -> "Min[float]":
+def minf() -> Min[float]:
     """A double min value; contribute with ``.observe(v)``."""
     return Min("DFTU_AGG_MIN", elem="f64")
 
 
-def maxf() -> "Max[float]":
+def maxf() -> Max[float]:
     """A double max value; contribute with ``.observe(v)``."""
     return Max("DFTU_AGG_MAX", elem="f64")
 
@@ -252,7 +251,7 @@ def prod() -> Monoid:
     return Monoid("DFTU_AGG_PROD", elem="f64")
 
 
-def _elem_of(fn: str, of: "TypeTag[object]") -> str:
+def _elem_of(fn: str, of: TypeTag[object]) -> str:
     if of is i64:
         return "i64"
     if of is str_:
@@ -261,10 +260,10 @@ def _elem_of(fn: str, of: "TypeTag[object]") -> str:
 
 
 @overload
-def set() -> "SetV[Str]": ...
+def set() -> SetV[Str]: ...
 @overload
-def set(of: "TypeTag[T]") -> "SetV[T]": ...
-def set(of: "TypeTag[Any]" = str_) -> "SetV[Any]":
+def set(of: TypeTag[T]) -> SetV[T]: ...
+def set(of: TypeTag[Any] = str_) -> SetV[Any]:
     """A set value collecting distinct elements added with ``.observe``.
 
     ``of=jit.str_`` (default) observes strings, ``of=jit.i64`` int64 values.
@@ -274,10 +273,10 @@ def set(of: "TypeTag[Any]" = str_) -> "SetV[Any]":
 
 
 @overload
-def list() -> "ListV[Str]": ...
+def list() -> ListV[Str]: ...
 @overload
-def list(of: "TypeTag[T]") -> "ListV[T]": ...
-def list(of: "TypeTag[Any]" = str_) -> "ListV[Any]":
+def list(of: TypeTag[T]) -> ListV[T]: ...
+def list(of: TypeTag[Any] = str_) -> ListV[Any]:
     """An ordered-list value collecting elements added with ``.append``.
 
     ``of=jit.str_`` (default) collects strings, ``of=jit.i64`` int64 values;
@@ -306,7 +305,7 @@ def stddev() -> Stddev:
 std = stddev
 
 
-def quantiles(qs: "Tuple[float, ...]" = (0.5, 0.9, 0.95, 0.99)) -> Quantiles:
+def quantiles(qs: tuple[float, ...] = (0.5, 0.9, 0.95, 0.99)) -> Quantiles:
     """A DDSketch quantile value; contribute with ``.observe(v)``.
 
     Materializes a ``count`` int64 column plus one f64 column per quantile in
@@ -410,10 +409,10 @@ def regr_r2() -> AggReduce:
 
 
 @overload
-def argmin() -> "ArgMin[Str]": ...
+def argmin() -> ArgMin[Str]: ...
 @overload
-def argmin(of: "TypeTag[T]") -> "ArgMin[T]": ...
-def argmin(of: "TypeTag[Any]" = str_) -> "ArgMin[Any]":
+def argmin(of: TypeTag[T]) -> ArgMin[T]: ...
+def argmin(of: TypeTag[Any] = str_) -> ArgMin[Any]:
     """An argmin value: keep the payload whose ``by=`` key is smallest.
 
     ``of=jit.str_`` (default) observes a string payload, ``of=jit.i64`` an
@@ -423,10 +422,10 @@ def argmin(of: "TypeTag[Any]" = str_) -> "ArgMin[Any]":
 
 
 @overload
-def argmax() -> "ArgMax[Str]": ...
+def argmax() -> ArgMax[Str]: ...
 @overload
-def argmax(of: "TypeTag[T]") -> "ArgMax[T]": ...
-def argmax(of: "TypeTag[Any]" = str_) -> "ArgMax[Any]":
+def argmax(of: TypeTag[T]) -> ArgMax[T]: ...
+def argmax(of: TypeTag[Any] = str_) -> ArgMax[Any]:
     """An argmax value: keep the payload whose ``by=`` key is largest.
 
     ``of=jit.str_`` (default) observes a string payload, ``of=jit.i64`` an
@@ -442,10 +441,10 @@ def _check_k(op: str, k: int) -> float:
 
 
 @overload
-def topk(k: int) -> "TopK[Str]": ...
+def topk(k: int) -> TopK[Str]: ...
 @overload
-def topk(k: int, of: "TypeTag[T]") -> "TopK[T]": ...
-def topk(k: int, of: "TypeTag[Any]" = str_) -> "TopK[Any]":
+def topk(k: int, of: TypeTag[T]) -> TopK[T]: ...
+def topk(k: int, of: TypeTag[Any] = str_) -> TopK[Any]:
     """A bounded top-k value: keep the k payloads at the k largest ``by=`` keys.
 
     ``of=jit.str_`` (default) observes string payloads, ``of=jit.i64`` int64
@@ -457,10 +456,10 @@ def topk(k: int, of: "TypeTag[Any]" = str_) -> "TopK[Any]":
 
 
 @overload
-def bottomk(k: int) -> "BottomK[Str]": ...
+def bottomk(k: int) -> BottomK[Str]: ...
 @overload
-def bottomk(k: int, of: "TypeTag[T]") -> "BottomK[T]": ...
-def bottomk(k: int, of: "TypeTag[Any]" = str_) -> "BottomK[Any]":
+def bottomk(k: int, of: TypeTag[T]) -> BottomK[T]: ...
+def bottomk(k: int, of: TypeTag[Any] = str_) -> BottomK[Any]:
     """A bounded bottom-k value: keep the k payloads at the k smallest ``by=``
     keys, mirroring :func:`topk`."""
     return BottomK(
@@ -472,10 +471,10 @@ def bottomk(k: int, of: "TypeTag[Any]" = str_) -> "BottomK[Any]":
 
 
 @overload
-def approx_topk(k: int) -> "ApproxTopK[Str]": ...
+def approx_topk(k: int) -> ApproxTopK[Str]: ...
 @overload
-def approx_topk(k: int, of: "TypeTag[T]") -> "ApproxTopK[T]": ...
-def approx_topk(k: int, of: "TypeTag[Any]" = str_) -> "ApproxTopK[Any]":
+def approx_topk(k: int, of: TypeTag[T]) -> ApproxTopK[T]: ...
+def approx_topk(k: int, of: TypeTag[Any] = str_) -> ApproxTopK[Any]:
     """An approximate heavy-hitters value: the k most FREQUENT observed values
     (SpaceSaving), in bounded memory. Contribute with ``.observe(value)``."""
     return ApproxTopK(
@@ -486,10 +485,10 @@ def approx_topk(k: int, of: "TypeTag[Any]" = str_) -> "ApproxTopK[Any]":
 
 
 @overload
-def sample(k: int) -> "Sample[Str]": ...
+def sample(k: int) -> Sample[Str]: ...
 @overload
-def sample(k: int, of: "TypeTag[T]") -> "Sample[T]": ...
-def sample(k: int, of: "TypeTag[Any]" = str_) -> "Sample[Any]":
+def sample(k: int, of: TypeTag[T]) -> Sample[T]: ...
+def sample(k: int, of: TypeTag[Any] = str_) -> Sample[Any]:
     """A deterministic mergeable sample of k items, a list<string> of their
     reprs; contribute with ``.observe(item)``."""
     return Sample("DFTU_AGG_SAMPLE", param=_check_k("sample", k), elem=_elem_of("sample", of))

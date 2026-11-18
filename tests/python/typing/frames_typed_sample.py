@@ -7,7 +7,7 @@ The frames subclass the native types, so a method that keeps the type returns
 ``Expr``; ``Expr`` becomes generic in a later step.
 """
 
-from typing import Dict, List, Sequence, Tuple, cast
+from typing import Dict, List, Optional, Tuple, cast
 
 from typing_extensions import assert_type
 
@@ -29,7 +29,7 @@ assert_type(df.shape, Tuple[int, int])
 assert_type(len(df), int)
 assert_type(df.num_rows, int)
 assert_type("x" in df, bool)
-assert_type(df.to_dict(), Dict[str, Sequence[object]])
+assert_type(df.to_dict(), Dict[str, List[Optional[Scalar]]])
 
 # DataFrame: methods that keep the type return Self.
 assert_type(df.head(), DataFrame)

@@ -4,7 +4,19 @@
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Set, Type, Union
+from types import TracebackType
+from typing import (
+    TYPE_CHECKING,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Type,
+    TypedDict,
+    Union,
+    cast,
+)
 
 from .dataframe import DataFrame
 from .dftracer_utils_ext import CheckpointIndexer as _NativeCheckpointIndexer
@@ -12,6 +24,9 @@ from .dftracer_utils_ext import Indexer as _NativeIndexer
 from .enums import coerce_bytes, coerce_duration
 from .runtime import Runtime, TaskHandle
 from .schemas import RecordSchema, schema_id
+
+if TYPE_CHECKING:
+    from .dftracer_utils_ext import IndexStatusDict
 
 DEFAULT_CHECKPOINT_SIZE = 32 * 1024 * 1024  # 32MB
 
@@ -78,6 +93,43 @@ class BloomConfig:
     expected_entries: int = 1024
 
 
+class ManifestExtension(TypedDict):
+    """One extension built for an indexed file (``Indexer.manifest``)."""
+
+    name: str
+    version: int
+    params_hash: str
+    ready: bool
+    current: bool
+
+
+class ManifestEntry(TypedDict):
+    """The extensions built for one indexed file (``Indexer.manifest``)."""
+
+    path: str
+    index_dir: str
+    extensions: List[ManifestExtension]
+
+
+class ExplainExtension(TypedDict):
+    """What one extension rules out of a query (``Indexer.explain``)."""
+
+    name: str
+    file_ruled_out: bool
+    removed: List[int]
+
+
+class ExplainEntry(TypedDict):
+    """Why a query reads the chunks it reads in one file (``Indexer.explain``)."""
+
+    path: str
+    indexed: bool
+    may_match: bool
+    chunks: int
+    read: List[int]
+    extensions: List[ExplainExtension]
+
+
 @dataclass
 class IndexStatus:
     """Status of index resolution.
@@ -101,7 +153,7 @@ class IndexStatus:
     truncated: List[str] = field(default_factory=list)
 
     @classmethod
-    def _from_dict(cls, result: dict) -> "IndexStatus":
+    def _from_dict(cls, result: "IndexStatusDict") -> "IndexStatus":
         """Build from the native status()/ensure()/build() result dict."""
         return cls(
             total_files=result["total_files"],
@@ -190,7 +242,7 @@ class Indexer:
         extensions: Optional[Sequence[str]] = None,
         memory_budget: Union[int, str] = 0,
         schema: "Union[str, Type[RecordSchema], None]" = None,
-    ):
+    ) -> None:
         checkpoint_size = coerce_bytes(checkpoint_size, "checkpoint_size")
 
         agg_config = aggregation_config if aggregation_config is not None else AggregationConfig()
@@ -226,14 +278,18 @@ class Indexer:
         self._file_info_cache: Optional[FileInfo] = None
         self._closed = False
 
-    def __enter__(self):
+    def __enter__(self) -> "Indexer":
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None:
         self.close()
-        return False
 
-    def close(self):
+    def close(self) -> None:
         """Release resources."""
         self._closed = True
 
@@ -288,7 +344,7 @@ class Indexer:
             finish=IndexStatus._from_dict,
         )
 
-    def manifest(self) -> List[dict]:
+    def manifest(self) -> List[ManifestEntry]:
         """The extensions built for each indexed file.
 
         Returns:
@@ -296,9 +352,9 @@ class Indexer:
             ``extensions``: dicts with ``name``, ``version``, ``params_hash``
             (16 hex digits), ``ready`` and ``current``.
         """
-        return json.loads(self._native.manifest())
+        return cast("List[ManifestEntry]", json.loads(self._native.manifest()))
 
-    def explain(self, duql: str) -> List[dict]:
+    def explain(self, duql: str) -> List[ExplainEntry]:
         """Why a query reads the chunks it reads, per file. Writes nothing.
 
         Returns:
@@ -310,7 +366,7 @@ class Indexer:
         Raises:
             DFTUtilsValueError: The duql text does not parse.
         """
-        return json.loads(self._native.explain(duql))
+        return cast("List[ExplainEntry]", json.loads(self._native.explain(duql)))
 
     def rebuild_extension(self, name: str) -> IndexStatus:
         """Rewrite one tier extension of every file, leaving the others.
@@ -369,7 +425,7 @@ class Indexer:
         """
         return DataFrame(self._native.rowset(name))
 
-    def query_file_pids(self, path: str) -> set:
+    def query_file_pids(self, path: str) -> Set[int]:
         """Query PIDs observed in a specific file.
 
         Args:
@@ -404,7 +460,9 @@ class Indexer:
         return self._file_info_cache
 
 
-def open_readonly_indexer(files, index_dir: str) -> "Indexer":
+def open_readonly_indexer(
+    files: "Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]]", index_dir: str
+) -> "Indexer":
     """Open an Indexer that only reads existing index tiers (never builds).
 
     Used by the distributed read paths where the index is already built.

@@ -35,15 +35,15 @@ from typing import (
     overload,
 )
 
-from . import dftracer_utils_ext as _ext
-from ._aliases import install as _install_aliases
-from ._trace_lazy import _LazyOps
-from .agg import UdafAgg
-from .dataframe import DataFrame, PhaseArg, TimeUnitArg
-from .enums import coerce_bytes, coerce_duration
-from .expr import Agg, Col, Expr, Wildcard
-from .lazyframe import BoundColumn, LazyFrame, LazyResult, collect_all
-from .schemas import RecordSchema, schema_id
+from .. import dftracer_utils_ext as _ext
+from .._aliases import install as _install_aliases
+from ..dataframe import DataFrame, PhaseArg, TimeUnitArg
+from ..enums import coerce_bytes, coerce_duration
+from ..expr import Agg, Expr
+from ..lazyframe import BoundColumn, LazyFrame, LazyResult, collect_all
+from ..schemas import RecordSchema, schema_id
+from .lazy import LazyOps
+from .partials import agg_specs, export_stats, partial_bytes, stats_row
 
 _S = TypeVar("_S", bound=RecordSchema)
 
@@ -52,12 +52,10 @@ _scan_columns = _ext.TraceViewer.columns
 _plan_columns = _ext.LazyFrame.schema
 
 if TYPE_CHECKING:
-    from .enums import DType
-    from .plugins import Plugins
-    from .runtime import Runtime
+    from ..enums import DType
+    from ..plugins import Plugins
+    from ..runtime import Runtime
 
-_OCCUPANCY = ("busy", "concurrency", "utilization", "active")
-_WILDCARD_OPS = ("sum", "min", "max", "var", "std", "skew", "kurt")
 
 DuqlParam = Union[bool, int, float, str, Sequence[Union[bool, int, float, str]]]
 
@@ -69,84 +67,7 @@ class Containment(NamedTuple):
     flamegraph: DataFrame
 
 
-def _agg_specs(specs: Sequence[Union[str, Agg]]) -> "tuple[List[str], List[str], Optional[int]]":
-    """Trace agg spec strings, ``F.any`` reductions and the occupancy grid of
-    ``specs``: spec strings pass through, a bare-field ``Agg`` becomes
-    ``"op:field"``, and ``F.any.<op>()`` becomes a numeric-args reduction."""
-
-    strings: List[str] = []
-    wildcard: List[str] = []
-    grids = set()
-    for s in specs:
-        if isinstance(s, str):
-            strings.append(s)
-            continue
-        if not isinstance(s, Agg):
-            raise TypeError(
-                f"agg() expects a spec string or an Agg (F.dur.sum()), got {type(s).__name__}"
-            )
-        if isinstance(s, UdafAgg):
-            raise TypeError(
-                f"TraceViewer.agg() cannot run the udaf {s.name!r}; collect first, "
-                "then DataFrame.group_by"
-            )
-        if isinstance(s.value, Wildcard):
-            if s.op == "count":
-                strings.append("count")
-            elif s.op == "mean" or s.op in _WILDCARD_OPS:
-                wildcard.append(s.op)
-            else:
-                raise ValueError(
-                    "F.any supports .count()/.mean()/.sum()/.min()/.max()/.var()/"
-                    ".std()/.skew()/.kurt(); name a field for argmax or percentile"
-                )
-            continue
-        if s.value is None:
-            strings.append(s.op)
-            continue
-        if not isinstance(s.value, Col):
-            raise TypeError(
-                "TraceViewer.agg() needs a bare-field aggregate like F.dur.sum(); "
-                "aggregate a computed value with with_column() then group_by()"
-            )
-        # The index keeps DDSketches, so a quantile here is the sketch's.
-        op = "pct" if s.op == "quantile" else s.op
-        spec = f"{'count' if s.op == 'count_valid' else op}:{s.value.name}"
-        if s.op == "pct":
-            spec += f":{s.param}"
-        elif s.op == "quantile":
-            spec += f":{s.param}"
-        strings.append(spec)
-        if s.op in _OCCUPANCY and s.param:
-            grids.add(int(s.param))
-    if len(grids) > 1:
-        raise ValueError("occupancy aggregates in one plan share one resolution")
-    return strings, wildcard, (grids.pop() if grids else None)
-
-
-def _stats_row(frame: DataFrame) -> Dict[str, object]:
-    row = {c: v[0] for c, v in frame.to_dict().items()} if frame.height else {}
-    return {
-        "duration_count": row.get("count", 0),
-        "duration_mean_us": row.get("mean_dur", 0.0),
-        "duration_stddev_us": row.get("std_dur", 0.0),
-        "min_timestamp_us": row.get("min_ts", 0),
-        "max_timestamp_us": row.get("max_ts", 0),
-    }
-
-
-def _export_stats(frame: DataFrame) -> Dict[str, object]:
-    return {c: v[0] for c, v in frame.to_dict().items()}
-
-
-def _partial(frame: DataFrame) -> bytes:
-    value = frame.to_dict()["partial"][0]
-    if not isinstance(value, (bytes, bytearray)):
-        raise TypeError(f"a partial is bytes, got {type(value).__name__}")
-    return bytes(value)
-
-
-class TraceViewer(_LazyOps, _ext.TraceViewer):
+class TraceViewer(LazyOps, _ext.TraceViewer):
     """A lazy view over trace files; see the module docstring.
 
     ``files`` is a path (``str`` or ``os.PathLike``) or a sequence of paths,
@@ -394,7 +315,7 @@ class TraceViewer(_LazyOps, _ext.TraceViewer):
         (``F.dur.sum()``, ``F.dur.busy(resolution="1ms")``, ``F.any.mean()``)."""
         if not specs:
             raise TypeError("agg() needs at least one aggregate")
-        strings, wildcard, grid = _agg_specs(specs)
+        strings, wildcard, grid = agg_specs(specs)
         tv = self
         if grid is not None:
             tv = _ext.TraceViewer.resolution(tv, grid)
@@ -543,7 +464,7 @@ class TraceViewer(_LazyOps, _ext.TraceViewer):
         plan = _ext.TraceViewer.flamegraph_partial(
             self, list(partition), ts, dur, name, list(group)
         )
-        return LazyResult([self._new(plan)], lambda f: _partial(f[0]))
+        return LazyResult([self._new(plan)], lambda f: partial_bytes(f[0]))
 
     @staticmethod
     def merge_flamegraph_partials(partials: Sequence[bytes]) -> DataFrame:
@@ -554,7 +475,7 @@ class TraceViewer(_LazyOps, _ext.TraceViewer):
         """A mergeable partial of this aggregation for a distributed run;
         merge with :meth:`merge_partials`."""
         return LazyResult(
-            [self._new(_ext.TraceViewer.aggregate_partial(self))], lambda f: _partial(f[0])
+            [self._new(_ext.TraceViewer.aggregate_partial(self))], lambda f: partial_bytes(f[0])
         )
 
     def merge_partials(self, partials: Sequence[bytes]) -> DataFrame:
@@ -605,7 +526,7 @@ class TraceViewer(_LazyOps, _ext.TraceViewer):
         re-indexable trace). Runs now and returns the scan stats; ``lazy=True``
         returns a :class:`LazyResult` for :func:`collect_all` or a session."""
         result = LazyResult(
-            [self._new(_ext.TraceViewer.sink_json(self, path))], lambda f: _export_stats(f[0])
+            [self._new(_ext.TraceViewer.sink_json(self, path))], lambda f: export_stats(f[0])
         )
         return result if lazy else result.collect()
 
@@ -679,7 +600,7 @@ class TraceViewer(_LazyOps, _ext.TraceViewer):
         """Count, mean and stddev of ``dur`` and the ``ts`` range of the
         selected events."""
         plan = self.group_by().agg("count", "mean:dur", "std:dur", "min:ts", "max:ts")
-        result = LazyResult([plan], lambda f: _stats_row(f[0]))
+        result = LazyResult([plan], lambda f: stats_row(f[0]))
         return result if lazy else result.collect()
 
     def compare(self, variant: "TraceViewer") -> LazyFrame:

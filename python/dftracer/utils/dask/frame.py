@@ -32,11 +32,11 @@ from typing import (
     cast,
 )
 
-from .agg import UdafAgg
-from .dataframe import DataFrame
-from .expr import Agg, col
-from .groupby import GroupBy
-from .series import Series
+from ..agg import UdafAgg
+from ..dataframe import DataFrame
+from ..expr import Agg, col
+from ..groupby import GroupBy
+from ..series import Series
 
 if TYPE_CHECKING:
     from dask.distributed import Client, Future

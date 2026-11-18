@@ -18,7 +18,7 @@ cloudpickle = pytest.importorskip("cloudpickle")
 
 from dftracer.utils import DataFrame, col  # noqa: E402
 from dftracer.utils.dask import DaskFrame as ExportedDaskFrame  # noqa: E402
-from dftracer.utils.dask_frame import DaskFrame, _join  # noqa: E402
+from dftracer.utils.dask.frame import DaskFrame, _join  # noqa: E402
 
 # Workers are spawned processes that cannot import this module; ship its functions by value.
 cloudpickle.register_pickle_by_value(sys.modules[__name__])

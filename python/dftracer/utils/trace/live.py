@@ -9,9 +9,9 @@ import os
 import time
 from typing import Any, Iterator, List, NamedTuple, Optional, Sequence, Union
 
-from . import dftracer_utils_ext as _ext
-from .schemas import schema_id
-from .trace_viewer import TraceViewer
+from .. import dftracer_utils_ext as _ext
+from ..schemas import schema_id
+from .viewer import TraceViewer
 
 
 class LiveFileStatus(NamedTuple):

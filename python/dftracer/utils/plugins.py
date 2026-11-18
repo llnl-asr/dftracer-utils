@@ -164,11 +164,12 @@ class Plugins:
             if isinstance(plugin, str):
                 path = plugin
             else:
-                from . import jit
+                from .jit.maps import plugin_config
+                from .jit.package import compile_class, plugin_result_names
 
-                cfg = jit.plugin_config(plugin, cfg)
-                result_names.update(jit.plugin_result_names(plugin))
-                path = jit.compile_class(plugin)
+                cfg = plugin_config(plugin, cfg)
+                result_names.update(plugin_result_names(plugin))
+                path = compile_class(plugin)
             specs.append((path, json.dumps(cfg) if cfg is not None else None))
         check_port_wiring(plugins)
         try:

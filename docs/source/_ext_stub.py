@@ -480,7 +480,7 @@ class Index:
         ...
     def write_agg_config(self, aggregation_config: Any) -> None:
         """Record the aggregation config a distributed build aggregated its
-        files with (a ``dftracer.utils.indexer.AggregationConfig``). Each
+        files with (a ``dftracer.utils.index.AggregationConfig``). Each
         file's ``dftracer.agg`` entry comes with its data."""
         ...
 

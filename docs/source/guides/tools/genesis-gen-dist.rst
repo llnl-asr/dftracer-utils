@@ -177,7 +177,7 @@ Query the output
 .. code-block:: python
 
    from dftracer.utils import Indexer
-   from dftracer.utils.trace_viewer import TraceViewer
+   from dftracer.utils.trace import TraceViewer
 
    # Build the index once: it stores the runs row set.
    with Indexer(files=["genesis.pfw.gz"]) as ix:

@@ -25,6 +25,7 @@ import textwrap
 import tokenize
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
+from ._eval import COMPARE_NAME, ENGINE_ARITH_SYMBOL
 from .expr import Expr, Select, col, lit
 
 # Python 3.8 wraps a subscript's slice in ast.Index; 3.9+ stores the value
@@ -50,8 +51,6 @@ def _missing(method: str) -> ast.expr:
 # without a replacement (the expression language has no null literal).
 NULL_COLUMN = "__eval_null__"
 
-_BIN = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/"}
-_CMP = {ast.Lt: "lt", ast.LtE: "le", ast.Gt: "gt", ast.GtE: "ge", ast.Eq: "eq", ast.NotEq: "ne"}
 _FLIP = {"lt": "gt", "le": "ge", "gt": "lt", "ge": "le", "eq": "eq", "ne": "ne"}
 _MATH = {"sqrt": "sqrt", "log": "log", "exp": "exp", "floor": "floor", "ceil": "ceil"}
 _NULL_TESTS = {"isna": True, "isnull": True, "notna": False, "notnull": False}  # True: is null
@@ -242,7 +241,7 @@ class _Lowering:
         left, right = self.scalar_or_expr(n.left), self.scalar_or_expr(n.right)
         if not isinstance(left, Expr) and not isinstance(right, Expr):
             raise TranspileError("arithmetic on two constants")
-        op = _BIN.get(type(n.op))
+        op = ENGINE_ARITH_SYMBOL.get(type(n.op))
         if op is not None:
             return {
                 "+": lambda a, b: a + b,
@@ -377,7 +376,7 @@ class _Lowering:
             elif isinstance(op, (ast.Is, ast.IsNot)):
                 part = self.null_test(left, right, negate=isinstance(op, ast.IsNot))
             else:
-                code = _CMP.get(type(op))
+                code = COMPARE_NAME.get(type(op))
                 if code is None:
                     raise TranspileError(f"comparison {type(op).__name__} has no engine form")
                 lv, rv = self.scalar_or_expr(left), self.scalar_or_expr(right)

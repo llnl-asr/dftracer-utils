@@ -14,7 +14,7 @@ from typing import Tuple
 import pytest
 
 from dftracer.utils import Runtime, jit
-from dftracer.utils.jit import _store_plugin_name
+from dftracer.utils.jit.plugin import store_plugin_name
 from dftracer.utils.plugins import Plugins
 from dftracer.utils.store import Store as PyStore
 
@@ -124,7 +124,7 @@ def test_namespace_identity_is_the_plugin_name_and_field_name(trace, idx):
     _run(cls, trace, idx)
     name = _plugin_name(cls)
     identity = jit.provided_names(cls)["before"].rsplit(".", 1)[0]
-    assert name == _store_plugin_name(identity)
+    assert name == store_plugin_name(identity)
     store = _python_store(idx)
     ns = store.namespace(f"plugin.{name}.runs", 1, durable=True, shared=True)
     snap = store.snapshot()
@@ -304,6 +304,6 @@ def test_every_worker_slice_keeps_its_puts(tmp_path, idx):
 
 
 def test_store_plugin_names_are_injective():
-    names = [_store_plugin_name(i) for i in ("a/b.c", "a/b_c", "a/b/c", "a.b.c", "a_b/c", "a/b__c")]
+    names = [store_plugin_name(i) for i in ("a/b.c", "a/b_c", "a/b/c", "a.b.c", "a_b/c", "a/b__c")]
     assert len(set(names)) == len(names)
     assert all(all(c in "abcdefghijklmnopqrstuvwxyz0123456789_-" for c in n) for n in names)

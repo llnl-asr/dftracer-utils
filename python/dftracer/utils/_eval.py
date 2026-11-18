@@ -10,7 +10,8 @@ parallel evaluation. An expression with no column is folded here.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, List, NamedTuple, Union
+import ast
+from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Tuple, Union
 
 from . import dftracer_utils_ext as _ext
 from ._convert import _arrow_native
@@ -47,6 +48,45 @@ if TYPE_CHECKING:
     from .dataframe import DataFrame
 
 __all__ = ["Columnar", "columnar", "eval_many", "where"]
+
+
+class AstOp(NamedTuple):
+    """One Python operator in an authored body, in every form a consumer needs."""
+
+    node: type
+    symbol: str
+    """The operator as C and Python spell it."""
+    name: str
+    """The engine's name for the operation."""
+    code: Optional[int]
+    """The opcode in the engine's AST bytecode (``vec_eval`` and ``@each_batch``);
+    None for an operator the engine has no opcode for."""
+
+
+# The one table of the arithmetic and comparison operators that `apply`, the jit
+# compiler and `jit.op` lower. `Mod` has no engine opcode.
+ARITH_OPS: Tuple[AstOp, ...] = (
+    AstOp(ast.Add, "+", "add", 0),
+    AstOp(ast.Sub, "-", "sub", 1),
+    AstOp(ast.Mult, "*", "mul", 2),
+    AstOp(ast.Div, "/", "div", 3),
+    AstOp(ast.Mod, "%", "mod", None),
+)
+COMPARE_OPS: Tuple[AstOp, ...] = (
+    AstOp(ast.Gt, ">", "gt", 0),
+    AstOp(ast.GtE, ">=", "ge", 1),
+    AstOp(ast.Lt, "<", "lt", 2),
+    AstOp(ast.LtE, "<=", "le", 3),
+    AstOp(ast.Eq, "==", "eq", 4),
+    AstOp(ast.NotEq, "!=", "ne", 5),
+)
+
+ARITH_SYMBOL: Dict[type, str] = {o.node: o.symbol for o in ARITH_OPS}
+ARITH_CODE: Dict[type, int] = {o.node: o.code for o in ARITH_OPS if o.code is not None}
+ENGINE_ARITH_SYMBOL: Dict[type, str] = {n: ARITH_SYMBOL[n] for n in ARITH_CODE}
+COMPARE_SYMBOL: Dict[type, str] = {o.node: o.symbol for o in COMPARE_OPS}
+COMPARE_NAME: Dict[type, str] = {o.node: o.name for o in COMPARE_OPS}
+COMPARE_CODE: Dict[type, int] = {o.node: o.code for o in COMPARE_OPS if o.code is not None}
 
 # A source of columns for in-memory evaluation: a DataFrame, a
 # {name: Series} mapping, or a pyarrow Table imported at the Arrow boundary.

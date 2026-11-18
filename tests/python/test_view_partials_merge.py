@@ -7,7 +7,7 @@ import pytest
 
 pytest.importorskip("pyarrow")
 
-from dftracer.utils.dfanalyzer import _partial_agg_columns, merge_view_partials  # noqa: E402
+from dftracer.utils.dfanalyzer.partials import _partial_agg_columns, merge_view_partials  # noqa: E402
 
 FULL = ["dur"]
 SUMS = ["size"]

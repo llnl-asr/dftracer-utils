@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Parity checks for the View-based dfanalyzer read path.
 
-_typed_read_to_ipc and view_typed_frames are both the View's typed read mapped to
+typed_read_to_ipc and view_typed_frames are both the View's typed read mapped to
 the dfanalyzer schema (the former is its Arrow-IPC form); these tests pin the
 schema mapping, the tier-vs-raw-scan equivalence, and name/percentile resolution.
 """
@@ -33,12 +33,13 @@ def _make_trace(path):
 
 
 def test_typed_read_to_ipc_is_the_ipc_form_of_view_typed_frames(tmp_path):
-    """_typed_read_to_ipc emits {events, profiles, system} Arrow IPC in the
+    """typed_read_to_ipc emits {events, profiles, system} Arrow IPC in the
     dfanalyzer schema; decoding it reproduces view_typed_frames' event totals,
     since one is just the serialized form of the other."""
     pytest.importorskip("pyarrow")
     from dftracer.utils import AggregationConfig
-    from dftracer.utils.dfanalyzer import _ipc_to_pandas, _typed_read_to_ipc, view_typed_frames
+    from dftracer.utils.dfanalyzer import view_typed_frames
+    from dftracer.utils.dfanalyzer.frames import _ipc_to_pandas, typed_read_to_ipc
 
     files = [str(tmp_path / f"t{k}.pfw.gz") for k in range(2)]
     for p in files:
@@ -53,7 +54,7 @@ def test_typed_read_to_ipc_is_the_ipc_form_of_view_typed_frames(tmp_path):
 
     # Granularity must match the tier's interval (100000 ms == 100 s): coarsening
     # only reads coarser than the stored bucket, never finer.
-    scan = _typed_read_to_ipc(files, idx, 100.0, 1e6, None)
+    scan = typed_read_to_ipc(files, idx, 100.0, 1e6, None)
     assert set(scan) == {"events", "profiles", "system"}
     assert scan["events"] is not None
 
@@ -593,7 +594,7 @@ def test_drop_ignored_files_matches_folded_and_unfolded_names():
     pytest.importorskip("pyarrow")
     import pandas as pd
 
-    from dftracer.utils.dfanalyzer import _drop_ignored_files
+    from dftracer.utils.dfanalyzer.frames import _drop_ignored_files
 
     df = pd.DataFrame(
         {

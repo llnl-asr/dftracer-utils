@@ -39,7 +39,7 @@ from .expr import (  # noqa: F401
     udf,
 )
 from .groupby import GroupBy  # noqa: F401
-from .indexer import (  # noqa: F401
+from .index import (  # noqa: F401
     AggregationConfig,
     BloomConfig,
     Indexer,
@@ -55,11 +55,10 @@ from .lazyframe import (  # noqa: F401
     lazy,
     scan_file,
 )
-from .live_trace_viewer import LiveFileStatus, LiveTraceViewer  # noqa: F401
 from .runtime import Runtime, TaskHandle, get_default_runtime, peek_default_runtime  # noqa: F401
 from .series import Series  # noqa: F401
 from .store import Store  # noqa: F401
-from .trace_viewer import Containment, TraceViewer  # noqa: F401
+from .trace import Containment, LiveFileStatus, LiveTraceViewer, TraceViewer  # noqa: F401
 
 try:
     __version__ = _version("dftracer-utils")

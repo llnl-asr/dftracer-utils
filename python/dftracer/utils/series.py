@@ -49,7 +49,7 @@ from ._convert import (
     pandas_to_native,
     polars_to_native,
 )
-from ._pandas_series import _SeriesPandasMixin
+from ._pandas_series import SeriesPandasMixin
 from .enums import (
     DT_UNIT_CODES,
     DTYPE_BY_NAME,
@@ -220,7 +220,7 @@ class _OpsAccessor:
         return call
 
 
-class Series(_SeriesPandasMixin, _ext.Series[T_co]):
+class Series(SeriesPandasMixin, _ext.Series[T_co]):
     """A typed column: SIMD ops from the native engine plus Arrow/NumPy conversion.
 
     Supports NumPy-style ``+ - * /`` against another Series (elementwise) or a
@@ -1029,7 +1029,7 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
 
     # BEGIN GENERATED aliases from _aliases.py by scripts/gen_pyi.py
     if TYPE_CHECKING:
-        aggregate = _SeriesPandasMixin.agg
+        aggregate = SeriesPandasMixin.agg
         astype = cast
         isna = _ext.Series.is_null
         isnull = _ext.Series.is_null
@@ -1055,16 +1055,16 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         bfill = _ext.Series.backward_fill
         backfill = _ext.Series.backward_fill
         take = gather
-        iat = _SeriesPandasMixin.iloc
-        at = _SeriesPandasMixin.iloc
-        loc = _SeriesPandasMixin.iloc
-        rtruediv = _SeriesPandasMixin.rdiv
+        iat = SeriesPandasMixin.iloc
+        at = SeriesPandasMixin.iloc
+        loc = SeriesPandasMixin.iloc
+        rtruediv = SeriesPandasMixin.rdiv
         divide = truediv
         div = truediv
         multiply = mul
         subtract = sub
         alias = _ext.Series.rename
-        clone = _SeriesPandasMixin.copy
+        clone = SeriesPandasMixin.copy
         limit = _ext.Series.head
         not_ = __invert__
         pass

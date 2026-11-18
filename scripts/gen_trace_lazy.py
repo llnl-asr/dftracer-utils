@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Generate python/dftracer/utils/_trace_lazy.py.
+"""Generate python/dftracer/utils/trace/lazy.py.
 
 The file holds one typed delegate on TraceViewer for each LazyFrame method that
 TraceViewer does not define itself: the method runs on ``self.lazy()`` and
@@ -16,6 +16,7 @@ compares the two.
 
 import argparse
 import ast
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -28,7 +29,7 @@ def generate() -> str:
     root = str(PKG) + "/"
     lsrc = open(root + "lazyframe.py").read()
     lt = ast.parse(lsrc)
-    tsrc = open(root + "trace_viewer.py").read()
+    tsrc = open(root + "trace/viewer.py").read()
     tt = ast.parse(tsrc)
     lc = [n for n in lt.body if isinstance(n, ast.ClassDef) and n.name == "LazyFrame"][0]
     tc = [n for n in tt.body if isinstance(n, ast.ClassDef) and n.name == "TraceViewer"][0]
@@ -99,11 +100,12 @@ def generate() -> str:
     )
     body = "\n".join(imports)
     body = body.replace("from . import dftracer_utils_ext as _ext\n", "")
+    body = re.sub(r"^(\s*)from \.(\w)", r"\1from ..\2", body, flags=re.M)
     text = (
         header
-        + "from . import dftracer_utils_ext as _ext\n"
+        + "from .. import dftracer_utils_ext as _ext\n"
         + body
-        + "\n\nif TYPE_CHECKING:\n    from .lazyframe import LazyFrame, SinkSummary, Value\n\n\nclass _LazyOps(_ext.TraceViewer):\n    __slots__ = ()\n\n"
+        + "\n\nif TYPE_CHECKING:\n    from ..lazyframe import LazyFrame, SinkSummary, Value\n\n\nclass LazyOps(_ext.TraceViewer):\n    __slots__ = ()\n\n"
         + "\n\n".join(out)
         + "\n"
     )
@@ -112,7 +114,7 @@ def generate() -> str:
 
 
 def ruff(text: str) -> str:
-    name = "python/dftracer/utils/_trace_lazy.py"
+    name = "python/dftracer/utils/trace/lazy.py"
     for args in (
         ["check", "--fix", "--select", "F401,I001", "--stdin-filename", name, "-"],
         ["format", "--stdin-filename", name, "-"],
@@ -128,7 +130,7 @@ def ruff(text: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--out", type=Path, default=PKG / "_trace_lazy.py")
+    parser.add_argument("--out", type=Path, default=PKG / "trace" / "lazy.py")
     args = parser.parse_args()
     args.out.write_text(ruff(generate()), encoding="utf-8")
 

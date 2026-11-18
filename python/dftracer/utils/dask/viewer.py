@@ -1,292 +1,34 @@
 # SPDX-License-Identifier: MIT
-"""Dask distributed integration for dftracer-utils."""
+"""A distributed, arrow-native trace viewer over a Dask cluster."""
+
+from __future__ import annotations
 
 import os
-import zlib
-from collections import defaultdict, namedtuple
+from collections import namedtuple
 from dataclasses import dataclass, replace
+from importlib.util import find_spec
 from typing import (
     TYPE_CHECKING,
-    Callable,
     Dict,
     List,
     Literal,
     Optional,
     Sequence,
-    Set,
     Tuple,
-    TypedDict,
     Union,
 )
 
-# dask/distributed/pyarrow have no type stubs ty can resolve; TYPE_CHECKING
-# imports name the true types for annotations while the runtime `else` branch
-# provides real values (or None fallbacks for the optional deps).
 if TYPE_CHECKING:
     import pyarrow as pa  # ty: ignore[import-not-found]
-    from dask.distributed import Client, WorkerPlugin, get_client  # ty: ignore[import-not-found]
-    from distributed import Future, Worker  # ty: ignore[import-not-found]
-
-    from .indexer import AggregationConfig
-else:
-    try:
-        import pyarrow as pa
-    except ImportError:
-        pa = None
-
-    try:
-        from dask.distributed import Client, WorkerPlugin, get_client
-    except ImportError:
-        Client = None
-        WorkerPlugin = None
-        get_client = None
-
-try:
-    import dask
-    import dask.dataframe as dd
-except ImportError:
-    dask = None  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
-    dd = None  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
-
-from dftracer.utils import Runtime
-from dftracer.utils.dask_frame import DaskFrame
-from dftracer.utils.dataframe import DataFrame, PhaseArg, TimeUnitArg
-from dftracer.utils.enums import coerce_bytes, coerce_duration
-from dftracer.utils.trace_viewer import TraceViewer
-
-__all__ = [
-    "DaskFrame",
-    "DaskTraceViewer",
-    "DaskAggregatedTraceViewer",
-    "ProgressAggregator",
-    "register_auto_thread_plugin",
-    "assign_files_by_pid",
-]
+    from dask.distributed import Client  # ty: ignore[import-not-found]
+    from distributed import Future  # ty: ignore[import-not-found]
 
 
-if WorkerPlugin is not None:
-
-    class DFTracerUtilsDaskWorkerPlugin(WorkerPlugin):  # ty: ignore[unsupported-base]
-        """Configures the process runtime of each Dask worker."""
-
-        def __init__(self, threads=0, io_threads=0):
-            self.threads = threads
-            self.io_threads = io_threads
-
-        def setup(self, worker):
-            worker.dftracer_utils_runtime = Runtime(
-                threads=self.threads, io_threads=self.io_threads
-            )
-
-        def teardown(self, worker):
-            if hasattr(worker, "dftracer_utils_runtime"):
-                # wait=False: don't block on pending tasks during teardown.
-                # Dask may be tearing down because of timeout/cancel, and a
-                # stuck task would hang the worker process indefinitely.
-                try:
-                    worker.dftracer_utils_runtime.shutdown(wait=False)
-                except Exception:
-                    pass
-                del worker.dftracer_utils_runtime
-
-else:
-    DFTracerUtilsDaskWorkerPlugin = None  # type: ignore[assignment]
-
-
-_plugin_registered_schedulers: set = set()
-
-# All worker-side progress (parse, scan, ...) is published to one topic with a
-# `phase` label; the coordinator aggregates per (phase, batch).
-_PROGRESS_TOPIC = "dft-progress"
-
-
-class _ProgressMsg(TypedDict):
-    """The per-event payload published to _PROGRESS_TOPIC."""
-
-    phase: str
-    batch: str
-    done: int
-    total: int
-
-
-class DistributedIndexResult(TypedDict):
-    """Return shape of :func:`distributed_index`."""
-
-    total_files: int
-    per_worker: List[int]
-    index_dir: str
-
-
-def _worker_progress_forwarder(phase: str, batch: str) -> Callable[[int, int], None]:
-    """Callback that publishes (done, total) progress for `phase`/`batch` to the
-    coordinator. Runs on a Dask worker; no-op off-worker (inline mode)."""
-    try:
-        from distributed import get_worker
-
-        worker = get_worker()
-    except (ImportError, ValueError):
-        worker = None
-
-    def _cb(done: int, total: int) -> None:
-        if worker is None:
-            return
-        msg: _ProgressMsg = {
-            "phase": phase,
-            "batch": batch,
-            "done": int(done),
-            "total": int(total),
-        }
-        # Called from a C++ worker thread; hop to the IOLoop so the event is
-        # sent on the worker's own loop rather than a foreign thread.
-        try:
-            worker.loop.add_callback(worker.log_event, _PROGRESS_TOPIC, msg)
-        except Exception:
-            try:
-                worker.log_event(_PROGRESS_TOPIC, msg)
-            except Exception:
-                pass
-
-    return _cb
-
-
-class ProgressAggregator:
-    """Subscribe to the progress topic and forward aggregated
-    (done, total, phase) to `callback`, summing per (phase, batch)."""
-
-    def __init__(
-        self, client: "Client", callback: Optional[Callable[[int, int, str], None]]
-    ) -> None:
-        self._client = client
-        self._callback = callback
-        self._state: Dict[Tuple[str, str], Tuple[int, int]] = {}
-
-    # event is a distributed topic payload: (timestamp, msg).
-    def _handler(self, event: "Tuple[float, _ProgressMsg]") -> None:
-        if self._callback is None:
-            return
-        try:
-            _, msg = event
-            phase = msg["phase"]
-            self._state[(phase, msg["batch"])] = (int(msg["done"]), int(msg["total"]))
-            done = sum(d for (p, _), (d, _t) in self._state.items() if p == phase)
-            total = sum(t for (p, _), (_d, t) in self._state.items() if p == phase)
-            self._callback(done, total, phase)
-        except Exception:
-            pass
-
-    def __enter__(self) -> "ProgressAggregator":
-        # NullClient (in-process) has no pub/sub topic; skip quietly.
-        if self._callback is not None and hasattr(self._client, "subscribe_topic"):
-            self._client.subscribe_topic(_PROGRESS_TOPIC, self._handler)
-        return self
-
-    def __exit__(self, *exc):
-        if self._callback is not None and hasattr(self._client, "unsubscribe_topic"):
-            try:
-                self._client.unsubscribe_topic(_PROGRESS_TOPIC)
-            except Exception:
-                pass
-        return False
-
-
-def _runtime_threads(worker: "Worker", host_worker_counts: Dict[str, int], total_cpus: int) -> int:
-    """C++ Runtime thread count for one Dask worker.
-
-    Dask already divided the node between its workers and the Runtime is shared
-    by every task on this worker, so the worker's own thread count is the share
-    to match. `host_worker_counts` is a client-side snapshot and only a
-    fallback: a worker that started later, or whose address spells the host
-    differently, is missing from it, and assuming it is alone on the node
-    oversubscribes by however many workers the node really has.
-    """
-    own = getattr(worker, "nthreads", None) or getattr(
-        getattr(worker, "state", None), "nthreads", None
-    )
-    if own:
-        return max(1, min(int(own), total_cpus))
-    host = worker.address.split("://")[-1].rsplit(":", 1)[0]
-    n_local = host_worker_counts.get(host) or max(host_worker_counts.values(), default=1)
-    return max(1, total_cpus // n_local)
-
-
-def register_auto_thread_plugin() -> None:
-    """Register the DFTracer worker plugin on the active distributed client.
-
-    Sizes each worker's C++ Runtime, compute and I/O threads alike, to the
-    worker's own Dask thread count, so several workers on one node do not each
-    claim every core.
-
-    Idempotent: re-registering the same plugin on the same scheduler triggers a
-    teardown+setup round-trip on every worker, which deadlocks if the previous
-    Runtime still has in-flight coroutines. Skips if already registered for the
-    scheduler address. A no-op when no distributed client is active.
-    """
-    if DFTracerUtilsDaskWorkerPlugin is None:
-        return
-    try:
-        import logging
-        import time
-        from collections import Counter
-
-        client = get_client()  # pyright: ignore[reportOptionalCall]  # ty: ignore[not-callable]
-        sched_addr = getattr(client.scheduler, "address", None) or ""
-        if sched_addr in _plugin_registered_schedulers:
-            return
-
-        def _addr_to_host(addr: str) -> str:
-            return addr.split("://")[-1].rsplit(":", 1)[0]
-
-        nthreads = client.nthreads()
-        for _ in range(10):
-            nthreads_next = client.nthreads()
-            if len(nthreads_next) >= len(nthreads):
-                nthreads = nthreads_next
-            if len(nthreads) > 0:
-                break
-            time.sleep(0.5)
-        host_counts = Counter(_addr_to_host(a) for a in nthreads.keys())
-
-        logging.getLogger("dftracer.dask_plugin").info(
-            "coord register_plugin: host_counts=%s total_workers=%d worker_addr_sample=%s",
-            dict(host_counts),
-            sum(host_counts.values()),
-            list(nthreads.keys())[:8],
-        )
-
-        class _AutoThreadPlugin(DFTracerUtilsDaskWorkerPlugin):
-            def __init__(self, host_worker_counts):
-                super().__init__(threads=0)
-                self._host_worker_counts = host_worker_counts
-
-            def setup(self, worker):
-                affinity = getattr(os, "sched_getaffinity", None)  # Linux only
-                total_cpus = len(affinity(0)) if affinity else (os.cpu_count() or 1)
-                my_host = worker.address.split("://")[-1].rsplit(":", 1)[0]
-                self.threads = _runtime_threads(worker, self._host_worker_counts, total_cpus)
-                # The I/O pool needs the same treatment: left at 0 it defaults
-                # to one thread per core in every worker on the node.
-                self.io_threads = self.threads
-                logging.getLogger("distributed.worker").info(
-                    "DFTracer Runtime: host=%s cpus=%d worker_nthreads=%s "
-                    "cpp_threads=%d io_threads=%d",
-                    my_host,
-                    total_cpus,
-                    getattr(worker, "nthreads", None),
-                    self.threads,
-                    self.io_threads,
-                )
-                super().setup(worker)
-
-        client.register_plugin(_AutoThreadPlugin(dict(host_counts)))
-        _plugin_registered_schedulers.add(sched_addr)
-        logging.getLogger("dftracer.dask_plugin").info(
-            "Registered DFTracerUtilsDaskWorkerPlugin host_worker_counts=%s total_workers=%d",
-            dict(host_counts),
-            sum(host_counts.values()),
-        )
-    except (ValueError, ImportError):
-        pass
-
+from ..dataframe import DataFrame, PhaseArg, TimeUnitArg
+from ..dftracer_utils_ext import NUM_SHARDS
+from ..enums import coerce_bytes, coerce_duration
+from ..trace.viewer import TraceViewer
+from .progress import worker_progress_forwarder
 
 QueryPage = namedtuple("QueryPage", ["table", "next_cursor"])
 
@@ -474,15 +216,14 @@ def _dv_typed_ipc_task(
     absolute (origin 0); the HLM derives the global origin and rebuckets
     ``time_range``. The read + schema mapping lives in the dialect module so this
     stays the viewer's one distributed typed-read path."""
-    from .dfanalyzer import _typed_read_to_ipc
-    from .dftracer_utils_ext import NUM_SHARDS
+    from ..dfanalyzer.frames import typed_read_to_ipc
 
     if not shard_end or shard_end <= 0:
         shard_end = NUM_SHARDS
     # Per-shard progress from the C++ scan, tagged with the "Reading traces"
     # phase so the coordinator's ProgressAggregator can drive the read bar.
-    forward = _worker_progress_forwarder("Reading traces", f"{shard_begin}_{shard_end}")
-    return _typed_read_to_ipc(
+    forward = worker_progress_forwarder("Reading traces", f"{shard_begin}_{shard_end}")
+    return typed_read_to_ipc(
         files,
         index_dir,
         time_granularity,
@@ -525,7 +266,7 @@ class DaskTraceViewer:
         files_per_task: int = 1,
         _plan: Optional[_Plan] = None,
     ) -> None:
-        if dask is None:
+        if find_spec("dask") is None:
             raise ImportError("dask is required for DaskTraceViewer")
         self._files = list(files)
         self._index_dir = index_dir
@@ -625,7 +366,11 @@ class DaskTraceViewer:
         return [self._files[i : i + step] for i in range(0, len(self._files), step)]
 
     def _resolve_client(self) -> "Client":
-        return self._client or get_client()  # pyright: ignore[reportOptionalCall]  # ty: ignore[not-callable]
+        if self._client is not None:
+            return self._client
+        from dask.distributed import get_client
+
+        return get_client()
 
     def collect(self):
         """Distributed group_by+agg -> one native DataFrame.
@@ -679,8 +424,6 @@ class DaskTraceViewer:
         workers (the index-wide tier can't be file-sharded)."""
         import pyarrow as pa
 
-        from .dftracer_utils_ext import NUM_SHARDS
-
         client = self._resolve_client()
         n = max(1, len(client.scheduler_info().get("workers") or {}))
         span = (NUM_SHARDS + n - 1) // n
@@ -726,7 +469,6 @@ class DaskTraceViewer:
         distributed reducer to consume. This is the View's one distributed
         typed-read path.
         """
-        from .dftracer_utils_ext import NUM_SHARDS
 
         client = self._resolve_client()
         # nthreads() works for both a real Client and the in-process NullClient
@@ -920,333 +662,3 @@ def distributed_write_trace(
     if view:
         dv = dv.filter(view)
     return dv.export_trace(output_dir, build_index=build_index)
-
-
-def assign_files_by_pid(
-    file_pids: Dict[str, Set[int]],
-    n_workers: int,
-) -> Dict[int, List[str]]:
-    """Assign files to workers based on majority PID affinity.
-
-    Files with overlapping PIDs are assigned to the same worker to minimize
-    cross-worker aggregation during the merge phase. A file with no recorded
-    PID goes to the worker its path hashes to, so separate processes agree on
-    the assignment.
-
-    Args:
-        file_pids: Dict mapping trace path to set of PIDs in that file.
-        n_workers: Number of workers to distribute to.
-
-    Returns:
-        Dict mapping worker_id to list of trace paths.
-    """
-    if n_workers <= 0:
-        n_workers = 1
-
-    worker_assignments: Dict[int, List[str]] = defaultdict(list)
-
-    for path, pids in file_pids.items():
-        if not pids:
-            # crc32, not hash(): a str hash is salted per process.
-            worker_id = zlib.crc32(path.encode()) % n_workers
-        else:
-            # Files with same PIDs go to same worker.
-            majority_pid = min(pids)  # min for determinism
-            worker_id = hash(majority_pid) % n_workers
-        worker_assignments[worker_id].append(path)
-
-    return dict(worker_assignments)
-
-
-def _build_index_task(
-    files: List[str],
-    batch_id: str,
-    shard_root: str,
-    checkpoint_size: int,
-    bloom_dimensions: Optional[List[str]],
-    force: bool,
-    parallelism: int,
-    build_bloom: bool = True,
-    aggregation_config: "Optional[AggregationConfig]" = None,
-) -> None:
-    """Dask worker task: index `files` as the shard at `shard_root`.
-
-    The shard is a complete index root of its own. The coordinator catalogs the
-    shards and merges them into the index root once every task finished.
-    """
-    import logging as _logging
-    import socket as _socket
-    import time as _time
-
-    from .dftracer_utils_ext import (
-        build_index_batch,
-        enable_aggregation_deterministic_ids,
-    )
-
-    _log = _logging.getLogger("dftracer.utils.dask._build_index_task")
-    _host = _socket.gethostname()
-
-    _progress_cb = _worker_progress_forwarder("Indexing", batch_id)
-
-    t0 = _time.monotonic()
-    # Every shard numbers its aggregation dictionary by content, so the shards
-    # of one root agree on the ids their data files carry.
-    enable_aggregation_deterministic_ids()
-
-    build_index_batch(
-        files,
-        shard_root,
-        checkpoint_size,
-        force,
-        build_bloom,
-        bloom_dimensions,
-        parallelism,
-        None,
-        aggregation_config,
-        progress=_progress_cb,
-    )
-    _log.info(
-        "build host=%s batch=%s n_files=%d total=%.2fs",
-        _host,
-        batch_id,
-        len(files),
-        _time.monotonic() - t0,
-    )
-
-
-def distributed_index(
-    files: "Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]]",
-    index_dir: str = "",
-    client: "Optional[Client]" = None,
-    checkpoint_size: Union[int, str] = 32 * 1024 * 1024,
-    bloom_dimensions: Optional[List[str]] = None,
-    force: bool = False,
-    build_bloom: bool = True,
-    partition: Literal["lpt", "round_robin"] = "lpt",
-    parallelism_per_worker: int = 0,
-    aggregation_config: "Optional[AggregationConfig]" = None,
-    progress: Optional[Callable[[int, int, str], None]] = None,
-) -> DistributedIndexResult:
-    """Index a set of trace files using Dask workers that write in parallel.
-
-    Steps (all O(1) on the coordinator except the fan-out):
-      1. Enumerate files + sizes via parallel scan.
-      2. LPT bin-pack whole files into one bucket per Dask worker. A file is
-         never split across workers: every part of its index is built from the
-         whole file, by one worker with its own threads.
-      3. Submit one Dask task per non-empty worker. Each task builds its files
-         as the shard `<index_dir>/shards/<worker>`, a complete index root of
-         its own, on node-local scratch when the destination warrants it.
-      4. The coordinator catalogs the arrived shards in `<index_dir>/shards.json`
-         and merges them into `<index_dir>/store` by moving their data files,
-         which leaves the manifest and the shard directories gone. A failed task
-         fails the build and leaves the arrived shards in place, so a later call
-         retries the merge without a rebuild.
-      5. The coordinator writes the aggregation config and refreshes its view of
-         the index.
-
-    Args:
-        files: A trace file, a directory scanned for trace files, or a list of
-            file paths, as for :class:`~dftracer.utils.Indexer`.
-        index_dir: Target .dftindex path (coordinator-writable).
-        client: Dask distributed Client. None -> run tasks inline.
-        partition: "lpt" (greedy longest-processing-time bin-pack) or
-            "round_robin".
-        parallelism_per_worker: 0 -> let the plugin/default Runtime choose
-            (one coroutine thread per core).
-
-    Returns:
-        dict with total_files, per_worker sizes and index_dir.
-    """
-    if dask is None:
-        raise ImportError("dask is required for distributed_index")
-    checkpoint_size = coerce_bytes(checkpoint_size, "checkpoint_size")
-    if not index_dir:
-        raise ValueError("index_dir is required")
-    from .indexer import AggregationConfig as _AggregationConfig
-
-    agg_config = aggregation_config if aggregation_config is not None else _AggregationConfig()
-    import logging as _logging
-    import time as _time
-
-    from .dftracer_utils_ext import INPUT_FILE_PATTERNS
-    from .dftracer_utils_ext import (
-        Index as _Index,
-    )
-    from .dftracer_utils_ext import (
-        plan_lpt_partition as _plan_lpt_partition,
-    )
-    from .dftracer_utils_ext import (
-        scan_files as _scan_files,
-    )
-
-    _log = _logging.getLogger("dftracer.utils.dask.distributed_index")
-    if not _log.handlers:
-        _log.setLevel(_logging.INFO)
-
-    # 1. Enumerate files + sizes.
-    _t0 = _time.monotonic()
-    if isinstance(files, (str, os.PathLike)) and os.path.isdir(os.fspath(files)):
-        directory = os.fspath(files)
-        _log.info("distributed_index: scan_files(%s)", directory)
-        entries = _scan_files(directory, list(INPUT_FILE_PATTERNS), True, None)
-    else:
-        listed = (
-            [os.fspath(files)]
-            if isinstance(files, (str, os.PathLike))
-            else [os.fspath(f) for f in files]
-        )
-        if not listed:
-            raise ValueError("files must name at least one path")
-        _log.info("distributed_index: sizing %d pre-listed files", len(listed))
-        entries = [(p, os.path.getsize(p)) for p in listed]
-    _log.info("distributed_index: scanned %d files in %.1fs", len(entries), _time.monotonic() - _t0)
-
-    if not entries:
-        return {
-            "total_files": 0,
-            "per_worker": [],
-            "index_dir": index_dir,
-        }
-
-    n_workers = 1
-    if client is not None:
-        n_workers = len(client.nthreads()) or 1
-    _log.info("distributed_index: %d workers visible", n_workers)
-
-    all_paths = [p for (p, _) in entries]
-    n_total_files = len(all_paths)
-
-    if not force:
-        from .indexer import Indexer
-
-        with Indexer(
-            files=all_paths,
-            index_dir=index_dir,
-            require_checkpoint=True,
-            require_bloom=True,
-            aggregation_config=agg_config,
-        ) as _resolver:
-            _status = _resolver.status()
-        _needs = set(_status.needs_work)
-        _log.info(
-            "distributed_index: resolver reports %d/%d files need work",
-            len(_needs),
-            len(all_paths),
-        )
-        if not _needs:
-            return {
-                "total_files": n_total_files,
-                "per_worker": [],
-                "index_dir": index_dir,
-            }
-        if len(_needs) < len(entries):
-            entries = [(p, s) for (p, s) in entries if p in _needs]
-            all_paths = [p for (p, _) in entries]
-
-    # A file is never split across workers, since each part of its index is
-    # built from the whole file.
-    _t3 = _time.monotonic()
-    if partition == "lpt":
-        path_index = {p: i for i, p in enumerate(all_paths)}
-        per_worker_files = [
-            [path_index[p] for (p, _sz) in bucket]
-            for bucket in _plan_lpt_partition(list(entries), n_workers)
-        ]
-    elif partition == "round_robin":
-        per_worker_files = [[] for _ in range(n_workers)]
-        for i in range(len(all_paths)):
-            per_worker_files[i % n_workers].append(i)
-    else:
-        raise ValueError(f"unknown partition={partition}")
-    _log.info(
-        "distributed_index: planned in %.2fs (per-worker files=%s)",
-        _time.monotonic() - _t3,
-        [len(u) for u in per_worker_files],
-    )
-
-    index_dir = index_dir.rstrip("/")
-    worker_file_lists: List[List[str]] = [
-        [all_paths[i] for i in files_w] for files_w in per_worker_files
-    ]
-    shard_dirs = [os.path.join(index_dir, "shards", str(w)) for w in range(len(worker_file_lists))]
-
-    _t_build = _time.monotonic()
-    worker_ids: List[int] = []
-    if client is None:
-        for w, paths_w in enumerate(worker_file_lists):
-            if not paths_w:
-                continue
-            worker_ids.append(w)
-            _build_index_task(
-                paths_w,
-                f"worker_{w}",
-                shard_dirs[w],
-                checkpoint_size,
-                bloom_dimensions,
-                force,
-                parallelism_per_worker,
-                build_bloom,
-                agg_config,
-            )
-    else:
-        worker_addrs = list(client.nthreads().keys())
-        with ProgressAggregator(client, progress):
-            futures = []
-            for w, paths_w in enumerate(worker_file_lists):
-                if not paths_w:
-                    continue
-                target = [worker_addrs[w % len(worker_addrs)]] if worker_addrs else None
-                worker_ids.append(w)
-                futures.append(
-                    client.submit(
-                        _build_index_task,
-                        paths_w,
-                        f"worker_{w}",
-                        shard_dirs[w],
-                        checkpoint_size,
-                        bloom_dimensions,
-                        force,
-                        parallelism_per_worker,
-                        build_bloom,
-                        agg_config,
-                        workers=target,
-                        pure=False,
-                    )
-                )
-            client.gather(futures)
-    _log.info(
-        "distributed_index: build dispatch+gather done in %.1fs (%d workers)",
-        _time.monotonic() - _t_build,
-        len(worker_ids),
-    )
-
-    built = bool(worker_ids)
-    if built:
-        _t_merge = _time.monotonic()
-        from .dftracer_utils_ext import consolidate_shard_set, write_shard_set
-
-        arrived = [shard_dirs[w] for w in worker_ids if os.path.isdir(shard_dirs[w])]
-        write_shard_set(index_dir, arrived)
-        consolidate_shard_set(index_dir)
-        _log.info(
-            "distributed_index: merged %d shards into %s in %.1fs",
-            len(arrived),
-            index_dir,
-            _time.monotonic() - _t_merge,
-        )
-
-        _t_meta = _time.monotonic()
-        db = _Index(index_dir)
-        db.write_agg_config(agg_config)
-        _log.info(
-            "distributed_index: agg meta writes done in %.2fs",
-            _time.monotonic() - _t_meta,
-        )
-
-    per_worker_file_counts = [len(set(paths)) for paths in worker_file_lists]
-    return {
-        "total_files": n_total_files,
-        "per_worker": per_worker_file_counts,
-        "index_dir": index_dir,
-    }

@@ -163,10 +163,9 @@ include = [
   "python/dftracer/utils/_polars_frame.py",
   "python/dftracer/utils/_udf_lane.py",
   "python/dftracer/utils/arrow.py",
-  "python/dftracer/utils/dask.py",
-  "python/dftracer/utils/dask_frame.py",
+  "python/dftracer/utils/dask/*.py",
   "python/dftracer/utils/dataframe.py",
-  "python/dftracer/utils/dfanalyzer.py",
+  "python/dftracer/utils/dfanalyzer/*.py",
   "python/dftracer/utils/dftracer_utils_ext.pyi",
   "python/dftracer/utils/expr.py",
   "python/dftracer/utils/groupby.py",
@@ -186,11 +185,11 @@ unused-ignore-comment = "ignore"
 [[tool.ty.overrides]]
 include = [
   "python/dftracer/utils/_pandas_frame.py",
-  "python/dftracer/utils/_trace_lazy.py",
+  "python/dftracer/utils/trace/lazy.py",
   "python/dftracer/utils/dataframe.py",
   "python/dftracer/utils/lazyframe.py",
   "python/dftracer/utils/series.py",
-  "python/dftracer/utils/trace_viewer.py",
+  "python/dftracer/utils/trace/viewer.py",
 ]
 
 [tool.ty.overrides.rules]

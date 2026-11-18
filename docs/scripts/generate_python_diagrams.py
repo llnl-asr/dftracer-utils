@@ -49,11 +49,11 @@ PAGE_MODULE = {
     "columnar": ("expr", "_eval", "groupby"),
     "dataframe": ("dataframe",),
     "series": ("series",),
-    "trace_viewer": ("trace_viewer",),
-    "duql": ("duql",),
+    "trace_viewer": ("viewer",),
+    "duql": ("col", "pipe"),
     "runtime": ("runtime",),
-    "indexer": ("indexer",),
-    "dfanalyzer": ("dfanalyzer",),
+    "indexer": ("index",),
+    "dfanalyzer": ("frames",),
 }
 
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -167,7 +167,7 @@ def main() -> None:
     args = parser.parse_args()
 
     registry: dict[str, PyClass] = {}
-    for py in sorted(args.pkg_dir.glob("*.py")):
+    for py in sorted([*args.pkg_dir.glob("*.py"), *args.pkg_dir.glob("*/*.py")]):
         module = py.stem
         try:
             for name, pc in parse_module(py, module).items():

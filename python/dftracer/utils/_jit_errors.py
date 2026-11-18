@@ -153,7 +153,7 @@ def _class_node(cls: type) -> "Tuple[str, List[str], ast.ClassDef]":
     return file, lines, found[0]
 
 
-class _Source:
+class Source:
     """Where a function or class sits in its file, so a node of its AST maps back
     to ``file:line:col``. For a function the nodes come from the dedented
     ``text``; for a class they are already file positions."""
@@ -169,7 +169,7 @@ class _Source:
         self.cls_node: ast.ClassDef | None = None
 
     @classmethod
-    def of_class(cls, klass: type) -> "_Source":
+    def of_class(cls, klass: type) -> "Source":
         file, lines, node = _class_node(klass)
         src = cls.__new__(cls)
         src.file, src.lines, src.first, src.margin = file, lines, 1, 0
@@ -215,10 +215,10 @@ class _Source:
         return cls_node
 
 
-def _class_error(cls: type, reason: str, attr: "str | None" = None) -> JitError:
+def class_error(cls: type, reason: str, attr: "str | None" = None) -> JitError:
     """A JitError located at ``cls``'s statement, or at its ``attr`` assignment."""
     try:
-        src = _Source.of_class(cls)
+        src = Source.of_class(cls)
         return src.error(reason, src.find(attr))
     except (OSError, TypeError, SyntaxError):
         return JitError(reason)
@@ -400,7 +400,7 @@ def check_port_wiring(plugins: "List[Any]") -> None:
                 found = owner_of.get(decl.full)
                 if found is not None and (found.kind, found.elem) != (decl.kind, decl.elem):
                     word = {"i64": "int", "f64": "float"}
-                    raise _class_error(
+                    raise class_error(
                         cls,
                         f"the port '{attr}' carries {word.get(decl.elem or '', decl.elem)} but "
                         f"{decl.full} is a {found.kind} port that carries "
@@ -408,7 +408,7 @@ def check_port_wiring(plugins: "List[Any]") -> None:
                         attr,
                     )
             if not decl.owner and not isinstance(decl.source, str) and decl.full not in owned:
-                raise _class_error(
+                raise class_error(
                     cls,
                     f"the port '{attr}' refers to {decl.full}, which no plugin of this set "
                     "declares; load the plugin that owns it in the same run",
@@ -427,5 +427,5 @@ def translate_plan_error(plugins: "List[Any]", exc: BaseException) -> "JitError 
             continue
         for attr, decl in (getattr(cls, "_jit_ports", None) or {}).items():
             if decl.full and decl.full in text:
-                return _class_error(cls, text, attr)
+                return class_error(cls, text, attr)
     return None

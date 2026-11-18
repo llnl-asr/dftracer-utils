@@ -27,14 +27,14 @@ from typing import (
 
 from . import dftracer_utils_ext as _ext
 from ._convert import _like
-from ._pandas_series import _OMITTED, _replace_in, _replace_pairs
+from ._pandas_series import OMITTED, replace_in, replace_pairs
 from .enums import DType, rule_to_units
 from .series import Series
 
 if TYPE_CHECKING:
     from typing_extensions import Concatenate, ParamSpec, Self
 
-    from ._pandas_series import ReplaceKey, ReplaceValue, _Omitted
+    from ._pandas_series import Omitted, ReplaceKey, ReplaceValue
     from .dataframe import DataFrame
     from .dftracer_utils_ext import Scalar
     from .groupby import GroupBy
@@ -48,7 +48,7 @@ _STRING = {DType.STRING}
 Operand = Union[int, float, Series, "DataFrame"]
 
 
-def _is_numeric(s: Series) -> bool:
+def is_numeric_series(s: Series) -> bool:
     return s.dtype.is_numeric or s.dtype == DType.BOOL
 
 
@@ -58,11 +58,11 @@ def _group(frame: "DataFrame", keys: Sequence[str]) -> "GroupBy":
     return GroupBy(frame, list(keys))
 
 
-def _series(frame: "DataFrame", name: str) -> Series:
+def column_series(frame: "DataFrame", name: str) -> Series:
     return _ext.DataFrame.__getitem__(frame, name)
 
 
-class _FramePandasMixin(_ext.DataFrame):
+class FramePandasMixin(_ext.DataFrame):
     """pandas spellings over the engine's Series kernels, one column at a
     time. ``self`` is a :class:`DataFrame`."""
 
@@ -103,7 +103,7 @@ class _FramePandasMixin(_ext.DataFrame):
         out: Dict[str, Series] = {}
         for name in self.columns:
             s = self._col(name)
-            if numeric_only and not _is_numeric(s):
+            if numeric_only and not is_numeric_series(s):
                 continue
             out[name] = fn(s)
         return self._rebuild(out, keep_others)
@@ -116,7 +116,7 @@ class _FramePandasMixin(_ext.DataFrame):
         if isinstance(other, DataFrame):
             if name not in other:
                 raise KeyError(f"no column named {name!r} in the other frame")
-            return _series(other, name)
+            return column_series(other, name)
         if isinstance(other, Series):
             if len(other) != len(self._frame()):
                 raise ValueError(
@@ -132,7 +132,7 @@ class _FramePandasMixin(_ext.DataFrame):
     def _binary(self, other: Operand, op: str, reverse: bool = False) -> "DataFrame":
         from .dataframe import DataFrame
 
-        names = [c for c in self.columns if _is_numeric(self._col(c))]
+        names = [c for c in self.columns if is_numeric_series(self._col(c))]
         if isinstance(other, DataFrame):
             names = [c for c in names if c in other]
         out: Dict[str, Series] = {}
@@ -251,7 +251,7 @@ class _FramePandasMixin(_ext.DataFrame):
             rhs = self._operand(other, name)
             if isinstance(rhs, Series):
                 # Column against column: numeric only (a - b <op> 0).
-                if not _is_numeric(s) or not _is_numeric(rhs):
+                if not is_numeric_series(s) or not is_numeric_series(rhs):
                     continue
                 out[name] = getattr(s - rhs, op)(0)
             elif s.dtype in _STRING:
@@ -380,14 +380,14 @@ class _FramePandasMixin(_ext.DataFrame):
         return self._map_columns(lambda s: s.mask(cond, other))
 
     def replace(
-        self, to_replace: "ReplaceKey", value: "Union[ReplaceValue, _Omitted]" = _OMITTED
+        self, to_replace: "ReplaceKey", value: "Union[ReplaceValue, Omitted]" = OMITTED
     ) -> "DataFrame":
         """:meth:`Series.replace` in every column. A column that no old value can
         match, or of a bool, list or temporal type, is left as it is; a column whose
         old value matches but whose new value it cannot hold raises ``TypeError``
         naming the column."""
-        pairs = _replace_pairs(to_replace, value)
-        out = {name: _replace_in(self._col(name), pairs, name, False) for name in self.columns}
+        pairs = replace_pairs(to_replace, value)
+        out = {name: replace_in(self._col(name), pairs, name, False) for name in self.columns}
         return self._rebuild(out, True)
 
     def applymap(self, func: "Callable[[Scalar], Scalar]") -> "DataFrame":
@@ -411,7 +411,7 @@ class _FramePandasMixin(_ext.DataFrame):
         out: Dict[str, List[object]] = {}
         for name in self.columns:
             s = self._col(name)
-            if numeric_only and not _is_numeric(s):
+            if numeric_only and not is_numeric_series(s):
                 continue
             out[name] = [fn(s)]
         return DataFrame(out)
@@ -447,11 +447,11 @@ class _FramePandasMixin(_ext.DataFrame):
             counts = s.value_counts()
             if len(counts) == 0:
                 return None
-            count = _series(counts, "count")
+            count = column_series(counts, "count")
             top = int(
                 cast(int, count.max())
             )  # a count column: min()/max() can also be str for text
-            return _series(counts.filter(count.eq(top)), "value").min()
+            return column_series(counts.filter(count.eq(top)), "value").min()
 
         return self._reduce_scalar(one)
 
@@ -493,7 +493,7 @@ class _FramePandasMixin(_ext.DataFrame):
         from .dataframe import DataFrame
         from .expr import Agg, Col
 
-        names = [c for c in self.columns if _is_numeric(self._col(c))]
+        names = [c for c in self.columns if is_numeric_series(self._col(c))]
         specs = [Agg(agg, Col(b), f"{a}__{b}", by=Col(a)) for a in names for b in names]
         if not specs:
             return DataFrame({"column": []})
@@ -568,7 +568,7 @@ class _FramePandasMixin(_ext.DataFrame):
         rows = self._frame().to_dict()
         names = self.columns
         n = len(self._frame())
-        mixed = not all(_is_numeric(self._col(c)) for c in names)
+        mixed = not all(is_numeric_series(self._col(c)) for c in names)
 
         def cell(v: object) -> object:
             return v if v is None or not mixed else str(v)
@@ -595,7 +595,7 @@ class _FramePandasMixin(_ext.DataFrame):
         f = self._frame()
         out = f.copy()
         for name in f.columns:
-            converted = _series(f, name).convert_dtypes(
+            converted = column_series(f, name).convert_dtypes(
                 infer_objects, convert_string, convert_integer, convert_boolean, convert_floating
             )
             out = out.with_column(name, converted)
@@ -638,7 +638,7 @@ class _FramePandasMixin(_ext.DataFrame):
         cols = {c: self._col(c).to_list() for c in self.columns}
         labels: Sequence[object] = list(range(len(self._frame())))
         if self._index is not None and len(self._index) == 1:
-            labels = _series(self._frame(), self._index[0]).to_list()
+            labels = column_series(self._frame(), self._index[0]).to_list()
         for i in range(len(self._frame())):
             yield labels[i], Row({c: cols[c][i] for c in self.columns})
 
@@ -831,7 +831,7 @@ class _FramePandasMixin(_ext.DataFrame):
         out: Dict[str, Series] = {}
         for name in self.columns:
             if name in other:
-                out[name] = func(self._col(name), _series(other, name))
+                out[name] = func(self._col(name), column_series(other, name))
         return self._rebuild(out, keep_others=False)
 
     def compare(self, other: "DataFrame") -> "DataFrame":
@@ -848,7 +848,7 @@ class _FramePandasMixin(_ext.DataFrame):
         mine: List[Optional[str]] = []
         theirs: List[Optional[str]] = []
         for name in self.columns:
-            diff = self._col(name).compare(_series(other, name)).to_dict()
+            diff = self._col(name).compare(column_series(other, name)).to_dict()
             for i, va, vb in zip(diff["index"], diff["self"], diff["other"]):
                 assert isinstance(i, int)
                 rows.append(i)
@@ -872,8 +872,8 @@ class _FramePandasMixin(_ext.DataFrame):
         out: Dict[str, List[float]] = {}
         for name in self.columns:
             s = self._col(name)
-            if name in other and _is_numeric(s):
-                out[name] = [s.corr(_series(other, name))]
+            if name in other and is_numeric_series(s):
+                out[name] = [s.corr(column_series(other, name))]
         return DataFrame(out)
 
     def info(self) -> str:
@@ -920,7 +920,7 @@ class _FramePandasMixin(_ext.DataFrame):
         for name in self.columns:
             if name in other:
                 s = self._col(name)
-                out[name] = s.where(s.notna(), _series(other, name))
+                out[name] = s.where(s.notna(), column_series(other, name))
         return self._rebuild(out)
 
     def update(self, other: "DataFrame") -> None:
@@ -929,7 +929,7 @@ class _FramePandasMixin(_ext.DataFrame):
         out: Dict[str, Series] = {}
         for name in self.columns:
             if name in other:
-                o = _series(other, name)
+                o = column_series(other, name)
                 out[name] = o.where(o.notna(), self._col(name))
         _ext.DataFrame._replace(self, self._rebuild(out))
 
@@ -938,11 +938,11 @@ class _FramePandasMixin(_ext.DataFrame):
         (each column of ``other`` against each of ours)."""
         from .dataframe import DataFrame
 
-        names = [c for c in self.columns if _is_numeric(self._col(c))]
+        names = [c for c in self.columns if is_numeric_series(self._col(c))]
         if isinstance(other, Series):
             return Series.from_list([self._col(c).dot(other) for c in names])
         return DataFrame(
-            {o: [self._col(c).dot(_series(other, o)) for c in names] for o in other.columns}
+            {o: [self._col(c).dot(column_series(other, o)) for c in names] for o in other.columns}
         )
 
     @classmethod
@@ -1086,13 +1086,13 @@ class _FramePandasMixin(_ext.DataFrame):
             raise ValueError("asfreq: method must be ffill, bfill or None")
         if fill_value is not None:
             for c in others:
-                if _is_numeric(self._col_of(out, c)):
+                if is_numeric_series(self._col_of(out, c)):
                     out = out.with_column(c, self._col_of(out, c).fillna(fill_value))
         return frame._like(_ext.DataFrame.select(out, *frame.columns))
 
     @staticmethod
     def _col_of(frame: "DataFrame", name: str) -> Series:
-        return _series(frame, name)
+        return column_series(frame, name)
 
     # -- exports through pandas / pyarrow -----------------------------------------
     def to_csv(
@@ -1133,7 +1133,7 @@ class _FrameWindow:
 
     __slots__ = ("_frame", "_window")
 
-    def __init__(self, frame: "_FramePandasMixin", window: Callable[[Series], object]) -> None:
+    def __init__(self, frame: "FramePandasMixin", window: Callable[[Series], object]) -> None:
         self._frame = frame
         self._window = window
 

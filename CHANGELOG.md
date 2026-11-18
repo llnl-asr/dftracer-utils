@@ -182,6 +182,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   - `dftracer.utils._import` and the conversion helpers of `dftracer.utils.series` are in `dftracer.utils._convert`.
   - The `DFTUtils*Error` classes are in `dftracer.utils.errors`; `get_default_runtime` and `peek_default_runtime` are in `dftracer.utils.runtime`.
   - `dftracer.utils.indexing` is `dftracer.utils._loc`.
+  - The `jit` internals are in `dftracer.utils.jit.types`, `monoids`, `prims`, `maps`, `compiler`, `emit`, `plugin`, `vfold` and `package`; `dftracer.utils.jit` still exports its names.
+    The C scalar types of a jit body are one table keyed by `DType` (`jit.types.C_TYPES`), and the Python operators that `apply`, `jit` and `jit.op` lower are one table in `dftracer.utils._eval` (`ARITH_OPS`, `COMPARE_OPS`).
+  - `dftracer.utils._plugin_build` is `dftracer.utils._build`, the one compile pipeline of `@jit.plugin`, `@jit.op`, `@dft.udf` and `dftracer_plugin`; `PluginBuildError` is `BuildError`.
+    It resolves the compiler, the flags and the ABI digest once per environment, so a cached `jit.op` call no longer re-hashes the ABI headers.
+    A built plugin sits in `<cache>/<digest>/<name>.so`, a built op in `<cache>/op/<digest>/<name>.so` and a built UDF in `<cache>/udf/<digest>/udf.so`.
+  - `dftracer.utils.dask` and `dftracer.utils.dfanalyzer` are packages that load a submodule on the first use of a name, so importing them no longer imports `dask`.
+    `dftracer.utils.dask_frame` is `dftracer.utils.dask.frame`; the progress, worker, viewer and index code are in `dftracer.utils.dask.progress`, `worker`, `viewer` and `index`; the dfanalyzer helpers are in `dftracer.utils.dfanalyzer.index`, `partials` and `frames`.
+    `_runtime_threads` is `dftracer.utils.dask.worker.runtime_threads`.
+  - `dftracer.utils.trace_viewer` and `dftracer.utils.live_trace_viewer` are in the package `dftracer.utils.trace` (`viewer`, `live`, `partials`); `dftracer.utils._trace_lazy` is `dftracer.utils.trace.lazy` and `_LazyOps` is `LazyOps`.
+  - `dftracer.utils.indexer` is `dftracer.utils.index`, `dftracer.utils.duql` is a package (`col`, `pipe`) with the same names, and `dftracer.utils.store` and `dftracer.utils.store_codec` are the package `dftracer.utils.store` and its module `dftracer.utils.store.codec`.
 - `TraceViewer(files)` and `Indexer(files)` take one input form: a `str` or `os.PathLike`, or a list or tuple of them. One directory is scanned; a directory inside a list is a `ValueError`; a path given twice is read once.
 - Name the index location `index_dir` everywhere: `TraceViewer(files, index_dir=)`, `LiveTraceViewer(files, index_dir=)`, `CheckpointIndexer(gz_path, index_dir=)` and its `index_dir` property, `Index(index_dir)`, `write_shard_set(index_dir, ...)`, `consolidate_shard_set(index_dir)`, `distributed_index(index_dir=)`, `build_index_distributed(index_dir=)`, the dfanalyzer helpers (`index_dir_for`, `view_typed_frames`, `count_index_files`), `IndexStatus.index_dir`, the `index_dir` key of the Indexer status dict, of the manifest entries and of the `distributed_index` result, and the `index_dir` field of the `dftracer_stats` JSON.
   In C++ and C, the `index_dir` parameter of `View::from_directory`, `LiveView` and `dftu_view_from_directory`, and the `index_dir` field of `TraceWriteOptions`.
@@ -191,7 +201,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Both return an `IndexStatus`.
   The `directory` and `force_rebuild` arguments and the `resolve` and `ensure_indexed` methods are gone.
 - Export the error classes (`DFTUtilsError` and its ten subclasses) and `DType` from `dftracer.utils`, and drop `schemas`, `Session` and `Handle` from `dftracer.utils.__all__`.
-  `Session` and `Handle` stay in `dftracer.utils.trace_viewer`, and the `typing`, `atexit` and `importlib` helpers no longer show as public names of the package.
+  `Session` and `Handle` stay in `dftracer.utils.trace`, and the `typing`, `atexit` and `importlib` helpers no longer show as public names of the package.
 - Make the polars names canonical on `Series`, `Expr`, `DataFrame`, `LazyFrame` and the group-by classes, and build every pandas spelling from one table, `python/dftracer/utils/_aliases.py`: `fillna`, `astype`, `isna`, `notna`, `dropna`, `isin`, `groupby`, `sort_values`, `drop_duplicates`, `take`, `cumsum`, `ffill` and the rest are the same object as `fill_null`, `cast`, `is_null`, `is_not_null`, `drop_nulls`, `is_in`, `group_by`, `sort`, `unique`, `gather`, `cum_sum` and `forward_fill`.
   A pandas name with other keywords or another result (`sort_values(ascending=, na_position=)`, `nlargest`, `groupby(sort=)`) is a small function listed in the table.
   `Series`, `DataFrame`, `LazyFrame` and `Expr` take the same keywords for a shared name: `fill_null(value)`, `clip(lower, upper)`, `is_between(lower, upper)` and `sort(by, *, descending, nulls_last)`.

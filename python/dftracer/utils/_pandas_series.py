@@ -44,11 +44,11 @@ if TYPE_CHECKING:
 _Scalar = Union[int, float]
 
 
-class _Omitted:
-    """The type of ``_OMITTED``: ``replace``'s ``value`` when the caller gave none."""
+class Omitted:
+    """The type of ``OMITTED``: ``replace``'s ``value`` when the caller gave none."""
 
 
-_OMITTED = _Omitted()
+OMITTED = Omitted()
 
 
 def _plain(v: "ReplaceScalar") -> "PlainScalar":
@@ -71,15 +71,15 @@ def _kind(v: "PlainScalar") -> str:
     raise TypeError(f"replace: cannot replace a {type(v).__name__} value")
 
 
-def _replace_pairs(
-    to_replace: "ReplaceKey", value: "Union[ReplaceValue, _Omitted]"
+def replace_pairs(
+    to_replace: "ReplaceKey", value: "Union[ReplaceValue, Omitted]"
 ) -> "List[Tuple[ReplaceScalar, ReplaceScalar]]":
     """The (old, new) pairs of any replace form."""
     if isinstance(to_replace, dict):
-        if value is not _OMITTED:
+        if value is not OMITTED:
             raise TypeError("replace: value must be omitted when to_replace is a dict")
         return list(to_replace.items())
-    if isinstance(value, _Omitted):
+    if isinstance(value, Omitted):
         raise TypeError("replace() missing required argument: 'value'")
     if isinstance(to_replace, (list, tuple)):
         keys = cast("Sequence[ReplaceScalar]", to_replace)
@@ -95,7 +95,7 @@ def _replace_pairs(
     return [(cast("ReplaceScalar", to_replace), cast("ReplaceScalar", value))]
 
 
-def _replace_in(
+def replace_in(
     s: "Series",
     pairs: "List[Tuple[ReplaceScalar, ReplaceScalar]]",
     column: Optional[str],
@@ -145,7 +145,7 @@ def _replace_in(
     return out
 
 
-class _SeriesPandasMixin:
+class SeriesPandasMixin:
     """``self`` is a :class:`Series`."""
 
     __slots__ = ()
@@ -298,7 +298,7 @@ class _SeriesPandasMixin:
         return s.take([i for i in range(len(s)) for _ in range(n)])
 
     def replace(
-        self, to_replace: "ReplaceKey", value: "Union[ReplaceValue, _Omitted]" = _OMITTED
+        self, to_replace: "ReplaceKey", value: "Union[ReplaceValue, Omitted]" = OMITTED
     ) -> "Series":
         """Replace values, pandas' forms: ``replace(old, new)``,
         ``replace([old, ...], new)``, ``replace([old, ...], [new, ...])`` (paired
@@ -310,7 +310,7 @@ class _SeriesPandasMixin:
         :meth:`where` does); a string needs a string column and a number a numeric
         one, else ``TypeError``. An old value its column type cannot hold matches
         nothing. Bool, list and temporal columns raise ``TypeError``."""
-        return _replace_in(self._s(), _replace_pairs(to_replace, value), None, True)
+        return replace_in(self._s(), replace_pairs(to_replace, value), None, True)
 
     def to_frame(self, name: Optional[str] = None) -> "DataFrame":
         """A one-column frame; the column is ``name``, else this Series' name,
@@ -578,4 +578,4 @@ class _SeriesILoc:
         raise TypeError("a Series is immutable; assign through df.loc[rows, column] = value")
 
 
-__all__ = ["_SeriesPandasMixin", "_SeriesILoc"]
+__all__ = ["SeriesPandasMixin", "_SeriesILoc"]

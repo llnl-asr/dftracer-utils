@@ -26,19 +26,17 @@ from typing import (
     overload,
 )
 
-from .dftracer_utils_ext import Store as _NativeStore
-from .dftracer_utils_ext import StoreBatch as _NativeBatch
-from .dftracer_utils_ext import StoreNamespace as _NativeNamespace
-from .dftracer_utils_ext import StoreSnapshot as _NativeSnapshot
-from .store_codec import (
+from ..dftracer_utils_ext import Store as _NativeStore
+from ..dftracer_utils_ext import StoreBatch as _NativeBatch
+from ..dftracer_utils_ext import StoreNamespace as _NativeNamespace
+from ..dftracer_utils_ext import StoreSnapshot as _NativeSnapshot
+from .codec import (
     BytesLike,
     Encodable,
-    StoreAware,
     decode,
     encode,
     encode_prefix,
     matches_prefix,
-    register_type,
 )
 
 if TYPE_CHECKING:
@@ -555,26 +553,3 @@ class Store:
     def snapshot(self) -> Snapshot:
         """A point-in-time view of the store."""
         return Snapshot(self._native.snapshot())
-
-
-__all__ = [
-    "Batch",
-    "BytesLike",
-    "CopyInfo",
-    "Encodable",
-    "Namespace",
-    "PackReport",
-    "RawBatch",
-    "RawNamespace",
-    "Scope",
-    "ScopeState",
-    "Snapshot",
-    "SourceStat",
-    "Store",
-    "StoreAware",
-    "decode",
-    "encode",
-    "encode_prefix",
-    "matches_prefix",
-    "register_type",
-]

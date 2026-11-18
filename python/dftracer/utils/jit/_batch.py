@@ -15,7 +15,8 @@ import ast
 from typing import Any, Dict, Iterable, List, NoReturn, Optional, Tuple
 
 from .._c_text import c_str_literal
-from .._jit_errors import JitError, _Source
+from .._eval import ARITH_CODE, COMPARE_CODE
+from .._jit_errors import JitError, Source
 
 VOCABULARY = (
     'df["col"], numbers, + - * /, unary -, comparisons (a < x <= b), & | ~ on masks, '
@@ -30,9 +31,7 @@ _INT_COLUMNS = frozenset({"pid", "tid", "ts", "dur", "ph"})
 # int64, so ``dur - 20`` is negative as in Python instead of wrapping.
 _U64_COLUMNS = frozenset({"pid", "tid", "ts", "dur"})
 
-_CMP_CODE = {ast.Gt: 0, ast.GtE: 1, ast.Lt: 2, ast.LtE: 3, ast.Eq: 4, ast.NotEq: 5}
 _CMP_FLIP = {0: 2, 1: 3, 2: 0, 3: 1, 4: 4, 5: 5}
-_BIN_CODE = {ast.Add: 0, ast.Sub: 1, ast.Mult: 2, ast.Div: 3}
 _ABS, _NEGATE = 0, 8
 
 _REDUCERS = {
@@ -626,7 +625,7 @@ class _Lowering:
             domain = self._series_args((a, b), node)
             kind = "and" if isinstance(node.op, ast.BitAnd) else "or"
             return _V(kind, "mask", "int", domain, args=(a, b))
-        code = _BIN_CODE.get(type(node.op))
+        code = ARITH_CODE.get(type(node.op))
         if code is None:
             _fail(
                 f"operator {type(node.op).__name__} in a column expression. "
@@ -666,7 +665,7 @@ class _Lowering:
         parts: List[_V] = []
         left = node.left
         for op, right in zip(node.ops, node.comparators):
-            code = _CMP_CODE.get(type(op))
+            code = COMPARE_CODE.get(type(op))
             if code is None:
                 _fail(
                     f"`{type(op).__name__}` on columns. Vocabulary: {VOCABULARY}",
@@ -1090,7 +1089,7 @@ def lower_batch(
 ) -> BatchHook:
     """Lower an ``each_batch`` function to a :class:`BatchHook`; ``maps`` is
     the plugin's ``jit.map`` declarations and ``plains`` its plain fields."""
-    source = _Source(fn)
+    source = Source(fn)
     try:
         tree = ast.parse(source.text)
         funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef)]

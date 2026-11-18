@@ -43,8 +43,8 @@ from ._convert import (
     index_columns,
 )
 from ._eval import Columnar
-from ._pandas_frame import _FramePandasMixin
-from ._polars_frame import _FramePolarsMixin
+from ._pandas_frame import FramePandasMixin
+from ._polars_frame import FramePolarsMixin
 from .agg import select_aggs
 from .enums import DType, rule_to_units
 from .expr import Agg, Expr, Lit, Named, col, resolve_selectors, when
@@ -332,7 +332,7 @@ def norm_window_spec(spec: Sequence[Any]) -> Tuple[object, ...]:
     return (func, value, offset, name, time, threshold, counter, pre, post, end, span, range_frame)
 
 
-class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
+class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
     """A named set of columns: native frame ops plus Arrow conversion.
 
     ``DataFrame({"a": [1, 2]})`` builds one from a ``{name: array-like}``
@@ -1670,19 +1670,19 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         fillna = fill_null
         drop_duplicates = unique
         take = gather
-        divide = _FramePandasMixin.div
-        truediv = _FramePandasMixin.div
-        multiply = _FramePandasMixin.mul
-        subtract = _FramePandasMixin.sub
-        product = _FramePandasMixin.prod
-        rtruediv = _FramePandasMixin.rdiv
-        map = _FramePandasMixin.applymap
-        isnull = _FramePandasMixin.isna
-        notnull = _FramePandasMixin.notna
-        backfill = _FramePandasMixin.bfill
-        pad = _FramePandasMixin.ffill
+        divide = FramePandasMixin.div
+        truediv = FramePandasMixin.div
+        multiply = FramePandasMixin.mul
+        subtract = FramePandasMixin.sub
+        product = FramePandasMixin.prod
+        rtruediv = FramePandasMixin.rdiv
+        map = FramePandasMixin.applymap
+        isnull = FramePandasMixin.isna
+        notnull = FramePandasMixin.notna
+        backfill = FramePandasMixin.bfill
+        pad = FramePandasMixin.ffill
         limit = head
-        clone = _FramePandasMixin.copy
+        clone = FramePandasMixin.copy
         select_seq = select
         with_columns_seq = with_columns
         pass

@@ -19,7 +19,7 @@ from typing import (
 )
 
 from ._convert import _require_pyarrow
-from ._pandas_frame import _is_numeric, _series
+from ._pandas_frame import column_series, is_numeric_series
 from .series import Series
 
 if TYPE_CHECKING:
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from .expr import Expr
 
 
-class _FramePolarsMixin:
+class FramePolarsMixin:
     """Mixed into :class:`DataFrame`; every method reads the frame through
     the wrapper's own API."""
 
@@ -44,7 +44,7 @@ class _FramePolarsMixin:
 
     def _numeric_columns(self) -> List[str]:
         f = self._frame()
-        return [c for c in f.columns if _is_numeric(_series(f, c))]
+        return [c for c in f.columns if is_numeric_series(column_series(f, c))]
 
     # -- horizontal reductions --------------------------------------------------
     def sum_horizontal(self) -> Series:
@@ -54,11 +54,11 @@ class _FramePolarsMixin:
         if not cols:
             raise ValueError("sum_horizontal: no numeric column")
         f = self._frame()
-        out = _series(f, cols[0]).astype("float64").fillna(0.0)
-        present = _series(f, cols[0]).notna()
+        out = column_series(f, cols[0]).astype("float64").fillna(0.0)
+        present = column_series(f, cols[0]).notna()
         for c in cols[1:]:
-            out = out + _series(f, c).astype("float64").fillna(0.0)
-            present = present.logical(1, _series(f, c).notna())
+            out = out + column_series(f, c).astype("float64").fillna(0.0)
+            present = present.logical(1, column_series(f, c).notna())
         return out.where(present, out.shift(len(out)))
 
     def mean_horizontal(self) -> Series:
@@ -66,9 +66,9 @@ class _FramePolarsMixin:
         if not cols:
             raise ValueError("mean_horizontal: no numeric column")
         f = self._frame()
-        count = _series(f, cols[0]).notna().astype("int64")
+        count = column_series(f, cols[0]).notna().astype("int64")
         for c in cols[1:]:
-            count = count + _series(f, c).notna().astype("int64")
+            count = count + column_series(f, c).notna().astype("int64")
         total = self.sum_horizontal()
         return total / count.where(count.ge(1), count.shift(len(count)))
 
@@ -83,9 +83,9 @@ class _FramePolarsMixin:
         if not cols:
             raise ValueError("min_horizontal: no numeric column")
         f = self._frame()
-        out = _series(f, cols[0]).astype("float64")
+        out = column_series(f, cols[0]).astype("float64")
         for c in cols[1:]:
-            other = _series(f, c).astype("float64")
+            other = column_series(f, c).astype("float64")
             # Fill each side from the other so a lone value wins, then pick.
             other = other.where(other.notna(), out)
             out = out.where(out.notna(), other)
@@ -104,7 +104,9 @@ class _FramePolarsMixin:
 
         out = self._frame()
         if isinstance(columns, DataFrame):
-            items: List[Tuple[str, Series]] = [(c, _series(columns, c)) for c in columns.columns]
+            items: List[Tuple[str, Series]] = [
+                (c, column_series(columns, c)) for c in columns.columns
+            ]
         elif isinstance(columns, dict):
             items = list(columns.items())
         else:
@@ -208,7 +210,7 @@ class _FramePolarsMixin:
             index += len(f)
         if not 0 <= index < len(f):
             raise IndexError(f"row: {index} out of range")
-        values = tuple(_series(f, c)[index] for c in f.columns)  # type: ignore[index]
+        values = tuple(column_series(f, c)[index] for c in f.columns)  # type: ignore[index]
         return dict(zip(f.columns, values)) if named else values
 
     def item(self, row: Optional[int] = None, column: Optional[Union[int, str]] = None) -> object:
@@ -221,21 +223,21 @@ class _FramePolarsMixin:
         if row is None or column is None:
             raise ValueError("item: pass both row and column")
         name = f.columns[column] if isinstance(column, int) else column
-        return _series(f, name)[row]
+        return column_series(f, name)[row]
 
     def get_column(self, name: str) -> Series:
-        return _series(self._frame(), name)
+        return column_series(self._frame(), name)
 
     def get_columns(self) -> List[Series]:
         f = self._frame()
-        return [_series(f, c) for c in f.columns]  # type: ignore[misc]
+        return [column_series(f, c) for c in f.columns]  # type: ignore[misc]
 
     def get_column_index(self, name: str) -> int:
         return self._frame().column_index(name)
 
     def to_series(self, index: int = 0) -> Series:
         f = self._frame()
-        return _series(f, f.columns[index])
+        return column_series(f, f.columns[index])
 
     def is_empty(self) -> bool:
         return len(self._frame()) == 0
@@ -254,8 +256,8 @@ class _FramePolarsMixin:
         f = self._frame()
         out = f
         for c in f.columns:
-            s = _series(f, c)
-            if not _is_numeric(s):
+            s = column_series(f, c)
+            if not is_numeric_series(s):
                 continue
             nan = s.is_nan()
             if value is None:
@@ -270,8 +272,8 @@ class _FramePolarsMixin:
         names = [subset] if isinstance(subset, str) else list(subset) if subset else list(f.columns)
         keep = None
         for c in names:
-            s = _series(f, c)
-            if not _is_numeric(s):
+            s = column_series(f, c)
+            if not is_numeric_series(s):
                 continue
             ok = s.is_nan().logical_not()
             keep = ok if keep is None else keep.logical(0, ok)

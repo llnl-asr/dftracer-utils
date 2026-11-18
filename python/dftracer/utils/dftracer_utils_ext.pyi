@@ -29,7 +29,7 @@ from typing_extensions import Self, TypeAlias, TypeVar
 from .dataframe import DataFrame as PublicDataFrame
 from .lazyframe import LazyFrame as PublicLazyFrame
 from .series import Series as PublicSeries
-from .trace_viewer import TraceViewer as PublicTraceViewer
+from .trace import TraceViewer as PublicTraceViewer
 
 if TYPE_CHECKING:
     import numpy as np  # ty: ignore[import-not-found]
@@ -514,7 +514,7 @@ class Index:
 
     def write_agg_config(self, aggregation_config: Any) -> None:
         """Record the aggregation config a distributed build aggregated its
-        files with (a ``dftracer.utils.indexer.AggregationConfig``). Each
+        files with (a ``dftracer.utils.index.AggregationConfig``). Each
         file's ``dftracer.agg`` entry comes with its data."""
         ...
 

@@ -168,7 +168,7 @@ def test_ewm_std_is_shift_invariant():
 
 
 def test_merged_partitions_equal_one_pass():
-    from dftracer.utils.dask_frame import DaskFrame
+    from dftracer.utils.dask.frame import DaskFrame
 
     v = normal(1e9, 1.0, N, 4)
     ref = two_pass(v)

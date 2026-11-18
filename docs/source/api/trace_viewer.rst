@@ -312,10 +312,10 @@ viewer and returns the final node DataFrame:
 Sessions
 --------
 
-``view.session()`` returns a :class:`~dftracer.utils.trace_viewer.Session`. Plans and lazy
+``view.session()`` returns a :class:`~dftracer.utils.trace.Session`. Plans and lazy
 results registered on it run together, as :func:`~dftracer.utils.collect_all`
 runs them, at the end of the ``with`` block or on the first
-:meth:`Handle.result <dftracer.utils.trace_viewer.Handle.result>`:
+:meth:`Handle.result <dftracer.utils.trace.Handle.result>`:
 
 .. code-block:: python
 
@@ -398,11 +398,11 @@ How the viewer types relate and what they return:
    :members:
    :undoc-members:
 
-.. autoclass:: dftracer.utils.trace_viewer.Session
+.. autoclass:: dftracer.utils.trace.Session
    :members:
    :undoc-members:
 
-.. autoclass:: dftracer.utils.trace_viewer.Handle
+.. autoclass:: dftracer.utils.trace.Handle
    :members:
    :undoc-members:
 

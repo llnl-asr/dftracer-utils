@@ -24,12 +24,16 @@ Example::
 from __future__ import annotations
 
 import ast
+import struct
 from typing import TYPE_CHECKING, Callable, List, Optional, Sequence, Tuple, TypedDict, Union, cast
 
-from . import _plugin_build
+from . import _build
 from ._c_text import c_str_literal as _c_str_literal
-from ._jit_errors import JitError, _Source
+from ._eval import ARITH_CODE, ARITH_SYMBOL, COMPARE_SYMBOL
+from ._jit_errors import JitError, Source
+from .dftracer_utils_ext import jit_run_op, vec_eval
 from .enums import DType
+from .series import Series
 
 if TYPE_CHECKING:
     from typing_extensions import TypeGuard
@@ -80,29 +84,13 @@ _SIZE = {
 }
 _FLOAT = {"DFTU_T_F64", "DFTU_T_F32"}
 _STR = "DFTU_T_STR"
-_ARITH = {
-    ast.Add: "+",
-    ast.Sub: "-",
-    ast.Mult: "*",
-    ast.Div: "/",
-    ast.Mod: "%",
-}
-_CMP = {
-    ast.Eq: "==",
-    ast.NotEq: "!=",
-    ast.Lt: "<",
-    ast.Gt: ">",
-    ast.LtE: "<=",
-    ast.GtE: ">=",
-}
 # The only comparators an interned id supports; equality is id equality
 # (equal iff the underlying strings are), never an ordering.
-_STR_CMP = {ast.Eq: "==", ast.NotEq: "!="}
+_STR_CMP = {node: COMPARE_SYMBOL[node] for node in (ast.Eq, ast.NotEq)}
 
 # expr.py's post-order AST opcodes for _ext.vec_eval (mirror columnar_eval.cpp).
 _AST_COL, _AST_LIT_I, _AST_LIT_F, _AST_BIN = 0, 1, 2, 3
 _AST_CAST, _AST_UNARY = 8, 9
-_EXPR_BIN = {ast.Add: 0, ast.Sub: 1, ast.Mult: 2, ast.Div: 3}  # no Mod
 _UNARY_ABS, _UNARY_NEGATE = 0, 8
 _NONCOMMUTATIVE = {ast.Sub, ast.Div}
 # Op value types the Expr engine can target today (dataframe::TypeId ordinals).
@@ -199,7 +187,7 @@ def _lower_node(node: ast.expr, var: str, in_type: str, literals: List[str]) -> 
         if len(node.ops) != 1 or len(node.comparators) != 1:
             raise JitOpError("only a single comparison is allowed in an op body")
         cmp_op = node.ops[0]
-        sym = _CMP.get(type(cmp_op), type(cmp_op).__name__)
+        sym = COMPARE_SYMBOL.get(type(cmp_op), type(cmp_op).__name__)
         if in_type != _STR or type(cmp_op) not in _STR_CMP:
             raise JitOpError(
                 f"operator {sym!r} is not supported on {in_type}; DFTU_T_STR "
@@ -216,7 +204,7 @@ def _lower_node(node: ast.expr, var: str, in_type: str, literals: List[str]) -> 
             return "x"
         raise JitOpError(_str_op_error(_op_name(node)))
     if isinstance(node, ast.BinOp):
-        sym = _ARITH.get(type(node.op))
+        sym = ARITH_SYMBOL.get(type(node.op))
         if sym is None:
             raise JitOpError("only + - * / % are allowed in an op body")
         return (
@@ -243,7 +231,7 @@ def _lower_node(node: ast.expr, var: str, in_type: str, literals: List[str]) -> 
 
 def _op_name(node: ast.expr) -> str:
     if isinstance(node, ast.BinOp):
-        return _ARITH.get(type(node.op), type(node.op).__name__)
+        return ARITH_SYMBOL.get(type(node.op), type(node.op).__name__)
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
         return "-"
     if _is_abs_call(node):
@@ -296,7 +284,7 @@ def _lower_expr(
     Div always promotes to Float64 first) and `scalar - column` / `scalar /
     column` (no such kernel; Add/Mul commute instead of needing one)."""
     if isinstance(node, ast.BinOp):
-        code = _EXPR_BIN.get(type(node.op))
+        code = ARITH_CODE.get(type(node.op))
         if code is None:
             return None
         left = _lower_expr(node.left, var, leaf, var_is_float)
@@ -345,14 +333,14 @@ def op(fn: Callable[..., object]) -> Op:
     The body must be a single ``return <arithmetic on the argument>``; anything
     else raises :class:`JitOpError` at decoration time.
     """
-    source = _Source(fn)
+    source = Source(fn)
     try:
         return _op_from(fn, source)
     except JitOpError as exc:
         raise source.relocate(exc, ast.parse(source.text).body[0]) from None
 
 
-def _op_from(fn: Callable[..., object], source: _Source) -> Op:
+def _op_from(fn: Callable[..., object], source: Source) -> Op:
     ann = getattr(fn, "__annotations__", {})
     tree = ast.parse(source.text)
     func = tree.body[0]
@@ -527,24 +515,12 @@ def compile_op(op_obj: Op, *, name: str = "op") -> str:
     """Emit and build a .so exposing ``dftracer_build_op(host)`` for `op_obj`.
     Returns the cached ``.so`` path (run it via :func:`run_op`)."""
     source = _emit(op_obj)
-    include = _plugin_build.include_dir()
-    cxx = _plugin_build.compiler()
-    digest = _plugin_build.source_digest(source, include, cxx)
-    out = _plugin_build.cache_dir() / f"{name}.{digest}.so"
-    if not out.is_file():
-        src = out.with_suffix(".cpp")
-        src.write_text(source, encoding="utf-8")
-        _plugin_build.build_shared(str(src), out=str(out), name=name)
-    return str(out)
+    return _build.compile_source(source, name, group="op")
 
 
 def run_op(op_obj: Op, value: Union[int, float]) -> Union[int, float]:
     """Compile `op_obj`, then build and run its dftu_op graph over `value` on a
     standalone compose host (no plugin, no scan), returning the output value."""
-    import struct
-
-    from .dftracer_utils_ext import jit_run_op  # native standalone runner
-
     so = compile_op(op_obj)
     in_fmt = _STRUCT[op_obj.in_type]
     out_fmt = _STRUCT[op_obj.out_type]
@@ -587,9 +563,6 @@ def run_op_array(
 def _run_fused(
     op_obj: Op, ast_tokens: List[tuple], values: Sequence[_ArrayValue]
 ) -> List[_ArrayValue]:
-    from .dftracer_utils_ext import vec_eval
-    from .series import Series
-
     dtype = DType.FLOAT64 if is_float_type(op_obj.in_type) else DType.INT64
     col = Series.from_list(list(values), dtype=dtype)
     out = vec_eval(ast_tokens, [col])

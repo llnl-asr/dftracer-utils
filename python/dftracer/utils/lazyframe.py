@@ -69,7 +69,7 @@ if TYPE_CHECKING:
     from ._loc import LazyILoc, LazyLoc, Resampler
     from .enums import DType
     from .runtime import Runtime
-    from .trace_viewer import TraceViewer
+    from .trace.viewer import TraceViewer
 
     _P = ParamSpec("_P")
     _R = TypeVar("_R")

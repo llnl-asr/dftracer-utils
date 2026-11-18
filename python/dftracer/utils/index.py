@@ -4,16 +4,14 @@
 import json
 import os
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Set, Type, Union
+from typing import Dict, List, Optional, Sequence, Set, Type, Union
 
+from .dataframe import DataFrame
 from .dftracer_utils_ext import CheckpointIndexer as _NativeCheckpointIndexer
 from .dftracer_utils_ext import Indexer as _NativeIndexer
 from .enums import coerce_bytes, coerce_duration
 from .runtime import Runtime, TaskHandle
 from .schemas import RecordSchema, schema_id
-
-if TYPE_CHECKING:
-    from .dataframe import DataFrame
 
 DEFAULT_CHECKPOINT_SIZE = 32 * 1024 * 1024  # 32MB
 
@@ -369,8 +367,6 @@ class Indexer:
             >>> files = indexer.rowset("files").to_dict()
             >>> # files = {"fhash": ["abc123", ...], "path": ["/data.h5", ...]}
         """
-        from .dataframe import DataFrame
-
         return DataFrame(self._native.rowset(name))
 
     def query_file_pids(self, path: str) -> set:
@@ -408,7 +404,7 @@ class Indexer:
         return self._file_info_cache
 
 
-def _open_readonly_indexer(files, index_dir: str) -> "Indexer":
+def open_readonly_indexer(files, index_dir: str) -> "Indexer":
     """Open an Indexer that only reads existing index tiers (never builds).
 
     Used by the distributed read paths where the index is already built.

@@ -25,13 +25,12 @@ from __future__ import annotations
 import ast
 import builtins
 import math
-import os
-import subprocess
 from typing import Callable, Dict, List, NoReturn, Optional, Set, Tuple
 
-from .. import _plugin_build
+from .. import _build
 from .._c_text import c_str_literal
-from .._jit_errors import JitError, _Source
+from .._eval import COMPARE_SYMBOL
+from .._jit_errors import JitError, Source
 
 BOOL, INT, FLOAT = 0, 1, 2
 _TYPE_NAMES = {"bool": BOOL, "int": INT, "float": FLOAT}
@@ -201,18 +200,9 @@ _MATH_CONST = {
     "nan": math.nan,
 }
 
-_CMP = {
-    ast.Lt: "<",
-    ast.LtE: "<=",
-    ast.Gt: ">",
-    ast.GtE: ">=",
-    ast.Eq: "==",
-    ast.NotEq: "!=",
-}
-
 
 class _Compiler:
-    def __init__(self, fn: Callable[..., object], src: _Source) -> None:
+    def __init__(self, fn: Callable[..., object], src: Source) -> None:
         self.fn = fn
         self.src = src
         self.vars: Dict[str, int] = {}
@@ -419,7 +409,7 @@ class _Compiler:
         nodes = [node.left] + list(node.comparators)
         parts = []
         for i, op in enumerate(node.ops):
-            sym = _CMP.get(type(op))
+            sym = COMPARE_SYMBOL.get(type(op))
             if sym is None:
                 self.reject("this comparison operator", node)
             (a, ta), (b, tb) = operands[i], operands[i + 1]
@@ -749,7 +739,7 @@ def compile_udf(fn: Callable[..., object], name: str, volatile: bool) -> str:
     shared library. Raises :class:`JitError`, located at the offending node, for
     a body outside the subset."""
     try:
-        src = _Source(fn)
+        src = Source(fn)
     except (OSError, TypeError) as exc:
         raise JitError(f"@dft.udf cannot read the source of {name}: {exc}", locate=False) from exc
     tree = ast.parse(src.text)
@@ -759,37 +749,11 @@ def compile_udf(fn: Callable[..., object], name: str, volatile: bool) -> str:
     compiler = _Compiler(fn, src)
     row_fn, params, ret = compiler.compile(node)
     source = _emit(name, row_fn, params, ret, volatile)
-    return _build(name, source)
+    return _build_udf(name, source)
 
 
-def _build(name: str, source: str) -> str:
+def _build_udf(name: str, source: str) -> str:
     try:
-        include = _plugin_build.include_dir()
-        cxx = _plugin_build.compiler()
-        flags = list(_plugin_build.cflags())
-        digest = _plugin_build.source_digest(source, include, cxx)
-        out_dir = _plugin_build.cache_dir() / "udf" / digest
-        out_path = out_dir / "udf.so"
-        if out_path.is_file():
-            return str(out_path)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        # Built beside the final name and renamed, so a process that builds the
-        # same UDF at the same time never loads a half-written library.
-        stem = f"udf.{os.getpid()}"
-        src_path = out_dir / f"{stem}.cpp"
-        tmp_path = out_dir / f"{stem}.so"
-        src_path.write_text(source, encoding="utf-8")
-        try:
-            proc = subprocess.run(
-                [cxx, *flags, "-O2", "-o", str(tmp_path), str(src_path)],
-                capture_output=True,
-                text=True,
-            )
-        finally:
-            src_path.unlink()
-        if proc.returncode != 0:
-            raise _plugin_build.PluginBuildError(proc.stderr)
-        os.replace(tmp_path, out_path)
-        return str(out_path)
-    except _plugin_build.PluginBuildError as exc:
+        return _build.compile_source(source, "udf", group="udf", extra_flags=("-O2",))
+    except _build.BuildError as exc:
         raise JitError(f"udf '{name}' compile failed:\n{exc}", locate=False) from exc

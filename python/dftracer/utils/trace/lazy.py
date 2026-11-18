@@ -20,29 +20,29 @@ from typing import (
     Union,
 )
 
-from . import dftracer_utils_ext as _ext
-from .dataframe import DataFrame, JoinHow, WindowSpec
-from .expr import (
+from .. import dftracer_utils_ext as _ext
+from ..dataframe import DataFrame, JoinHow, WindowSpec
+from ..expr import (
     Agg,
     Expr,
 )
-from .runtime import TaskHandle
-from .series import Series
+from ..runtime import TaskHandle
+from ..series import Series
 
 if TYPE_CHECKING:
     from typing_extensions import Concatenate, ParamSpec
 
-    from ._loc import LazyILoc, LazyLoc, Resampler
-    from .enums import DType
+    from .._loc import LazyILoc, LazyLoc, Resampler
+    from ..enums import DType
 
     _P = ParamSpec("_P")
     _R = TypeVar("_R")
 
 if TYPE_CHECKING:
-    from .lazyframe import LazyFrame, SinkSummary, Value
+    from ..lazyframe import LazyFrame, SinkSummary, Value
 
 
-class _LazyOps(_ext.TraceViewer):
+class LazyOps(_ext.TraceViewer):
     __slots__ = ()
 
     def set_index(self, names: Union[str, Sequence[str]]) -> "LazyFrame":

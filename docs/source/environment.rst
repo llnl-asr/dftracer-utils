@@ -369,7 +369,7 @@ Monitor (coroutine/task instrumentation)
 Plugin and JIT build
 ----------------------
 
-Read by the Python compile backend (``python/dftracer/utils/_plugin_build.py``)
+Read by the Python compile backend (``python/dftracer/utils/_build.py``)
 shared by the ``@jit.plugin`` decorator and the ``dftracer_plugin``
 console-script.
 

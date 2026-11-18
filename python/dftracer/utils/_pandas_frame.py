@@ -24,7 +24,16 @@ from typing import (
 from . import dftracer_utils_ext as _ext
 from ._convert import _like
 from ._label_align import LabelAlignMixin
-from ._pandas_series import OMITTED, replace_in, replace_pairs, valid_edge
+from ._levels import (
+    LevelArg,
+    LevelsMixin,
+    label_text,
+    pick_levels,
+    sort_plan,
+    sorted_positions,
+)
+from ._pandas_series import OMITTED, Omitted, replace_in, replace_pairs, valid_edge
+from ._series_index import default_name, internal_name, positions, public_name, renamed_names
 from .enums import DType, rule_to_units
 from .series import Series
 
@@ -33,7 +42,7 @@ if TYPE_CHECKING:
     from typing_extensions import Concatenate, ParamSpec, Self
 
     from ._apply import Row
-    from ._pandas_series import Omitted, ReplaceKey, ReplaceValue
+    from ._pandas_series import ReplaceKey, ReplaceValue
     from .dataframe import DataFrame
     from .dftracer_utils_ext import Scalar
     from .groupby import GroupBy
@@ -61,7 +70,7 @@ def column_series(frame: DataFrame, name: str) -> Series:
     return _ext.DataFrame.__getitem__(frame, name)
 
 
-class FramePandasMixin(LabelAlignMixin, _ext.DataFrame):
+class FramePandasMixin(LabelAlignMixin, LevelsMixin, _ext.DataFrame):
     """pandas spellings over the engine's Series kernels, one column at a
     time. ``self`` is a :class:`DataFrame`."""
 
@@ -672,11 +681,49 @@ class FramePandasMixin(LabelAlignMixin, _ext.DataFrame):
         order.insert(loc, column)
         _ext.DataFrame._replace(self, _ext.DataFrame.select(self, *order))
 
-    def add_prefix(self, prefix: str) -> DataFrame:
+    def _level_names(self) -> list[str]:
+        return list(_ext.DataFrame.index_names(self))
+
+    def _keep_levels(self, order: list[int]) -> DataFrame:
+        names = self._level_names()
+        keep = [names[i] for i in order]
+        gone = {n for n in names if n not in keep}
+        frame = self._frame()
+        out = _ext.DataFrame.select(frame, *[c for c in frame._names() if c not in gone])
+        return _ext.DataFrame.with_index(out, keep)
+
+    def _axis_is_rows(self, axis: object) -> bool:
+        if axis in (0, "index", "rows"):
+            return True
+        if axis in (1, "columns"):
+            return False
+        raise ValueError(f"No axis named {axis} for object type DataFrame")
+
+    def add_prefix(self, prefix: str, axis: int | str | None = None) -> DataFrame:
+        """The pandas ``add_prefix``: ``prefix`` in front of every column name
+        (``axis=1``, the default) or in front of every row label as text
+        (``axis=0``, each level of a ``MultiIndex``; a frame with no index gets
+        the positions as labels)."""
+        if axis is not None and self._axis_is_rows(axis):
+            return self._text_labels(prefix, "")
         return self._frame().rename({c: prefix + c for c in self.columns})
 
-    def add_suffix(self, suffix: str) -> DataFrame:
+    def add_suffix(self, suffix: str, axis: int | str | None = None) -> DataFrame:
+        """As :meth:`add_prefix`, with ``suffix`` after the name or the label."""
+        if axis is not None and self._axis_is_rows(axis):
+            return self._text_labels("", suffix)
         return self._frame().rename({c: c + suffix for c in self.columns})
+
+    def _text_labels(self, prefix: str, suffix: str) -> DataFrame:
+        frame = self._frame()
+        names = self._level_names()
+        if not names:
+            names = [default_name(0)]
+            frame = frame.with_column(names[0], positions(len(frame)))
+        for name in names:
+            level = column_series(frame, name)
+            frame = frame.with_column(name, label_text(level, prefix, suffix))
+        return _ext.DataFrame.with_index(frame, names)
 
     def reindex(
         self,
@@ -771,21 +818,53 @@ class FramePandasMixin(LabelAlignMixin, _ext.DataFrame):
         assert isinstance(out, DataFrame)
         return out
 
-    def sort_index(self, ascending: bool = True, *, axis: int | str = 0) -> DataFrame:
+    def sort_index(
+        self,
+        ascending: bool | Sequence[bool] = True,
+        *,
+        axis: int | str = 0,
+        level: LevelArg = None,
+        sort_remaining: bool = True,
+        na_position: Literal["first", "last"] = "last",
+        ignore_index: bool = False,
+        kind: str = "quicksort",
+        key: Callable[[Series], Series] | None = None,
+        inplace: bool = False,
+    ) -> DataFrame:
         """Sort by the index columns (a frame with no index is already in
-        position order). ``axis=1`` (or ``"columns"``) orders the columns by
-        name instead, ascending unless ``ascending=False``; the values of every
-        column are unchanged and any index columns stay first."""
-        if axis in (1, "columns"):
-            keys = list(self.index_names())
-            rest = sorted((c for c in self.columns if c not in keys), reverse=not ascending)
-            return self._frame().select(*keys, *rest)
-        if axis not in (0, "index"):
-            raise ValueError(f"sort_index: axis must be 0/'index' or 1/'columns', got {axis!r}")
+        position order). With ``level`` (a name, a position or a list) the rows
+        are ordered by those levels first and, with ``sort_remaining``, by the
+        others after them; ``ascending`` is one flag or one for each level in
+        ``level``, a null label goes last (or first with ``na_position``),
+        ``key`` is called on each level and returns the values to order by, and
+        ``ignore_index`` drops the index afterwards. The sort is stable, so
+        ``kind`` is accepted and not used. ``axis=1`` (or ``"columns"``) orders
+        the columns by name instead, ascending unless ``ascending=False``; the
+        values of every column are unchanged and any index columns stay first."""
+        if inplace:
+            raise ValueError("sort_index: a DataFrame is immutable; use the result")
+        frame = self._frame()
         keys = list(self.index_names())
+        if not self._axis_is_rows(axis):
+            rest = sorted((c for c in self.columns if c not in keys), reverse=not ascending)
+            return frame.select(*keys, *rest)
+        if not keys and key is None:
+            _, flags, _ = sort_plan([default_name(0)], level, ascending, sort_remaining)
+            if flags[0]:
+                return frame
         if not keys:
-            return self._frame() if ascending else self._frame().reverse()
-        return self._frame().sort_values(keys, ascending=ascending)
+            keys = [default_name(0)]
+            frame = frame.with_column(keys[0], positions(len(frame))).set_index(keys)
+        picked, flags, keyed = sort_plan(keys, level, ascending, sort_remaining)
+        if key is None:
+            out = frame.sort_values([keys[i] for i in picked], flags, na_position)
+        else:
+            levels = [column_series(frame, keys[i]) for i in picked]
+            order = sorted_positions(
+                [keys[i] for i in picked], levels, flags, na_position, key, keyed
+            )
+            out = frame.gather(order)
+        return out.reset_index(drop=True) if ignore_index else out
 
     def first_valid_index(self) -> object | None:
         """The label of the first row with any present value (``None`` when
@@ -939,13 +1018,90 @@ class FramePandasMixin(LabelAlignMixin, _ext.DataFrame):
         lines.append(f"memory: {total} bytes")
         return "\n".join(lines)
 
-    def rename_axis(self, name: str) -> DataFrame:
-        """The single index column renamed to ``name`` (pandas
-        ``rename_axis``); needs ``set_index`` first."""
-        from .dataframe import single_index
+    def rename_axis(
+        self,
+        mapper: object = OMITTED,
+        *,
+        index: object = OMITTED,
+        columns: object = OMITTED,
+        axis: int | str = 0,
+        copy: bool | None = None,
+        inplace: bool = False,
+    ) -> DataFrame:
+        """The pandas ``rename_axis`` on the row labels: a scalar or ``None``
+        names a single level, a list names every level, and with ``index=`` a
+        dict or a function maps the current names. A frame with no index gains
+        its positions as the index under the name. ``ValueError`` when a name is
+        already a column or repeats (pandas allows it); the column axis has no
+        name here, so ``columns=`` other than ``None`` raises
+        ``NotImplementedError``."""
+        if inplace:
+            raise ValueError("rename_axis: a DataFrame is immutable; use the result")
+        rows = self._axis_is_rows(axis)
+        if not isinstance(columns, Omitted) and columns is not None:
+            raise NotImplementedError("rename_axis: the column axis has no name")
+        given = index if not isinstance(index, Omitted) else mapper
+        if isinstance(given, Omitted) or (not rows and given is None):
+            return self._frame()
+        if given is mapper and (callable(given) or isinstance(given, dict)):
+            raise ValueError("Use `.rename` to alter labels with a mapper.")
+        if not rows:
+            raise NotImplementedError("rename_axis: the column axis has no name")
+        frame = self._frame()
+        current = self._level_names()
+        fresh = not current
+        new = renamed_names(current or [default_name(0)], given)
+        if fresh:
+            if new == [default_name(0)]:
+                return frame
+            frame = frame.with_column(new[0], positions(len(frame))).set_index(new)
+            return frame
+        if len(set(new)) != len(new) or any(n in self.columns for n in new):
+            raise ValueError("rename_axis: an index level cannot take the name of a column")
+        return frame.rename({a: b for a, b in zip(current, new) if a != b})
 
-        current = single_index(self.index_names(), "rename_axis")
-        return self._frame().rename({current: name})
+    # -- the pandas Index surface of what ``index`` returns ---------------------------
+    @property
+    def names(self) -> list[str | None]:
+        """The level names when this frame is the ``index`` of another object (the
+        levels are its columns)."""
+        return [public_name(c) for c in self._frame()._names()]
+
+    @property
+    def nlevels(self) -> int:
+        """The number of levels when this frame is the ``index`` of another object:
+        its columns."""
+        return len(self._frame()._names())
+
+    def get_level_values(self, level: int | str | None) -> Series:
+        """The level ``level`` (a name or a position) of the ``index`` of another
+        object, as a Series: the column of this frame. ``IndexError`` or
+        ``KeyError`` for another level, as pandas."""
+        names = self._frame()._names()
+        return column_series(self._frame(), names[pick_levels(names, level)[0]])
+
+    def set_names(
+        self, names: object, *, level: LevelArg = None, inplace: bool = False
+    ) -> DataFrame:
+        """The levels (the columns) under new names, as ``Index.set_names``: a
+        list of one name for each, or with ``level`` one name for it (a list for
+        a list of levels). ``ValueError`` for a name that repeats."""
+        if inplace:
+            raise ValueError("set_names: a DataFrame is immutable; use the result")
+        current = self._frame()._names()
+        if level is None:
+            new = renamed_names(current, names)
+        else:
+            picked = pick_levels(current, level)
+            values = list(names) if isinstance(names, (list, tuple)) else [names]
+            if len(values) != len(picked):
+                raise ValueError(f"Length of new names must be {len(picked)}, got {len(values)}")
+            new = list(current)
+            for i, v in zip(picked, values):
+                new[i] = internal_name(v, i)
+        if len(set(new)) != len(new):
+            raise ValueError("set_names: a level name repeats")
+        return self._frame().rename(dict(zip(current, new)))
 
     def kurtosis(self, fisher: bool = True, bias: bool = True) -> DataFrame:
         """The polars ``kurtosis`` of every numeric column, one row (see

@@ -1001,8 +1001,8 @@ def test_last_pandas_names_match_pandas():
     assert list(q.set_index("a").rename_axis("idx").schema)[0] == "idx"
     assert q.set_index("a").rename_axis("idx").columns == ["b", "s"]
     assert q.set_index("a").rename_axis("idx").index_names() == ["idx"]
-    with pytest.raises(ValueError):
-        q.rename_axis("idx")
+    named = q.rename_axis("idx")  # no index yet: the positions, under the name
+    assert named.index_names() == ["idx"] and named.to_pandas().index.tolist() == [0, 1, 2]
     _same(q.kurt(), pq.kurtosis(numeric_only=True).to_frame().T)
     assert _d(q.select("a", "b").swapaxes()) == _d(q.select("a", "b").T)
 

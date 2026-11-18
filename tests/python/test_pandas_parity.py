@@ -10,6 +10,8 @@ differs today, each with its reason; a listed case is a strict expected
 failure, so a fixed case fails the run until its row is deleted. A case that
 is not listed must match pandas exactly."""
 
+import re
+
 import pytest
 
 pa = pytest.importorskip("pyarrow")
@@ -631,8 +633,10 @@ def test_matches_pandas(kind, method, letter, args, kwargs):
         # Both sides are indexed by the group keys (as_index=True); compare
         # the index names, then the keys as columns.
         if not isinstance(theirs.index, pd.RangeIndex):
-            if isinstance(ours, DataFrame):
-                assert ours.index_names() == [str(n) for n in theirs.index.names]
+            if isinstance(ours, (DataFrame, Series)):
+                unnamed = re.compile(r"__index_level_\d+__")
+                shown = [None if unnamed.fullmatch(n) else n for n in ours.index_names()]
+                assert shown == list(theirs.index.names)
                 ours = ours.reset_index()
             theirs = theirs.reset_index()
     diff = compare(ours, theirs, norm_pandas(pd, theirs))

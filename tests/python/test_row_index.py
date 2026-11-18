@@ -537,9 +537,18 @@ def test_group_filter_and_apply_keep_the_original_labels():
         ref.groupby("g").filter(lambda x: len(x) > 2 and True),
     )
     got = ours.groupby("g").apply(lambda x: x.head(1))
-    assert got.index_names() == ["k"]
-    assert got.to_pandas().index.tolist() == [10, 30]
-    assert ours.groupby("g").take([0, 1]).to_pandas().index.tolist() == [10, 20, 30, 40]
+    assert got.index_names() == ["g", "k"]
+    assert got.to_pandas().index.tolist() == [("a", 10), ("b", 30)]
+    taken = ours.groupby("g").take([0, 1])
+    assert taken.index_names() == ["g", "k"]
+    assert taken.to_pandas().index.tolist() == [("a", 10), ("a", 20), ("b", 30), ("b", 40)]
+    # a group-by that does not index by the keys keeps the labels the rows had
+    assert ours.groupby("g", as_index=False).take([0, 1]).to_pandas().index.tolist() == [
+        10,
+        20,
+        30,
+        40,
+    ]
     assert ours.groupby("g").sample(1, random_state=0).index_names() == ["k"]
 
 

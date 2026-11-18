@@ -429,7 +429,7 @@ def rows_by_level(labels: Labels, level: object, key: object) -> Rows:
         rows = rows_by_label(labels, key)
         return Rows.take(rows.positions, drop=(0,))
     if labels.frame is not None:
-        found = Labels(labels.frame.set_index(labels.names[at]))
+        found = Labels(_ext.DataFrame.with_index(labels.frame, [labels.names[at]]))
     else:
         from ._series_index import with_levels
 

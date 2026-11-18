@@ -40,11 +40,12 @@ if TYPE_CHECKING:
 class LazyOps(_ext.TraceViewer):
     __slots__ = ()
 
-    def set_index(self, names: str | Sequence[str]) -> LazyFrame:
+    def set_index(self, names: str | Sequence[str], *, append: bool = False) -> LazyFrame:
         """Name the column(s) ``loc`` / ``resample`` read labels from; the
         columns stay in place. Several names: ``loc[(a, b)]`` matches every
-        level, ``loc[a]`` the first."""
-        return self.lazy().set_index(names)
+        level, ``loc[a]`` the first. With ``append`` they become levels after
+        the current ones (row positions come first when there is no index)."""
+        return self.lazy().set_index(names, append=append)
 
     def reset_index(self, drop: bool = False) -> LazyFrame:
         """Forget the index columns (kept as plain columns unless ``drop``);

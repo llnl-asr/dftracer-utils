@@ -9,7 +9,9 @@
 #   conversion:<what>, display:<what>
 Series.T | python-semantics | pandas container API on the Series, not an op
 Series.add | needs-token:SERIES | -
+Series.add_prefix | python-semantics | pandas container API on the Series, edits the row labels, not an op
 Series.add_scalar | needs-token:SCALAR_ARITH | -
+Series.add_suffix | python-semantics | pandas container API on the Series, edits the row labels, not an op
 Series.agg | python-semantics | pandas container API on the Series, not an op
 Series.all | needs-token:BOOL_VALUE | -
 Series.any | needs-token:BOOL_VALUE | -
@@ -38,6 +40,7 @@ Series.div_scalar | needs-token:SCALAR_ARITH | -
 Series.divmod | python-semantics | Python logic around native calls
 Series.dot | needs-token:SERIES | -
 Series.drop | python-semantics | pandas container API on the Series, not an op
+Series.droplevel | python-semantics | pandas container API on the Series, edits the row labels, not an op
 Series.dt | python-semantics | accessor or shape property of the column, not an op
 Series.dt_as_unit | needs-token:I64_ARG | -
 Series.dt_format | needs-token:STR_ARG | -
@@ -69,6 +72,7 @@ Series.full_like | python-semantics | pandas or polars semantics written over se
 Series.gather | python-semantics | pandas or polars semantics written over several native calls
 Series.ge | python-semantics | Python logic around native calls
 Series.get | python-semantics | pandas container API on the Series, not an op
+Series.get_level_values | python-semantics | pandas Index method of the object that index returns, not an op
 Series.groupby | python-semantics | pandas container API on the Series, not an op
 Series.gt | python-semantics | Python logic around native calls
 Series.has_nulls | python-semantics | polars spelling written over native calls
@@ -111,9 +115,11 @@ Series.mod | needs-token:SERIES_OR_SCALAR | -
 Series.mul | needs-token:SERIES | -
 Series.mul_scalar | needs-token:SCALAR_ARITH | -
 Series.name | python-semantics | metadata property read from the column, not an op
+Series.names | python-semantics | pandas Index property of the object that index returns, not an op
 Series.nbytes | python-semantics | metadata property read from the column, not an op
 Series.ndim | python-semantics | accessor or shape property of the column, not an op
 Series.ne | python-semantics | Python logic around native calls
+Series.nlevels | python-semantics | pandas Index property of the object that index returns, not an op
 Series.null_count | python-semantics | the null count from the column's metadata, not a kernel
 Series.num_children | python-semantics | metadata property read from the column, not an op
 Series.ops | python-semantics | accessor or shape property of the column, not an op
@@ -129,6 +135,7 @@ Series.rdiv | python-semantics | pandas spelling written in Python; an alias wit
 Series.rdivmod | python-semantics | Python logic around native calls
 Series.rename | python-semantics | a new handle under another name
 Series.rename_axis | python-semantics | pandas container API on the Series, edits the label names, not an op
+Series.reorder_levels | python-semantics | pandas container API on the Series, edits the row labels, not an op
 Series.repeat | python-semantics | pandas or polars semantics written over several native calls
 Series.replace | python-semantics | pandas or polars semantics written over several native calls
 Series.reset_index | python-semantics | pandas container API on the Series, not an op
@@ -147,6 +154,7 @@ Series.sample | needs-token:FLAG | -
 Series.search_sorted | needs-token:SERIES | -
 Series.sem | python-semantics | pandas or polars semantics written over several native calls
 Series.set_axis | python-semantics | pandas container API on the Series, sets the row labels, not an op
+Series.set_names | python-semantics | pandas Index method of the object that index returns, not an op
 Series.shape | python-semantics | accessor or shape property of the column, not an op
 Series.share | python-semantics | a new handle on the same buffers
 Series.shift | needs-token:I64_ARG | -
@@ -192,6 +200,7 @@ Series.str_zfill | needs-token:I64_ARG | -
 Series.sub | needs-token:SERIES | -
 Series.sub_scalar | needs-token:SCALAR_ARITH | -
 Series.sum | needs-token:REDUCE | -
+Series.swaplevel | python-semantics | pandas container API on the Series, edits the row labels, not an op
 Series.tail | needs-token:I64_ARG | -
 Series.time_unit | python-semantics | metadata property read from the column, not an op
 Series.timezone | python-semantics | metadata property read from the column, not an op
@@ -530,6 +539,7 @@ DataFrame.dot | python-semantics | pandas container API on the frame, written ov
 DataFrame.drop | python-semantics | frame method written in Python over native calls
 DataFrame.drop_nans | python-semantics | polars spelling written over native calls
 DataFrame.drop_nulls | python-semantics | frame method written in Python over native calls
+DataFrame.droplevel | python-semantics | pandas container API on the frame, written over native calls
 DataFrame.dtypes | python-semantics | accessor or shape property of the frame, not an op
 DataFrame.duplicated | python-semantics | frame method written in Python over native calls
 DataFrame.empty | python-semantics | accessor or shape property of the frame, not an op
@@ -561,6 +571,7 @@ DataFrame.get | python-semantics | pandas container API on the frame, written ov
 DataFrame.get_column | python-semantics | polars spelling written over native calls
 DataFrame.get_column_index | python-semantics | polars spelling written over native calls
 DataFrame.get_columns | python-semantics | polars spelling written over native calls
+DataFrame.get_level_values | python-semantics | pandas Index method of the object that index returns, not an op
 DataFrame.group_by | python-semantics | frame method written in Python over native calls
 DataFrame.group_by_dynamic | python-semantics | frame method written in Python over native calls
 DataFrame.gt | python-semantics | pandas container API on the frame, written over native calls
@@ -617,8 +628,10 @@ DataFrame.mod | python-semantics | pandas container API on the frame, written ov
 DataFrame.mode | python-semantics | pandas container API on the frame, written over native calls
 DataFrame.mul | python-semantics | pandas container API on the frame, written over native calls
 DataFrame.n_unique | python-semantics | polars spelling written over native calls
+DataFrame.names | python-semantics | pandas Index property of the object that index returns, not an op
 DataFrame.ndim | python-semantics | accessor or shape property of the frame, not an op
 DataFrame.ne | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.nlevels | python-semantics | pandas Index property of the object that index returns, not an op
 DataFrame.notna | python-semantics | pandas container API on the frame, written over native calls
 DataFrame.null_count | python-semantics | frame method written in Python over native calls
 DataFrame.num_columns | python-semantics | native method of the binding, not one registry op
@@ -641,6 +654,7 @@ DataFrame.rdiv | python-semantics | pandas container API on the frame, written o
 DataFrame.reduce | python-semantics | frame method written in Python over native calls
 DataFrame.rename | python-semantics | frame method written in Python over native calls
 DataFrame.rename_axis | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.reorder_levels | python-semantics | pandas container API on the frame, written over native calls
 DataFrame.replace | python-semantics | pandas container API on the frame, written over native calls
 DataFrame.resample | python-semantics | frame method written in Python over native calls
 DataFrame.reset_index | python-semantics | frame method written in Python over native calls
@@ -661,6 +675,7 @@ DataFrame.select_dtypes | python-semantics | pandas container API on the frame, 
 DataFrame.sem | python-semantics | pandas container API on the frame, written over native calls
 DataFrame.set_axis | python-semantics | pandas container API on the frame, written over native calls
 DataFrame.set_index | python-semantics | frame method written in Python over native calls
+DataFrame.set_names | python-semantics | pandas Index method of the object that index returns, not an op
 DataFrame.shape | python-semantics | accessor or shape property of the frame, not an op
 DataFrame.share | python-semantics | native method of the binding, not one registry op
 DataFrame.shift | python-semantics | pandas container API on the frame, written over native calls
@@ -677,6 +692,7 @@ DataFrame.sub | python-semantics | pandas container API on the frame, written ov
 DataFrame.sum | python-semantics | frame method written in Python over native calls
 DataFrame.sum_horizontal | python-semantics | polars spelling written over native calls
 DataFrame.swapaxes | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.swaplevel | python-semantics | pandas container API on the frame, written over native calls
 DataFrame.tail | python-semantics | frame method written in Python over native calls
 DataFrame.to_arrow | conversion | to_arrow gives the data in another form
 DataFrame.to_bytes | conversion | to_bytes gives the data in another form

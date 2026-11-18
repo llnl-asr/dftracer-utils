@@ -20,6 +20,7 @@ from .enums import DType
 if TYPE_CHECKING:
     import pandas as pd
 
+    from ._levels import LevelArg
     from .dataframe import DataFrame
     from .series import Series
 
@@ -100,7 +101,7 @@ def to_frame(s: Series, name: str | None) -> DataFrame:
 
 def reset(
     s: Series,
-    level: object,
+    level: LevelArg,
     drop: bool,
     name: object,
 ) -> Series | DataFrame:
@@ -108,22 +109,16 @@ def reset(
     leads with them (the pandas names: ``index`` for an unnamed single level,
     ``level_<i>`` for an unnamed one of several), the rest stay the index; with
     ``drop`` the Series keeps its values under the remaining levels."""
+    from ._levels import pick_levels
     from .dataframe import DataFrame
 
     names = names_of(s)
-    if not names:
-        if level is not None:
-            raise IndexError(f"Too many levels: Index has only 1 level, not {level!r}")
-        picked: list[int] = []
-        shown = ["index"]
-        columns: list[Series] = [positions(len(s))]
-        keep: list[int] = []
-    else:
-        every = list(range(len(names)))
-        picked = every if level is None else _pick_levels(names, level)
-        keep = [i for i in every if i not in picked]
-        shown = [_shown_name(names, i) for i in picked]
-        columns = [_ext.Series._index_level(s, i) for i in picked]
+    effective = names or [default_name(0)]
+    every = list(range(len(effective)))
+    picked = every if level is None else sorted(set(pick_levels(effective, level)))
+    keep = [i for i in every if i not in picked]
+    shown = [shown_name(effective, i) for i in picked]
+    columns = [_ext.Series._index_level(s, i) for i in picked] if names else [positions(len(s))]
     if drop:
         if not names:
             return s
@@ -149,31 +144,11 @@ def _reindex(frame: DataFrame, names: list[str], levels: list[Series]) -> DataFr
     return frame.set_index(names)
 
 
-def _shown_name(names: list[str], i: int) -> str:
+def shown_name(names: list[str], i: int) -> str:
     shown = public_name(names[i])
     if shown is not None:
         return shown
     return "index" if len(names) == 1 else f"level_{i}"
-
-
-def _pick_levels(names: list[str], level: object) -> list[int]:
-    wanted = list(level) if isinstance(level, (list, tuple)) else [level]
-    out: list[int] = []
-    for item in wanted:
-        if isinstance(item, int) and not isinstance(item, bool):
-            at = item if item >= 0 else item + len(names)
-            if not 0 <= at < len(names):
-                raise IndexError(
-                    f"Too many levels: Index has only {len(names)} level"
-                    f"{'' if len(names) == 1 else 's'}, not {item + 1 if item >= 0 else item}"
-                )
-        else:
-            matches = [i for i, n in enumerate(names) if public_name(n) == item]
-            if not matches:
-                raise KeyError(f"Level {item} not found")
-            at = matches[0]
-        out.append(at)
-    return out
 
 
 # -- set_axis, rename_axis ---------------------------------------------------------
@@ -239,11 +214,10 @@ def labels_from(labels: object, n: int | None) -> tuple[list[str], list[Series]]
     return names, levels
 
 
-def renamed_names(s: Series, given: object) -> list[str]:
-    """The level names of ``s`` after ``rename_axis(mapper)`` /
-    ``rename_axis(index=...)``: a scalar or ``None`` names a single level, a
-    list names every level, a dict or a callable maps the current names."""
-    current = names_of(s) or [default_name(0)]
+def renamed_names(current: list[str], given: object) -> list[str]:
+    """The level names after ``rename_axis(mapper)`` / ``rename_axis(index=...)``
+    over the ``current`` ones: a scalar or ``None`` names a single level, a list
+    names every level, a dict or a callable maps the current names."""
     if callable(given) or isinstance(given, dict):
         out = []
         for i, name in enumerate(current):
@@ -259,7 +233,7 @@ def renamed_names(s: Series, given: object) -> list[str]:
             raise ValueError(f"Length of new names must be {len(current)}, got {len(given)}")
         return [internal_name(x, i) for i, x in enumerate(given)]
     if len(current) != 1:
-        raise ValueError(f"Length of new names must be {len(current)}, got 1")
+        raise TypeError("Must pass list-like as `names`.")
     return [internal_name(given, 0)]
 
 

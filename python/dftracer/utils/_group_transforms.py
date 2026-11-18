@@ -20,6 +20,10 @@ class GroupTransforms(Generic[R]):
     def take(self, indices: Sequence[int]) -> R:
         raise NotImplementedError
 
+    def _take_rows(self, indices: Sequence[int]) -> R:
+        """The rows at ``indices`` of each group, in input order."""
+        raise NotImplementedError
+
     def reduce(self, agg: str) -> R:
         raise NotImplementedError
 
@@ -76,7 +80,7 @@ class GroupTransforms(Generic[R]):
         end), or of each position in a list, in input order."""
         if isinstance(n, int):
             return self._transform("nth", n)
-        return self.take(n)
+        return self._take_rows(n)
 
     def prod(self) -> R:
         return self.reduce("prod")

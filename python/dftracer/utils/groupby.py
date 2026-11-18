@@ -9,6 +9,14 @@ from typing import TYPE_CHECKING, Callable, List, Optional, Sequence, Tuple, Typ
 from . import dftracer_utils_ext as _ext
 from ._aliases import install as _install_aliases
 from ._apply import trace_errors, uses_identity_test, warn_fallback
+from ._group_labels import (
+    apply_pieces,
+    group_frame,
+    labelled_series,
+    pandas_named,
+    top,
+)
+from ._group_labels import take as labelled_take
 from ._group_transforms import GroupTransforms
 from ._series_index import to_frame, with_levels
 from .agg import (
@@ -97,7 +105,7 @@ class GroupBy(GroupTransforms[DataFrame]):
             return out
         if self._as_index:
             if all(k in out for k in self._keys):
-                out = out.set_index(self._keys)
+                out = _ext.DataFrame.with_index(out, self._keys)
         elif out.index_names():
             out = out.reset_index()
         return out
@@ -239,8 +247,8 @@ class GroupBy(GroupTransforms[DataFrame]):
 
     def _labelled_series(self, out: Series) -> Series:
         """``out``, one value per row of the grouped frame in input order, under
-        the labels that frame had (pandas also puts the group keys before them;
-        a level of keys is not added here)."""
+        the labels that frame had (the Polars ``group_by`` adds no level of
+        keys)."""
         origin = self._origin
         names = _ext.DataFrame.index_names(origin) if origin is not None else []
         if origin is None or not names:
@@ -322,43 +330,28 @@ class GroupBy(GroupTransforms[DataFrame]):
             raise TypeError(f"{what}: select one column, groupby(keys)['column'].{what}(...)")
         return self._single
 
-    def nlargest(self, n: int = 5, keep: str = "first") -> DataFrame:
+    def nlargest(self, n: int = 5, keep: str = "first") -> Series:
         """Per group, the ``n`` largest present values of the selected column
-        (pandas ``SeriesGroupBy.nlargest``): the keys, the original row position
-        as ``index`` (the frame has no row labels) and the value, groups in key order and each group descending. A null or NaN ranks
-        last, so it only appears in a group with fewer than ``n`` numbers. A tie
-        keeps the earlier row first; ``keep`` takes only ``"first"``, because
-        pandas orders ``keep="last"`` ties by a rule that depends on the group
-        size."""
+        (pandas ``SeriesGroupBy.nlargest``): a Series named like the column,
+        each group in key order and descending, under the labels the pandas
+        group-by gives: the group keys, then the label the row had (its index,
+        or its position when the frame has none); ``as_index=False`` leaves the
+        keys out. A null or NaN ranks last, so it only appears in a group with
+        fewer than ``n`` numbers. A tie keeps the earlier row first; ``keep``
+        takes only ``"first"``, because pandas orders ``keep="last"`` ties by a
+        rule that depends on the group size."""
         return self._top(n, keep, True)
 
-    def nsmallest(self, n: int = 5, keep: str = "first") -> DataFrame:
+    def nsmallest(self, n: int = 5, keep: str = "first") -> Series:
         """As :meth:`nlargest` for the smallest values, ascending."""
         return self._top(n, keep, False)
 
-    def _top(self, n: int, keep: str, largest: bool) -> DataFrame:
+    def _top(self, n: int, keep: str, largest: bool) -> Series:
         name = "nlargest" if largest else "nsmallest"
         col = self._one_column(name)
         if keep != "first":
             raise NotImplementedError(f"{name}: keep={keep!r}; only 'first'")
-        frame = self._frame()
-        label = "index"
-        if label in frame._names():
-            raise ValueError(f"{name}: a column is already named {label!r}")
-        frame = frame.with_row_index(label)
-        if n <= 0:
-            return frame.head(0).select(*self._keys, label, col)
-        # A null or NaN ranks last, so it fills a group that has fewer than
-        # ``n`` numbers, as pandas.
-        rank = "__dftu_rank__"
-        value = self._col(frame, col)
-        if value.dtype in (DType.FLOAT32, DType.FLOAT64):
-            value = value.where(value.is_nan().logical_not())
-        frame = frame.with_column(rank, value)
-        ranked = frame.sort_by_multi(
-            [*self._keys, rank], [False] * len(self._keys) + [largest], nulls_last=True
-        )
-        return GroupBy(ranked, self._keys).head(n).select(*self._keys, label, col)
+        return top(self, col, n, largest)
 
     def unique(self) -> DataFrame:
         """Per group, the distinct values of the selected column in first-seen
@@ -498,7 +491,14 @@ class GroupBy(GroupTransforms[DataFrame]):
 
     def take(self, indices: Sequence[int]) -> DataFrame:
         """The rows at ``indices`` within each group (0-based; negative from
-        the end), in input order (pandas ``GroupBy.take``)."""
+        the end), without the key columns, under the group keys (with
+        ``as_index``) and the labels the rows had (pandas ``GroupBy.take``: group
+        order, then the order of ``indices``; ``IndexError`` when a group is too
+        small). The Polars ``group_by`` gives the rows in input order, key columns
+        included, under the labels they had."""
+        return labelled_take(self, indices) if pandas_named(self) else self._take_rows(indices)
+
+    def _take_rows(self, indices: Sequence[int]) -> DataFrame:
         frame = self._frame()
         row = "__dftu_group_row__"
         indexed = frame.with_row_index(row)
@@ -712,18 +712,32 @@ class GroupBy(GroupTransforms[DataFrame]):
             ]
         return self._sorted(out.select(*order))
 
-    def value_counts(self, ascending: bool = False) -> DataFrame:
+    def value_counts(self, ascending: bool = False) -> DataFrame | Series:
         """Distinct rows of the non-key columns within each group with their
-        count, most frequent first."""
+        count, most frequent first. The pandas ``groupby`` gives the counts as a
+        Series named ``count`` under the keys and the values; ``group_by`` and
+        ``as_index=False`` give a frame with the keys and values as columns."""
         frame = self._frame()
         cols = [c for c in frame._names() if c not in self._keys]
         for c in cols:  # pandas drops a row with a null value (dropna=True)
             frame = frame.filter(self._col(frame, c).notna())
-        out = GroupBy(frame, self._keys + cols).size().rename({"size": "count"})
-        out = out.sort_values(
-            self._keys + ["count"], ascending=[True] * len(self._keys) + [ascending]
-        )
-        return out.set_index(self._keys + cols) if self._as_index else out
+        if self._sort or not pandas_named(self):
+            out = GroupBy(frame, self._keys + cols).size().rename({"size": "count"})
+            out = out.sort_values(
+                self._keys + ["count"], ascending=[True] * len(self._keys) + [ascending]
+            )
+        else:
+            # Pandas orders the combinations by count, ties in order of first appearance.
+            row, first = "__dftu_row__", "__dftu_first__"
+            indexed = frame.with_row_index(row)
+            out = GroupBy(indexed, self._keys + cols).agg(
+                Agg("count", None, "count"), Agg("min", Col(row), first)
+            )
+            out = out.sort_values(["count", first], ascending=[ascending, True])
+            out = out.select(*self._keys, *cols, "count")
+        if self._as_index is True:
+            return out.set_index(self._keys + cols)["count"]
+        return out
 
     def transform(self, func: str) -> DataFrame:
         """A group aggregate (``"mean"``, ``"sum"``, ...) broadcast back to
@@ -759,10 +773,17 @@ class GroupBy(GroupTransforms[DataFrame]):
         input order). A body the trace cannot follow runs in Python per group
         with a warning: a scalar result per group gives the keys + ``value``
         frame, a Series or frame result the concatenation."""
-        traced = trace_group(func, self._frame()._names())
+        traced = trace_group(func, self._group_columns())
         if traced is not None:
             return self._lower_apply(traced)
         return self._apply_python(func)
+
+    def _group_columns(self) -> list[str]:
+        """The columns a group function sees: all of them, but for the pandas
+        ``groupby`` the key columns are left out, as pandas 3 does (pandas 2
+        passes them with a warning)."""
+        names = self._frame()._names()
+        return [c for c in names if c not in self._keys] if pandas_named(self) else names
 
     def filter(self, func: Callable[[DataFrame], object]) -> DataFrame:
         """The rows of the groups for which ``func`` holds (pandas
@@ -785,8 +806,10 @@ class GroupBy(GroupTransforms[DataFrame]):
 
     def _lower_apply(self, traced: object) -> DataFrame | Series:
         frame = self._frame()
+        if isinstance(traced, _AggSet):
+            return self.agg(*traced.aggs)
         if isinstance(traced, Agg):
-            return self.agg(traced.alias("value"))
+            return self._scalars(self.agg(traced.alias("value")))
         if not isinstance(traced, Expr):
             raise TypeError(
                 f"the group function returned {type(traced).__name__}; expected an "
@@ -794,12 +817,14 @@ class GroupBy(GroupTransforms[DataFrame]):
             )
         if not has_agg_leaf(traced):
             # A row expression with no aggregate: one value per row.
-            return self._labelled_series(traced.apply(frame))
+            return self._rows_series(traced.apply(frame), traced)
         grouped, rewritten = self._group_values(traced)
         row_cols = [c for c in collect_columns(traced) if c in frame]
         if not row_cols:
             value = rewritten.apply(grouped)
-            return grouped.with_column("value", value).select(*(self._keys + ["value"]))
+            return self._scalars(
+                grouped.with_column("value", value).select(*(self._keys + ["value"]))
+            )
         # Row leaves too: the aggregates broadcast back onto the rows.
         row = "__dftu_row__"
         indexed = frame.with_row_index(row)
@@ -809,7 +834,28 @@ class GroupBy(GroupTransforms[DataFrame]):
                 v = self._col(grouped, name)[0]
                 assert isinstance(v, (int, float))
                 joined = joined.with_column(name, self._col(frame, row_cols[0]).full_like(v))
-        return self._labelled_series(rewritten.apply(joined))
+        return self._rows_series(rewritten.apply(joined), traced)
+
+    def _scalars(self, out: DataFrame) -> DataFrame | Series:
+        """One value for each group (``out`` holds the keys and ``value``): for
+        the pandas ``groupby`` a Series with no name under the keys, as pandas 3
+        gives; else the frame of keys and ``value``."""
+        if not (pandas_named(self) and self._as_index is True):
+            return out
+        if not out.index_names():
+            out = out.set_index(self._keys)
+        return out["value"].rename(None)
+
+    def _rows_series(self, out: Series, expr: Expr) -> Series:
+        """``out``, one value for each row of the grouped frame in input order,
+        as the Series ``apply`` returns: for the pandas ``groupby`` in group
+        order under the labels the rows had (and the group keys, with
+        ``as_index``), named like the one column ``expr`` reads, else in input
+        order under the labels."""
+        if not pandas_named(self):
+            return self._labelled_series(out)
+        read = {c for c in collect_columns(expr) if c in self._frame()}
+        return labelled_series(self, out.rename(read.pop()) if len(read) == 1 else out)
 
     def _lower_filter(self, traced: object) -> DataFrame:
         frame = self._frame()
@@ -829,16 +875,28 @@ class GroupBy(GroupTransforms[DataFrame]):
         return self._labelled(out.select(*frame._names()), self._col(out, row))
 
     def _groups_in_order(self) -> list[tuple[object, list[int]]]:
-        return list(self.groups.items())
+        groups: list[tuple[object, list[int]]] = list(self.groups.items())
+        if pandas_named(self) and self._sort:
+            # Key order, a null key last, as the engine sorts them.
+            def order(item: tuple[object, list[int]]) -> tuple[object, ...]:
+                parts = item[0] if isinstance(item[0], tuple) else (item[0],)
+                return tuple((p is None, p) if p is not None else (True, 0) for p in parts)
+
+            groups.sort(key=order)
+        return groups
 
     def _apply_python(self, func: Callable[[DataFrame], object]) -> DataFrame | Series:
         frame = self._frame()
+        by_key = pandas_named(self)
         results: list[tuple[object, object]] = []
         for label, rows in self._groups_in_order():
-            results.append((label, func(self._labelled(frame.take(rows), rows))))
+            group = group_frame(self, rows) if by_key else self._labelled(frame.take(rows), rows)
+            results.append((label, func(group)))
         if not results:
             return frame.head(0)
         first = results[0][1]
+        if by_key and isinstance(first, (DataFrame, Series)):
+            return apply_pieces(self, results)
         if isinstance(first, DataFrame):
             out = results[0][1]
             assert isinstance(out, DataFrame)
@@ -858,7 +916,7 @@ class GroupBy(GroupTransforms[DataFrame]):
             parts = label if isinstance(label, tuple) else (label,)
             for k, v in zip(self._keys, parts):
                 keys[k].append(v)
-        return DataFrame({**keys, "value": [r for _, r in results]})
+        return self._scalars(DataFrame({**keys, "value": [r for _, r in results]}))
 
     def _filter_python(self, func: Callable[[DataFrame], object]) -> DataFrame:
         frame = self._frame()
@@ -995,7 +1053,11 @@ class GroupResample:
             out = attr(*args, **kwargs)
             names = out._names() if isinstance(out, DataFrame) else getattr(out, "columns", None)
             if names is not None and all(c in names for c in self._order):
-                out = out.sort_by_multi(self._order).set_index(list(self._order))
+                out = out.sort_by_multi(self._order)
+                if isinstance(out, DataFrame):
+                    out = _ext.DataFrame.with_index(out, list(self._order))
+                else:
+                    out = out.set_index(list(self._order))
             return out
 
         return call
@@ -1004,6 +1066,40 @@ class GroupResample:
 class _MissingColumn(KeyError):
     """A column the group function reads that the frame lacks: an error in
     the function, not a body the trace cannot follow."""
+
+
+class _AggSet:
+    """The aggregates of one group function that reduces several columns, one
+    column of the result each."""
+
+    __slots__ = ("aggs",)
+
+    def __init__(self, aggs: list[Agg]) -> None:
+        self.aggs = aggs
+
+
+class _TraceColumns:
+    """``group[["a", "b"]]`` on a traced group: a reduction of it is one
+    aggregate for each column, named like the column."""
+
+    __slots__ = ("_names",)
+
+    def __init__(self, names: list[str]) -> None:
+        self._names = names
+
+    def __getattr__(self, name: str) -> Callable[[], _AggSet]:
+        if name.startswith("_") or name not in _COLUMN_REDUCTIONS:
+            raise AttributeError(name)
+
+        def reduce() -> _AggSet:
+            return _AggSet([getattr(Col(c), name)().alias(c) for c in self._names])
+
+        return reduce
+
+
+_COLUMN_REDUCTIONS = frozenset(
+    ("sum", "mean", "min", "max", "count", "std", "var", "median", "first", "last")
+)
 
 
 class _GroupTrace:
@@ -1015,7 +1111,12 @@ class _GroupTrace:
     def __init__(self, columns: Sequence[str]) -> None:
         self._columns = list(columns)
 
-    def __getitem__(self, name: str) -> Expr:
+    def __getitem__(self, name: str | list[str]) -> Expr | _TraceColumns:
+        if isinstance(name, list):
+            for c in name:
+                if c not in self._columns:
+                    raise _MissingColumn(f"no column named {c!r}")
+            return _TraceColumns(name)
         if name not in self._columns:
             raise _MissingColumn(f"no column named {name!r}")
         return Col(name)
@@ -1052,7 +1153,7 @@ def trace_group(
     except trace_errors() as e:
         warn_fallback(what, func, f"{type(e).__name__}: {e}")
         return None
-    if not isinstance(traced, (Agg, Expr)):
+    if not isinstance(traced, (Agg, Expr, _AggSet)):
         warn_fallback(
             what,
             func,

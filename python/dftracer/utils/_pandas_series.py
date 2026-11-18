@@ -22,7 +22,17 @@ from typing import (
 )
 
 from ._label_align import LabelAlignMixin
+from ._levels import (
+    LevelArg,
+    LevelsMixin,
+    label_text,
+    pick_levels,
+    sort_plan,
+    sorted_positions,
+)
 from ._series_index import (
+    default_name,
+    drop_levels,
     labels_from,
     levels_of,
     names_of,
@@ -274,7 +284,7 @@ def replace_in(
     return out
 
 
-class SeriesPandasMixin(LabelAlignMixin):
+class SeriesPandasMixin(LabelAlignMixin, LevelsMixin):
     """``self`` is a :class:`Series`."""
 
     __slots__ = ()
@@ -284,6 +294,20 @@ class SeriesPandasMixin(LabelAlignMixin):
 
         assert isinstance(self, Series)
         return self
+
+    def _level_names(self) -> list[str]:
+        return names_of(self._s())
+
+    def _keep_levels(self, order: list[int]) -> Series:
+        s = self._s()
+        names = names_of(s)
+        levels = levels_of(s)
+        return with_levels(s, [names[i] for i in order], [levels[i] for i in order])
+
+    def _axis_is_rows(self, axis: object) -> bool:
+        if axis not in (0, "index", "rows"):
+            raise ValueError(f"No axis named {axis} for object type Series")
+        return True
 
     # -- spellings -----------------------------------------------------------------
     def between(self, left: _Scalar, right: _Scalar, inclusive: str = "both") -> Series:
@@ -454,7 +478,7 @@ class SeriesPandasMixin(LabelAlignMixin):
 
     def reset_index(
         self,
-        level: object = None,
+        level: LevelArg = None,
         *,
         drop: bool = False,
         name: str | Omitted = OMITTED,
@@ -537,8 +561,10 @@ class SeriesPandasMixin(LabelAlignMixin):
         given = index if not isinstance(index, Omitted) else mapper
         if isinstance(given, Omitted):
             return self._s()
+        if given is mapper and (callable(given) or isinstance(given, dict)):
+            raise ValueError("Use `.rename` to alter labels with a mapper.")
         s = self._s()
-        return rename_levels(s, renamed_names(s, given))
+        return rename_levels(s, renamed_names(names_of(s) or [default_name(0)], given))
 
     @property
     def index(self) -> Series | DataFrame:
@@ -673,25 +699,96 @@ class SeriesPandasMixin(LabelAlignMixin):
         return series_by_label(self._s(), key, level, drop_level)
 
     def sort_index(
-        self, ascending: bool = True, na_position: Literal["first", "last"] = "last"
+        self,
+        ascending: bool | Sequence[bool] = True,
+        na_position: Literal["first", "last"] = "last",
+        *,
+        axis: int | str = 0,
+        level: LevelArg = None,
+        sort_remaining: bool = True,
+        ignore_index: bool = False,
+        kind: str = "quicksort",
+        key: Callable[[Series], Series] | None = None,
+        inplace: bool = False,
     ) -> Series:
-        """The rows ordered by their row labels, level by level (a null label
-        last, or first with ``na_position="first"``); a Series without labels
+        """The rows ordered by their row labels (a null label last, or first with
+        ``na_position="first"``). With ``level`` (a name, a position or a list)
+        the rows are ordered by those levels first and, with ``sort_remaining``,
+        by the others after them; ``ascending`` is one flag or one for each
+        level in ``level``. ``key`` is called on each level and returns the
+        values to order by; ``ignore_index`` drops the labels. The sort is
+        stable, so ``kind`` is accepted and not used. A Series without labels
         has the positional index, which is already sorted: this Series, or
         reversed for ``ascending=False``."""
-        from .dataframe import DataFrame
-
-        if na_position not in ("first", "last"):
-            raise ValueError("na_position must be 'first' or 'last'")
+        if inplace:
+            raise ValueError("sort_index: a Series is immutable; use the result")
+        self._axis_is_rows(axis)
         s = self._s()
-        if not names_of(s):
-            return s if ascending else s.reverse()
-        columns = {f"l{i}": level for i, level in enumerate(levels_of(s))}
-        columns["pos"] = positions(len(s))
-        order = DataFrame(columns).sort_values(
-            [k for k in columns if k != "pos"], ascending=ascending, na_position=na_position
-        )["pos"]
-        return s.gather(order)
+        names = names_of(s)
+        if not names and key is None:
+            _, flags, _ = sort_plan([default_name(0)], level, ascending, sort_remaining)
+            if flags[0]:
+                return s
+        s = positional(s)
+        names = names_of(s)
+        picked, flags, keyed = sort_plan(names, level, ascending, sort_remaining)
+        levels = levels_of(s)
+        order = sorted_positions(
+            [names[i] for i in picked], [levels[i] for i in picked], flags, na_position, key, keyed
+        )
+        out = s.gather(order)
+        return drop_levels(out) if ignore_index else out
+
+    def add_prefix(self, prefix: str, axis: int | str | None = None) -> Series:
+        """The pandas ``add_prefix``: every row label as text with ``prefix`` in
+        front (each level of a ``MultiIndex``); a Series with no labels gets the
+        positions. A Series has only the row axis."""
+        return self._text_labels(prefix, "", axis)
+
+    def add_suffix(self, suffix: str, axis: int | str | None = None) -> Series:
+        """As :meth:`add_prefix`, with ``suffix`` after each label."""
+        return self._text_labels("", suffix, axis)
+
+    def _text_labels(self, prefix: str, suffix: str, axis: int | str | None) -> Series:
+        if axis is not None:
+            self._axis_is_rows(axis)
+        s = positional(self._s())
+        levels = [label_text(level, prefix, suffix) for level in levels_of(s)]
+        return with_levels(s, names_of(s), levels)
+
+    # -- the pandas Index surface of what ``index`` returns --------------------------
+    @property
+    def names(self) -> list[str | None]:
+        """The level names when this Series is the ``index`` of another object:
+        the one name of a single level."""
+        return [self._s().name]
+
+    @property
+    def nlevels(self) -> int:
+        """1: a Series is the single level of the ``index`` it came from."""
+        return 1
+
+    def get_level_values(self, level: int | str | None) -> Series:
+        """This Series, for the one level of an ``index``: ``0``, ``-1`` or its
+        name. ``IndexError`` or ``KeyError`` for another level, as pandas."""
+        s = self._s()
+        pick_levels([s.name if s.name is not None else default_name(0)], level)
+        return s
+
+    def set_names(self, names: object, *, level: LevelArg = None, inplace: bool = False) -> Series:
+        """This Series under a new name (a string, ``None`` or a list of one): the
+        ``Index.set_names`` of the ``index`` of another object. ``level`` is
+        ``0`` or its current name."""
+        if inplace:
+            raise ValueError("set_names: a Series is immutable; use the result")
+        s = self._s()
+        if level is not None:
+            pick_levels([s.name if s.name is not None else default_name(0)], level)
+        if isinstance(names, (list, tuple)):
+            if len(names) != 1:
+                raise ValueError(f"Length of new names must be 1, got {len(names)}")
+            names = names[0]
+        return s.rename(None if names is None else str(names))
 
     def memory_usage(self, index: bool = False, deep: bool = False) -> int:
         """The bytes this column's Arrow buffers hold (``nbytes``)."""

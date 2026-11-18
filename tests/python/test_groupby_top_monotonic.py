@@ -41,10 +41,21 @@ def test_top_matches_pandas(values, n, method):
     ours, theirs = _frame(values)
     got = getattr(ours.groupby("k")["v"], method)(n)
     want = getattr(theirs.groupby("k")["v"], method)(n)
-    assert got.columns == ["k", "index", "v"]
-    assert got["k"].to_list() == [k for k, _ in want.index]
-    assert got["index"].to_list() == [i for _, i in want.index]
-    _same(got["v"].to_list(), want.tolist())
+    # a Series named like the column, under the key and the row position
+    assert isinstance(got, dft.Series) and got.name == "v"
+    frame = got.to_pandas()
+    assert list(frame.index.names) == list(want.index.names) == ["k", None]
+    assert frame.index.tolist() == want.index.tolist()
+    _same(got.to_list(), want.tolist())
+
+
+def test_top_without_the_keys_in_the_index_keeps_the_row_labels():
+    if int(pd.__version__.split(".")[0]) < 3:
+        pytest.skip("pandas 2 raises ValueError for nlargest with as_index=False")
+    ours, theirs = _frame(FLOATS)
+    got = ours.groupby("k", as_index=False)["v"].nlargest(2)
+    want = theirs.groupby("k", as_index=False)["v"].nlargest(2)
+    assert got.to_pandas().index.tolist() == want.index.tolist()
 
 
 def test_top_refuses_other_shapes():
@@ -54,8 +65,6 @@ def test_top_refuses_other_shapes():
     for keep in ("last", "all"):
         with pytest.raises(NotImplementedError, match="only 'first'"):
             ours.groupby("k")["v"].nlargest(1, keep=keep)
-    with pytest.raises(ValueError, match="already named 'index'"):
-        ours.groupby("k")["index"].nlargest(1)
 
 
 MONO_KEYS = [1, 1, 1, 2, 2, 2, 3, 4, 4, 5, 5, 5, 5]

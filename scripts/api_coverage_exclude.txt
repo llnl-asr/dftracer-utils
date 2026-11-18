@@ -6,17 +6,14 @@
 pandas DataFrame.attrs | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
 pandas DataFrame.bool | deprecated-upstream | removed or deprecated in pandas 3 (still present in pandas 2)
 pandas DataFrame.boxplot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
-pandas DataFrame.droplevel | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas DataFrame.flags | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
 pandas DataFrame.hist | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
 pandas DataFrame.isetitem | python-semantics | assigns a column in place by position; frames are immutable (use with_columns or assign)
 pandas DataFrame.plot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
-pandas DataFrame.reorder_levels | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas DataFrame.set_flags | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
 pandas DataFrame.sparse | out-of-scope | sparse arrays (D3b out-of-scope)
 pandas DataFrame.stack | needs-index | needs a (multi-/Datetime/Period) index; waits for the row index step (D3b point 4)
 pandas DataFrame.style | out-of-scope | Styler (D3b out-of-scope)
-pandas DataFrame.swaplevel | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas DataFrame.to_clipboard | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas DataFrame.to_excel | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas DataFrame.to_gbq | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
@@ -32,8 +29,6 @@ pandas DataFrame.to_timestamp | needs-index | needs a (multi-/Datetime/Period) i
 pandas DataFrame.to_xarray | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas DataFrame.to_xml | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas DataFrame.unstack | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
-pandas Series.add_prefix | needs-index | renames the index labels; a Series has no labels until the row index step
-pandas Series.add_suffix | needs-index | renames the index labels; a Series has no labels until the row index step
 pandas Series.asfreq | needs-index | selects or resamples by a DatetimeIndex; waits for the row index step (D3b point 4)
 pandas Series.at_time | needs-index | selects or resamples by a DatetimeIndex; waits for the row index step (D3b point 4)
 pandas Series.attrs | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
@@ -41,19 +36,16 @@ pandas Series.between_time | needs-index | selects or resamples by a DatetimeInd
 pandas Series.bool | deprecated-upstream | removed or deprecated in pandas 3 (still present in pandas 2)
 pandas Series.cat | needs-kernel | categorical dtype and the .cat accessor (codes, categories): the engine has no categorical column type
 pandas Series.combine | python-semantics | calls a two-argument Python function per element pair; use apply with a traced function or an expression
-pandas Series.droplevel | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas Series.flags | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
 pandas Series.hist | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
 pandas Series.info | python-semantics | prints a text summary to a buffer; DataFrame.info is the engine's summary
 pandas Series.plot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
 pandas Series.ravel | deprecated-upstream | removed or deprecated in pandas 3 (still present in pandas 2)
-pandas Series.reorder_levels | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas Series.resample | needs-index | acts on a DatetimeIndex (the values go through s.dt.tz_convert / tz_localize); waits for the row index step
 pandas Series.set_flags | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
 pandas Series.sparse | out-of-scope | sparse arrays (D3b out-of-scope)
 pandas Series.struct | needs-kernel | the .struct accessor (field, explode, rename_fields): DType.STRUCT has no accessor kernel
 pandas Series.swapaxes | deprecated-upstream | removed or deprecated in pandas 3 (still present in pandas 2)
-pandas Series.swaplevel | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas Series.to_clipboard | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas Series.to_excel | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas Series.to_hdf | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there

@@ -42,8 +42,10 @@ from ._convert import (
     index_columns,
 )
 from ._eval import Columnar
+from ._levels import LevelArg, pick_levels
 from ._pandas_frame import FramePandasMixin
 from ._polars_frame import FramePolarsMixin
+from ._series_index import default_name, shown_name
 from ._window_spec import norm_window_spec
 from .agg import AggForm, AggKeyword, select_aggs
 from .enums import DType, rule_to_units
@@ -272,31 +274,72 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
             return [Series.from_list(list(range(len(self))))]
         return [_ext.DataFrame.__getitem__(self, name) for name in names]
 
-    def set_index(self, names: str | Sequence[str]) -> DataFrame:
+    def set_index(self, names: str | Sequence[str], *, append: bool = False) -> DataFrame:
         """Name the column(s) ``loc`` / ``at`` / ``resample`` read labels
         from: the native row index of the frame. The columns stay in place;
         nothing is copied. Several names are the pandas ``MultiIndex``
         shape: ``loc[(a, b)]`` matches every level, ``loc[a]`` the first. A
-        list or struct column cannot be an index."""
+        list or struct column cannot be an index. With ``append`` the columns
+        become levels after the current ones (a frame with no index keeps its
+        row positions as an unnamed first level); a name that is already a level
+        is a ``KeyError``, as pandas. Without ``append`` the old index columns are
+        dropped, as pandas does, and a name that is a level and not a column is a
+        ``KeyError``."""
         keys = [names] if isinstance(names, str) else list(names)
         if not keys:
             raise ValueError("set_index: at least one column")
-        for name in keys:
-            if name not in self:
-                raise KeyError(f"set_index: no column named {name!r}")
-        return _bound(_ext.DataFrame.with_index(self, keys))
+        if not append:
+            missing = [name for name in keys if name not in self.columns]
+            if missing:
+                raise KeyError(f"None of {missing} are in the columns")
+            gone = [n for n in self.index_names() if n not in keys]
+            frame = self
+            if gone:
+                rest = [c for c in self._names() if c not in gone]
+                frame = _bound(_ext.DataFrame.select(self, *rest))
+            return _bound(_ext.DataFrame.with_index(frame, keys))
+        shown = self.columns
+        missing = [name for name in keys if name not in shown]
+        if missing:
+            raise KeyError(f"None of {missing} are in the columns")
+        current = self.index_names()
+        if current:
+            return _bound(_ext.DataFrame.with_index(self, [*current, *keys]))
+        first = default_name(0)
+        frame = _ext.DataFrame.with_row_index(self, first)
+        return _bound(_ext.DataFrame.with_index(frame, [first, *keys]))
 
-    def reset_index(self, drop: bool = False) -> DataFrame:
-        """Forget the index columns (they stay as plain columns unless
-        ``drop``); with no index set, prepend the row positions as ``index``,
-        as pandas."""
+    def reset_index(self, level: LevelArg = None, *, drop: bool = False) -> DataFrame:
+        """The index levels ``level`` (a name, a position or a list; all by
+        default) back to plain columns, in front of the others and named as
+        pandas names them (``index`` for an unnamed single level, ``level_<i>``
+        for an unnamed one of several); the other levels stay the index. With
+        ``drop`` the levels are removed. With no index, prepend the row
+        positions as ``index``, as pandas. ``ValueError`` when a level's name is
+        already a column (a frame has no duplicate names)."""
         names = self.index_names()
+        effective = names or [default_name(0)]
+        picked = (
+            sorted(set(pick_levels(effective, level)))
+            if level is not None
+            else list(range(len(effective)))
+        )
         if not names:
             return self if drop else _bound(_ext.DataFrame.with_row_index(self, "index"))
+        keep = [names[i] for i in range(len(names)) if i not in picked]
+        gone = [names[i] for i in picked]
         if drop:
-            keep = [c for c in self._names() if c not in names]
-            return _bound(_ext.DataFrame.select(self, *keep))
-        return _bound(_ext.DataFrame.with_index(self, []))
+            rest = [c for c in self._names() if c not in gone]
+            return _bound(_ext.DataFrame.with_index(_ext.DataFrame.select(self, *rest), keep))
+        shown = [shown_name(names, i) for i in picked]
+        visible = self.columns
+        if len(set(shown)) != len(shown) or any(s in visible for s in shown):
+            clash = next(s for s in shown if s in visible or shown.count(s) > 1)
+            raise ValueError(f"cannot insert {clash}, already exists")
+        renamed = {a: b for a, b in zip(gone, shown) if a != b}
+        out = _ext.DataFrame.rename(self, renamed) if renamed else self
+        order = [*shown, *visible, *keep]
+        return _bound(_ext.DataFrame.with_index(_ext.DataFrame.select(out, *order), keep))
 
     @property
     def iloc(self) -> ILoc:
@@ -369,7 +412,8 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         """Import a ``pandas.DataFrame`` through NumPy, with no pyarrow (see
         :meth:`Series.from_pandas`). A non-default index becomes columns after the
         data columns, named by its levels or ``__index_level_<i>__``, and the
-        frame's row index (:meth:`index_names`); a ``RangeIndex`` is no index."""
+        frame's row index (:meth:`index_names`); the default ``RangeIndex`` (``0 .. n-1``
+        with step 1) is no index, any other range is labels."""
         columns = [(str(name), df[name]) for name in df.columns]
         if len({n for n, _ in columns}) != len(columns):
             raise ValueError("from_pandas: column names are not unique")
@@ -1851,15 +1895,43 @@ def _dataframe_from_bytes(data: bytes) -> DataFrame:
 def _dataframe_from_arrow(table: pa.Table) -> DataFrame:
     """Import a pyarrow Table into a native DataFrame wrapper, with the row
     index its schema metadata names: ``dftracer.utils.index``, else the
-    ``index_columns`` of its pandas metadata (a ``RangeIndex`` is none)."""
+    ``index_columns`` of its pandas metadata (a default ``RangeIndex``, ``0 .. n-1``
+    with step 1, is none; another range becomes an index column of its values)."""
     frame = DataFrame(_arrow_native("_dataframe_from_arrow")(table))
     names = _arrow_index_names(table.schema.metadata, frame)
     if not names:
-        return frame
+        return _range_index(table.schema.metadata, frame)
     try:
         return _bound(_ext.DataFrame.with_index(frame, names))
     except ValueError:
         return frame
+
+
+def _range_index(metadata: Mapping[bytes, bytes] | None, frame: DataFrame) -> DataFrame:
+    """``frame`` indexed by the range its pandas metadata stores in place of a
+    column (``{"kind": "range", ...}``), unless it is the default ``0 .. n-1``."""
+    if not metadata or b"dftracer.utils.index" in metadata:
+        return frame
+    import json
+
+    listed = json.loads(metadata[b"pandas"]).get("index_columns") if b"pandas" in metadata else None
+    if not isinstance(listed, list) or len(listed) != 1 or not isinstance(listed[0], dict):
+        return frame
+    spec = listed[0]
+    start, step = spec.get("start"), spec.get("step")
+    if spec.get("kind") != "range" or not isinstance(start, int) or not isinstance(step, int):
+        return frame
+    if (start == 0 and step == 1) or step == 0:
+        return frame
+    name = spec.get("name")
+    name = default_name(0) if name is None else str(name)
+    if name in frame._names():
+        return frame
+    from ._series_index import positions
+
+    labels = positions(len(frame)) * step + start
+    framed = _ext.DataFrame.with_column(frame, name, labels)
+    return _bound(_ext.DataFrame.with_index(framed, [name]))
 
 
 def _arrow_index_names(metadata: Mapping[bytes, bytes] | None, frame: DataFrame) -> list[str]:

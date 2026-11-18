@@ -392,10 +392,82 @@ side makes ``**`` null, where pandas gives ``1.0`` for ``1 ** NaN``. ``where``,
 raise ``ValueError`` otherwise. ``sort_index`` orders the rows by their labels,
 level by level. ``loc``, ``at``, ``get``, ``xs`` and ``s[label]`` look rows up by
 label (see Label lookup). ``s[mask]`` keeps the rows where a Bool Series is true, a null counting as false. Comparing two
-Series whose labels differ raises ``ValueError``, as pandas. A group-by
-``apply`` that returns a Series, and ``take``, keep the original labels of the
-rows; pandas also puts the group keys before them, which is not done here.
-``value_counts`` keeps the Polars frame of ``value`` and ``count``.
+Series whose labels differ raises ``ValueError``, as pandas.
+``Series.value_counts`` keeps the Polars frame of ``value`` and ``count``.
+The labels a group-by gives its results are in "Levels" below.
+
+Levels
+~~~~~~
+
+The levels of a row index (a name, a position, a negative position, or a list
+of them) are edited as in pandas 2 and 3, on a Series and a DataFrame, by
+changing the list of level names and the label columns: no row moves except in
+``sort_index``.
+
+- ``droplevel(level)`` removes levels (a frame's label columns are gone, not
+  data) and raises ``ValueError`` when none would be left, ``KeyError`` for an
+  unknown name and ``IndexError`` for a position out of range. ``swaplevel(i, j)``
+  (the last two by default) and ``reorder_levels(order)`` need a MultiIndex;
+  pandas raises ``AssertionError`` or a bare ``Exception`` there for some
+  inputs, and this raises ``TypeError`` or ``ValueError``. ``axis=1`` is the
+  column labels, which have one level.
+- ``rename_axis(["a", "b"])`` names every level, ``rename_axis(index={"a": "x"})``
+  and ``rename_axis(index=func)`` map the names, and a dict or a function as the
+  first argument is a ``ValueError`` as in pandas. A frame with no index gains
+  its positions as the index under the name. A frame cannot hold two columns of
+  one name, so a level name that is already a column, or a repeated level name,
+  is a ``ValueError`` (pandas allows both); the name of the column axis
+  (``columns=``) is not kept and raises ``NotImplementedError`` unless it is
+  ``None``.
+- ``df.index`` and ``s.index`` (a Series for one level, a frame for several)
+  have the pandas Index names ``names``, ``nlevels``, ``get_level_values(level)``
+  and ``set_names(names, level=)``; they read the levels of the object that
+  ``index`` returned, and exist on every Series and DataFrame for that reason.
+- ``add_prefix`` and ``add_suffix`` of a Series give every row label as text with
+  the prefix (each level of a MultiIndex; a positional Series gets the
+  positions); numbers, Bool and text go through the native string kernels. A DataFrame names the columns (``axis=1``, the default) or, with
+  ``axis=0``, does the same to the row labels. A null label prints as pandas 3
+  prints it (``nan``, ``NaT``).
+- ``set_index(keys, append=True)`` adds the columns as levels after the current
+  ones, and a frame with no index keeps its positions as an unnamed first level;
+  a key that is already a level is a ``KeyError``. Without ``append`` the old index
+  columns are dropped, as pandas does (``df.set_index("a").set_index("b")`` keeps
+  neither as a column). ``reset_index(level=...)``
+  moves some levels back into columns, in front of the others and in level
+  order, named as pandas names them (``index`` or ``level_<i>`` for an unnamed
+  one); with ``drop=True`` they are removed. ``sort_index(level=...,
+  sort_remaining=True)`` orders by those levels first and then by the rest;
+  ``ascending`` is one flag or one for each level in ``level`` (a list sorts the
+  listed levels only, as pandas), ``na_position``, ``ignore_index`` and ``key`` (a
+  function of each level) work as in pandas, and the sort is stable. A single
+  level ignores ``level``, as pandas.
+
+The group-by results that pandas labels with the group keys in front
+(``group_keys=True``) are labelled the same way by the pandas ``groupby``:
+``apply`` that returns a frame or a Series, ``take``, ``SeriesGroupBy.nlargest``
+and ``nsmallest`` (now a Series named like the column, where the Polars-shaped
+frame with an ``index`` column was) and ``value_counts`` (a Series named
+``count``). Each row is labelled by its group key, then by the label it had (its
+index, or its position when the frame has none), and the groups come in key order
+(or first appearance with ``sort=False``). As pandas 3, the group function gets
+the frame without the key columns (pandas 2 passes them with a warning); a result
+column that is named like a key is a ``ValueError``. Series results that all have
+the same labels become one row for each group (columns are the labels, as pandas),
+and a scalar or a list per group is a Series with no name under the keys, as pandas 3 (the traced reduction of several columns, ``g[["a", "b"]].sum()``, is a frame with those columns under the keys). With
+``as_index=False`` the keys are left out and the rows keep their labels. The Polars
+``group_by`` keeps the old shapes: key columns present and rows in input order
+for ``take``. ``take`` raises ``IndexError`` when a group is too small, as
+pandas; ``value_counts`` with ``sort=False`` orders the combinations by count, ties in
+order of first appearance, as pandas; the lazy group-by is unchanged.
+
+.. code-block:: python
+
+   df = DataFrame({"g": ["a", "a", "b"], "n": [1, 2, 1], "v": [1.0, 2.0, 3.0]}).set_index(["g", "n"])
+   df.swaplevel()                      # levels n, g
+   df.droplevel("g")                   # the index n alone
+   df.reset_index(level="g")           # g back as a column, n stays the index
+   df.sort_index(level="n", ascending=False)
+   df.reset_index().groupby("g")["v"].nlargest(1)   # Series under (g, position)
 
 Several columns can be assigned at once from a frame or a list of Series. The
 targets and the value's columns pair by position (the value's own names are

@@ -32,6 +32,7 @@ from . import dftracer_utils_ext as _ext
 from ._aliases import install as _install_aliases
 from ._expr_ops import lower_column_ops
 from ._group_transforms import GroupTransforms
+from ._series_index import default_name
 from ._window_spec import norm_window_spec
 from .agg import (
     PANDAS_AGG_NAMES,
@@ -155,17 +156,26 @@ class LazyFrame(_ext.LazyFrame):
 
         return self.index_names() or [_ROW]
 
-    def set_index(self, names: str | Sequence[str]) -> LazyFrame:
+    def set_index(self, names: str | Sequence[str], *, append: bool = False) -> LazyFrame:
         """Name the column(s) ``loc`` / ``resample`` read labels from; the
         columns stay in place. Several names: ``loc[(a, b)]`` matches every
-        level, ``loc[a]`` the first."""
+        level, ``loc[a]`` the first. With ``append`` they become levels after
+        the current ones (row positions come first when there is no index)."""
         keys = [names] if isinstance(names, str) else list(names)
         if not keys:
             raise ValueError("set_index: at least one column")
         resolve = self._resolve("set_index")
         for name in keys:
             resolve(name)
-        return self._new(_ext.LazyFrame.with_index(self, keys))
+        if not append:
+            return self._new(_ext.LazyFrame.with_index(self, keys))
+        current = self.index_names()
+        if current:
+            return self._new(_ext.LazyFrame.with_index(self, [*current, *keys]))
+        first = default_name(0)
+        return self._new(
+            _ext.LazyFrame.with_index(_ext.LazyFrame.with_row_index(self, first), [first, *keys])
+        )
 
     def reset_index(self, drop: bool = False) -> LazyFrame:
         """Forget the index columns (kept as plain columns unless ``drop``);
@@ -1078,6 +1088,9 @@ class LazyGroupBy(GroupTransforms[LazyFrame]):
         .max()`` (the Series-kernel reductions need an eager group-by)."""
 
         return GroupRolling(self, int(window))
+
+    def _take_rows(self, indices: Sequence[int]) -> LazyFrame:
+        return self.take(indices)
 
     def take(self, indices: Sequence[int]) -> LazyFrame:
         """:meth:`GroupBy.take` as plan steps: the ``nth`` plans of each

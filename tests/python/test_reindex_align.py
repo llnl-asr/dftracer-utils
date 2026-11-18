@@ -16,6 +16,8 @@ from dftracer.utils import DataFrame, Series  # noqa: E402
 pytestmark = pytest.mark.filterwarnings("ignore::FutureWarning", "ignore::DeprecationWarning")
 
 PANDAS3 = int(pd.__version__.split(".")[0]) >= 3
+PANDAS31 = tuple(int(p) for p in pd.__version__.split(".")[:2]) >= (3, 1)
+PANDAS30 = PANDAS3 and not PANDAS31
 NAN = float("nan")
 
 INDEXES = {
@@ -184,7 +186,10 @@ def test_series_reindex_repeated_labels_raise():
         7,
         -1,
         pytest.param(
-            0.0, marks=pytest.mark.skipif(not PANDAS3, reason="pandas 2 keeps an integer column")
+            0.0,
+            marks=pytest.mark.skipif(
+                not PANDAS31, reason="pandas before 3.1 widens an integer column to float64"
+            ),
         ),
     ],
 )
@@ -525,6 +530,8 @@ def _pair(a, b):
 @pytest.mark.parametrize("pair", PAIRS)
 def test_series_align(pair, join):
     a, b = PAIRS[pair]
+    if PANDAS30 and join == "inner" and pair == "dup":
+        pytest.skip("pandas 3.0 orders the other side's repeated labels unlike 2.x and 3.1")
     check(lambda: _pair(a, b), lambda x, y: x.align(y, join=join))
 
 

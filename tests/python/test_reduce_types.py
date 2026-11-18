@@ -88,4 +88,6 @@ def test_numeric_reductions_are_unchanged():
     assert x.mean() == pytest.approx(8 / 3)
     empty = DataFrame.from_dict({"x": [3, 1, 4]}).filter(col("x") > 100)["x"]
     assert empty.sum() == 0
-    assert empty.mean() == 0.0
+    assert empty.mean() is None
+    assert empty.min() is None
+    assert empty.max() is None

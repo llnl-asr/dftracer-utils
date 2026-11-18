@@ -928,7 +928,27 @@ DFTU_EXPORT double dftu_series_kurtosis(const dftu_series* v);
  * `v` is NULL or not numeric. Nothing is allocated for the caller. */
 DFTU_EXPORT double dftu_series_skewness_unbiased(const dftu_series* v);
 DFTU_EXPORT double dftu_series_kurtosis_unbiased(const dftu_series* v);
+/** How dftu_series_quantile_interp picks a quantile between two ranked values.
+ */
+typedef int32_t dftu_interpolation;
+enum {
+    DFTU_INTERP_LINEAR = 0,
+    DFTU_INTERP_NEAREST = 1,
+    DFTU_INTERP_LOWER = 2,
+    DFTU_INTERP_HIGHER = 3,
+    DFTU_INTERP_MIDPOINT = 4
+};
+
+/** The exact `q` quantile (q clamped to [0, 1]) of the non-null values with
+ * linear interpolation; NaN when there is no value. A NaN value ranks above
+ * every number. Nothing is allocated for the caller. */
 DFTU_EXPORT double dftu_series_quantile(const dftu_series* v, double q);
+/** Like dftu_series_quantile, with `interp` (a dftu_interpolation) choosing the
+ * result when `q * (n - 1)` falls between two ranks: LINEAR blends them,
+ * NEAREST rounds the rank half away from zero, LOWER and HIGHER take the rank
+ * below or above, MIDPOINT their mean. An unknown `interp` gives NaN. */
+DFTU_EXPORT double dftu_series_quantile_interp(const dftu_series* v, double q,
+                                               dftu_interpolation interp);
 DFTU_EXPORT int64_t dftu_series_nunique(const dftu_series* v);
 /** The distinct non-null values, ascending. Caller owns the column. */
 DFTU_EXPORT dftu_series* dftu_series_unique(const dftu_series* v);

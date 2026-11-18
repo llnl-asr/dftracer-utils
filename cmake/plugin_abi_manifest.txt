@@ -182,6 +182,11 @@ enum DFTU_INDEX_LT 2
 enum DFTU_INDEX_NE 1
 enum DFTU_INDEX_NOT_IN 7
 enum DFTU_INDEX_REGEX 10
+enum DFTU_INTERP_HIGHER 3
+enum DFTU_INTERP_LINEAR 0
+enum DFTU_INTERP_LOWER 2
+enum DFTU_INTERP_MIDPOINT 4
+enum DFTU_INTERP_NEAREST 1
 enum DFTU_JOB_BLOCKING 2
 enum DFTU_JOB_CPU 0
 enum DFTU_JOB_INLINE 1
@@ -1376,6 +1381,7 @@ typedef dftu_gap_fill_mode int32_t
 typedef dftu_groupwise_op int32_t
 typedef dftu_gz_writer struct dftu_gz_writer
 typedef dftu_index_op int32_t
+typedef dftu_interpolation int32_t
 typedef dftu_job struct dftu_job
 typedef dftu_job_where int32_t
 typedef dftu_join_how int32_t

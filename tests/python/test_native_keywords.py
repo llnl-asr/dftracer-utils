@@ -136,7 +136,6 @@ ACCESSOR_KEYWORDS = [
     ("str", "join", {"sep": "-"}),
     ("str", "removeprefix", {"prefix": "a"}),
     ("str", "removesuffix", {"suffix": "c"}),
-    ("str", "replace_all", {"pat": "a", "repl": "z"}),
     ("str", "rfind", {"sub": "b"}),
     ("str", "startswith", {"pat": "a"}),
     ("str", "strip_prefix", {"prefix": "a"}),

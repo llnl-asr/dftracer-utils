@@ -701,11 +701,18 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         columns: Union[str, Sequence[str], None] = None,
         axis: "Union[int, Literal['index', 'columns'], None]" = None,
     ) -> "DataFrame":
-        """Every column except ``names`` (``columns=`` is the pandas spelling;
-        ``axis=1`` or ``"columns"`` is accepted, the frame has no row labels
-        for ``axis=0``)."""
-        if axis in (0, "index"):
-            raise ValueError("drop: dropping rows by label needs the row index; use filter")
+        """Every column except ``names`` (``columns=`` is the pandas spelling).
+        ``axis`` is ``None``, ``1`` or ``"columns"``; any other value raises
+        ``ValueError`` (the frame has no row labels for ``axis=0``)."""
+        if (
+            axis is not None
+            and not (axis == 1 and not isinstance(axis, bool))
+            and axis != "columns"
+        ):
+            raise ValueError(
+                f"drop: axis must be None, 1 or 'columns', not {axis!r} "
+                "(dropping rows by label needs the row index; use filter)"
+            )
         dropped = set(_names(columns))
         for n in names:
             dropped.update(_names(n))
@@ -834,12 +841,12 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         return out
 
     def nlargest(self, n: int, columns: str) -> "DataFrame":
-        """The pandas ``nlargest``: :meth:`top_k` of ``columns`` with ``n``."""
-        return self.top_k(columns, n, True)
+        """The pandas ``nlargest``: the ``n`` rows with the largest ``columns``."""
+        return self._like(_ext.DataFrame.topk(self, columns, n, True))
 
     def nsmallest(self, n: int, columns: str) -> "DataFrame":
-        """The pandas ``nsmallest``: :meth:`top_k` of ``columns`` with ``n``."""
-        return self.top_k(columns, n, False)
+        """The pandas ``nsmallest``: the ``n`` rows with the smallest ``columns``."""
+        return self._like(_ext.DataFrame.topk(self, columns, n, False))
 
     def pivot_table(
         self,
@@ -1176,9 +1183,26 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         the single-list variant that always keeps the row."""
         return self._like(_ext.DataFrame.unnest(self, column, bool(keep_empty)))
 
-    def top_k(self, name: str, k: int, largest: bool = True) -> "DataFrame":
-        """The ``k`` best rows by column ``name`` (the native :meth:`topk`)."""
-        return self._like(_ext.DataFrame.topk(self, name, k, largest))
+    def top_k(
+        self, k: int, *, by: "Union[str, Sequence[str]]", reverse: bool = False
+    ) -> "DataFrame":
+        """The ``k`` rows with the largest ``by`` (the smallest with
+        ``reverse=True``), best first; a null never ranks (polars ``top_k``).
+        Several ``by`` columns rank lexicographically."""
+        if isinstance(by, str):
+            return self._like(_ext.DataFrame.topk(self, by, k, not reverse))
+        cols = list(by)
+        present = self[cols[0]].is_not_null()
+        for c in cols[1:]:
+            present = present & self[c].is_not_null()
+        return self.filter(present).sort(cols, descending=not reverse).head(k)
+
+    def bottom_k(
+        self, k: int, *, by: "Union[str, Sequence[str]]", reverse: bool = False
+    ) -> "DataFrame":
+        """The ``k`` rows with the smallest ``by``, smallest first (polars
+        ``bottom_k``): :meth:`top_k` with ``reverse`` flipped."""
+        return self.top_k(k, by=by, reverse=not reverse)
 
     def sort_values(
         self,
@@ -1673,6 +1697,8 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         pad = _FramePandasMixin.ffill
         limit = head
         clone = _FramePandasMixin.copy
+        select_seq = select
+        with_columns_seq = with_columns
         pass
     # END GENERATED aliases
 

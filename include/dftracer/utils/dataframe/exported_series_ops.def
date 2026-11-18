@@ -170,6 +170,7 @@ DFTU_SERIES_OP(dftu.series.kurtosis_unbiased, dftu_series_kurtosis_unbiased, F64
 DFTU_SERIES_OP(dftu.series.variance, dftu_series_variance, F64, SERIES, I32, NONE)
 DFTU_SERIES_OP(dftu.series.stddev, dftu_series_stddev, F64, SERIES, I32, NONE)
 DFTU_SERIES_OP(dftu.series.quantile, dftu_series_quantile, F64, SERIES, F64, NONE)
+DFTU_SERIES_OP(dftu.series.quantile_interp, dftu_series_quantile_interp, F64, SERIES, F64, I32)
 DFTU_SERIES_OP(dftu.series.is_sorted, dftu_series_is_sorted, BOOL, SERIES, I32, NONE)
 
 /* Ordering / selection (series + flag/enum -> series). */

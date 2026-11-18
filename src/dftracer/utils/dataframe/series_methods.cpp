@@ -164,6 +164,10 @@ double Series::kurtosis_unbiased() const {
 double Series::quantile(double q) const {
     return dftu_series_quantile(handle_, q);
 }
+double Series::quantile(double q, Interpolation interp) const {
+    return dftu_series_quantile_interp(handle_, q,
+                                       static_cast<dftu_interpolation>(interp));
+}
 double Series::median() const { return dftu_series_quantile(handle_, 0.5); }
 std::int64_t Series::nunique() const { return dftu_series_nunique(handle_); }
 

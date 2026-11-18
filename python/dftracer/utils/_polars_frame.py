@@ -22,6 +22,7 @@ from ._pandas_frame import _is_numeric, _series
 from .series import Series, _require_pyarrow
 
 if TYPE_CHECKING:
+    from .columnar import Expr
     from .dataframe import DataFrame
     from .enums import DType
 
@@ -114,6 +115,38 @@ class _FramePolarsMixin:
     def vstack(self, other: "DataFrame") -> "DataFrame":
         """``other``'s rows below this frame's (polars ``vstack``)."""
         return self._frame().concat(other)
+
+    def is_sorted(
+        self,
+        by: "Union[str, Sequence[str]]",
+        *more_by: str,
+        descending: bool = False,
+        nulls_last: bool = False,
+    ) -> bool:
+        """Whether the rows already are in the order ``sort(by, ...)`` gives
+        (polars ``is_sorted``)."""
+        f = self._frame()
+        keys = [by] if isinstance(by, str) else list(by)
+        keys += more_by
+        ordered = f.select(*keys)
+        return ordered.equals(ordered.sort(keys, descending=descending, nulls_last=nulls_last))
+
+    def iter_slices(self, n_rows: int = 10_000) -> Iterator["DataFrame"]:
+        """The frame in consecutive slices of ``n_rows`` rows, the last one
+        shorter (polars ``iter_slices``)."""
+        if n_rows < 1:
+            raise ValueError("iter_slices: n_rows must be at least 1")
+        f = self._frame()
+        for offset in range(0, len(f), n_rows):
+            yield f.slice(offset, n_rows)
+
+    def remove(self, predicate: "Union[Series, Expr]") -> "DataFrame":
+        """The rows where ``predicate`` is not true: false and null rows stay
+        (polars ``remove``), where :meth:`filter` of the negation drops the
+        null ones."""
+        f = self._frame()
+        mask = predicate if isinstance(predicate, Series) else predicate.apply(f)
+        return f.filter(~mask.fill_null(False))
 
     def gather_every(self, n: int, offset: int = 0) -> "DataFrame":
         """Every ``n``-th row from ``offset`` (polars ``gather_every``)."""

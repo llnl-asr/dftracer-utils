@@ -143,10 +143,10 @@ class TestFrameNames:
         for axis in (1, "columns"):
             assert ours.drop("a", axis=axis).columns == list(pdf.drop("a", axis=axis).columns)
         assert ours.drop(["a"], axis=1).columns == ["b"]
-        with pytest.raises(ValueError, match="row index"):
-            ours.drop("a", axis=0)
-        with pytest.raises(ValueError, match="row index"):
-            ours.drop("a", axis="index")
+        assert ours.drop("a", axis=None).columns == ["b"]
+        for bad in (0, "index", True, 2, "rows"):
+            with pytest.raises(ValueError, match="axis must be"):
+                ours.drop("a", axis=bad)
 
 
 class TestLazyFrameNames:

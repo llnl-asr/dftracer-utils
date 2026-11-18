@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add the Polars names `select_seq`, `with_columns_seq` (frames and plans), `DataFrame.is_sorted`, `iter_slices`, `remove`, `bottom_k`, `LazyFrame.top_k`, `bottom_k`, `shift`, `cast`, `gather_every`, `remove`, `Series.not_`, `clear`, `radians`, `degrees`, `Expr.radians`, `degrees`, `pipe`, `Series.dt.total_days` to `total_nanoseconds` (whole units, truncated toward zero, in integer arithmetic), `Series.dt.timestamp`, `to_string`, `min`, `max`, `Series.str.head`, `tail`, and `Expr.str.head`, `tail`, `Expr.dt.timestamp`, `to_string`.
+- `scripts/api_coverage.py` rejects a `needs-kernel` line whose detail points to a method we already have.
 - Add `scripts/api_coverage.py`, a gate that lists the public names of pandas (`DataFrame`, `Series`, both group-bys, `.str`, `.dt`) and Polars (`DataFrame`, `Series`, `LazyFrame`, `Expr`, both group-bys, the `str`, `dt` and `list` namespaces), subtracts ours and the reasoned list in `scripts/api_coverage_exclude.txt`, and fails on a name that is neither; `--report` prints the table.
   A line for a name that is now ours fails too, so the list only shrinks.
   `tests/python/test_pandas_parity.py` and `tests/python/test_polars_parity.py` run each pandas or Polars method that we have on the same data in the library and in ours and compare type, shape, dtype, values and, for pandas, that the result has the default RangeIndex; `tests/python/parity_findings_pandas.txt` and `parity_findings_polars.txt` list every method whose result differs, with its reason.
@@ -916,6 +918,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- `Series.exp`, `Series.log` and the expression forms follow IEEE for zero, negatives, infinities, NaN and overflow: `log` of a negative is NaN, `log(0)` is `-inf`, `exp` of a large value is `inf` and NaN stays NaN.
+  A vector that held such a value was computed outside the range of the SIMD routine and returned garbage.
+  `sign` of NaN is NaN, and `clip` leaves a NaN value as it is and ignores a NaN bound.
+- `Series.is_duplicated` and `is_unique` count every NaN as one value and `-0.0` as `0.0`; a lone NaN no longer counts as a repeat.
+- `Series.min`, `max`, `mean`, `median`, `std`, `var` and `quantile` of a column with no valid value give `None` (Polars gives null) where they gave 0 or NaN; `sum` stays 0.
+- `Series.quantile` takes `interpolation` (`linear` by default, `nearest`, `lower`, `higher`, `midpoint`) and ranks a NaN value above every number, as Polars does.
+  The C ABI gets `dftu_series_quantile_interp` and the C++ `Series::quantile(q, Interpolation)`; `DataFrame.quantile` passes `interpolation` through.
+- `Series.str.contains` and `Expr.str.contains` search a regex by default, as pandas and Polars do; `regex=False` or `literal=True` keeps the substring kernel.
+  `Series.str.replace_all` and `Expr.str.replace_all` take a regex by default, and `literal=True` the literal form; `Series.str.replace` takes `regex=` and `literal=`.
+  `case=False` with a regex runs the pattern with `(?i)`.
+- `DataFrame.drop(axis=...)` takes `None`, `1` and `"columns"` only; every other value raises `ValueError`.
+- `Expr.clip` takes `lower_bound` and `upper_bound` (either may be `None`), the Polars names, in place of `lower` and `upper`.
+- `DataFrame.top_k` takes `(k, *, by, reverse=False)` as Polars does; `nlargest` and `nsmallest` keep the pandas order.
+- `Series.convert_dtypes` and `DataFrame.convert_dtypes` turn a Float64 column of whole numbers into Int64 (nulls kept), as pandas does with `convert_integer=True`.
+  A float NaN is a value in the engine, so a column that holds one stays Float64.
+- The parity gate is exact and strict.
+  A findings line is one case (`kind.method#N[input]`) and must fail; a case that is not listed must pass.
+  NaN and null are separate values, a bool never equals an int, a dtype is its Arrow spelling and a float must match to a relative 1e-9.
+  When both libraries raise, the exception class must match.
 - A forced index build (`Indexer.build(force=True)`, `dftracer_index --force`) of one trace folder no longer clears the aggregation of other folders that share its `index_dir`; only the forced files' aggregation rows are rebuilt.
 - `group_by(...).agg(...)` keeps the type of a temporal column: `min`, `max`, `first` and `last` of a Timestamp (any unit and zone), Date32, Date64, Time32, Time64 or Duration give that type, the `sum` of a Duration is a Duration and the `mean` of a Timestamp or a Duration keeps its type, as pandas and Polars do; they gave an Int64 column that later `.dt` calls read as microseconds.
   The lazy plan `schema` after `group_by(...).agg(...)` and `group_by_dynamic` carries the same types, from one rule in `agg_output_type`.

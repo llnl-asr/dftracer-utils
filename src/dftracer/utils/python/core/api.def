@@ -198,8 +198,6 @@ PY_METHOD(Str, removeprefix, "dftu.series.str_remove_prefix", STR, STR, KEEP, NO
           "removeprefix(prefix) -> String Series without a leading prefix.")
 PY_METHOD(Str, removesuffix, "dftu.series.str_remove_suffix", STR, STR, KEEP, NO, "suffix", "", "str_remove_suffix: not a String column",
           "removesuffix(suffix) -> String Series without a trailing suffix.")
-PY_METHOD(Str, replace_all, "dftu.series.str_replace_all", STR2, STR, KEEP, NO, "pat", "repl", "",
-          "replace_all(pat, repl) -> String Series, every literal occurrence of pat replaced.")
 PY_METHOD(Str, zfill, "dftu.series.str_zfill", INT, STR, KEEP, NO, "width", "", "",
           "zfill(width) -> String Series left-padded with '0' after any sign.")
 PY_METHOD(Str, join, "dftu.series.list_join", STR, STR, KEEP, NO, "sep", "", "list_join: not a List column of strings",

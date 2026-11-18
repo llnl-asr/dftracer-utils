@@ -117,11 +117,17 @@ PyObject* scalar_to_py(dftu_scalar v);
 // A reducer that refuses its column (sum of a string, ...) returns an error
 // from the C++ member; it reaches Python as a TypeError that carries the
 // refusal's message.
-template <auto Method>
+// A reducer with NullWhenEmpty gives None for a column with no valid value
+// (min, max, mean); the engine's own scalar is 0 there, which no reader can
+// tell from a real 0.
+template <auto Method, bool NullWhenEmpty = false>
 PyObject* series_reduce_scalar(PyObject* self, PyObject*) {
     Held held_a(self);
     Series* a = held_a.get();
     if (!a) return nullptr;
+    if constexpr (NullWhenEmpty) {
+        if (a->count() == 0) Py_RETURN_NONE;
+    }
     auto out = without_gil(a->length(), [&] { return (a->*Method)(); });
     if constexpr (std::is_same_v<decltype(out),
                                  dftracer::utils::dstd::Result<
@@ -135,11 +141,14 @@ PyObject* series_reduce_scalar(PyObject* self, PyObject*) {
         return scalar_to_py(out);
     }
 }
-template <auto Method>
+template <auto Method, bool NullWhenEmpty = false>
 PyObject* series_reduce_f64(PyObject* self, PyObject*) {
     Held held_a(self);
     Series* a = held_a.get();
     if (!a) return nullptr;
+    if constexpr (NullWhenEmpty) {
+        if (a->count() == 0) Py_RETURN_NONE;
+    }
     auto out = without_gil(a->length(), [&] { return (a->*Method)(); });
     if (!out) {
         PyErr_SetString(PyExc_TypeError, out.error().c_str());
@@ -188,7 +197,7 @@ PyObject* Series_cut(PyObject* self, PyObject* other);
 PyObject* Series_qcut(PyObject* self, PyObject* arg);
 
 // series/stats.cpp
-PyObject* Series_quantile(PyObject* self, PyObject* arg);
+PyObject* Series_quantile(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* Series_median(PyObject* self, PyObject*);
 PyObject* Series_variance(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* Series_stddev(PyObject* self, PyObject* args, PyObject* kwds);

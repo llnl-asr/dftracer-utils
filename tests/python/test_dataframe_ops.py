@@ -743,7 +743,7 @@ def test_melt_concat_union_distinct_sample_topk_sort():
     assert big.sample(5, seed=1).num_rows == 5
 
     scores = _df({"name": ["a", "b", "c"], "v": [3, 1, 2]})
-    assert _col(scores.top_k("v", 2), "v") == [3, 2]
+    assert _col(scores.top_k(2, by="v"), "v") == [3, 2]
     assert _col(scores.sort("v"), "v") == [1, 2, 3]
     assert _col(scores.sort("v", descending=True), "v") == [3, 2, 1]
 

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import re
 import sys
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
@@ -199,9 +200,29 @@ def measure(libs: List[str]) -> Tuple[List[Row], List[str], List[str]]:
                     row.missing.add(name)
                 else:
                     row.excluded[name] = entry[0]
-            for (xlib, xcls, name), (kind, _) in exclusions.items():
-                if xlib == lib and xcls == cls and name in mine_names:
+            for (xlib, xcls, name), (kind, detail) in exclusions.items():
+                if xlib != lib or xcls != cls:
+                    continue
+                if name in mine_names:
                     errors.append(f"stale exclusion: {lib} {cls}.{name} ({kind}) is now ours")
+                if kind == "needs-kernel":
+                    # A missing kernel is not a method we have under another
+                    # name: a detail that sends the reader to one ("use x",
+                    # "x is the form", "x exists") is an implementation to do.
+                    for t in sorted(mine_names - {name}):
+                        pointer = (
+                            rf"\buse (?:\w+, )*{t}\b"
+                            rf"|\b{t}\b(?:\([^)]*\))? (?:\w+ )?(?:is|are|exists?)\b"
+                            rf"|\bform[s]? (?:is|are) (?:\w+ )*{t}\b"
+                            rf"|\b{t}\b and \w+ are the forms?"
+                        )
+                        if len(t) > 3 and re.search(pointer, detail):
+                            errors.append(
+                                f"needs-kernel {lib} {cls}.{name}: the detail points to our "
+                                f"existing {t}; implement it as forwarding or composition, "
+                                "or say what kernel is missing"
+                            )
+                            break
             rows.append(row)
     known = {(r.lib, r.cls) for r in rows}
     for lib, cls, name in exclusions:

@@ -1980,6 +1980,72 @@ TEST_SUITE("vec") {
         CHECK(u.data<std::int64_t>()[2] == 3);
     }
 
+    TEST_CASE("quantile: interpolation keywords and NaN above every number") {
+        dstd::Vector<std::int64_t> v{1, 2, 3, 4};
+        Series c = Series::flat_i64(v.data(), 4);
+        CHECK(dataframe::quantile(c, 0.4, Interpolation::Linear) ==
+              doctest::Approx(2.2));
+        CHECK(dataframe::quantile(c, 0.4, Interpolation::Nearest) == 2.0);
+        CHECK(dataframe::quantile(c, 0.4, Interpolation::Lower) == 2.0);
+        CHECK(dataframe::quantile(c, 0.4, Interpolation::Higher) == 3.0);
+        CHECK(dataframe::quantile(c, 0.4, Interpolation::Midpoint) == 2.5);
+
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        dstd::Vector<double> f{1.5, nan, -2.5};
+        Series fc = Series::flat_f64(f.data(), 3);
+        CHECK(dataframe::quantile(fc, 0.5) == 1.5);
+        CHECK(std::isnan(dataframe::quantile(fc, 1.0)));
+        CHECK(dataframe::quantile(fc, 0.0) == -2.5);
+    }
+
+    TEST_CASE("exp/log/sign/clip follow IEEE on zero, negatives, inf and NaN") {
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        const double inf = std::numeric_limits<double>::infinity();
+        // Wide enough that vector lanes and the scalar tail both see specials.
+        dstd::Vector<double> x{0.0,   -1.0,   inf, -inf,  nan,
+                               710.0, -800.0, 2.0, 1e308, 1e-320};
+        const auto n = static_cast<std::int64_t>(x.size());
+        Series c = Series::flat_f64(x.data(), n);
+        Series lg = dataframe::log(c);
+        Series ex = dataframe::exp(c);
+        Series sg = dataframe::sign(c);
+        const double* l = lg.data<double>();
+        const double* e = ex.data<double>();
+        const double* g = sg.data<double>();
+        CHECK(l[0] == -inf);
+        CHECK(std::isnan(l[1]));
+        CHECK(l[2] == inf);
+        CHECK(std::isnan(l[3]));
+        CHECK(std::isnan(l[4]));
+        CHECK(l[7] == doctest::Approx(std::log(2.0)));
+        CHECK(l[9] == doctest::Approx(std::log(1e-320)));
+        CHECK(e[0] == 1.0);
+        CHECK(e[2] == inf);
+        CHECK(e[3] == 0.0);
+        CHECK(std::isnan(e[4]));
+        CHECK(e[5] == inf);
+        CHECK(e[6] == 0.0);
+        CHECK(g[0] == 0.0);
+        CHECK(g[1] == -1.0);
+        CHECK(g[2] == 1.0);
+        CHECK(g[3] == -1.0);
+        CHECK(std::isnan(g[4]));
+
+        dstd::Vector<double> k{1.5, nan, -2.5, 3.0};
+        Series kc = Series::flat_f64(k.data(), 4);
+        const dftu_scalar lo = to_scalar(-1.0);
+        const dftu_scalar hi = to_scalar(2.0);
+        Series clipped = dataframe::clip(kc, lo, hi);
+        const double* p = clipped.data<double>();
+        CHECK(p[0] == 1.5);
+        CHECK(std::isnan(p[1]));
+        CHECK(p[2] == -1.0);
+        CHECK(p[3] == 2.0);
+        Series ignored = dataframe::clip(kc, to_scalar(nan), hi);
+        CHECK(ignored.data<double>()[2] == -2.5);
+        CHECK(ignored.data<double>()[3] == 2.0);
+    }
+
     TEST_CASE("D1 windowed stats: rolling_var/std/median/quantile") {
         dstd::Vector<std::int64_t> wv{1, 2, 3, 4, 5};
         // window 3 over 1..5: windows {1,2,3},{2,3,4},{3,4,5} each var 1.0.

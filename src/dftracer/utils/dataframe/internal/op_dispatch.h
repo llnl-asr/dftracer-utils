@@ -110,6 +110,8 @@ DFTU_OP_FN(DFTU_OP_SIG(BOOL, STR, STR, NONE),
            std::int32_t (*)(const char*, std::int32_t, const char*,
                             std::int32_t))
 DFTU_OP_FN(DFTU_OP_SIG(F64, SERIES, F64, NONE), double (*)(CS, double))
+DFTU_OP_FN(DFTU_OP_SIG(F64, SERIES, F64, I32),
+           double (*)(CS, double, std::int32_t))
 
 // dftu_op_run_frame (DFTU_OP_KIND_FRAME).
 DFTU_OP_FN(DFTU_OP_SIG(FRAME, FRAME, NONE, NONE), DF (*)(CDF))

@@ -5,9 +5,13 @@ on the same data in Polars and in ours, and the results are compared: type,
 shape, dtype kind and values.
 
 The cases come from the tables below, not one test per method. ``FINDINGS``
-lists the methods whose result differs today, each with its reason; a listed
-case is an expected failure (non-strict, so a fixed method shows as XPASS and
-its row is deleted). A method that is not listed must match Polars exactly."""
+lists the cases (method, input) whose result differs today, each with its
+reason; a listed case is a strict expected failure, so a fixed case fails the
+run until its row is deleted. A case that is not listed must match Polars
+exactly."""
+
+import datetime as dt
+import inspect
 
 import pytest
 
@@ -21,6 +25,24 @@ from .parity_common import R, compare, load_findings, norm_polars, resolve  # no
 
 NAN = float("nan")
 
+# Zero, negatives, both infinities, NaN, a null and values past the exp range.
+_SPECIAL = [
+    0.0,
+    -1.0,
+    float("inf"),
+    float("-inf"),
+    float("nan"),
+    None,
+    1e308,
+    2.0,
+    710.0,
+    -800.0,
+    1e-320,
+]
+
+# NaN repeated and once, a signed zero pair and repeated nulls.
+_REPEATS = [float("nan"), 1.0, float("nan"), 0.0, -0.0, None, 2.0, None]
+
 # Series inputs: ints with nulls, floats with a null and a NaN, strings with
 # nulls, bools, and an empty int64.
 SERIES = {
@@ -33,6 +55,16 @@ SERIES = {
         "float_null_nan",
         lambda: Series([1.5, None, NAN, -2.5, 3.0, 0.0]).rename("v"),
         lambda: pl.Series("v", [1.5, None, NAN, -2.5, 3.0, 0.0], dtype=pl.Float64),
+    ),
+    "Z": (
+        "float_special",
+        lambda: Series(_SPECIAL).rename("v"),
+        lambda: pl.Series("v", _SPECIAL, dtype=pl.Float64),
+    ),
+    "W": (
+        "float_repeats",
+        lambda: Series(_REPEATS).rename("v"),
+        lambda: pl.Series("v", _REPEATS, dtype=pl.Float64),
     ),
     "S": (
         "str_nulls",
@@ -63,6 +95,7 @@ _GROUPED = {
     "a": [1, None, 3, 2, 2],
     "b": [1.5, None, 3.0, -2.5, 3.0],
 }
+_DISTINCT = {"a": [5, 1, None, 4, 2], "b": [1.0, 2.0, 3.0, None, 5.0]}
 _PL_DTYPES = {"a": pl.Int64, "b": pl.Float64, "c": pl.String, "d": pl.Boolean, "k": pl.String}
 
 
@@ -78,6 +111,7 @@ FRAMES = {
     "M": ("mixed", *_frames(_MIXED)),
     "N": ("num", *_frames(_NUM)),
     "G": ("grouped", *_frames(_GROUPED)),
+    "U": ("distinct", *_frames(_DISTINCT)),
     "E": (
         "empty",
         lambda: DataFrame.from_arrow(
@@ -102,6 +136,37 @@ def _like(r):
 
 OTHER = R(_like)
 
+# Temporal inputs for ``.dt``: durations (a negative one, a null) and
+# timestamps (a pre-epoch one, a null), both microsecond.
+_DURATIONS = [
+    dt.timedelta(days=1, hours=2, seconds=3, microseconds=4),
+    None,
+    dt.timedelta(days=-1, hours=-2, microseconds=-5),
+]
+_STAMPS = [dt.datetime(2020, 1, 2, 3, 4, 5, 6), None, dt.datetime(1969, 12, 31, 23)]
+DTSERIES = {
+    "D": (
+        "durations",
+        lambda: Series.from_arrow(pa.array(_DURATIONS, pa.duration("us"))).rename("v"),
+        lambda: pl.Series("v", _DURATIONS, dtype=pl.Duration("us")),
+    ),
+    "T": (
+        "timestamps",
+        lambda: Series.from_arrow(pa.array(_STAMPS, pa.timestamp("us"))).rename("v"),
+        lambda: pl.Series("v", _STAMPS, dtype=pl.Datetime("us")),
+    ),
+}
+
+DT_CASES = [
+    *[(f"total_{u}", "D", (), {}) for u in ("days", "hours", "minutes", "seconds", "milliseconds", "microseconds", "nanoseconds")],
+    ("timestamp", "T", (), {}),
+    ("timestamp", "T", ("ms",), {}),
+    ("timestamp", "T", ("ns",), {}),
+    ("to_string", "T", ("%Y-%m-%d",), {}),
+    ("min", "T", (), {}),
+    ("max", "T", (), {}),
+]  # fmt: skip
+
 SERIES_CASES = [
     # reductions and statistics
     *[(m, "IFE", (), {}) for m in ("sum", "mean", "median", "min", "max", "std", "var", "product")],
@@ -116,6 +181,12 @@ SERIES_CASES = [
     ("null_count", "IFSE", (), {}),
     ("quantile", "IF", (0.5,), {}),
     ("quantile", "IF", (0.25,), {"interpolation": "lower"}),
+    ("quantile", "IFZ", (0.4,), {"interpolation": "nearest"}),
+    ("quantile", "IFZ", (0.4,), {"interpolation": "higher"}),
+    ("quantile", "IFZ", (0.4,), {"interpolation": "lower"}),
+    ("quantile", "IFZ", (0.4,), {"interpolation": "midpoint"}),
+    ("quantile", "IFZ", (0.4,), {"interpolation": "linear"}),
+    ("quantile", "IFZ", (1.0,), {"interpolation": "linear"}),
     ("arg_max", "IF", (), {}),
     ("arg_min", "IF", (), {}),
     ("any", "B", (), {}),
@@ -125,18 +196,23 @@ SERIES_CASES = [
     ("max", "S", (), {}),
     ("dot", "I", (OTHER,), {}),
     # elementwise
-    ("abs", "IF", (), {}),
-    ("round", "F", (1,), {}),
-    ("round", "F", (), {"decimals": 0}),
-    ("ceil", "F", (), {}),
-    ("floor", "F", (), {}),
-    ("sqrt", "IF", (), {}),
-    ("exp", "F", (), {}),
-    ("log", "F", (), {}),
-    ("sign", "IF", (), {}),
+    ("not_", "B", (), {}),
+    ("clear", "IFS", (), {}),
+    ("clear", "IFS", (2,), {}),
+    ("radians", "IFZ", (), {}),
+    ("degrees", "IFZ", (), {}),
+    ("abs", "IFZ", (), {}),
+    ("round", "FZ", (1,), {}),
+    ("round", "FZ", (), {"decimals": 0}),
+    ("ceil", "FZ", (), {}),
+    ("floor", "FZ", (), {}),
+    ("sqrt", "IFZ", (), {}),
+    ("exp", "FZ", (), {}),
+    ("log", "FZ", (), {}),
+    ("sign", "IFZ", (), {}),
     ("pow", "IF", (2,), {}),
-    ("clip", "IF", (), {"lower_bound": -1, "upper_bound": 2}),
-    ("clip", "IF", (0,), {}),
+    ("clip", "IFZ", (), {"lower_bound": -1, "upper_bound": 2}),
+    ("clip", "IFZ", (0,), {}),
     ("cum_sum", "IF", (), {}),
     ("cum_sum", "IF", (), {"reverse": True}),
     ("cum_prod", "IF", (), {}),
@@ -181,9 +257,9 @@ SERIES_CASES = [
     ("cast", "IF", (pl.Int64,), {"strict": False}),
     ("cast", "B", (pl.Int64,), {}),
     ("cast", "I", (pl.String,), {}),
-    ("is_duplicated", "IFS", (), {}),
-    ("is_unique", "IFS", (), {}),
-    ("unique", "IFS", (), {}),
+    ("is_duplicated", "IFSW", (), {}),
+    ("is_unique", "IFSW", (), {}),
+    ("unique", "IFS", (), {"_unordered": True}),
     ("unique", "IFS", (), {"maintain_order": True}),
     ("value_counts", "IFS", (), {}),
     ("value_counts", "IFS", (), {"sort": True}),
@@ -268,6 +344,14 @@ FRAME_CASES = [
     ("filter", "M", (R(lambda r: r["a"] > 1),), {}),
     ("filter", "M", (), {"predicate": R(lambda r: r["a"] > 1)}),
     ("select", "M", ("a", "c"), {}),
+    ("select_seq", "M", ("a", "c"), {}),
+    ("with_columns_seq", "N", (), {"z": R(lambda r: r["a"] * 2)}),
+    ("is_sorted", "NM", ("a",), {}),
+    ("is_sorted", "N", ("b",), {"descending": True, "nulls_last": True}),
+    ("iter_slices", "G", (2,), {}),
+    ("remove", "N", (R(lambda r: r["b"] > 2),), {}),
+    ("bottom_k", "U", (2,), {"by": "b"}),
+    ("bottom_k", "U", (2,), {"by": "a", "reverse": True}),
     ("select", "M", ([R(lambda r: r["a"] * 2)],), {}),
     ("with_columns", "N", (), {"z": R(lambda r: r["a"] * 2)}),
     ("with_columns", "N", (R(lambda r: (r["a"] + 1).alias("z")),), {}),
@@ -286,8 +370,8 @@ FRAME_CASES = [
     ("sort", "M", ("a",), {}),
     ("sort", "M", (), {"by": ["c", "a"], "descending": [False, True]}),
     ("sort", "M", ("a",), {"nulls_last": True}),
-    ("top_k", "N", (2,), {"by": "a"}),
-    ("bottom_k", "N", (2,), {"by": "a"}),
+    ("top_k", "U", (2,), {"by": "a"}),
+    ("bottom_k", "U", (2,), {"by": "a"}),
     ("head", "MNE", (2,), {}),
     ("head", "M", (), {}),
     ("tail", "MNE", (2,), {}),
@@ -323,7 +407,7 @@ FRAME_CASES = [
     ("update", "N", (SELF,), {}),
     ("partition_by", "M", ("c",), {}),
     ("pipe", "M", (R(lambda r: lambda d: d),), {}),
-    ("join", "G", (R(lambda r: r),), {"on": "k", "how": "inner"}),
+    ("join", "G", (R(lambda r: r),), {"on": "k", "how": "inner", "_unordered": True}),
     ("join", "G", (R(lambda r: r),), {"on": "k", "how": "left", "suffix": "_r"}),
     ("join", "G", (R(lambda r: r),), {"on": "k", "how": "semi"}),
     ("join", "G", (R(lambda r: r),), {"on": "k", "how": "anti"}),
@@ -347,6 +431,17 @@ LAZY_CASES = [
     ("shift", "N", (1,), {}),
     ("filter", "M", (R(lambda r: _col(r)("a") > 1),), {}),
     ("select", "M", ("a", "c"), {}),
+    ("select_seq", "M", ("a", "c"), {}),
+    ("with_columns_seq", "N", (), {"z": R(lambda r: _col(r)("a") * 2)}),
+    ("top_k", "U", (2,), {"by": "a"}),
+    ("top_k", "U", (2,), {"by": "b", "reverse": True}),
+    ("bottom_k", "U", (2,), {"by": "b"}),
+    ("shift", "N", (), {}),
+    ("shift", "N", (-1,), {}),
+    ("cast", "N", (R(lambda r: {"a": "float64"} if isinstance(r, dft.LazyFrame) else {"a": pl.Float64}),), {}),
+    ("gather_every", "N", (2,), {}),
+    ("gather_every", "N", (3, 1), {}),
+    ("remove", "N", (R(lambda r: _col(r)("b") > 2),), {}),
     ("with_columns", "N", (), {"z": R(lambda r: _col(r)("a") * 2)}),
     ("with_row_index", "M", (), {}),
     ("drop", "M", ("a",), {}),
@@ -364,7 +459,7 @@ LAZY_CASES = [
     ("explode", "M", ("c",), {}),
     ("unpivot", "N", (), {"index": "a"}),
     ("describe", "N", (), {}),
-    ("join", "G", (R(lambda r: r),), {"on": "k", "how": "inner"}),
+    ("join", "G", (R(lambda r: r),), {"on": "k", "how": "inner", "_unordered": True}),
     ("collect", "M", (), {}),
     ("collect_schema", "M", (), {}),
 ]  # fmt: skip
@@ -381,18 +476,21 @@ GROUPBY_CASES = [
 # df.select(col("v").method(...).alias("r")) on a one-column frame named v, in
 # both libraries.
 EXPR_CASES = [
-    ("abs", "IF", (), {}),
-    ("sqrt", "IF", (), {}),
-    ("exp", "F", (), {}),
-    ("log", "F", (), {}),
-    ("log10", "F", (), {}),
-    ("log1p", "F", (), {}),
-    ("ceil", "F", (), {}),
-    ("floor", "F", (), {}),
-    ("round", "F", (1,), {}),
-    ("sign", "IF", (), {}),
+    ("abs", "IFZ", (), {}),
+    ("radians", "IFZ", (), {}),
+    ("degrees", "IFZ", (), {}),
+    ("pipe", "IF", (lambda e: e + 1,), {}),
+    ("sqrt", "IFZ", (), {}),
+    ("exp", "FZ", (), {}),
+    ("log", "FZ", (), {}),
+    ("log10", "FZ", (), {}),
+    ("log1p", "FZ", (), {}),
+    ("ceil", "FZ", (), {}),
+    ("floor", "FZ", (), {}),
+    ("round", "FZ", (1,), {}),
+    ("sign", "IFZ", (), {}),
     ("pow", "IF", (2,), {}),
-    ("clip", "IF", (), {"lower_bound": -1, "upper_bound": 2}),
+    ("clip", "IFZ", (), {"lower_bound": -1, "upper_bound": 2}),
     ("sum", "IF", (), {}),
     ("mean", "IF", (), {}),
     ("median", "IF", (), {}),
@@ -432,8 +530,8 @@ EXPR_CASES = [
     ("is_infinite", "F", (), {}),
     ("is_in", "IS", ([1, 2],), {}),
     ("is_between", "IF", (1, 3), {}),
-    ("is_duplicated", "IFS", (), {}),
-    ("is_unique", "IFS", (), {}),
+    ("is_duplicated", "IFSW", (), {}),
+    ("is_unique", "IFSW", (), {}),
     ("cast", "IF", (pl.Float64,), {}),
     ("alias", "IFS", ("z",), {}),
     ("sort", "IFS", (), {}),
@@ -508,15 +606,16 @@ def _build_params():
         ("groupby", GROUPBY_CASES),
         ("expr", EXPR_CASES),
         ("str", STR_CASES),
+        ("dt", DT_CASES),
     ):
         for method, letters, args, kwargs in cases:
             key = f"{kind}.{method}"
             count[key] = count.get(key, 0) + 1
             for letter in letters:
-                marks = []
-                if key in FINDINGS:
-                    marks.append(pytest.mark.xfail(reason=FINDINGS[key], strict=False))
                 name = f"{key}#{count[key]}[{letter}]"
+                marks = []
+                if name in FINDINGS:
+                    marks.append(pytest.mark.xfail(reason=FINDINGS[name], strict=True))
                 params.append(
                     pytest.param(kind, method, letter, args, kwargs, marks=marks, id=name)
                 )
@@ -527,7 +626,7 @@ PARAMS = _build_params()
 
 
 def _receiver(kind, letter, side):
-    table = SERIES if kind in ("series", "str", "expr") else FRAMES
+    table = DTSERIES if kind == "dt" else SERIES if kind in ("series", "str", "expr") else FRAMES
     make = table[letter][1 if side == "ours" else 2]
     recv = make()
     if kind == "expr":
@@ -538,6 +637,7 @@ def _receiver(kind, letter, side):
 
 
 def _run(kind, method, letter, args, kwargs, side):
+    kwargs = {k: v for k, v in kwargs.items() if k != "_unordered"}
     recv = _receiver(kind, letter, side)
     if kind == "groupby":
         recv = recv.group_by("k", maintain_order=True)
@@ -550,9 +650,14 @@ def _run(kind, method, letter, args, kwargs, side):
         return recv.select(expr.alias("r"))
     if kind == "str":
         return getattr(recv.str, method)(*a, **kw)
+    if kind == "dt":
+        return getattr(recv.dt, method)(*a, **kw)
     if args is None:
         return getattr(recv, method)
-    return getattr(recv, method)(*a, **kw)
+    out = getattr(recv, method)(*a, **kw)
+    if inspect.isgenerator(out):
+        return [frame.to_dicts() for frame in out]
+    return out
 
 
 @pytest.mark.parametrize("kind,method,letter,args,kwargs", PARAMS)
@@ -569,13 +674,18 @@ def test_matches_polars(kind, method, letter, args, kwargs):
     if theirs_err is not None:
         if ours_err is None:
             pytest.fail(f"[raises] polars raised {type(theirs_err).__name__}, ours returned")
+        if not isinstance(ours_err, type(theirs_err)):
+            pytest.fail(
+                f"[raises] polars raised {type(theirs_err).__name__}, "
+                f"ours {type(ours_err).__name__}: {ours_err}"
+            )
         return
     if ours_err is not None:
         pytest.fail(f"[error] ours raised {type(ours_err).__name__}: {ours_err}")
-    diff = compare(ours, theirs, norm_polars(pl, theirs))
+    diff = compare(ours, theirs, norm_polars(pl, theirs), kwargs.get("_unordered", False))
     assert diff is None, diff
 
 
 def test_every_finding_names_a_case():
-    cases = {p.id.split("#")[0] for p in PARAMS}
+    cases = {p.id for p in PARAMS}
     assert not (set(FINDINGS) - cases), sorted(set(FINDINGS) - cases)

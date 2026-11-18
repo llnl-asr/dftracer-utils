@@ -12,21 +12,29 @@ from typing import (
     Dict,
     List,
     Literal,
+    Mapping,
     Optional,
     Sequence,
     Tuple,
+    TypeVar,
     Union,
 )
 
 from . import dftracer_utils_ext as _ext
+from .columnar import Expr
 from .dataframe import DataFrame, JoinHow, WindowSpec
 from .runtime import TaskHandle
 from .series import Series
 
 if TYPE_CHECKING:
+    from typing_extensions import Concatenate, ParamSpec
+
     from .columnar import Agg
     from .enums import DType
     from .indexing import LazyILoc, LazyLoc, Resampler
+
+    _P = ParamSpec("_P")
+    _R = TypeVar("_R")
 
 if TYPE_CHECKING:
     from .lazyframe import LazyFrame, SinkSummary, Value
@@ -99,7 +107,12 @@ class _LazyOps(_ext.TraceViewer):
         """The last row as a one-row plan."""
         return self.lazy().last()
 
-    def pipe(self, function: Callable[..., object], *args: object, **kwargs: object) -> object:
+    def pipe(
+        self,
+        function: "Callable[Concatenate[LazyFrame, _P], _R]",
+        *args: "_P.args",
+        **kwargs: "_P.kwargs",
+    ) -> "_R":
         """``function(self, *args, **kwargs)``."""
         return self.lazy().pipe(function, *args, **kwargs)
 
@@ -114,6 +127,44 @@ class _LazyOps(_ext.TraceViewer):
     def fill_null(self, value: Value) -> "LazyFrame":
         """Fill nulls in every column with ``value``."""
         return self.lazy().fill_null(value)
+
+    def top_k(
+        self, k: int, *, by: "Union[str, Sequence[str]]", reverse: bool = False
+    ) -> "LazyFrame":
+        """The ``k`` rows with the largest ``by`` (the smallest with
+        ``reverse=True``), best first; a null never ranks (polars ``top_k``)."""
+        return self.lazy().top_k(k, by=by, reverse=reverse)
+
+    def bottom_k(
+        self, k: int, *, by: "Union[str, Sequence[str]]", reverse: bool = False
+    ) -> "LazyFrame":
+        """The ``k`` rows with the smallest ``by``, smallest first (polars
+        ``bottom_k``): :meth:`top_k` with ``reverse`` flipped."""
+        return self.lazy().bottom_k(k, by=by, reverse=reverse)
+
+    def shift(self, n: int = 1, *, fill_value: Optional[Value] = None) -> "LazyFrame":
+        """Every column shifted down by ``n`` rows (up for a negative ``n``);
+        the vacated rows are null, or ``fill_value`` (polars ``shift``)."""
+        return self.lazy().shift(n, fill_value=fill_value)
+
+    def cast(
+        self, dtypes: "Union[Mapping[str, Union[str, DType]], str, DType]", *, strict: bool = True
+    ) -> "LazyFrame":
+        """Cast the named columns (a mapping) or every column (one dtype) to
+        ``int64``, ``uint64``, ``float64``, ``bool``, ``string`` or ``binary``
+        (polars ``cast``). A value that cannot be cast fails when the plan
+        runs; ``strict=False`` is not taken."""
+        return self.lazy().cast(dtypes, strict=strict)
+
+    def gather_every(self, n: int, offset: int = 0) -> "LazyFrame":
+        """Every ``n``-th row from ``offset`` (polars ``gather_every``)."""
+        return self.lazy().gather_every(n, offset)
+
+    def remove(self, predicate: Expr) -> "LazyFrame":
+        """The rows where ``predicate`` is not true: false and null rows stay
+        (polars ``remove``), where :meth:`filter` of the negation drops the
+        null ones."""
+        return self.lazy().remove(predicate)
 
     def with_row_index(self, name: str = "index") -> "LazyFrame":
         """Prepend an Int64 row-index column."""

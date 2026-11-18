@@ -56,20 +56,26 @@ void ClipImpl(const void* av, dftu_scalar lo, dftu_scalar hi, void* ov,
               std::size_t n) {
     const T* a = static_cast<const T*>(av);
     T* out = static_cast<T*>(ov);
-    const T l = scalar_value<T>(lo);
-    const T h = scalar_value<T>(hi);
+    T l = scalar_value<T>(lo);
+    T h = scalar_value<T>(hi);
+    // A NaN bound clips nothing and a NaN value stays NaN (Polars, pandas).
+    if constexpr (std::is_floating_point_v<T>) {
+        if (l != l) l = -std::numeric_limits<T>::infinity();
+        if (h != h) h = std::numeric_limits<T>::infinity();
+    }
     const hwy::HWY_NAMESPACE::ScalableTag<T> d;
     const auto vl = hwy::HWY_NAMESPACE::Set(d, l);
     const auto vh = hwy::HWY_NAMESPACE::Set(d, h);
     const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     std::size_t i = 0;
-    for (; i + lanes <= n; i += lanes)
-        hwy::HWY_NAMESPACE::StoreU(
-            hwy::HWY_NAMESPACE::Min(
-                hwy::HWY_NAMESPACE::Max(hwy::HWY_NAMESPACE::LoadU(d, a + i),
-                                        vl),
-                vh),
-            d, out + i);
+    for (; i + lanes <= n; i += lanes) {
+        const auto v = hwy::HWY_NAMESPACE::LoadU(d, a + i);
+        auto r = hwy::HWY_NAMESPACE::Min(hwy::HWY_NAMESPACE::Max(v, vl), vh);
+        if constexpr (std::is_floating_point_v<T>)
+            r = hwy::HWY_NAMESPACE::IfThenElse(hwy::HWY_NAMESPACE::IsNaN(v), v,
+                                               r);
+        hwy::HWY_NAMESPACE::StoreU(r, d, out + i);
+    }
     for (; i < n; ++i) out[i] = a[i] < l ? l : (a[i] > h ? h : a[i]);
 }
 
@@ -145,11 +151,18 @@ void SignImpl(const void* av, void* ov, std::size_t n) {
             r = hwy::HWY_NAMESPACE::Sub(
                 r, hwy::HWY_NAMESPACE::IfThenElseZero(
                        hwy::HWY_NAMESPACE::Lt(v, zero), one));
+        if constexpr (std::is_floating_point_v<T>)
+            r = hwy::HWY_NAMESPACE::IfThenElse(hwy::HWY_NAMESPACE::IsNaN(v), v,
+                                               r);
         hwy::HWY_NAMESPACE::StoreU(r, d, out + i);
     }
     for (; i < n; ++i) {
         if constexpr (std::is_unsigned_v<T>)
             out[i] = a[i] > 0 ? T{1} : T{0};
+        else if constexpr (std::is_floating_point_v<T>)
+            out[i] = a[i] != a[i]
+                         ? a[i]
+                         : (a[i] > 0 ? T{1} : (a[i] < 0 ? T{-1} : T{0}));
         else
             out[i] = a[i] > 0 ? T{1} : (a[i] < 0 ? static_cast<T>(-1) : T{0});
     }
@@ -187,26 +200,47 @@ void SqrtF64Impl(double* p, std::size_t n) {
 }
 
 // In-place SIMD exp/log over a Float64 buffer (input already widened to
-// double). Highway's Exp/Log are accurate to <= 4 ULP versus libm.
+// double). Highway's Exp/Log are accurate to <= 4 ULP versus libm, but only
+// on their valid range (exp: [-DBL_MAX, 706], log: (0, DBL_MAX]); outside it,
+// and on NaN, they return garbage. A vector with any lane outside a range that
+// is safe for both is computed with libm, so 0, negatives, infinities, NaN and
+// overflow follow IEEE.
 void ExpF64Impl(double* p, std::size_t n) {
     const hwy::HWY_NAMESPACE::ScalableTag<double> d;
     const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    const auto lo = hwy::HWY_NAMESPACE::Set(d, -700.0);
+    const auto hi = hwy::HWY_NAMESPACE::Set(d, 700.0);
     std::size_t i = 0;
-    for (; i + lanes <= n; i += lanes)
-        hwy::HWY_NAMESPACE::StoreU(
-            hwy::HWY_NAMESPACE::Exp(d, hwy::HWY_NAMESPACE::LoadU(d, p + i)), d,
-            p + i);
+    for (; i + lanes <= n; i += lanes) {
+        const auto x = hwy::HWY_NAMESPACE::LoadU(d, p + i);
+        if (hwy::HWY_NAMESPACE::AllTrue(
+                d, hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Ge(x, lo),
+                                           hwy::HWY_NAMESPACE::Le(x, hi)))) {
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Exp(d, x), d, p + i);
+        } else {
+            for (std::size_t j = i; j < i + lanes; ++j) p[j] = std::exp(p[j]);
+        }
+    }
     for (; i < n; ++i) p[i] = std::exp(p[i]);
 }
 
 void LogF64Impl(double* p, std::size_t n) {
     const hwy::HWY_NAMESPACE::ScalableTag<double> d;
     const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    const auto zero = hwy::HWY_NAMESPACE::Zero(d);
+    const auto max =
+        hwy::HWY_NAMESPACE::Set(d, std::numeric_limits<double>::max());
     std::size_t i = 0;
-    for (; i + lanes <= n; i += lanes)
-        hwy::HWY_NAMESPACE::StoreU(
-            hwy::HWY_NAMESPACE::Log(d, hwy::HWY_NAMESPACE::LoadU(d, p + i)), d,
-            p + i);
+    for (; i + lanes <= n; i += lanes) {
+        const auto x = hwy::HWY_NAMESPACE::LoadU(d, p + i);
+        if (hwy::HWY_NAMESPACE::AllTrue(
+                d, hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Gt(x, zero),
+                                           hwy::HWY_NAMESPACE::Le(x, max)))) {
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Log(d, x), d, p + i);
+        } else {
+            for (std::size_t j = i; j < i + lanes; ++j) p[j] = std::log(p[j]);
+        }
+    }
     for (; i < n; ++i) p[i] = std::log(p[i]);
 }
 

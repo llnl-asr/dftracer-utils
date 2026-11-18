@@ -21,6 +21,7 @@
 #include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 
 namespace dftracer::utils::dataframe {
@@ -72,8 +73,11 @@ dstd::Vector<std::int64_t> count_values(const Series& v) {
                        [&](std::int64_t j) {
                            return dstd::String(read_bytes(v, idx_at(j)));
                        })
-                 : radix_counts_by<double>(m, [&](std::int64_t j) {
-                       return read_f64(v, idx_at(j));
+                 : radix_counts_by<std::uint64_t>(m, [&](std::int64_t j) {
+                       // Every NaN is one value and -0.0 is +0.0 (Polars).
+                       const double d = read_f64(v, idx_at(j));
+                       if (d != d) return std::uint64_t{0x7ff8000000000000ULL};
+                       return std::bit_cast<std::uint64_t>(d == 0.0 ? 0.0 : d);
                    });
 
     dstd::Vector<std::int64_t> counts(static_cast<std::size_t>(n), 0);

@@ -40,13 +40,46 @@ from .runtime import TaskHandle
 from .series import Series
 
 if TYPE_CHECKING:
+    from typing_extensions import Concatenate, ParamSpec
+
     from .columnar import Agg, _GroupResample, _GroupRolling
     from .enums import DType
     from .indexing import LazyILoc, LazyLoc, Resampler
     from .runtime import Runtime
     from .trace_viewer import TraceViewer
 
+    _P = ParamSpec("_P")
+    _R = TypeVar("_R")
+
 Value = Union[int, float]
+
+
+def _col_is_not_null(name: str) -> Expr:
+    return col(name).is_not_null()
+
+
+_CastName = Literal["int64", "uint64", "float64", "bool", "string", "binary"]
+_CAST_NAMES: Tuple[_CastName, ...] = ("int64", "uint64", "float64", "bool", "string", "binary")
+
+
+def _cast_name(dtype: "Union[str, DType]") -> _CastName:
+    from .enums import DType
+
+    by_type: "Dict[DType, _CastName]" = {
+        DType.INT64: "int64",
+        DType.UINT64: "uint64",
+        DType.FLOAT64: "float64",
+        DType.BOOL: "bool",
+        DType.STRING: "string",
+        DType.BINARY: "binary",
+    }
+    if isinstance(dtype, str):
+        for name in _CAST_NAMES:
+            if name == dtype:
+                return name
+    elif dtype in by_type:
+        return by_type[dtype]
+    raise TypeError(f"cast: a plan casts to {list(_CAST_NAMES)}, not {dtype!r}")
 
 
 class SinkSummary(NamedTuple):
@@ -233,7 +266,12 @@ class LazyFrame(_ext.LazyFrame):
         """The last row as a one-row plan."""
         return self.tail(1)
 
-    def pipe(self, function: Callable[..., object], *args: object, **kwargs: object) -> object:
+    def pipe(
+        self,
+        function: "Callable[Concatenate[LazyFrame, _P], _R]",
+        *args: "_P.args",
+        **kwargs: "_P.kwargs",
+    ) -> "_R":
         """``function(self, *args, **kwargs)``."""
         return function(self, *args, **kwargs)
 
@@ -359,6 +397,71 @@ class LazyFrame(_ext.LazyFrame):
     def fill_null(self, value: Value) -> "LazyFrame":
         """Fill nulls in every column with ``value``."""
         return self._like(_ext.LazyFrame.fill_null(self, value))
+
+    def top_k(
+        self, k: int, *, by: "Union[str, Sequence[str]]", reverse: bool = False
+    ) -> "LazyFrame":
+        """The ``k`` rows with the largest ``by`` (the smallest with
+        ``reverse=True``), best first; a null never ranks (polars ``top_k``)."""
+        keys = [by] if isinstance(by, str) else list(by)
+        present = _col_is_not_null(keys[0])
+        for key in keys[1:]:
+            present = present & _col_is_not_null(key)
+        return self.filter(present).sort(keys, descending=not reverse).head(k)
+
+    def bottom_k(
+        self, k: int, *, by: "Union[str, Sequence[str]]", reverse: bool = False
+    ) -> "LazyFrame":
+        """The ``k`` rows with the smallest ``by``, smallest first (polars
+        ``bottom_k``): :meth:`top_k` with ``reverse`` flipped."""
+        return self.top_k(k, by=by, reverse=not reverse)
+
+    def shift(self, n: int = 1, *, fill_value: Optional[Value] = None) -> "LazyFrame":
+        """Every column shifted down by ``n`` rows (up for a negative ``n``);
+        the vacated rows are null, or ``fill_value`` (polars ``shift``)."""
+        out = self
+        for name in self.columns:
+            shifted = col(name).shift(n)
+            if fill_value is not None:
+                shifted = shifted.fill_null(fill_value)  # type: ignore[arg-type]
+            out = out.with_column(name, shifted)
+        return out
+
+    def cast(
+        self,
+        dtypes: "Union[Mapping[str, Union[str, DType]], str, DType]",
+        *,
+        strict: bool = True,
+    ) -> "LazyFrame":
+        """Cast the named columns (a mapping) or every column (one dtype) to
+        ``int64``, ``uint64``, ``float64``, ``bool``, ``string`` or ``binary``
+        (polars ``cast``). A value that cannot be cast fails when the plan
+        runs; ``strict=False`` is not taken."""
+        if not strict:
+            raise ValueError("cast: only strict=True is taken")
+        mapping = (
+            dict(dtypes) if isinstance(dtypes, Mapping) else {name: dtypes for name in self.columns}
+        )
+        out = self
+        for name, target in mapping.items():
+            out = out.with_column(name, col(name).cast(_cast_name(target)))
+        return out
+
+    def gather_every(self, n: int, offset: int = 0) -> "LazyFrame":
+        """Every ``n``-th row from ``offset`` (polars ``gather_every``)."""
+        if n < 1:
+            raise ValueError("gather_every: n must be at least 1")
+        index = "__dftu_row__"
+        step = (col(index) - offset) / n
+        keep = (col(index) >= offset) & (step == step.floor())  # type: ignore[attr-defined]
+        return self.with_row_index(index).filter(keep).drop(index)
+
+    def remove(self, predicate: Expr) -> "LazyFrame":
+        """The rows where ``predicate`` is not true: false and null rows stay
+        (polars ``remove``), where :meth:`filter` of the negation drops the
+        null ones."""
+        predicate = _as_expr(predicate)
+        return self.filter((~predicate) | predicate.is_null())
 
     def with_row_index(self, name: str = "index") -> "LazyFrame":
         """Prepend an Int64 row-index column."""
@@ -791,6 +894,8 @@ class LazyFrame(_ext.LazyFrame):
         drop_duplicates = unique
         take = gather
         limit = head
+        select_seq = select
+        with_columns_seq = with_columns
         pass
     # END GENERATED aliases
 
@@ -1157,7 +1262,12 @@ class LazyGroupBy:
     def _value_columns(self, agg: str = "sum") -> List[str]:
         return [s.split(":")[1] for s in _ext.LazyFrame._reduce_specs(self._plan, agg, self._keys)]
 
-    def pipe(self, func: Callable[..., object], *args: object, **kwargs: object) -> object:
+    def pipe(
+        self,
+        func: "Callable[Concatenate[LazyGroupBy, _P], _R]",
+        *args: "_P.args",
+        **kwargs: "_P.kwargs",
+    ) -> "_R":
         return func(self, *args, **kwargs)
 
     def get_group(self, key: object) -> LazyFrame:

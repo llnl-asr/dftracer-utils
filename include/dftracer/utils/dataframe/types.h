@@ -734,6 +734,16 @@ enum class RankMethod : std::int32_t {
     Max = 4,
 };
 
+/// Mirrors dftu_interpolation: how a quantile that falls between two ranked
+/// values picks its result (Polars `interpolation`, numpy `method`).
+enum class Interpolation : std::int32_t {
+    Linear = 0,
+    Nearest = 1,
+    Lower = 2,
+    Higher = 3,
+    Midpoint = 4,
+};
+
 /// Mirrors dftu_groupwise_op: the group-wise transforms (one value per input
 /// row, in input order) a @ref GroupBy / @ref LazyGroupBy runs.
 enum class GroupwiseOp : std::int32_t {

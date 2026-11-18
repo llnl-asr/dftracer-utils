@@ -5,10 +5,10 @@ and the results are compared: type, shape, dtype kind, values and, where we
 have no row index, that the pandas result has the default RangeIndex.
 
 The cases come from the tables below (method -> inputs, arguments), not one
-test per method. ``FINDINGS`` lists the methods whose result differs today,
-each with its reason; a listed case is an expected failure (non-strict, so a
-fixed method shows as XPASS and its row is deleted). A method that is not
-listed must match pandas exactly."""
+test per method. ``FINDINGS`` lists the cases (method, input) whose result
+differs today, each with its reason; a listed case is a strict expected
+failure, so a fixed case fails the run until its row is deleted. A case that
+is not listed must match pandas exactly."""
 
 import pytest
 
@@ -42,12 +42,18 @@ SERIES = {
     "F": (
         "float_null",
         lambda: Series([1.5, None, 3.0, -2.5, 3.0, 0.0]),
-        lambda: _pd_series([1.5, None, 3.0, -2.5, 3.0, 0.0], "float64"),
+        lambda: _pd_series([1.5, None, 3.0, -2.5, 3.0, 0.0], "Float64"),
     ),
     "X": (
         "float_nan",
         lambda: Series([1.5, NAN, 3.0, -2.5, 3.0, 0.0]),
         lambda: _pd_series([1.5, NAN, 3.0, -2.5, 3.0, 0.0], "float64"),
+    ),
+    "W": (
+        "float_whole",
+        lambda: Series([1.0, None, 3.0, -2.0]),
+        # numpy float64 reads its NaN as missing, which convert_dtypes turns to Int64.
+        lambda: _pd_series([1.0, NAN, 3.0, -2.0], "float64"),
     ),
     "S": (
         "str_nulls",
@@ -73,19 +79,27 @@ _MIXED = {
     "d": [True, False, True, True, False],
 }
 _NUM = {"a": _MIXED["a"], "b": _MIXED["b"]}
+_WHOLE = {"a": [1, None, 3], "b": [1.0, None, 3.0], "c": ["x", None, "y"]}
 _NANS = {"a": _MIXED["a"], "b": [1.5, NAN, 3.0, -2.5, 3.0]}
 _GROUPED = {
     "k": ["x", "y", "x", "y", "x"],
     "a": [1, None, 3, 2, 2],
     "b": [1.5, None, 3.0, -2.5, 3.0],
 }
-_PD_DTYPES = {"a": "Int64", "b": "float64", "c": "string", "d": "bool", "k": "string"}
+_PD_DTYPES = {"a": "Int64", "b": "Float64", "c": "string", "d": "bool", "k": "string"}
+
+
+def _pd_dtype(name, values):
+    # A real NaN needs numpy float64: the nullable Float64 folds NaN into NA.
+    if name == "b" and any(v != v for v in values if v is not None):
+        return "float64"
+    return _PD_DTYPES[name]
 
 
 def _frames(data):
     ours = lambda: DataFrame(data)  # noqa: E731
     theirs = lambda: pd.DataFrame(  # noqa: E731
-        {k: pd.Series(v, dtype=_PD_DTYPES[k]) for k, v in data.items()}
+        {k: pd.Series(v, dtype=_pd_dtype(k, v)) for k, v in data.items()}
     )
     return ours, theirs
 
@@ -94,6 +108,17 @@ FRAMES = {
     "M": ("mixed", *_frames(_MIXED)),
     "N": ("num", *_frames(_NUM)),
     "X": ("nan_value", *_frames(_NANS)),
+    "W": (
+        "whole",
+        lambda: DataFrame(_WHOLE),
+        lambda: pd.DataFrame(
+            {
+                "a": pd.Series([1, None, 3], dtype="Int64"),
+                "b": pd.Series([1.0, NAN, 3.0], dtype="float64"),
+                "c": pd.Series(["x", None, "y"], dtype="string"),
+            }
+        ),
+    ),
     "G": ("grouped", *_frames(_GROUPED)),
     "E": (
         "empty",
@@ -101,7 +126,7 @@ FRAMES = {
             pa.table({"a": pa.array([], pa.int64()), "b": pa.array([], pa.float64())})
         ),
         lambda: pd.DataFrame(
-            {"a": pd.Series([], dtype="Int64"), "b": pd.Series([], dtype="float64")}
+            {"a": pd.Series([], dtype="Int64"), "b": pd.Series([], dtype="Float64")}
         ),
     ),
 }
@@ -143,6 +168,10 @@ SERIES_CASES = [
     ("all", "B", (), {}),
     ("quantile", "IF", (0.5,), {}),
     ("quantile", "IF", (), {"q": 0.25}),
+    ("quantile", "IF", (0.4,), {"interpolation": "lower"}),
+    ("quantile", "IF", (0.4,), {"interpolation": "higher"}),
+    ("quantile", "IF", (0.4,), {"interpolation": "midpoint"}),
+    ("quantile", "IF", (0.4,), {"interpolation": "linear"}),
     ("quantile", "IF", ([0.25, 0.75],), {}),
     ("median", "IF", (), {"skipna": False}),
     ("idxmax", "IF", (), {}),
@@ -155,6 +184,9 @@ SERIES_CASES = [
     ("autocorr", "F", (), {}),
     ("dot", "I", (OTHER,), {}),
     # elementwise
+    ("convert_dtypes", "IFSBWX", (), {}),
+    ("convert_dtypes", "W", (), {"convert_integer": False}),
+    ("infer_objects", "IFSBW", (), {}),
     ("abs", "IF", (), {}),
     ("round", "F", (), {}),
     ("round", "F", (1,), {}),
@@ -312,6 +344,9 @@ FRAME_CASES = [
     ("cov", "N", (), {}),
     ("corr", "N", (), {}),
     ("corrwith", "N", (SELF,), {}),
+    ("convert_dtypes", "MNW", (), {}),
+    ("convert_dtypes", "W", (), {"convert_integer": False}),
+    ("infer_objects", "MNW", (), {}),
     ("abs", "N", (), {}),
     ("round", "N", (), {}),
     ("round", "N", (1,), {}),
@@ -521,7 +556,9 @@ STR_CASES = [
     ("get_dummies", "S", (), {}),
 ]  # fmt: skip
 
-FINDINGS = load_findings("parity_findings_pandas.txt")
+FINDINGS = load_findings(
+    "parity_findings_pandas.txt", "pandas2" if pd.__version__.startswith("2.") else ""
+)
 
 
 def _build_params():
@@ -537,10 +574,10 @@ def _build_params():
             key = f"{kind}.{method}"
             count[key] = count.get(key, 0) + 1
             for letter in letters:
-                marks = []
-                if key in FINDINGS:
-                    marks.append(pytest.mark.xfail(reason=FINDINGS[key], strict=False))
                 name = f"{key}#{count[key]}[{letter}]"
+                marks = []
+                if name in FINDINGS:
+                    marks.append(pytest.mark.xfail(reason=FINDINGS[name], strict=True))
                 params.append(
                     pytest.param(kind, method, letter, args, kwargs, marks=marks, id=name)
                 )
@@ -584,6 +621,11 @@ def test_matches_pandas(kind, method, letter, args, kwargs):
     if theirs_err is not None:
         if ours_err is None:
             pytest.fail(f"[raises] pandas raised {type(theirs_err).__name__}, ours returned")
+        if not isinstance(ours_err, type(theirs_err)):
+            pytest.fail(
+                f"[raises] pandas raised {type(theirs_err).__name__}, "
+                f"ours {type(ours_err).__name__}: {ours_err}"
+            )
         return
     if ours_err is not None:
         pytest.fail(f"[error] ours raised {type(ours_err).__name__}: {ours_err}")
@@ -597,5 +639,5 @@ def test_matches_pandas(kind, method, letter, args, kwargs):
 
 
 def test_every_finding_names_a_case():
-    cases = {p.id.split("#")[0] for p in PARAMS}
+    cases = {p.id for p in PARAMS}
     assert not (set(FINDINGS) - cases), sorted(set(FINDINGS) - cases)

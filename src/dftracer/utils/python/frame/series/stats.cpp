@@ -12,19 +12,41 @@
 
 namespace dftracer::utils::python::frame::series_detail {
 
-PyObject* Series_quantile(PyObject* self, PyObject* arg) {
+PyObject* Series_quantile(PyObject* self, PyObject* args, PyObject* kwds) {
     Held held_a(self);
     Series* a = held_a.get();
     if (!a) return nullptr;
-    double q = PyFloat_AsDouble(arg);
-    if (q == -1.0 && PyErr_Occurred()) return nullptr;
-    return PyFloat_FromDouble(without_gil(
-        a->length(), [&] { return dftu_series_quantile(a->handle(), q); }));
+    double q = 0.5;
+    const char* interpolation = "linear";
+    if (!parse_kw<"|ds">(args, kwds, {"q", "interpolation"}, &q,
+                         &interpolation))
+        return nullptr;
+    const dftracer::utils::dstd::StringView which = interpolation;
+    dftu_interpolation code = DFTU_INTERP_LINEAR;
+    if (which == "nearest")
+        code = DFTU_INTERP_NEAREST;
+    else if (which == "lower")
+        code = DFTU_INTERP_LOWER;
+    else if (which == "higher")
+        code = DFTU_INTERP_HIGHER;
+    else if (which == "midpoint")
+        code = DFTU_INTERP_MIDPOINT;
+    else if (which != "linear") {
+        PyErr_SetString(PyExc_ValueError,
+                        "quantile: interpolation must be 'linear', "
+                        "'nearest', 'lower', 'higher' or 'midpoint'");
+        return nullptr;
+    }
+    if (a->count() == 0) Py_RETURN_NONE;
+    return PyFloat_FromDouble(without_gil(a->length(), [&] {
+        return dftu_series_quantile_interp(a->handle(), q, code);
+    }));
 }
 PyObject* Series_median(PyObject* self, PyObject*) {
     Held held_a(self);
     Series* a = held_a.get();
     if (!a) return nullptr;
+    if (a->count() == 0) Py_RETURN_NONE;
     return PyFloat_FromDouble(without_gil(
         a->length(), [&] { return dftu_series_quantile(a->handle(), 0.5); }));
 }
@@ -44,6 +66,7 @@ PyObject* Series_stddev(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!a) return nullptr;
     int sample = 1;
     if (!parse_kw<"|p">(args, kwds, {"sample"}, &sample)) return nullptr;
+    if (a->count() == 0) Py_RETURN_NONE;
     return PyFloat_FromDouble(without_gil(
         a->length(), [&] { return dftu_series_stddev(a->handle(), sample); }));
 }

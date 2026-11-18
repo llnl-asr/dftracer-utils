@@ -126,6 +126,12 @@ static_assert(code(RankMethod::Dense) == DFTU_RANK_DENSE);
 static_assert(code(RankMethod::Ordinal) == DFTU_RANK_ORDINAL);
 static_assert(code(RankMethod::Max) == DFTU_RANK_MAX);
 
+static_assert(code(Interpolation::Linear) == DFTU_INTERP_LINEAR);
+static_assert(code(Interpolation::Nearest) == DFTU_INTERP_NEAREST);
+static_assert(code(Interpolation::Lower) == DFTU_INTERP_LOWER);
+static_assert(code(Interpolation::Higher) == DFTU_INTERP_HIGHER);
+static_assert(code(Interpolation::Midpoint) == DFTU_INTERP_MIDPOINT);
+
 static_assert(code(RollingOp::Sum) == DFTU_ROLLING_SUM);
 static_assert(code(RollingOp::Mean) == DFTU_ROLLING_MEAN);
 static_assert(code(RollingOp::Min) == DFTU_ROLLING_MIN);

@@ -891,3 +891,32 @@ LazyGroupBy.take | python-semantics | group-wise method written in Python over n
 LazyGroupBy.transform | python-semantics | group-wise method written in Python over native calls
 LazyGroupBy.value_counts | python-semantics | group-wise method written in Python over native calls
 LazyGroupBy.var | python-semantics | group-wise method written in Python over native calls
+Series.clear | python-semantics | polars container API on the Series, not an op
+Series.degrees | python-semantics | the column times a constant factor over existing ops
+Series.radians | python-semantics | the column times a constant factor over existing ops
+Expr.degrees | python-semantics | the expression times a constant factor over existing nodes
+Expr.radians | python-semantics | the expression times a constant factor over existing nodes
+Expr.pipe | python-semantics | calls a Python function with the expression, builds no node
+Str.head | python-semantics | one slice kernel with a fixed start; a row cannot hold a constant argument yet
+Str.tail | python-semantics | one slice kernel with a fixed start; a row cannot hold a constant argument yet
+Str.replace_all | python-semantics | a regex replace by default and the literal kernel with literal=True
+Dt.total_days | python-semantics | integer arithmetic over the ticks in the unit of the accessor, which a row cannot hold
+Dt.total_hours | python-semantics | integer arithmetic over the ticks in the unit of the accessor, which a row cannot hold
+Dt.total_minutes | python-semantics | integer arithmetic over the ticks in the unit of the accessor, which a row cannot hold
+Dt.total_milliseconds | python-semantics | integer arithmetic over the ticks in the unit of the accessor, which a row cannot hold
+Dt.total_microseconds | python-semantics | integer arithmetic over the ticks in the unit of the accessor, which a row cannot hold
+Dt.total_nanoseconds | python-semantics | integer arithmetic over the ticks in the unit of the accessor, which a row cannot hold
+Dt.timestamp | python-semantics | the polars name of epoch, which reads the unit of the accessor
+Dt.to_string | python-semantics | the polars name of strftime, which reads the unit of the accessor
+Dt.min | python-semantics | the earliest instant read back as a Python value
+Dt.max | python-semantics | the latest instant read back as a Python value
+DataFrame.bottom_k | python-semantics | top_k with the order reversed
+DataFrame.is_sorted | python-semantics | sorts the key columns and compares them with the frame
+DataFrame.iter_slices | python-semantics | a generator of slices
+DataFrame.remove | python-semantics | filter on the negated mask, null rows kept
+LazyFrame.bottom_k | python-semantics | top_k with the order reversed
+LazyFrame.cast | python-semantics | one with_column cast step per column
+LazyFrame.gather_every | python-semantics | a row-index filter over existing plan steps
+LazyFrame.remove | python-semantics | filter on the negated predicate, null rows kept
+LazyFrame.shift | python-semantics | one with_column shift step per column
+LazyFrame.top_k | python-semantics | a filter, a sort and a head over existing plan steps

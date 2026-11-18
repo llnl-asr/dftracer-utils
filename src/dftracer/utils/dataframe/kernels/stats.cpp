@@ -267,6 +267,10 @@ std::uint64_t sortable_i64(std::int64_t v) {
 }  // namespace
 
 double quantile(const Series& v, double q) {
+    return quantile(v, q, Interpolation::Linear);
+}
+
+double quantile(const Series& v, double q, Interpolation interp) {
     if (refuse_non_numeric("quantile", v.type())) return std::nan("");
     const auto n = static_cast<std::size_t>(v.length() - v.null_count());
     if (n == 0) return std::nan("");
@@ -274,9 +278,10 @@ double quantile(const Series& v, double q) {
     std::size_t lo = static_cast<std::size_t>(pos);
     double frac = pos - static_cast<double>(lo);
     if (lo + 1 >= n) frac = 0.0;
+    const bool linear = interp == Interpolation::Linear;
     // A flat Float64 / Int64 column is read in place, nulls skipped by the
     // bitmap; the bucket pass copies only the bucket the position falls in.
-    if (n > (std::size_t{1} << 18) && parallel_backend_installed() &&
+    if (linear && n > (std::size_t{1} << 18) && parallel_backend_installed() &&
         v.encoding() == Encoding::Flat &&
         (v.type() == TypeId::Float64 || v.type() == TypeId::Int64)) {
         const auto total = static_cast<std::size_t>(v.length());
@@ -292,15 +297,33 @@ double quantile(const Series& v, double q) {
             return frac == 0.0 ? a : a * (1.0 - frac) + b * frac;
     }
     dstd::Vector<double> x = nonnull_values(v);
-    if (n > (std::size_t{1} << 18) && parallel_backend_installed()) {
-        auto [a, b] =
-            two_order_statistics(x.data(), n, nullptr, lo, sortable_key);
-        if (!std::isnan(a))
-            return frac == 0.0 ? a : a * (1.0 - frac) + b * frac;
+    // NaN ranks above every number: sort the numbers and let the ranks past
+    // them read NaN, so the sort never compares a NaN.
+    const auto numbers = static_cast<std::size_t>(
+        std::partition(x.begin(), x.end(),
+                       [](double d) { return !std::isnan(d); }) -
+        x.begin());
+    parallel_packed_sort(x.data(), numbers,
+                         [](double a, double b) { return a < b; });
+    const auto rank = [&](std::size_t i) {
+        return i < numbers ? x[i] : std::nan("");
+    };
+    const std::size_t hi = std::min(lo + 1, n - 1);
+    switch (interp) {
+        case Interpolation::Linear:
+            return frac == 0.0 ? rank(lo)
+                               : rank(lo) * (1.0 - frac) + rank(hi) * frac;
+        case Interpolation::Nearest:
+            return rank(
+                std::min(static_cast<std::size_t>(std::round(pos)), n - 1));
+        case Interpolation::Lower:
+            return rank(lo);
+        case Interpolation::Higher:
+            return rank(frac == 0.0 ? lo : hi);
+        case Interpolation::Midpoint:
+            return frac == 0.0 ? rank(lo) : (rank(lo) + rank(hi)) / 2.0;
     }
-    parallel_packed_sort(x.data(), n, [](double a, double b) { return a < b; });
-    if (lo + 1 >= n) return x[lo];
-    return x[lo] * (1.0 - frac) + x[lo + 1] * frac;
+    return std::nan("");
 }
 
 double median(const Series& v) { return quantile(v, 0.5); }
@@ -1198,6 +1221,18 @@ double dftu_series_quantile(const dftu_series* v, double q) {
     DFTU_FLAT_INPUT(v, dftu_series_quantile, q);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     double r = dftracer::utils::dataframe::quantile(c, q);
+    c.release();
+    return r;
+}
+double dftu_series_quantile_interp(const dftu_series* v, double q,
+                                   dftu_interpolation interp) {
+    if (!v) return 0.0;
+    if (interp < DFTU_INTERP_LINEAR || interp > DFTU_INTERP_MIDPOINT)
+        return std::nan("");
+    DFTU_FLAT_INPUT(v, dftu_series_quantile_interp, q, interp);
+    dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
+    double r = dftracer::utils::dataframe::quantile(
+        c, q, static_cast<dftracer::utils::dataframe::Interpolation>(interp));
     c.release();
     return r;
 }

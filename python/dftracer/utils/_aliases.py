@@ -159,9 +159,23 @@ PANDAS: "tuple[Alias, ...]" = (
 )
 
 POLARS: "tuple[Alias, ...]" = (
-    *_polars("Series", {"alias": "rename", "clone": "copy", "limit": "head"}),
-    *_polars("DataFrame", {"limit": "head", "clone": "copy"}),
-    *_polars("LazyFrame", {"limit": "head"}),
+    *_polars(
+        "Series",
+        {"alias": "rename", "clone": "copy", "limit": "head", "not_": "__invert__"},
+    ),
+    *_polars(
+        "DataFrame",
+        {
+            "limit": "head",
+            "clone": "copy",
+            "select_seq": "select",
+            "with_columns_seq": "with_columns",
+        },
+    ),
+    *_polars(
+        "LazyFrame",
+        {"limit": "head", "select_seq": "select", "with_columns_seq": "with_columns"},
+    ),
 )
 
 ALIASES: "tuple[Alias, ...]" = PANDAS + POLARS

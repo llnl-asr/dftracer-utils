@@ -20,7 +20,9 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
+    TypeVar,
     Union,
+    cast,
 )
 
 from . import dftracer_utils_ext as _ext
@@ -29,12 +31,16 @@ from .enums import DType
 from .series import Series, _like
 
 if TYPE_CHECKING:
-    from typing_extensions import Self
+    from typing_extensions import Concatenate, ParamSpec, Self
 
     from ._pandas_series import ReplaceKey, ReplaceValue, _Omitted
     from .columnar import GroupBy
     from .dataframe import DataFrame
     from .dftracer_utils_ext import Scalar
+
+_R = TypeVar("_R")
+if TYPE_CHECKING:
+    _P = ParamSpec("_P")
 
 _NUMERIC = {
     DType.INT8,
@@ -424,11 +430,16 @@ class _FramePandasMixin(_ext.DataFrame):
 
     def median(self) -> "DataFrame":
         """One row of each numeric column's median (exact: the Series
-        quantile sorts; ``quantile(q)`` likewise, linear interpolation)."""
+        quantile sorts; ``quantile(q)`` likewise, linear interpolation unless
+        ``interpolation`` says otherwise)."""
         return self._reduce_scalar(lambda s: s.median())
 
-    def quantile(self, q: float = 0.5) -> "DataFrame":
-        return self._reduce_scalar(lambda s: s.quantile(q))
+    def quantile(
+        self,
+        q: float = 0.5,
+        interpolation: Literal["linear", "nearest", "lower", "higher", "midpoint"] = "linear",
+    ) -> "DataFrame":
+        return self._reduce_scalar(lambda s: s.quantile(q, interpolation))
 
     def nunique(self) -> "DataFrame":
         return self._reduce_scalar(lambda s: s.nunique(), numeric_only=False)
@@ -449,7 +460,9 @@ class _FramePandasMixin(_ext.DataFrame):
             if len(counts) == 0:
                 return None
             count = _series(counts, "count")
-            top = int(count.max())  # a count column: min()/max() can also be str for text
+            top = int(
+                cast(int, count.max())
+            )  # a count column: min()/max() can also be str for text
             return _series(counts.filter(count.eq(top)), "value").min()
 
         return self._reduce_scalar(one)
@@ -582,9 +595,23 @@ class _FramePandasMixin(_ext.DataFrame):
         out._index = self._index
         return out
 
-    def convert_dtypes(self) -> "DataFrame":
-        """:meth:`copy`: an engine column is already typed and nullable."""
-        return self._frame().copy()
+    def convert_dtypes(
+        self,
+        infer_objects: bool = True,
+        convert_string: bool = True,
+        convert_integer: bool = True,
+        convert_boolean: bool = True,
+        convert_floating: bool = True,
+    ) -> "DataFrame":
+        """:meth:`Series.convert_dtypes` on every column."""
+        f = self._frame()
+        out = f.copy()
+        for name in f.columns:
+            converted = _series(f, name).convert_dtypes(
+                infer_objects, convert_string, convert_integer, convert_boolean, convert_floating
+            )
+            out = out.with_column(name, converted)
+        return out
 
     def infer_objects(self) -> "DataFrame":
         """:meth:`copy`: an engine column is already typed."""
@@ -602,8 +629,14 @@ class _FramePandasMixin(_ext.DataFrame):
         for name in self._frame().columns:
             yield self._col(name)
 
-    def pipe(self, func: Callable[..., Any], *args: object, **kwargs: Any) -> Any:
-        return func(self, *args, **kwargs)
+    def pipe(
+        self,
+        func: "Callable[Concatenate[DataFrame, _P], _R]",
+        *args: "_P.args",
+        **kwargs: "_P.kwargs",
+    ) -> "_R":
+        """``func(self, *args, **kwargs)``."""
+        return func(self._frame(), *args, **kwargs)
 
     def items(self) -> Iterator[Tuple[str, Series]]:
         for name in self.columns:
@@ -1031,7 +1064,7 @@ class _FramePandasMixin(_ext.DataFrame):
         _, s = self._time_column(on, "first")
         span = rule_to_units(offset, self._unit_of(s))
         ticks = s.astype("int64")
-        return self._frame().filter(ticks < int(ticks.min()) + span)
+        return self._frame().filter(ticks < int(cast(int, ticks.min())) + span)
 
     def last(self, offset: Union[int, str], on: Optional[str] = None) -> "DataFrame":
         from .indexing import rule_to_units
@@ -1039,7 +1072,7 @@ class _FramePandasMixin(_ext.DataFrame):
         _, s = self._time_column(on, "last")
         span = rule_to_units(offset, self._unit_of(s))
         ticks = s.astype("int64")
-        return self._frame().filter(ticks > int(ticks.max()) - span)
+        return self._frame().filter(ticks > int(cast(int, ticks.max())) - span)
 
     def asfreq(
         self,
@@ -1064,7 +1097,7 @@ class _FramePandasMixin(_ext.DataFrame):
             raise ValueError("asfreq: the time column holds an instant more than once")
         every = rule_to_units(freq, self._unit_of(s))
         ticks = s.astype("int64")
-        lo, hi = int(ticks.min()), int(ticks.max())
+        lo, hi = int(cast(int, ticks.min())), int(cast(int, ticks.max()))
         grid = DataFrame(
             {name: _like(Series.from_list(list(range(lo, hi + 1, every)), DType.INT64), s)}
         )

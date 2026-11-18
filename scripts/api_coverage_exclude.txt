@@ -104,7 +104,6 @@ pandas Series.dt.timetz | needs-kernel | timestamp to date32 or to a time-of-day
 pandas Series.dt.to_period | needs-index | Period dtype; waits for the row index step
 pandas Series.dt.to_pydatetime | python-semantics | an object array of datetime values; use s.to_list()
 pandas Series.dt.unit | python-semantics | frequency of a DatetimeIndex, or the unit of the dtype as text; read s.time_unit
-polars DataFrame.bottom_k | needs-kernel | top_k(largest=False) is the engine form; the by-column form with ties kept is not built
 polars DataFrame.deserialize | out-of-scope | plan or object serialization (D3b out-of-scope)
 polars DataFrame.drop_in_place | python-semantics | in-place frame mutation; frames are immutable (use with_columns, vstack)
 polars DataFrame.estimated_size | python-semantics | memory layout of polars chunks; the engine manages its own chunked columns (see the memory budget)
@@ -114,8 +113,6 @@ polars DataFrame.fold | python-semantics | a Python callable folded over columns
 polars DataFrame.glimpse | python-semantics | console preview print; use head
 polars DataFrame.hash_rows | needs-kernel | row hash with polars' seeded hasher; the engine hashes columns (hash) with its own function
 polars DataFrame.insert_column | python-semantics | in-place frame mutation; frames are immutable (use with_columns, vstack)
-polars DataFrame.is_sorted | python-semantics | slice and sortedness helpers over existing ops
-polars DataFrame.iter_slices | python-semantics | slice and sortedness helpers over existing ops
 polars DataFrame.join_where | needs-kernel | inequality join on predicates; the engine joins on equality and as-of
 polars DataFrame.map_columns | python-semantics | a Python callable per row or per column; use apply with a traced function or an expression
 polars DataFrame.map_rows | python-semantics | a Python callable per row or per column; use apply with a traced function or an expression
@@ -124,10 +121,8 @@ polars DataFrame.merge_sorted | needs-kernel | merge of two sorted frames on a k
 polars DataFrame.n_chunks | python-semantics | memory layout of polars chunks; the engine manages its own chunked columns (see the memory budget)
 polars DataFrame.plot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
 polars DataFrame.rechunk | python-semantics | memory layout of polars chunks; the engine manages its own chunked columns (see the memory budget)
-polars DataFrame.remove | needs-kernel | row filter with null-as-keep semantics of the inverse predicate; filter on the negated expression
 polars DataFrame.replace_column | python-semantics | in-place frame mutation; frames are immutable (use with_columns, vstack)
 polars DataFrame.rows_by_key | python-semantics | rows grouped into a Python dict; use group_by and to_dicts
-polars DataFrame.select_seq | python-semantics | sequential variants of select and with_columns; the engine schedules its own parallelism
 polars DataFrame.serialize | out-of-scope | plan or object serialization (D3b out-of-scope)
 polars DataFrame.set_sorted | needs-kernel | sorted-flag metadata; the engine keeps no sortedness flag on a column
 polars DataFrame.show | out-of-scope | display of the plan or the frame (D3b out-of-scope)
@@ -140,7 +135,6 @@ polars DataFrame.to_struct | needs-kernel | struct column construction, reshape 
 polars DataFrame.to_torch | out-of-scope | torch and jax export (D3b out-of-scope)
 polars DataFrame.unstack | needs-kernel | struct column construction, reshape of a column into a frame, and upsampling over a time column; none has a kernel
 polars DataFrame.upsample | needs-kernel | struct column construction, reshape of a column into a frame, and upsampling over a time column; none has a kernel
-polars DataFrame.with_columns_seq | python-semantics | sequential variants of select and with_columns; the engine schedules its own parallelism
 polars DataFrame.write_avro | out-of-scope | foreign I/O or engine integration (D3b out-of-scope); call to_polars() or to_pandas()
 polars DataFrame.write_clipboard | out-of-scope | foreign I/O or engine integration (D3b out-of-scope); call to_polars() or to_pandas()
 polars DataFrame.write_database | out-of-scope | foreign I/O or engine integration (D3b out-of-scope); call to_polars() or to_pandas()
@@ -159,13 +153,13 @@ polars Series.arcsin | needs-kernel | elementwise math kernel; the unary table h
 polars Series.arcsinh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.arctan | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.arctanh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Series.arg_true | needs-kernel | row positions of true values or of first occurrences; no positions kernel (is_duplicated and arg_max exist)
-polars Series.arg_unique | needs-kernel | row positions of true values or of first occurrences; no positions kernel (is_duplicated and arg_max exist)
+polars Series.arg_true | needs-kernel | row positions of true values or of first occurrences; the engine has no positions kernel (a gather of the non-zero row numbers)
+polars Series.arg_unique | needs-kernel | row positions of true values or of first occurrences; the engine has no positions kernel (a gather of the non-zero row numbers)
 polars Series.arr | needs-kernel | namespace over array, categorical, struct or extension columns; no accessor kernel for these dtypes
-polars Series.bin | needs-kernel | interval binning into a categorical; cut and qcut are the engine forms
-polars Series.bin_intervals | needs-kernel | interval binning into a categorical; cut and qcut are the engine forms
-polars Series.bin_quantiles | needs-kernel | interval binning into a categorical; cut and qcut are the engine forms
-polars Series.bin_ranks | needs-kernel | interval binning into a categorical; cut and qcut are the engine forms
+polars Series.bin | needs-kernel | interval binning into a categorical; the engine has no categorical dtype, its binning kernels give integer bin numbers
+polars Series.bin_intervals | needs-kernel | interval binning into a categorical; the engine has no categorical dtype, its binning kernels give integer bin numbers
+polars Series.bin_quantiles | needs-kernel | interval binning into a categorical; the engine has no categorical dtype, its binning kernels give integer bin numbers
+polars Series.bin_ranks | needs-kernel | interval binning into a categorical; the engine has no categorical dtype, its binning kernels give integer bin numbers
 polars Series.bitwise_and | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
 polars Series.bitwise_count_ones | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
 polars Series.bitwise_count_zeros | needs-kernel | bitwise kernels over integer columns; the prim table has popcount, clz, ctz, bit_width only
@@ -179,12 +173,10 @@ polars Series.bottom_k_by | needs-kernel | by-column reductions and top-k; the a
 polars Series.cat | needs-kernel | namespace over array, categorical, struct or extension columns; no accessor kernel for these dtypes
 polars Series.cbrt | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.chunk_lengths | python-semantics | memory layout of polars chunks; the engine manages its own chunked columns (see the memory budget)
-polars Series.clear | python-semantics | in-place or growing mutation of a Series; Series are immutable (use concat, where, gather)
 polars Series.cos | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.cosh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.cot | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.cumulative_eval | python-semantics | a Python callable per element or window; use apply with a traced function or an expression
-polars Series.degrees | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.drop_nans | needs-kernel | NaN handling as a kernel; DataFrame.fill_nan composes where over is_nan eagerly, the Series form has no kernel
 polars Series.entropy | needs-kernel | Shannon entropy of a Series; no kernel
 polars Series.eq_missing | needs-kernel | comparison that treats null equal to null; the compare kernel returns null on a null side
@@ -204,12 +196,12 @@ polars Series.gather_every | needs-kernel | every n-th row; DataFrame.gather_eve
 polars Series.get_chunks | python-semantics | memory layout of polars chunks; the engine manages its own chunked columns (see the memory budget)
 polars Series.hash | needs-kernel | polars seeded hash; the engine hashes with its own function (hash64 ops)
 polars Series.hist | needs-kernel | histogram frame of a Series; the hist aggregate gives raw bins per group
-polars Series.implode | needs-kernel | collect a column into one list value; the engine has no list aggregate kernel (explode is the inverse)
-polars Series.index_of | needs-kernel | position of the first match of a value; arg_max and search_sorted exist, a find-first kernel does not
-polars Series.interpolate_by | needs-kernel | interpolation against a key column; interpolate is the row-position form
+polars Series.implode | needs-kernel | collect a column into one list value; the engine has no list aggregate kernel
+polars Series.index_of | needs-kernel | position of the first match of a value; the engine has no find-first kernel
+polars Series.interpolate_by | needs-kernel | interpolation against a key column; needs a keyed window kernel, the engine interpolates by row position only
 polars Series.is_close | needs-kernel | approximate float equality with tolerances; no kernel
-polars Series.is_first_distinct | needs-kernel | first/last occurrence masks; is_duplicated and is_unique exist
-polars Series.is_last_distinct | needs-kernel | first/last occurrence masks; is_duplicated and is_unique exist
+polars Series.is_first_distinct | needs-kernel | first/last occurrence masks; the engine has no first-occurrence kernel
+polars Series.is_last_distinct | needs-kernel | first/last occurrence masks; the engine has no first-occurrence kernel
 polars Series.log10 | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.log1p | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.lower_bound | needs-kernel | the minimum and maximum value of the dtype; read it from the dtype
@@ -221,15 +213,13 @@ polars Series.nan_max | needs-kernel | max and min that propagate NaN; no kernel
 polars Series.nan_min | needs-kernel | max and min that propagate NaN; no kernel flag for NaN ordering
 polars Series.ne_missing | needs-kernel | comparison that treats null equal to null; the compare kernel returns null on a null side
 polars Series.new_from_index | python-semantics | in-place or growing mutation of a Series; Series are immutable (use concat, where, gather)
-polars Series.not_ | python-semantics | boolean negation; use ~s
 polars Series.peak_max | needs-kernel | local extrema masks; no kernel
 polars Series.peak_min | needs-kernel | local extrema masks; no kernel
 polars Series.plot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
-polars Series.radians | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.rechunk | python-semantics | memory layout of polars chunks; the engine manages its own chunked columns (see the memory budget)
 polars Series.reinterpret | needs-kernel | bit-pattern reinterpretation and physical dtype view; cast converts values only
 polars Series.repeat_by | needs-kernel | repeat each value by a per-row count into a list; no kernel
-polars Series.replace_strict | needs-kernel | mapping with a default and strict coverage; replace is the lenient form
+polars Series.replace_strict | needs-kernel | mapping with a default and strict coverage; the engine has no coverage-check kernel
 polars Series.reshape | needs-kernel | reshape into an array dtype; no array dtype accessor
 polars Series.rle | needs-kernel | run-length encoding into a struct, and the run id column; no kernel
 polars Series.rle_id | needs-kernel | run-length encoding into a struct, and the run id column; no kernel
@@ -250,7 +240,7 @@ polars Series.round_sig_figs | needs-kernel | rounding to significant figures; r
 polars Series.scatter | python-semantics | in-place or growing mutation of a Series; Series are immutable (use concat, where, gather)
 polars Series.set | python-semantics | in-place or growing mutation of a Series; Series are immutable (use concat, where, gather)
 polars Series.set_sorted | needs-kernel | sorted-flag metadata that the engine could use to skip sorts; the engine keeps no sortedness flag on a column
-polars Series.shrink_dtype | needs-kernel | downcast to the narrowest dtype that holds the values; cast is explicit
+polars Series.shrink_dtype | needs-kernel | downcast to the narrowest dtype that holds the values; needs a min/max range scan that picks the type
 polars Series.shrink_to_fit | python-semantics | memory layout of polars chunks; the engine manages its own chunked columns (see the memory budget)
 polars Series.shuffle | needs-kernel | random permutation with a seed; sample draws rows
 polars Series.sin | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
@@ -268,16 +258,13 @@ polars Series.top_k_by | needs-kernel | by-column reductions and top-k; the argm
 polars Series.unique_counts | needs-kernel | count of each value in first-occurrence order; value_counts returns the pairs
 polars Series.upper_bound | needs-kernel | the minimum and maximum value of the dtype; read it from the dtype
 polars Series.zip_with | needs-kernel | pick values from two Series by a mask; where takes a scalar or Series for the other side but not by name
-polars LazyFrame.bottom_k | needs-kernel | no plan step; DataFrame.top_k is eager (sort then head)
 polars LazyFrame.cache | python-semantics | marks a plan node for reuse; the engine reuses a plan by materializing it with collect
-polars LazyFrame.cast | needs-kernel | plan step that casts named columns; DataFrame.cast is eager and Expr.cast takes the six cast names only
 polars LazyFrame.collect_batches | needs-kernel | streams the result as batches to a callback; stream() yields frames
 polars LazyFrame.deserialize | out-of-scope | plan or object serialization (D3b out-of-scope)
 polars LazyFrame.drop_nans | needs-kernel | no plan step: DataFrame.drop_nans / fill_nan run per column eagerly; a plan form needs the is_nan column op
 polars LazyFrame.execute | python-semantics | polars engine hooks (execution handle, resolver, inspection, Python batch callbacks); the plan runs through collect
 polars LazyFrame.fill_nan | needs-kernel | no plan step: DataFrame.drop_nans / fill_nan run per column eagerly; a plan form needs the is_nan column op
 polars LazyFrame.from_lazyframe_resolver | python-semantics | polars engine hooks (execution handle, resolver, inspection, Python batch callbacks); the plan runs through collect
-polars LazyFrame.gather_every | needs-kernel | no plan step; DataFrame.gather_every composes gather eagerly
 polars LazyFrame.inspect | python-semantics | polars engine hooks (execution handle, resolver, inspection, Python batch callbacks); the plan runs through collect
 polars LazyFrame.interpolate | needs-kernel | no plan step; DataFrame.interpolate is eager (the interpolate column op exists in an expression)
 polars LazyFrame.join_asof | needs-kernel | no plan step; DataFrame.join_asof composes eagerly
@@ -289,12 +276,9 @@ polars LazyFrame.merge_sorted | needs-kernel | merge of two sorted frames on a k
 polars LazyFrame.pipe_with_schema | python-semantics | polars engine hooks (execution handle, resolver, inspection, Python batch callbacks); the plan runs through collect
 polars LazyFrame.quantile | needs-kernel | no plan reduce step for these; group_quantile exists per group, DataFrame.median / quantile are eager
 polars LazyFrame.remote | out-of-scope | remote execution (D3b out-of-scope)
-polars LazyFrame.remove | needs-kernel | row filter with null-as-keep semantics of the inverse predicate; filter on the negated expression
 polars LazyFrame.rolling | needs-kernel | no plan step for rolling over an index column; the expression form rolling_* exists
-polars LazyFrame.select_seq | python-semantics | sequential variants of select and with_columns; the engine schedules its own parallelism
 polars LazyFrame.serialize | out-of-scope | plan or object serialization (D3b out-of-scope)
 polars LazyFrame.set_sorted | needs-kernel | sorted-flag metadata that the engine could use to skip sorts; the engine keeps no sortedness flag on a column
-polars LazyFrame.shift | needs-kernel | no plan step; the column op shift exists in an expression (col(x).shift(n))
 polars LazyFrame.show | out-of-scope | display of the plan or the frame (D3b out-of-scope)
 polars LazyFrame.show_graph | out-of-scope | display of the plan or the frame (D3b out-of-scope)
 polars LazyFrame.sink_batches | needs-kernel | streams the result as batches to a callback; stream() yields frames
@@ -305,9 +289,7 @@ polars LazyFrame.sink_ipc | needs-kernel | per-format streaming sink of a plan; 
 polars LazyFrame.sink_ndjson | needs-kernel | per-format streaming sink of a plan; LazyFrame.sink(name) runs a registered sink plugin
 polars LazyFrame.sink_parquet | needs-kernel | per-format streaming sink of a plan; LazyFrame.sink(name) runs a registered sink plugin
 polars LazyFrame.sql | out-of-scope | SQL interface (D3b out-of-scope); use duql
-polars LazyFrame.top_k | needs-kernel | no plan step; DataFrame.top_k is eager (sort then head)
 polars LazyFrame.update | needs-kernel | no plan step; DataFrame.update is eager
-polars LazyFrame.with_columns_seq | python-semantics | sequential variants of select and with_columns; the engine schedules its own parallelism
 polars Expr.all | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
 polars Expr.append | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
 polars Expr.approx_n_unique | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
@@ -344,7 +326,6 @@ polars Expr.cosh | needs-kernel | elementwise math kernel; the unary table has a
 polars Expr.cot | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Expr.cumulative_eval | python-semantics | a Python callable inside an expression; use a traced function through apply or the jit lane
 polars Expr.cut | needs-kernel | no expression form; Series.cut and qcut are eager
-polars Expr.degrees | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Expr.deserialize | out-of-scope | expression serialization and introspection (D3b out-of-scope plan serialize)
 polars Expr.dot | needs-kernel | dot product aggregate of two expressions; Series.dot is eager
 polars Expr.drop_nans | needs-kernel | length-changing or positional column op with no expression node (the evaluator keeps the row count, except through a plan step)
@@ -400,19 +381,17 @@ polars Expr.ne_missing | needs-kernel | no expression form; the Series kernel is
 polars Expr.null_count | needs-kernel | aggregate or distinct op with no Expr form (Series and DataFrame have it); the Agg table lacks the row
 polars Expr.peak_max | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
 polars Expr.peak_min | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
-polars Expr.pipe | python-semantics | a Python callable inside an expression; use a traced function through apply or the jit lane
 polars Expr.pipe_with_dtype | python-semantics | a Python callable inside an expression; use a traced function through apply or the jit lane
 polars Expr.pow | needs-kernel | binary op node: the expression evaluator has + - * / only (Series has floordiv_scalar, mod_scalar, pow_scalar as column ops)
 polars Expr.product | needs-kernel | aggregate or distinct op with no Expr form (Series and DataFrame have it); the Agg table lacks the row
 polars Expr.qcut | needs-kernel | no expression form; Series.cut and qcut are eager
-polars Expr.radians | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Expr.reinterpret | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
 polars Expr.repeat_by | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
 polars Expr.replace_strict | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
 polars Expr.reshape | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
 polars Expr.rle | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
 polars Expr.rle_id | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
-polars Expr.rolling | needs-kernel | rolling over an index column (the by-key window); rolling_* by row count exist
+polars Expr.rolling | needs-kernel | rolling over an index column (the by-key window); needs a keyed window plan step, the engine rolls by row count only
 polars Expr.rolling_kurtosis | needs-kernel | rolling window kernels for these statistics or over a time key; the rolling kernel has sum, mean, min, max, var, std, median and quantile by row count
 polars Expr.rolling_map | python-semantics | a Python callable inside an expression; use a traced function through apply or the jit lane
 polars Expr.rolling_max_by | needs-kernel | rolling window kernels for these statistics or over a time key; the rolling kernel has sum, mean, min, max, var, std, median and quantile by row count
@@ -467,7 +446,6 @@ polars Series.str.extract_all | needs-kernel | regex captures into a list or a s
 polars Series.str.extract_groups | needs-kernel | regex captures into a list or a struct; extract returns one group
 polars Series.str.extract_many | needs-kernel | Aho-Corasick multi-pattern match and replace; the engine has single-pattern str ops
 polars Series.str.find_many | needs-kernel | Aho-Corasick multi-pattern match and replace; the engine has single-pattern str ops
-polars Series.str.head | needs-kernel | first/last n characters; slice(0, n) and slice(-n) are the forms
 polars Series.str.json_decode | needs-kernel | JSON decode and JSONPath over a string column; the engine parses JSON lines, not a column of JSON text
 polars Series.str.json_path_match | needs-kernel | JSON decode and JSONPath over a string column; the engine parses JSON lines, not a column of JSON text
 polars Series.str.replace_many | needs-kernel | Aho-Corasick multi-pattern match and replace; the engine has single-pattern str ops
@@ -475,7 +453,6 @@ polars Series.str.reverse | needs-kernel | character reversal; no kernel
 polars Series.str.split_exact | needs-kernel | split into a struct or capped number of parts; split returns the full list
 polars Series.str.splitn | needs-kernel | split into a struct or capped number of parts; split returns the full list
 polars Series.str.strptime | needs-kernel | parse text to a temporal column; the engine casts numeric and string to numeric, not text to timestamp
-polars Series.str.tail | needs-kernel | first/last n characters; slice(0, n) and slice(-n) are the forms
 polars Series.str.to_date | needs-kernel | parse text to a temporal column; the engine casts numeric and string to numeric, not text to timestamp
 polars Series.str.to_datetime | needs-kernel | parse text to a temporal column; the engine casts numeric and string to numeric, not text to timestamp
 polars Series.str.to_decimal | needs-kernel | parse text with a radix or as a decimal; cast parses base-10 integers and floats
@@ -490,23 +467,13 @@ polars Series.dt.convert_time_zone | needs-kernel | named time zone conversion; 
 polars Series.dt.date | needs-kernel | build or split date and time of day columns; no date32/time cast kernel
 polars Series.dt.dst_offset | needs-kernel | time zone offset rules; the engine keeps UTC with tz_localize and tz_convert by fixed rule
 polars Series.dt.is_business_day | needs-kernel | business-day calendar kernels; no calendar table
-polars Series.dt.max | needs-kernel | min and max of a temporal Series as a method of the namespace; use Series.min / max
 polars Series.dt.millennium | needs-kernel | calendar part not in the date-part table (year to nanosecond, quarter, week, weekday, ordinal_day)
-polars Series.dt.min | needs-kernel | min and max of a temporal Series as a method of the namespace; use Series.min / max
 polars Series.dt.month_end | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
 polars Series.dt.month_start | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
 polars Series.dt.offset_by | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
 polars Series.dt.replace | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
 polars Series.dt.replace_time_zone | needs-kernel | named time zone conversion; tz_localize and tz_convert take the engine's fixed rules
 polars Series.dt.time | needs-kernel | build or split date and time of day columns; no date32/time cast kernel
-polars Series.dt.timestamp | needs-kernel | epoch integer in a chosen unit (epoch exists) and the strftime rename; to_string is strftime
-polars Series.dt.to_string | needs-kernel | epoch integer in a chosen unit (epoch exists) and the strftime rename; to_string is strftime
-polars Series.dt.total_days | needs-kernel | duration totals in other units; total_seconds exists
-polars Series.dt.total_hours | needs-kernel | duration totals in other units; total_seconds exists
-polars Series.dt.total_microseconds | needs-kernel | duration totals in other units; total_seconds exists
-polars Series.dt.total_milliseconds | needs-kernel | duration totals in other units; total_seconds exists
-polars Series.dt.total_minutes | needs-kernel | duration totals in other units; total_seconds exists
-polars Series.dt.total_nanoseconds | needs-kernel | duration totals in other units; total_seconds exists
 polars Series.list.agg | needs-kernel | list namespace kernel; the list accessor has first, get, last and len only
 polars Series.list.all | needs-kernel | list namespace kernel; the list accessor has first, get, last and len only
 polars Series.list.any | needs-kernel | list namespace kernel; the list accessor has first, get, last and len only
@@ -553,7 +520,6 @@ polars Expr.str.extract_all | needs-kernel | regex captures into a list or a str
 polars Expr.str.extract_groups | needs-kernel | regex captures into a list or a struct; extract returns one group
 polars Expr.str.extract_many | needs-kernel | Aho-Corasick multi-pattern match and replace; the engine has single-pattern str ops
 polars Expr.str.find_many | needs-kernel | Aho-Corasick multi-pattern match and replace; the engine has single-pattern str ops
-polars Expr.str.head | needs-kernel | first/last n characters; slice(0, n) and slice(-n) are the forms
 polars Expr.str.json_decode | needs-kernel | JSON decode and JSONPath over a string column; the engine parses JSON lines, not a column of JSON text
 polars Expr.str.json_path_match | needs-kernel | JSON decode and JSONPath over a string column; the engine parses JSON lines, not a column of JSON text
 polars Expr.str.replace_many | needs-kernel | Aho-Corasick multi-pattern match and replace; the engine has single-pattern str ops
@@ -561,7 +527,6 @@ polars Expr.str.reverse | needs-kernel | character reversal; no kernel
 polars Expr.str.split_exact | needs-kernel | split into a struct or capped number of parts; split returns the full list
 polars Expr.str.splitn | needs-kernel | split into a struct or capped number of parts; split returns the full list
 polars Expr.str.strptime | needs-kernel | parse text to a temporal column; the engine casts numeric and string to numeric, not text to timestamp
-polars Expr.str.tail | needs-kernel | first/last n characters; slice(0, n) and slice(-n) are the forms
 polars Expr.str.to_date | needs-kernel | parse text to a temporal column; the engine casts numeric and string to numeric, not text to timestamp
 polars Expr.str.to_datetime | needs-kernel | parse text to a temporal column; the engine casts numeric and string to numeric, not text to timestamp
 polars Expr.str.to_decimal | needs-kernel | parse text with a radix or as a decimal; cast parses base-10 integers and floats
@@ -583,14 +548,12 @@ polars Expr.dt.offset_by | needs-kernel | calendar offset and component replacem
 polars Expr.dt.replace | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
 polars Expr.dt.replace_time_zone | needs-kernel | named time zone conversion; tz_localize and tz_convert take the engine's fixed rules
 polars Expr.dt.time | needs-kernel | build or split date and time of day columns; no date32/time cast kernel
-polars Expr.dt.timestamp | needs-kernel | epoch integer in a chosen unit (epoch exists) and the strftime rename; to_string is strftime
-polars Expr.dt.to_string | needs-kernel | epoch integer in a chosen unit (epoch exists) and the strftime rename; to_string is strftime
-polars Expr.dt.total_days | needs-kernel | duration totals in other units; total_seconds exists
-polars Expr.dt.total_hours | needs-kernel | duration totals in other units; total_seconds exists
-polars Expr.dt.total_microseconds | needs-kernel | duration totals in other units; total_seconds exists
-polars Expr.dt.total_milliseconds | needs-kernel | duration totals in other units; total_seconds exists
-polars Expr.dt.total_minutes | needs-kernel | duration totals in other units; total_seconds exists
-polars Expr.dt.total_nanoseconds | needs-kernel | duration totals in other units; total_seconds exists
+polars Expr.dt.total_days | needs-kernel | duration totals in whole units need an integer division expression node, which the engine has not; the Series form divides in integer arithmetic
+polars Expr.dt.total_hours | needs-kernel | duration totals in whole units need an integer division expression node, which the engine has not; the Series form divides in integer arithmetic
+polars Expr.dt.total_microseconds | needs-kernel | duration totals in whole units need an integer division expression node, which the engine has not; the Series form divides in integer arithmetic
+polars Expr.dt.total_milliseconds | needs-kernel | duration totals in whole units need an integer division expression node, which the engine has not; the Series form divides in integer arithmetic
+polars Expr.dt.total_minutes | needs-kernel | duration totals in whole units need an integer division expression node, which the engine has not; the Series form divides in integer arithmetic
+polars Expr.dt.total_nanoseconds | needs-kernel | duration totals in whole units need an integer division expression node, which the engine has not; the Series form divides in integer arithmetic
 polars Expr.list.agg | needs-kernel | Expr.list is absent: the list accessor exists on Series only (first, get, last, len)
 polars Expr.list.all | needs-kernel | Expr.list is absent: the list accessor exists on Series only (first, get, last, len)
 polars Expr.list.any | needs-kernel | Expr.list is absent: the list accessor exists on Series only (first, get, last, len)

@@ -436,6 +436,8 @@ class Series {
     double skewness_unbiased() const;
     double kurtosis_unbiased() const;
     double quantile(double q) const;
+    /// The exact quantile with @p interp choosing the result between ranks.
+    double quantile(double q, Interpolation interp) const;
     double median() const;
     std::int64_t nunique() const;
 

@@ -44,6 +44,7 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
+    TypeVar,
     Union,
     overload,
 )
@@ -63,9 +64,14 @@ from .series import (
 
 if TYPE_CHECKING:
     import pyarrow as pa  # ty: ignore[import-not-found]
+    from typing_extensions import Concatenate, ParamSpec
 
     from ._expr_ops import ColumnOp
     from .lazyframe import LazyFrame, LazyGroupBy
+
+_R = TypeVar("_R")
+if TYPE_CHECKING:
+    _P = ParamSpec("_P")
 
 # A source of columns for in-memory evaluation: a DataFrame, a
 # {name: Series} mapping, or a pyarrow Table imported at the Arrow boundary.
@@ -361,19 +367,19 @@ class Expr:
         """Greater-or-equal predicate (the method form of ``>=``)."""
         return _Cmp("ge", self, other)
 
-    def add(self, other: object) -> "Expr":
+    def add(self, other: "Union[Value, Expr]") -> "Expr":
         """The method form of ``+``."""
         return _Bin("+", self, _wrap(other))
 
-    def sub(self, other: object) -> "Expr":
+    def sub(self, other: "Union[Value, Expr]") -> "Expr":
         """The method form of ``-``."""
         return _Bin("-", self, _wrap(other))
 
-    def mul(self, other: object) -> "Expr":
+    def mul(self, other: "Union[Value, Expr]") -> "Expr":
         """The method form of ``*``."""
         return _Bin("*", self, _wrap(other))
 
-    def truediv(self, other: object) -> "Expr":
+    def truediv(self, other: "Union[Value, Expr]") -> "Expr":
         """The method form of ``/``."""
         return _Bin("/", self, _wrap(other))
 
@@ -381,17 +387,34 @@ class Expr:
         """The negation of each value."""
         return _Unary("negate", self)
 
-    def and_(self, other: object) -> "Expr":
+    def and_(self, other: "Union[Value, Expr]") -> "Expr":
         """The method form of ``&``."""
         return _Logical("and", self, _as_expr(other))
 
-    def or_(self, other: object) -> "Expr":
+    def or_(self, other: "Union[Value, Expr]") -> "Expr":
         """The method form of ``|``."""
         return _Logical("or", self, _as_expr(other))
 
     def not_(self) -> "Expr":
         """The method form of ``~``."""
         return _Logical("not", self, None)
+
+    def radians(self) -> "Expr":
+        """Each value, in degrees, as radians (Float64; polars ``radians``)."""
+        return self * (math.pi / 180.0)
+
+    def degrees(self) -> "Expr":
+        """Each value, in radians, as degrees (Float64; polars ``degrees``)."""
+        return self * (180.0 / math.pi)
+
+    def pipe(
+        self,
+        function: "Callable[Concatenate[Expr, _P], _R]",
+        *args: "_P.args",
+        **kwargs: "_P.kwargs",
+    ) -> "_R":
+        """``function(self, *args, **kwargs)`` (polars ``pipe``)."""
+        return function(self, *args, **kwargs)
 
     def count(self) -> "Agg":
         """The number of non-null values of this expression per group, as an
@@ -451,9 +474,17 @@ class Expr:
     def __str__(self) -> str:
         return self._dsl()
 
-    def clip(self, lower: Union[int, float], upper: Union[int, float]) -> "Expr":
-        """Clamp each value to ``[lower, upper]`` (elementwise, SIMD)."""
-        return _Clip(self, lower, upper)
+    def clip(
+        self,
+        lower_bound: "Optional[Union[int, float]]" = None,
+        upper_bound: "Optional[Union[int, float]]" = None,
+    ) -> "Expr":
+        """Clamp each value to ``[lower_bound, upper_bound]`` (elementwise,
+        SIMD); a bound that is ``None`` or NaN clips nothing and a NaN value
+        stays NaN, as in Polars."""
+        lo = -math.inf if lower_bound is None else lower_bound
+        hi = math.inf if upper_bound is None else upper_bound
+        return _Clip(self, lo, hi)
 
     def cast(
         self, dtype: "Literal['int64', 'uint64', 'float64', 'bool', 'string', 'binary']"
@@ -1704,16 +1735,22 @@ class _ExprStr:
     def __init__(self, e: Expr) -> None:
         self._e = e
 
-    def contains(self, pat: "Union[str, Expr]", case: bool = True, regex: bool = False) -> Expr:
-        """Substring predicate, or with ``regex=True`` a regex search; the
-        keywords of ``Series.str.contains``. ``pat`` may be an expression for
-        a substring test."""
-        if regex:
-            if not case:
-                raise NotImplementedError("case-insensitive regex has no kernel; lower() first")
-            if isinstance(pat, Expr):
-                raise TypeError("contains(regex=True) needs a str pattern")
-            return self._e.regex(pat)
+    def contains(
+        self,
+        pat: "Union[str, Expr]",
+        case: bool = True,
+        regex: bool = True,
+        *,
+        literal: Optional[bool] = None,
+    ) -> Expr:
+        """A regex search by default (the pandas and Polars default), the
+        substring predicate with ``regex=False`` or ``literal=True``; the
+        keywords of ``Series.str.contains``. An expression ``pat`` is always a
+        substring test."""
+        if literal is not None:
+            regex = not literal
+        if regex and not isinstance(pat, Expr):
+            return self._e.regex(pat if case else "(?i)" + pat)
         return self._e.contains(pat, case)
 
     def starts_with(self, prefix: "Union[str, Expr]") -> Expr:
@@ -1755,8 +1792,23 @@ class _ExprStr:
             return self._e.replace(pat, repl)
         raise NotImplementedError("replace() supports n=-1 (all) or n=1 (first)")
 
-    def replace_all(self, pat: "Union[str, Expr]", repl: "Union[str, Expr]") -> Expr:
-        return self._e.replace_all(pat, repl)
+    def replace_all(
+        self, pat: "Union[str, Expr]", repl: "Union[str, Expr]", *, literal: bool = False
+    ) -> Expr:
+        """Replace every match of the regex ``pat`` (the Polars default;
+        ``repl`` may use ``$n`` / ``${name}``) or, with ``literal=True`` or an
+        expression argument, every occurrence of ``pat``."""
+        if literal or isinstance(pat, Expr) or isinstance(repl, Expr):
+            return self._e.replace_all(pat, repl)
+        return self._e.regex_replace(pat, repl)
+
+    def head(self, n: int) -> Expr:
+        """The first ``n`` bytes of each value (polars ``head``)."""
+        return self._e.slice(0, n)
+
+    def tail(self, n: int) -> Expr:
+        """The last ``n`` bytes of each value (polars ``tail``)."""
+        return self._e.slice(-n, n)
 
     def slice(self, start: int = 0, stop: Optional[int] = None) -> Expr:
         """Byte substring ``[start, stop)``, as ``Series.str.slice``."""
@@ -2092,6 +2144,14 @@ class _ExprDt:
         if time_unit not in _EPOCH_NS:
             raise ValueError("epoch: time_unit must be ns, us, ms, s or d")
         return self._e._op("dftu.series.cast", text=time_unit, kind="epoch", unit=self._given)
+
+    def timestamp(self, time_unit: str = "us") -> Expr:
+        """The polars name of :meth:`epoch`."""
+        return self.epoch(time_unit)
+
+    def to_string(self, format: str) -> Expr:
+        """The polars name of :meth:`strftime`."""
+        return self.strftime(format)
 
     def truncate(self, every: "Union[int, str]") -> Expr:
         """Each instant floored to a multiple of ``every`` (a pandas offset

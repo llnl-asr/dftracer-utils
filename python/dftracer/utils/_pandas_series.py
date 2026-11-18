@@ -22,14 +22,17 @@ from typing import (
     Tuple,
     Union,
     cast,
+    overload,
 )
+
+from .enums import DType
 
 if TYPE_CHECKING:
     from numpy import generic
     from pandas._libs.missing import NAType
 
     from .dataframe import DataFrame
-    from .enums import DType
+    from .dftracer_utils_ext import Scalar
     from .series import Series
 
     # A value of ``replace`` as the caller writes it, and as the engine takes it.
@@ -218,18 +221,46 @@ class _SeriesPandasMixin:
         """A new handle on the same immutable buffers (:meth:`share`)."""
         return self._s().share()
 
-    def convert_dtypes(self) -> "Series":
-        """:meth:`copy`: an engine column is already typed and nullable."""
-        return self.copy()
+    def convert_dtypes(
+        self,
+        infer_objects: bool = True,
+        convert_string: bool = True,
+        convert_integer: bool = True,
+        convert_boolean: bool = True,
+        convert_floating: bool = True,
+    ) -> "Series":
+        """The pandas rules that map to engine types. A column is typed and
+        nullable already, so only ``convert_integer`` changes it: a Float64
+        column whose valid values are all whole numbers (nulls allowed)
+        becomes Int64. A float ``NaN`` is a value here and not a null, so a
+        column holding one stays Float64, where pandas reads it as missing and
+        converts. The other keywords change nothing."""
+        s = self._s()
+        if not convert_integer or s.dtype not in (DType.FLOAT32, DType.FLOAT64):
+            return self.copy()
+        if not (s.floor() == s).fill_null(True).all():
+            return self.copy()
+        largest = s.abs().max()
+        if largest is not None and cast(float, largest) >= 2.0**63:
+            return self.copy()
+        return s.astype("int64")
 
     def infer_objects(self) -> "Series":
         """:meth:`copy`: an engine column is already typed."""
         return self.copy()
 
-    def squeeze(self) -> object:
+    @overload
+    def squeeze(self: "Series[int]") -> "Union[int, Series[int]]": ...
+    @overload
+    def squeeze(self: "Series[float]") -> "Union[float, Series[float]]": ...
+    @overload
+    def squeeze(self: "Series[str]") -> "Union[str, Series[str]]": ...
+    @overload
+    def squeeze(self: "Series[Scalar]") -> "Union[Scalar, Series[Scalar]]": ...
+    def squeeze(self) -> "Union[Scalar, Series]":
         """The one element of a one-element Series, else the Series itself."""
         s = self._s()
-        return s[0] if len(s) == 1 else s
+        return cast("Union[Scalar, Series]", s[0] if len(s) == 1 else s)
 
     @property
     def T(self) -> "Series":
@@ -371,7 +402,7 @@ class _SeriesPandasMixin:
         """Standard error of the mean: ``std(ddof) / sqrt(count)``."""
         s = self._s()
         n = s.count()
-        return float("nan") if n == 0 else s.std(ddof) / math.sqrt(n)
+        return float("nan") if n == 0 else cast(float, s.std(ddof)) / math.sqrt(n)
 
     def xs(self, key: int) -> object:
         """The element at position ``key`` (a Series has one axis)."""
@@ -434,7 +465,9 @@ class _SeriesPandasMixin:
             ("75%", s.quantile(0.75)),
             ("max", s.max()),
         ]
-        return DataFrame({"statistic": [r[0] for r in rows], "value": [float(r[1]) for r in rows]})
+        return DataFrame(
+            {"statistic": [r[0] for r in rows], "value": [float(cast(float, r[1])) for r in rows]}
+        )
 
     def agg(self, func: Union[str, Sequence[str]]) -> Union[object, "DataFrame"]:
         """A reduction by name (``"sum"``), or a list of names as a

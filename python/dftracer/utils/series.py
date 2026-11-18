@@ -13,7 +13,9 @@ polars spellings. ``dataframe.DataFrame`` is the frame counterpart.
 from __future__ import annotations
 
 import builtins
+import datetime
 import json
+import math
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -1019,6 +1021,23 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
     def __invert__(self) -> "Series[bool]":
         return self.logical_not()
 
+    def clear(self, n: int = 0) -> Self:
+        """A Series of this name and type with no rows (``n=0``) or with
+        ``n`` null rows (polars ``clear``); this Series is not changed."""
+        if n < 0:
+            raise ValueError("clear: n must not be negative")
+        if n == 0:
+            return self.head(0)
+        return self.take([-1] * n)
+
+    def radians(self) -> "Series[float]":
+        """Each value, in degrees, as radians (Float64; polars ``radians``)."""
+        return cast("Series[float]", self.astype("float64") * (math.pi / 180.0))
+
+    def degrees(self) -> "Series[float]":
+        """Each value, in radians, as degrees (Float64; polars ``degrees``)."""
+        return cast("Series[float]", self.astype("float64") * (180.0 / math.pi))
+
     def value_counts(
         self, normalize: bool = False, sort: bool = True, ascending: bool = False
     ) -> "DataFrame":
@@ -1268,17 +1287,23 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
             return [None if v is None else json.loads(cast(str, v)) for v in values]
         return values
 
-    def var(self, ddof: int = 1) -> float:
+    def var(self, ddof: int = 1) -> Optional[float]:
         """Variance with ``ddof`` degrees of freedom (0 = population, 1 =
         sample, the pandas default); the engine has kernels for those two.
-        NaN below ``ddof + 1`` present values, as pandas (the kernel's
-        readout is 0)."""
-        if self.count() < ddof + 1:
+        None for a column with no present value; NaN below ``ddof + 1``
+        present values, as pandas (the kernel's readout is 0)."""
+        n = self.count()
+        if n == 0:
+            return None
+        if n < ddof + 1:
             return float("nan")
         return self.variance(_ddof_sample(ddof))
 
-    def std(self, ddof: int = 1) -> float:
-        if self.count() < ddof + 1:
+    def std(self, ddof: int = 1) -> Optional[float]:
+        n = self.count()
+        if n == 0:
+            return None
+        if n < ddof + 1:
             return float("nan")
         return self.stddev(_ddof_sample(ddof))
 
@@ -1387,6 +1412,7 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         alias = _ext.Series.rename
         clone = _SeriesPandasMixin.copy
         limit = _ext.Series.head
+        not_ = __invert__
         pass
     # END GENERATED aliases
 
@@ -1479,6 +1505,7 @@ _NUMERIC_DTYPES = {
 }
 
 _TIME_UNITS = {"s": 0, "sec": 0, "ms": 1, "us": 2, "ns": 3}
+_Temporal = Union[datetime.datetime, datetime.date, datetime.time, datetime.timedelta]
 _FREQ_UNITS = {
     "ns": 1,
     "us": 1_000,
@@ -1705,6 +1732,57 @@ class _DtAccessor(_ext.DtAccessor):
         per_second = 1_000_000_000 / _FREQ_UNITS[self._unit]
         return self._s.astype("float64") / per_second
 
+    def _total(self, ns_per_result: int) -> "Series[int]":
+        # Whole units, truncated toward zero as polars does, in integer
+        # arithmetic from the column's ticks.
+        ticks = self._s.astype("int64")
+        unit_ns = _FREQ_UNITS[self._unit]
+        if ns_per_result <= unit_ns:
+            return cast("Series[int]", ticks * (unit_ns // ns_per_result))
+        step = ns_per_result // unit_ns
+        floored = ticks.floordiv(step)
+        return cast(
+            "Series[int]", floored + ((ticks < 0) & (floored * step != ticks)).astype("int64")
+        )
+
+    def total_days(self) -> "Series[int]":
+        """Whole days of each Duration (truncated toward zero, Int64)."""
+        return self._total(86_400_000_000_000)
+
+    def total_hours(self) -> "Series[int]":
+        return self._total(3_600_000_000_000)
+
+    def total_minutes(self) -> "Series[int]":
+        return self._total(60_000_000_000)
+
+    def total_milliseconds(self) -> "Series[int]":
+        return self._total(1_000_000)
+
+    def total_microseconds(self) -> "Series[int]":
+        return self._total(1_000)
+
+    def total_nanoseconds(self) -> "Series[int]":
+        return self._total(1)
+
+    def timestamp(self, time_unit: str = "us") -> "Series[int]":
+        """The polars name of :meth:`epoch`."""
+        return self.epoch(time_unit)
+
+    def to_string(self, format: str) -> Series:
+        """The polars name of :meth:`strftime`."""
+        return self.strftime(format)
+
+    def min(self) -> "Optional[_Temporal]":
+        """The earliest instant as a ``datetime`` (or the value ``to_list``
+        gives for the column's type), None when no value is valid."""
+        at = self._s.arg_min()
+        return None if at < 0 else cast("_Temporal", self._s.gather([at]).to_list()[0])
+
+    def max(self) -> "Optional[_Temporal]":
+        """The latest instant, as :meth:`min`."""
+        at = self._s.arg_max()
+        return None if at < 0 else cast("_Temporal", self._s.gather([at]).to_list()[0])
+
     @property
     def tz(self) -> Optional[str]:
         """The zone name of a Timestamp column, or None when naive."""
@@ -1757,27 +1835,76 @@ class _StrAccessor(_ext.StrAccessor):
     __slots__ = ()
 
     # pandas
-    def contains(self, pat: str, case: bool = True, regex: bool = False) -> "Series[bool]":
-        """Substring (or with ``regex=True`` a regex search) predicate."""
+    def contains(
+        self,
+        pat: str,
+        case: bool = True,
+        flags: int = 0,
+        na: Optional[bool] = None,
+        regex: bool = True,
+        *,
+        literal: Optional[bool] = None,
+    ) -> "Series[bool]":
+        """Whether each value contains ``pat``: a regex search by default (the
+        pandas and Polars default), the substring kernel with ``regex=False``
+        or ``literal=True``. ``na`` replaces a null result. ``flags`` has no
+        kernel."""
+        if literal is not None:
+            regex = not literal
+        if flags:
+            raise NotImplementedError("contains(flags=...) has no kernel")
         if regex:
-            if not case:
-                raise NotImplementedError("case-insensitive regex has no kernel; lower() first")
-            return self._s.str_search(pat)
-        if case:
-            return self._s.str_contains(pat)
-        return self._s.to_lowercase().str_contains(pat.lower())
+            out = self._s.str_search(pat if case else "(?i)" + pat)
+        elif case:
+            out = self._s.str_contains(pat)
+        else:
+            out = self._s.to_lowercase().str_contains(pat.lower())
+        return out if na is None else out.fill_null(na)
 
     def match(self, pat: str) -> "Series[bool]":
         """Regex anchored at the start, as pandas ``str.match``."""
         return self._s.str_search("^(?:" + pat + ")")
 
-    def replace(self, pat: str, repl: str, n: int = -1) -> "Series[builtins.str]":
-        """Literal replace: every occurrence (``n=-1``) or the first (``n=1``)."""
+    def replace(
+        self,
+        pat: str,
+        repl: str,
+        n: int = -1,
+        regex: bool = False,
+        *,
+        literal: Optional[bool] = None,
+    ) -> "Series[builtins.str]":
+        """Replace every occurrence (``n=-1``) or the first (``n=1``) of the
+        literal ``pat``; with ``regex=True`` (or ``literal=False``) ``pat`` is
+        a regex and ``repl`` may use ``$n`` / ``${name}`` group references, for
+        every match (``n=-1``) only."""
+        if literal is not None:
+            regex = not literal
+        if regex:
+            if n != -1:
+                raise NotImplementedError("a regex replace supports n=-1 (all)")
+            return self._s.str_regex_replace(pat, repl)
         if n == -1:
             return self._s.str_replace_all(pat, repl)
         if n == 1:
             return self._s.str_replace(pat, repl)
         raise NotImplementedError("replace() supports n=-1 (all) or n=1 (first)")
+
+    def replace_all(self, pat: str, repl: str, *, literal: bool = False) -> "Series[builtins.str]":
+        """Replace every match of the regex ``pat`` (the Polars default; ``repl``
+        may use ``$n`` / ``${name}``), or every occurrence of the literal ``pat``
+        with ``literal=True``."""
+        if literal:
+            return self._s.str_replace_all(pat, repl)
+        return self._s.str_regex_replace(pat, repl)
+
+    def head(self, n: int) -> "Series[builtins.str]":
+        """The first ``n`` bytes of each value (polars ``head``)."""
+        return self._s.str_slice(0, n)
+
+    def tail(self, n: int) -> "Series[builtins.str]":
+        """The last ``n`` bytes of each value (polars ``tail``)."""
+        return self._s.str_slice(-n, n)
 
     def slice(self, start: int = 0, stop: Optional[int] = None) -> "Series[builtins.str]":
         """Byte substring ``[start, stop)``, as pandas ``str.slice``."""

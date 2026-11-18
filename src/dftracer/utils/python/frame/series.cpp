@@ -340,10 +340,11 @@ PyMethodDef Series_methods[] = {
      "Stream the column: one Arrow array per chunk."},
     {"__arrow_c_array__", Series_arrow_c_array, METH_VARARGS,
      "Arrow PyCapsule export: (schema_capsule, array_capsule)."},
-    {"quantile",
-     DFTU_PYCFUNCTION((core::kw_one<"quantile", "q", Series_quantile>)),
+    {"quantile", DFTU_PYCFUNCTION(Series_quantile),
      METH_VARARGS | METH_KEYWORDS,
-     "quantile(q) -> float (linear interpolation, SIMD sort)."},
+     "quantile(q=0.5, interpolation='linear') -> float: the exact quantile of "
+     "the valid values. interpolation is 'linear', 'nearest', 'lower', "
+     "'higher' or 'midpoint'; a NaN value ranks above every number."},
     {"median", Series_median, METH_NOARGS, "Median (quantile 0.5)."},
     {"variance", DFTU_PYCFUNCTION(Series_variance),
      METH_VARARGS | METH_KEYWORDS, "variance(sample=True) -> float."},
@@ -440,15 +441,17 @@ PyMethodDef Series_methods[] = {
      "Sum of the valid values; a bool column counts True as 1, so (x > "
      "2).sum() counts the matches. Raises TypeError for a column type with "
      "no sum (string, most temporal types)."},
-    {"min", series_reduce_scalar<&Series::min>, METH_NOARGS,
-     "Smallest valid value. A bool column gives 0 or 1 and a string column "
-     "the bytewise smallest string (empty when no value is valid); raises "
+    {"min", series_reduce_scalar<&Series::min, true>, METH_NOARGS,
+     "Smallest valid value, None when no value is valid. A bool column gives "
+     "0 or 1 and a string column the bytewise smallest string; raises "
      "TypeError for a type with no order here."},
-    {"max", series_reduce_scalar<&Series::max>, METH_NOARGS,
-     "Largest valid value, over the same column types as min."},
-    {"mean", series_reduce_f64<&Series::mean>, METH_NOARGS,
-     "Mean of the valid values; a bool column gives the fraction that is "
-     "True. Raises TypeError for a column type with no sum."},
+    {"max", series_reduce_scalar<&Series::max, true>, METH_NOARGS,
+     "Largest valid value, over the same column types as min; None when no "
+     "value is valid."},
+    {"mean", series_reduce_f64<&Series::mean, true>, METH_NOARGS,
+     "Mean of the valid values, None when no value is valid; a bool column "
+     "gives the fraction that is True. Raises TypeError for a column type with "
+     "no sum."},
     {"all", Series_all, METH_NOARGS,
      "Whether every non-null Bool value is true."},
     {"any", Series_any, METH_NOARGS,

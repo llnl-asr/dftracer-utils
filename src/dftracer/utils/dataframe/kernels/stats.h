@@ -30,8 +30,12 @@ double skewness_unbiased(const Series& v);
 double kurtosis_unbiased(const Series& v);
 
 /// The q-th quantile (q in [0, 1]) with linear interpolation between the two
-/// nearest ranks. NaN when there are no non-null values.
+/// nearest ranks. NaN when there are no non-null values. A NaN value ranks
+/// above every number.
 double quantile(const Series& v, double q);
+
+/// The q-th quantile with @p interp choosing the result between two ranks.
+double quantile(const Series& v, double q, Interpolation interp);
 
 /// The median (quantile 0.5).
 double median(const Series& v);

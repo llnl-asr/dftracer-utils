@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -49,7 +50,7 @@ void write_run(const dstd::Path& root, dstd::StringView input, int calls) {
         dstd::String((dir / "compacted" / "set1.pfw.gz").str()), t);
 }
 
-dstd::Vector<dstd::String> sorted_gz_lines(dstd::StringView path) {
+dstd::Vector<dstd::String> sorted_gz_lines(dstd::CStringView path) {
     dstd::Vector<dstd::String> out;
     gzFile f = gzopen(path.c_str(), "rb");
     REQUIRE(f != nullptr);

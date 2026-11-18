@@ -317,12 +317,13 @@ def norm_polars(pl: Any, x: Any) -> Norm:
 FINDING_TAGS = ("needs-index", "keyword", "missing", "shape", "semantics", "engine")
 
 
-def load_findings(name: str, flavor: str = "") -> Dict[str, str]:
+def load_findings(name: str, pandas_version: str = "") -> Dict[str, str]:
     """The ``kind.method#N[input] | tag | reason`` lines of a findings file
     next to the tests, as ``{case id: "tag: reason"}``. A case id written
-    ``pandas2:kind.method#N[input]`` counts only when ``flavor`` is
-    ``pandas2`` (a difference that exists in one pandas major version, the
-    other is ``pandas3:``); a plain line applies to every flavor."""
+    ``pandas2:kind.method#N[input]`` counts only under pandas 2 (``pandas3:``
+    under pandas 3), and ``pandas<3.1:kind.method#N[input]`` only under a
+    pandas older than 3.1; a plain line applies to every version."""
+    have = tuple(int(p) for p in pandas_version.split(".")[:2] if p.isdigit())
     out: Dict[str, str] = {}
     for line in (Path(__file__).with_name(name)).read_text().splitlines():
         if not line.strip() or line.startswith("#"):
@@ -331,7 +332,13 @@ def load_findings(name: str, flavor: str = "") -> Dict[str, str]:
         assert tag in FINDING_TAGS, f"{name}: unknown tag {tag!r} in {line!r}"
         if ":" in key.split("#")[0]:
             only, key = key.split(":", 1)
-            if only != flavor:
+            assert only.startswith("pandas"), f"{name}: unknown prefix in {line!r}"
+            bound = only[len("pandas") :]
+            if bound.startswith("<"):
+                below = tuple(int(p) for p in bound[1:].split("."))
+                if not have or have >= below:
+                    continue
+            elif not have or have[0] != int(bound):
                 continue
         assert key not in out, f"{name}: {key} is listed twice"
         out[key] = f"{tag}: {reason}"

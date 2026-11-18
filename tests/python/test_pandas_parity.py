@@ -556,9 +556,7 @@ STR_CASES = [
     ("get_dummies", "S", (), {}),
 ]  # fmt: skip
 
-FINDINGS = load_findings(
-    "parity_findings_pandas.txt", "pandas2" if pd.__version__.startswith("2.") else ""
-)
+FINDINGS = load_findings("parity_findings_pandas.txt", pd.__version__)
 
 
 def _build_params():

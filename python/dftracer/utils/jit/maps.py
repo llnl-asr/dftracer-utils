@@ -580,9 +580,22 @@ def _store_field(cls: type, attr: str, tp: object, index: int) -> StoreField:
 
 def own_annotations(cls: type) -> dict[str, object]:
     get = getattr(inspect, "get_annotations", None)
-    if get is not None:
-        return dict(get(cls))
-    return dict(cls.__dict__.get("__annotations__", {}))
+    if get is None:
+        return dict(cls.__dict__.get("__annotations__", {}))
+    annotationlib = _import_annotationlib()
+    if annotationlib is not None:
+        return dict(get(cls, format=annotationlib.Format.FORWARDREF))
+    return dict(get(cls))
+
+
+def _import_annotationlib() -> types.ModuleType | None:
+    # Python 3.14 evaluates annotations lazily (PEP 649), so a class has no
+    # "__annotations__" entry in its __dict__.
+    if sys.version_info < (3, 14):
+        return None
+    import annotationlib
+
+    return annotationlib
 
 
 def state_fields(cls: type) -> tuple[dict[str, PlainField], dict[str, StoreField]]:
@@ -826,7 +839,7 @@ def type_hints(obj: type) -> dict[str, object]:
     try:
         return get_type_hints(obj)
     except (NameError, TypeError):
-        return dict(getattr(obj, "__dict__", {}).get("__annotations__", {}))
+        return own_annotations(obj)
 
 
 def config_fields(cls: type) -> dict[str, CfgField]:
@@ -834,7 +847,7 @@ def config_fields(cls: type) -> dict[str, CfgField]:
     when it declares none. Raises :class:`JitError` at the offending annotation
     for a config type that is not a dataclass or a field type that has no
     native form."""
-    if "config" not in cls.__dict__.get("__annotations__", {}):
+    if "config" not in own_annotations(cls):
         return {}
     cfg_type = type_hints(cls).get("config")
     if not (isinstance(cfg_type, type) and dataclasses.is_dataclass(cfg_type)):

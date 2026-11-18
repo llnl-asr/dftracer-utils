@@ -1015,6 +1015,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Read the `config` field of a `@jit.plugin` class on Python 3.14. Annotations are lazy there (PEP 649), so a class has no `__annotations__` entry in its `__dict__`: the config fields were not seen, `self.config.<field>` failed with `unsupported in @jit.each_event: Attribute`, and a config field with an unsupported type did not raise `JitError`. The JIT front end now reads class annotations through `inspect.get_annotations`, with `annotationlib` forward references on 3.14.
 - Keep the real value of a double in a zone bound. The bounds were text with six decimals, so a chunk of doubles near `1e-7` was stored as `0.000000` and a filter such as `args.lat > 1.5e-7` skipped chunks that held matching events.
 - A keyless aggregation over no rows is one row (`DataFrame.sum()`, `mean()` and the like, `group_by()` with no key): `sum` is 0 and the other reductions are null.
 - `Expr.str.find` is null where the needle is absent (Polars); `Series.str.find` keeps -1.

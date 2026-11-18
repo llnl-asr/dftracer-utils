@@ -175,10 +175,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Split the index into summaries and feeders. A summary (zonemap, bloom, counts, postings) knows only the algorithm: it takes typed values (int64, uint64, double, string, null) and writes its payload, and `Summary::compile` prepares a filter leaf against it.
+  A feeder owns the format: the JSON feeder reads the events the scan already parsed, with no second parse and no frame per line, and the column feeder (`ColumnFeeder`) takes one frame per chunk with a path per column, so a reader that has no JSON line can feed the same summaries.
+  The stored bloom, counts and postings bytes are the same as before.
+- Make the zonemap richer. A zone keeps its bounds in the type of the values (int64, uint64, double, or a string compared as unsigned bytes), counts the null values and the NaNs, never makes a NaN a bound, and marks a bound that is not exact, such as an integer a double cannot hold: that bound never rules out a value and never proves that every value passes.
+  A path that holds numbers and strings has no bounds. A filter literal is compared with the bounds as a number, so `x > 1.5` against an int zone is not read as `x > 1`.
+  A zone starts with a payload version byte and the `index` version in `VERSION` is 2, so an index built before this change is built again; a payload of another version is not read and prunes nothing.
 - The index hashes each value by its type, once, for every bloom filter and posting list (`dstd/hash/value_hash.h`): every integer hashes as an int64, a double that is a whole number hashes as that integer (`42.0` is `42`, `-0.0` is `0`), any other double by its bits, every NaN as one value, a uint64 above the int64 maximum as itself and a string as its bytes.
   A query on `args.size == 42` now finds a column of `42.0`, and `42.5` never matches `42`; a number literal also probes the text of the number only on a path the catalog says may hold strings, or when the file has no catalog.
   Each stored bloom filter carries a hash version byte after its three header words, and the marker of each postings path stores it; a reader that finds another version does not prune and reads the chunk.
-  The `index` version in `VERSION` is 1, so an index built before this change is built again; a sharded view root made before it is refused with its format version and must be indexed again.
+  The `index` version in `VERSION` moved for it, so an index built before this change is built again; a sharded view root made before it is refused with its format version and must be indexed again.
 - Speed up the Python layer.
   `Series.compare`, `Series.equals`, `DataFrame.equals`, `first_valid_index`, `last_valid_index`, `GroupBy.groups`, `Series.repeat` and `Series.drop` run on the engine kernels in place of a Python loop over the rows.
   On 1M rows (median of 5 rounds): `Series.compare` 57 to 2 ms, `equals` 65 to 2 ms, the four valid-index calls 99 to 36 ms, `GroupBy.groups` 63 to 36 ms.
@@ -955,6 +961,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Keep the real value of a double in a zone bound. The bounds were text with six decimals, so a chunk of doubles near `1e-7` was stored as `0.000000` and a filter such as `args.lat > 1.5e-7` skipped chunks that held matching events.
 - A keyless aggregation over no rows is one row (`DataFrame.sum()`, `mean()` and the like, `group_by()` with no key): `sum` is 0 and the other reductions are null.
 - `Expr.str.find` is null where the needle is absent (Polars); `Series.str.find` keeps -1.
 - The linear quantile of more than 262144 rows ranks a NaN of either sign above every number, and it selects the two ranks without a full sort for Int32, Float32 and other widths as well as Float64 and Int64.

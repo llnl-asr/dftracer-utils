@@ -18,6 +18,8 @@ set(TRACE_TEST_SOURCES
     # Indexing
     index/extensions/test_bloom_filter.cpp
     index/extensions/test_scalable_bloom_filter.cpp
+    index/extensions/test_summaries.cpp
+    index/extensions/test_zone_bounds.cpp
     index/schemas/dft/test_chunk_statistics.cpp
     index/build/test_chunk_indexer.cpp
     index/plan/test_chunk_pruner.cpp

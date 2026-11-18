@@ -14,6 +14,8 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/trace/index/extensions/json_feeder.h>
+#include <dftracer/utils/trace/index/extensions/zone_bounds.h>
 #include <dftracer/utils/trace/index/schemas/dft/bloom_core.h>
 #include <dftracer/utils/trace/views/fold.h>
 
@@ -147,16 +149,8 @@ class BloomFold : public trace::views::detail::Fold {
     using ChunkState = trace::index::schemas::dft::BloomCore::ChunkState;
     using Catalog = trace::index::schemas::dft::BloomCore::Catalog;
 
-    // One auto-indexed args key within a chunk: its stats, and its string
-    // values (interned ids) while they number at most auto_max_distinct.
-    struct AutoField {
-        AutoField() { stats.value_type.clear(); }
-        trace::index::schemas::dft::BloomCore::ChunkDimensionStats stats;
-        trace::index::schemas::dft::BloomCore::NumericBounds bounds;
-        dstd::HashSet<std::uint32_t> values;
-        bool overflow = false;
-    };
-    using AutoChunk = dstd::HashMap<std::uint32_t, AutoField>;
+    using AutoField = JsonFeeder::AutoField;
+    using AutoChunk = JsonFeeder::AutoChunk;
 
    public:
     class Lane {
@@ -178,8 +172,7 @@ class BloomFold : public trace::views::detail::Fold {
     // value: what it costs and whether it can rule a chunk out.
     struct PathEvidence {
         // The bounds of the first chunk summarized.
-        dstd::String min;
-        dstd::String max;
+        ZoneBounds bounds;
         std::uint64_t present_chunks = 0;
         std::uint64_t zone_chunks = 0;
         std::uint64_t bloom_chunks = 0;
@@ -249,13 +242,7 @@ class BloomFold : public trace::views::detail::Fold {
 
     dftracer::utils::dstd::StringIntern* intern_;
     trace::index::schemas::dft::BloomCore::ChunkIndexerConfig config_;
-    // Interned args key (or captured path) of each extra dimension, in
-    // config_.extra_dimensions order.
-    dstd::Vector<std::uint32_t> extra_keys_;
-    // Args keys the path budget leaves alone: the extra dimensions and the
-    // command hash keys the fixed shash dimension already covers.
-    dstd::HashSet<std::uint32_t> auto_skip_;
-    std::uint32_t dur_key_ = 0;
+    JsonFeeder feeder_;
     dstd::Optional<std::uint64_t> file_bytes_;
 
     /// Writes the tier of `file` into `build`, one chunk at a time. Consumes
@@ -279,8 +266,6 @@ class BloomFold : public trace::views::detail::Fold {
     Catalog catalog(const FileState& fs) const;
     void observe_shape(FileState& fs, dstd::Span<const SchemaLeaf> leaves);
     void flush_shapes(FileState& fs);
-    void observe_auto(AutoChunk& chunk,
-                      const trace::views::detail::FoldEvent& e);
     ChunkState assemble_chunk(FileState& fs, std::uint64_t cp,
                               dstd::Span<const dstd::String> dims,
                               const AutoKeys& keys);

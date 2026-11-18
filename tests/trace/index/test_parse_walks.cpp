@@ -161,7 +161,7 @@ constexpr NamespaceDigest RECORDED[] = {
     {"dftu.idx.dft.metadata", 8564637570051539016ULL},
     {"dftu.idx.dft.stats", 13276905867863997891ULL},
     {"dftu.idx.postings", 12146455479429525479ULL},
-    {"dftu.idx.zonemap", 14397360174130556973ULL},
+    {"dftu.idx.zonemap", 7630839300815478310ULL},
 };
 
 // The test directory is cut out of each record, since its length varies. A

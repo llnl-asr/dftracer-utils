@@ -17,8 +17,8 @@ bool unrecorded(dstd::StringView path) {
 
 const dstd::StringViewMap<std::uint64_t>* GranuleCounts::get() const {
     if (!values && !compressed.empty())
-        values = trace::index::extensions::ChunkDimensionStats::
-            decompress_value_counts(compressed.data(), compressed.size());
+        values = trace::index::extensions::CountsBuilder::decompress(
+            compressed.data(), compressed.size());
     return values ? &*values : nullptr;
 }
 

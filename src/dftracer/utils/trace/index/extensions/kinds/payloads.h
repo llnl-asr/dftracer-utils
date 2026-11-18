@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/index/extensions/scalable_bloom_filter.h>
+#include <dftracer/utils/trace/index/extensions/zone_bounds.h>
 
 #include <cstdint>
 
@@ -15,21 +16,24 @@
 // decode is treated like a missing one: no evidence.
 namespace dftracer::utils::trace::index::extensions::kinds {
 
-/// One path's values in one granule.
-struct Zone {
-    /// "string", "uint", "int", "double" or "mixed"; bounds compare in it.
-    dstd::String value_type;
-    dstd::String min;
-    dstd::String max;
+/// The version byte a stored zone starts with. A zone with another one is not
+/// read, which prunes nothing.
+inline constexpr std::uint8_t ZONE_PAYLOAD_VERSION = 1;
+
+/// One path's values in one granule: the bounds with their null and NaN counts
+/// (@ref ZoneBounds), and how many records the granule observed.
+struct Zone : ZoneBounds {
+    /// Where the path's values fall, for timestamp paths.
+    dstd::Optional<dataframe::TimestampHistogram> histogram;
     /// Records observed in the granule (dftracer: data events).
     std::uint64_t observed = 0;
     /// Observed records carrying the path, when known.
     dstd::Optional<std::uint64_t> present;
-    /// Where the path's values fall, for timestamp paths.
-    dstd::Optional<dataframe::TimestampHistogram> histogram;
 };
 
 dstd::String encode_zone(const Zone& zone);
+/// Nothing for bytes of another version, a bound pair out of order or a bound
+/// that is NaN.
 dstd::Optional<Zone> decode_zone(dstd::StringView bytes);
 
 /// A granule's value counts: the compressed map, or nullopt when it went over

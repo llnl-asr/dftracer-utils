@@ -382,4 +382,46 @@ TEST_SUITE("old index") {
         CHECK(trace::index::extension_current(snapshot, *file,
                                               IndexExtension::Members));
     }
+
+    TEST_CASE("a zonemap copy at an older format version is not current") {
+        dftu_utils_test::TestEnvironment env;
+        REQUIRE(env.is_valid());
+        const dstd::String root = env.dir() + "/.dftindex";
+        auto opened = trace::index::Index::open(root);
+        REQUIRE(opened.has_value());
+        const dstd::String path = "/traces/old.pfw.gz";
+        auto build = dftu_utils_test::register_test_file(*opened, path, 5);
+        dftu_utils_test::commit_test_build(build);
+
+        const std::uint32_t current =
+            trace::index::store::layout::ext_version(IndexExtension::Zonemap);
+        REQUIRE(current >= 1);
+        auto store = dftracer::utils::store::Store::open(root + "/store");
+        REQUIRE(store.has_value());
+        dftracer::utils::store::NamespaceSpec spec;
+        const dstd::String name =
+            trace::index::store::store_layout::namespace_name(
+                IndexExtension::Zonemap);
+        spec.name.assign(name.data(), name.size());
+        spec.format_version = current - 1;
+        auto ns = store->ns(spec);
+        REQUIRE(ns.has_value());
+        auto batch =
+            store->batch(*ns, dftracer::utils::store::ScopeKey::file(path));
+        batch.put(dstd::ByteView("\x02\x00", 2), dstd::ByteView());
+        auto committed = dftracer::utils::default_runtime()
+                             .submit(store->commit(std::move(batch)))
+                             .get();
+        REQUIRE(committed.has_value());
+
+        const auto snapshot = dftu_utils_test::index_take(opened->snapshot());
+        const auto file = snapshot.file(path);
+        REQUIRE(file.has_value());
+        CHECK_FALSE(trace::index::extension_current(snapshot, *file,
+                                                    IndexExtension::Zonemap));
+        CHECK(snapshot.extension(*file, IndexExtension::Zonemap, 0) !=
+              trace::index::Freshness::Current);
+        CHECK(trace::index::extension_current(snapshot, *file,
+                                              IndexExtension::Members));
+    }
 }

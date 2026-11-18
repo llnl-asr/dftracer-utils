@@ -16,6 +16,8 @@
 #include <task_result.h>
 #include <testing_utilities.h>
 
+#include <cmath>
+
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::index;
 
@@ -25,7 +27,6 @@ extensions::ChunkDimensionStats dim(dstd::String name,
                                     dstd::Vector<dstd::String> values) {
     extensions::ChunkDimensionStats ds;
     ds.dimension = std::move(name);
-    ds.value_type = "string";
     for (const auto& v : values) ds.observe(v);
     return ds;
 }
@@ -43,9 +44,8 @@ dstd::String build_index(dstd::CStringView dir, dstd::CStringView trace) {
         trace::index::put_gzip_member(
             w, {c, c * 100, 100, c * 200, 200, c * 2 + 1, c * 2 + 2});
         auto dur = dim("dur", {});
-        dur.value_type = "uint";
-        dur.min_value = dstd::to_string(10 + c * 20);
-        dur.max_value = dstd::to_string(20 + c * 20);
+        dur.zone.bounds().add(std::uint64_t{10 + c * 20});
+        dur.zone.bounds().add(std::uint64_t{20 + c * 20});
         dftu_utils_test::put_dimension_stats(w, c, dur, 2);
         if (c < 2)
             dftu_utils_test::put_dimension_stats(w, c, dim("cat", cats[c]), 2);
@@ -74,17 +74,30 @@ dstd::Vector<std::uint64_t> prune(dstd::CStringView index,
 
 TEST_SUITE("index kinds") {
     TEST_CASE("payloads round-trip and reject garbage") {
-        extensions::kinds::Zone zone{"uint", "3", "9", 5, 4, dstd::nullopt};
+        extensions::kinds::Zone zone;
+        zone.add(std::uint64_t{3});
+        zone.add(std::uint64_t{9});
+        zone.add_nulls(2);
+        zone.observed = 5;
+        zone.present = 4;
         auto z = extensions::kinds::decode_zone(
             extensions::kinds::encode_zone(zone));
         REQUIRE(z.has_value());
-        CHECK(z->value_type == "uint");
-        CHECK(z->min == "3");
-        CHECK(z->max == "9");
+        CHECK(z->type() == extensions::BoundType::UInt64);
+        CHECK(z->min_u64() == 3);
+        CHECK(z->max_u64() == 9);
+        CHECK(z->null_count() == 2);
+        CHECK(z->nan_count() == 0);
+        CHECK(z->exact());
         CHECK(z->observed == 5);
         CHECK(z->present == 4);
         CHECK_FALSE(z->histogram.has_value());
         CHECK_FALSE(extensions::kinds::decode_zone("\x01").has_value());
+        // A payload of another version is not read.
+        auto other = extensions::kinds::encode_zone(zone);
+        other[0] =
+            static_cast<char>(extensions::kinds::ZONE_PAYLOAD_VERSION + 1);
+        CHECK_FALSE(extensions::kinds::decode_zone(other).has_value());
 
         extensions::kinds::CountsGranule over{7, dstd::nullopt};
         auto c = extensions::kinds::decode_counts(
@@ -143,9 +156,10 @@ TEST_SUITE("index kinds") {
                 trace::index::put_gzip_member(
                     w, {c, c * 100, 100, c * 200, 200, c * 2 + 1, c * 2 + 2});
                 auto te = dim("te", {});
-                te.value_type = "uint";
-                te.min_value = dstd::to_string(spans[c].first);
-                te.max_value = dstd::to_string(spans[c].second);
+                te.zone.bounds().add(
+                    static_cast<std::uint64_t>(spans[c].first));
+                te.zone.bounds().add(
+                    static_cast<std::uint64_t>(spans[c].second));
                 dftu_utils_test::put_dimension_stats(w, c, te, 2);
             }
             dftu_utils_test::mark_built(w);
@@ -159,7 +173,7 @@ TEST_SUITE("index kinds") {
         CHECK(result->candidates == dstd::Vector<std::uint64_t>{1});
     }
 
-    TEST_CASE("a corrupt zone bound is an error, not a skipped prune") {
+    TEST_CASE("a zone whose bounds are out of order prunes nothing") {
         auto dir = dftu_utils_test::make_unique_test_path("kinds_bad_zone");
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         const dstd::String trace = "/fake/bad_zone.pfw.gz";
@@ -168,24 +182,79 @@ TEST_SUITE("index kinds") {
             auto idx = dftu_utils_test::open_test_index(path);
             auto w = dftu_utils_test::register_test_file(idx, trace, 1);
             trace::index::put_gzip_member(w, {0, 0, 100, 0, 200, 1, 2});
-            auto dur = dim("dur", {});
-            dur.value_type = "uint";
-            dur.min_value = "not-a-number";
-            dur.max_value = "20";
-            dftu_utils_test::put_dimension_stats(w, 0, dur, 2);
+            extensions::kinds::Zone zone;
+            zone.assign(extensions::BoundType::Int64, 2, 0, 0, true, true);
+            zone.set_min(std::int64_t{20});
+            zone.set_max(std::int64_t{5});
+            zone.observed = 2;
+            zone.present = 2;
+            const auto payload = extensions::kinds::encode_zone(zone);
+            trace::index::put_path_granule(
+                w, trace::index::store::IndexExtension::Zonemap, "dur", 0,
+                payload);
+            trace::index::put_path(
+                w, trace::index::store::IndexExtension::Zonemap, "dur");
             dftu_utils_test::mark_built(w);
             dftu_utils_test::commit_test_build(w);
         }
-        auto q = duql::Query::from_string("dur > 5");
+        auto q = duql::Query::from_string("dur > 100");
         REQUIRE(q.has_value());
         const auto pruned = trace::index::plan::prune_file(
                                 {path, trace, &*q, nullptr, dstd::nullopt})
                                 .get();
-        REQUIRE_FALSE(pruned.has_value());
-        CHECK(common::errorcode_of(pruned.error()) ==
-              common::ErrorCode::Indexer);
-        CHECK(dstd::String(pruned.error().message()).find("corrupt zone map") !=
-              dstd::String::npos);
+        REQUIRE(pruned.has_value());
+        CHECK(pruned->candidates == dstd::Vector<std::uint64_t>{0});
+    }
+
+    TEST_CASE("an unreadable zone prunes nothing") {
+        // A zone of another payload version and a zone with a NaN bound are no
+        // evidence: the chunk is read.
+        for (int bad = 0; bad < 2; ++bad) {
+            CAPTURE(bad);
+            auto dir =
+                dftu_utils_test::make_unique_test_path("kinds_bad_zone2");
+            REQUIRE(dstd::fs::create_directories(dir).has_value());
+            const dstd::String trace = "/fake/bad_zone2.pfw.gz";
+            const dstd::String path((dir / ".dftindex").str());
+            {
+                auto idx = dftu_utils_test::open_test_index(path);
+                auto w = dftu_utils_test::register_test_file(idx, trace, 1);
+                trace::index::put_gzip_member(w, {0, 0, 100, 0, 200, 1, 2});
+                extensions::kinds::Zone zone;
+                if (bad == 0) {
+                    zone.add(std::int64_t{1});
+                    zone.add(std::int64_t{5});
+                } else {
+                    zone.assign(extensions::BoundType::Double, 2, 0, 0, true,
+                                true);
+                    zone.set_min(std::nan(""));
+                    zone.set_max(5.0);
+                }
+                zone.observed = 2;
+                zone.present = 2;
+                auto payload = extensions::kinds::encode_zone(zone);
+                if (bad == 0)
+                    payload[0] = static_cast<char>(
+                        extensions::kinds::ZONE_PAYLOAD_VERSION + 1);
+                trace::index::put_path_granule(
+                    w, trace::index::store::IndexExtension::Zonemap, "dur", 0,
+                    payload);
+                trace::index::put_path(
+                    w, trace::index::store::IndexExtension::Zonemap, "dur");
+                dftu_utils_test::mark_built(w);
+                dftu_utils_test::commit_test_build(w);
+            }
+            for (const char* text : {"dur > 100", "dur < 0"}) {
+                auto q = duql::Query::from_string(text);
+                REQUIRE(q.has_value());
+                const auto pruned =
+                    trace::index::plan::prune_file(
+                        {path, trace, &*q, nullptr, dstd::nullopt})
+                        .get();
+                REQUIRE(pruned.has_value());
+                CHECK(pruned->candidates == dstd::Vector<std::uint64_t>{0});
+            }
+        }
     }
 
     TEST_CASE("a ts bound that is not an integer is an error") {

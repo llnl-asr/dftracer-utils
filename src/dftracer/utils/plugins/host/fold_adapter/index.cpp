@@ -131,6 +131,12 @@ class PluginIndexQuery final : public trace::index::extensions::ExtensionQuery {
             out.kind = DFTU_VAL_I64;
             out.as.i64 = v.i;
             break;
+        case trace::index::extensions::ExtensionValue::Kind::UInt64:
+            // The host never passes one: a plugin leaf with a uint64 above
+            // int64 is not compiled.
+            out.kind = DFTU_VAL_F64;
+            out.as.f64 = static_cast<double>(v.u);
+            break;
         case trace::index::extensions::ExtensionValue::Kind::Double:
             out.kind = DFTU_VAL_F64;
             out.as.f64 = v.f;

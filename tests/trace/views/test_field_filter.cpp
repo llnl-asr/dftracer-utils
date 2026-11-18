@@ -137,6 +137,85 @@ TEST_SUITE("View unified F filter") {
         CHECK(count("tid == 8") == 0);
     }
 
+    TEST_CASE("a zone keeps the real value of a small double") {
+        // A chunk of doubles near 1e-7 must not be pruned as if they were 0.
+        TestEnvironment env(10);
+        const dstd::String plain = env.dir() + "/small.pfw";
+        {
+            dftu_utils_test::FileOut out(plain);
+            const auto rec = [&](int i, dstd::StringView lat) {
+                out << R"({"name":"read","cat":"POSIX","pid":1,"tid":7,"ts":)"
+                    << 1000 + i * 10 << R"(,"dur":10,"ph":"X","args":{"lat":)"
+                    << lat << "}}\n";
+            };
+            const char* small[] = {"1e-7", "2e-7", "3e-7"};
+            for (int i = 0; i < 3000; ++i) rec(i, small[i % 3]);
+            for (int i = 3000; i < 6000; ++i)
+                rec(i, i % 2 == 0 ? "5.0" : "6.5");
+        }
+        const dstd::String gz = plain + ".gz";
+        REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
+                                                                   16 * 1024));
+        dstd::fs::remove(plain).discard();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        auto count = [&](dstd::StringView q) {
+            return run(View::from_file(dstd::String(gz), dstd::String(idx))
+                           .phase(Phase::Events)
+                           .duql(q)
+                           .collect())
+                .num_rows();
+        };
+        CHECK(count("args.lat > 1.5e-7") == 5000);
+        CHECK(count("args.lat >= 3e-7") == 4000);
+        CHECK(count("args.lat < 1.5e-7") == 1000);
+        CHECK(count("args.lat < 1e-7") == 0);
+        CHECK(count("args.lat == 2e-7") == 1000);
+    }
+
+    TEST_CASE("a zone over ints and doubles prunes by exact numbers") {
+        // Chunk A holds ints, chunk B ints and doubles in one path.
+        TestEnvironment env(10);
+        const dstd::String plain = env.dir() + "/mixed_num.pfw";
+        {
+            dftu_utils_test::FileOut out(plain);
+            const auto rec = [&](int i, dstd::StringView v) {
+                out << R"({"name":"read","cat":"POSIX","pid":1,"tid":7,"ts":)"
+                    << 1000 + i * 10 << R"(,"dur":10,"ph":"X","args":{"v":)"
+                    << v << "}}\n";
+            };
+            const char* ints[] = {"1", "2", "3"};
+            for (int i = 0; i < 3000; ++i) rec(i, ints[i % 3]);
+            for (int i = 3000; i < 6000; ++i) rec(i, i % 2 == 0 ? "2.5" : "7");
+        }
+        const dstd::String gz = plain + ".gz";
+        REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
+                                                                   16 * 1024));
+        dstd::fs::remove(plain).discard();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        auto count = [&](dstd::StringView q) {
+            return run(View::from_file(dstd::String(gz), dstd::String(idx))
+                           .phase(Phase::Events)
+                           .duql(q)
+                           .collect())
+                .num_rows();
+        };
+        CHECK(count("args.v > 3.5") == 1500);
+        CHECK(count("args.v < 2.5") == 2000);
+        CHECK(count("args.v >= 3") == 2500);
+        CHECK(count("args.v == 2.5") == 1500);
+        CHECK(count("args.v == 7.0") == 1500);
+        CHECK(count("args.v == 4") == 0);
+        CHECK(count("args.v > 7") == 0);
+    }
+
     TEST_CASE("a negated predicate keeps the events its positive form drops") {
         // Regression: the chunk pruner answered a NotNode with the set
         // difference of its operand's MAY-match chunks, but a chunk holding

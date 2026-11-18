@@ -590,8 +590,9 @@ TEST_SUITE("BloomCore") {
         trace::index::schemas::dft::BloomCore::merge_chunk_state(a, b);
         const auto& ts =
             a.fixed_dim_stats[trace::index::schemas::dft::BloomCore::FdTs];
-        CHECK(ts.min_value == "9");
-        CHECK(ts.max_value == "10");
+        CHECK(ts.zone.bounds().type() == BoundType::UInt64);
+        CHECK(ts.zone.bounds().min_u64() == 9);
+        CHECK(ts.zone.bounds().max_u64() == 10);
     }
 
     TEST_CASE("an extra dimension keeps min and max in its own type") {
@@ -615,23 +616,23 @@ TEST_SUITE("BloomCore") {
             c, 2, dstd::StringView("x"));
 
         const auto& size = c.extra_dim_stats[0];
-        CHECK(size.value_type == "double");
-        CHECK(size.min_value == "2.500000");
-        CHECK(size.max_value == "10");
-        CHECK(c.extra_blooms[0].possibly_contains_hashed(
+        CHECK(size.zone.bounds().type() == BoundType::Double);
+        CHECK(size.zone.bounds().min_double() == 2.5);
+        CHECK(size.zone.bounds().max_double() == 10.0);
+        CHECK(size.zone.bounds().exact());
+        CHECK(c.extra_blooms[0].filter().possibly_contains_hashed(
             dftracer::utils::dstd::hash::value_hash_int64(10)));
-        CHECK(c.extra_blooms[0].possibly_contains_hashed(
+        CHECK(c.extra_blooms[0].filter().possibly_contains_hashed(
             dftracer::utils::dstd::hash::value_hash_double(2.5)));
 
         const auto& mode = c.extra_dim_stats[1];
-        CHECK(mode.value_type == "string");
-        CHECK(mode.min_value == "r");
-        CHECK(mode.max_value == "rw");
+        CHECK(mode.zone.bounds().type() == BoundType::String);
+        CHECK(mode.zone.bounds().min_string() == "r");
+        CHECK(mode.zone.bounds().max_string() == "rw");
 
         const auto& mix = c.extra_dim_stats[2];
-        CHECK(mix.value_type == "mixed");
-        CHECK(mix.min_value.empty());
-        CHECK(mix.max_value.empty());
+        CHECK(mix.zone.bounds().type() == BoundType::Mixed);
+        CHECK_FALSE(mix.zone.bounds().has_bounds());
     }
 
     TEST_CASE("merging an extra dimension joins its types") {
@@ -646,13 +647,13 @@ TEST_SUITE("BloomCore") {
         trace::index::schemas::dft::BloomCore::observe_extra(b, 0,
                                                              std::int64_t{10});
         trace::index::schemas::dft::BloomCore::merge_chunk_state(a, b);
-        CHECK(a.extra_dim_stats[0].min_value == "9");
-        CHECK(a.extra_dim_stats[0].max_value == "10");
+        CHECK(a.extra_dim_stats[0].zone.bounds().type() == BoundType::Int64);
+        CHECK(a.extra_dim_stats[0].zone.bounds().min_double() == 9.0);
+        CHECK(a.extra_dim_stats[0].zone.bounds().max_double() == 10.0);
         trace::index::schemas::dft::BloomCore::observe_extra(
             c, 0, dstd::StringView("x"));
         trace::index::schemas::dft::BloomCore::merge_chunk_state(a, c);
-        CHECK(a.extra_dim_stats[0].value_type == "mixed");
-        CHECK(a.extra_dim_stats[0].min_value.empty());
+        CHECK(a.extra_dim_stats[0].zone.bounds().type() == BoundType::Mixed);
     }
 }
 
@@ -712,8 +713,8 @@ TEST_SUITE("BloomFold - auto fields") {
                 dftracer::utils::trace::index::extensions::kinds::decode_zone(
                     dstd::StringView(bytes.data(), bytes.size()));
             REQUIRE(zone.has_value());
-            CHECK(zone->value_type == "int");
-            CHECK_FALSE(zone->min.empty());
+            CHECK(zone->type() == BoundType::Int64);
+            CHECK(zone->has_bounds());
         }
         CHECK(dftu_utils_test::bloom_chunks(snapshot, file, "size") == 0);
         CHECK_FALSE(dftu_utils_test::has_file_bloom(snapshot, file, "size"));
@@ -727,75 +728,59 @@ TEST_SUITE("BloomFold - auto fields") {
     }
 }
 
-TEST_CASE("numeric bounds keep the min and max text of the text path") {
-    // Zeros of either sign print differently but compare equal.
-    for (const auto& values : dstd::Vector<dstd::Vector<double>>{
-             {0.0, -1e-7}, {1e-7, -1e-7}, {-1e-7, 1e-7}, {-1e-7, 0.0, 2e-7}}) {
-        ChunkDimensionStats text_path;
-        ChunkDimensionStats typed;
-        text_path.value_type.clear();
-        typed.value_type.clear();
-        trace::index::schemas::dft::BloomCore::NumericBounds bounds;
-        for (double v : values) {
-            trace::index::schemas::dft::BloomCore::observe_value(text_path, v);
-            trace::index::schemas::dft::BloomCore::observe_value(typed, bounds,
-                                                                 v);
-        }
-        CHECK(typed.min_value == text_path.min_value);
-        CHECK(typed.max_value == text_path.max_value);
-    }
+TEST_CASE("typed bounds agree with an exact reference") {
+    // The reference keeps every value and compares them with exact number
+    // comparison, so a bound is a value that was observed.
     std::mt19937_64 rng(7);
     std::uniform_real_distribution<double> real(-1e3, 1e3);
     for (int round = 0; round < 200; ++round) {
         CAPTURE(round);
-        ChunkDimensionStats text_path;
-        ChunkDimensionStats typed;
-        text_path.value_type.clear();
-        typed.value_type.clear();
-        trace::index::schemas::dft::BloomCore::NumericBounds bounds;
+        dftracer::utils::trace::index::extensions::ZoneBounds bounds;
+        dstd::Vector<dftracer::utils::duql::Number> seen;
+        std::uint64_t nans = 0;
         for (int i = 0; i < 300; ++i) {
-            // Doubles that print to the same 6 decimals, integers, a
-            // double between two integers, and the odd non-finite value.
             const int kind = static_cast<int>(rng() % 8);
             if (kind < 3) {
-                const double base = std::floor(real(rng) * 1e3) / 1e3;
-                const double v = base + static_cast<double>(rng() % 5) * 1e-7;
-                trace::index::schemas::dft::BloomCore::observe_value(text_path,
-                                                                     v);
-                trace::index::schemas::dft::BloomCore::observe_value(typed,
-                                                                     bounds, v);
+                const double v = real(rng) * 1e-9;
+                bounds.add(v);
+                seen.push_back(v);
             } else if (kind < 5) {
                 const auto v = static_cast<std::int64_t>(rng() % 2001) - 1000;
-                trace::index::schemas::dft::BloomCore::observe_value(text_path,
-                                                                     v);
-                trace::index::schemas::dft::BloomCore::observe_value(typed,
-                                                                     bounds, v);
+                bounds.add(v);
+                seen.push_back(v);
             } else if (kind < 6) {
                 const auto v = static_cast<std::uint64_t>(rng() % 1000);
-                trace::index::schemas::dft::BloomCore::observe_value(text_path,
-                                                                     v);
-                trace::index::schemas::dft::BloomCore::observe_value(typed,
-                                                                     bounds, v);
+                bounds.add(v);
+                seen.push_back(v);
             } else if (kind < 7) {
                 const double v = static_cast<double>(rng() % 2001) - 1000.5;
-                trace::index::schemas::dft::BloomCore::observe_value(text_path,
-                                                                     v);
-                trace::index::schemas::dft::BloomCore::observe_value(typed,
-                                                                     bounds, v);
+                bounds.add(v);
+                seen.push_back(v);
             } else if (round % 10 == 0) {
-                const double v = rng() % 2
-                                     ? std::numeric_limits<double>::infinity()
-                                     : std::nan("");
-                trace::index::schemas::dft::BloomCore::observe_value(text_path,
-                                                                     v);
-                trace::index::schemas::dft::BloomCore::observe_value(typed,
-                                                                     bounds, v);
+                bounds.add(std::nan(""));
+                ++nans;
             }
-            REQUIRE(typed.value_type == text_path.value_type);
-            REQUIRE(typed.present == text_path.present);
-            REQUIRE(typed.min_value == text_path.min_value);
-            REQUIRE(typed.max_value == text_path.max_value);
         }
+        REQUIRE(bounds.nan_count() == nans);
+        REQUIRE(bounds.value_count() == seen.size());
+        if (seen.empty()) continue;
+        const auto less = [](const dftracer::utils::duql::Number& x,
+                             const dftracer::utils::duql::Number& y) {
+            return dftracer::utils::duql::compare_numbers(x, y).value_or(0) < 0;
+        };
+        auto lo = seen[0];
+        auto hi = seen[0];
+        for (const auto& v : seen) {
+            if (less(v, lo)) lo = v;
+            if (less(hi, v)) hi = v;
+        }
+        // Whole values at most 2^53 widen to double without loss, so every
+        // bound is exact here and equals the reference.
+        REQUIRE(bounds.exact());
+        REQUIRE(dftracer::utils::duql::compare_numbers(bounds.min_number(), lo)
+                    .value_or(1) == 0);
+        REQUIRE(dftracer::utils::duql::compare_numbers(bounds.max_number(), hi)
+                    .value_or(1) == 0);
     }
 }
 

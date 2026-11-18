@@ -74,11 +74,13 @@ enum class ExtensionOp {
 
 /// One scalar of a filter leaf.
 struct ExtensionValue {
-    enum class Kind { Bool, Int64, Double, String };
+    enum class Kind { Bool, Int64, UInt64, Double, String };
 
     Kind kind = Kind::Int64;
     bool b = false;
     std::int64_t i = 0;
+    /// The UInt64 kind: a value above int64, which the plugin ABI cannot carry.
+    std::uint64_t u = 0;
     double f = 0;
     /// The String kind borrows the string, which outlives the compile call.
     const dstd::String* str = nullptr;

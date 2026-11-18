@@ -287,6 +287,11 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/extension_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/kinds/time_bounds.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/scalable_bloom_filter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/column_feeder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/json_feeder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/summaries.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/summary.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/zone_bounds.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/schemas/dft/agg/agg_store.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/schemas/dft/agg/aggregation_drain.cpp

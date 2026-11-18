@@ -118,8 +118,7 @@ dstd::Result<bool> roles_complete(const ViewPlan& plan) {
                     span.last_line_num - span.first_line_num + 1;
                 const auto z = zones.find(i);
                 if (z == zones.end() || z->second.observed != lines ||
-                    z->second.present != lines ||
-                    z->second.min.starts_with('-'))
+                    z->second.present != lines || z->second.min_is_negative())
                     return false;
             }
         }

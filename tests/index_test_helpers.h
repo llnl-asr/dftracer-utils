@@ -187,21 +187,23 @@ inline void mark_built(dftracer::utils::trace::index::FileBuild& build) {
 /// and, when the values fit, counts. `observed` is the chunk's data events.
 inline void put_dimension_stats(
     dftracer::utils::trace::index::FileBuild& build, std::uint64_t chunk,
-    const dftracer::utils::trace::index::extensions::ChunkDimensionStats& ds,
+    dftracer::utils::trace::index::extensions::ChunkDimensionStats ds,
     std::uint64_t observed) {
-    const auto compressed = ds.compress_value_counts(4096);
+    ds.counts.set_observed(observed);
+    dftracer::utils::trace::index::extensions::ExtensionOut counts_out{
+        {}, UINT64_MAX, false};
+    const bool has_counts = ds.counts.finish_granule(counts_out);
     dftracer::utils::dstd::Optional<std::uint64_t> present;
     if (ds.dimension == "ts" || ds.dimension == "dur") {
         present = observed;
-    } else if (compressed && ds.value_counts) {
+    } else if (has_counts && ds.counts.counts()) {
         std::uint64_t carried = 0;
-        for (const auto& [value, count] : *ds.value_counts) carried += count;
+        for (const auto& [value, count] : *ds.counts.counts()) carried += count;
         present = carried;
     }
     dftracer::utils::trace::index::extensions::kinds::Zone zone;
-    zone.value_type = ds.value_type;
-    zone.min = ds.min_value;
-    zone.max = ds.max_value;
+    static_cast<dftracer::utils::trace::index::extensions::ZoneBounds&>(zone) =
+        ds.zone.bounds();
     zone.observed = observed;
     zone.present = present;
     const dftracer::utils::dstd::String dimension(ds.dimension.data(),
@@ -211,14 +213,10 @@ inline void put_dimension_stats(
     dftracer::utils::trace::index::put_path_granule(
         build, dftracer::utils::trace::index::store::IndexExtension::Zonemap,
         dimension, chunk, zone_payload);
-    if (compressed) {
-        const dftracer::utils::dstd::String counts_payload =
-            dftracer::utils::trace::index::extensions::kinds::encode_counts(
-                {observed, *compressed});
+    if (has_counts)
         dftracer::utils::trace::index::put_path_granule(
             build, dftracer::utils::trace::index::store::IndexExtension::Counts,
-            dimension, chunk, counts_payload);
-    }
+            dimension, chunk, counts_out.bytes);
     dftracer::utils::trace::index::put_path(
         build, dftracer::utils::trace::index::store::IndexExtension::Zonemap,
         dimension);

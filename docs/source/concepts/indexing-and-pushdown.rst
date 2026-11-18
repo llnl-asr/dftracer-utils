@@ -16,9 +16,12 @@ where each compressed member of the gzip file starts, so a chunk can be
 decompressed on its own, and four kinds of pruning evidence, each kept per
 chunk and per field (a JSON path):
 
-- ``zonemap``: the field's minimum, maximum and value type, and how many
-  records carried it. It answers "could this chunk hold ``dur > 1000``"
-  without reading an event. The ``ts`` zone also keeps a histogram of where
+- ``zonemap``: the field's minimum and maximum in the type of its values
+  (an integer, a double, or a string compared as unsigned bytes), how many
+  records carried it, how many of its values were null or NaN, and whether
+  each bound is exact. A NaN is never a bound, and a bound that is not exact
+  (an integer a double cannot hold) never rules out a value. It answers "could
+  this chunk hold ``dur > 1000``" without reading an event. The ``ts`` zone also keeps a histogram of where
   the timestamps fall, and ``te`` (event end) gives each chunk's time span.
 - ``bloom``: a bloom filter of the field's values, per chunk and for the
   whole file. A negative test is certain (no false negatives), so a chunk or

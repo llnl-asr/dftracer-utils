@@ -34,21 +34,19 @@ static void populate_test_idx(
     {
         ChunkDimensionStats cat_ds;
         cat_ds.dimension = "cat";
-        cat_ds.value_type = "string";
         cat_ds.observe("POSIX");
         cat_ds.observe("POSIX");
         dftu_utils_test::put_dimension_stats(writer, 0, cat_ds, 2);
 
         ChunkDimensionStats name_ds;
         name_ds.dimension = "name";
-        name_ds.value_type = "string";
         name_ds.observe("read");
         name_ds.observe("read");
         dftu_utils_test::put_dimension_stats(writer, 0, name_ds, 2);
 
         ChunkDimensionStats dur_ds;
         dur_ds.dimension = "dur";
-        dur_ds.value_type = "uint";
+        dur_ds.numeric_text = true;
         dur_ds.observe("100");
         dur_ds.observe("200");
         dftu_utils_test::put_dimension_stats(writer, 0, dur_ds, 2);
@@ -61,21 +59,19 @@ static void populate_test_idx(
     {
         ChunkDimensionStats cat_ds;
         cat_ds.dimension = "cat";
-        cat_ds.value_type = "string";
         cat_ds.observe("STDIO");
         cat_ds.observe("STDIO");
         dftu_utils_test::put_dimension_stats(writer, 1, cat_ds, 2);
 
         ChunkDimensionStats name_ds;
         name_ds.dimension = "name";
-        name_ds.value_type = "string";
         name_ds.observe("write");
         name_ds.observe("write");
         dftu_utils_test::put_dimension_stats(writer, 1, name_ds, 2);
 
         ChunkDimensionStats dur_ds;
         dur_ds.dimension = "dur";
-        dur_ds.value_type = "uint";
+        dur_ds.numeric_text = true;
         dur_ds.observe("500");
         dur_ds.observe("600");
         dftu_utils_test::put_dimension_stats(writer, 1, dur_ds, 2);
@@ -84,21 +80,19 @@ static void populate_test_idx(
     {
         ChunkDimensionStats cat_ds;
         cat_ds.dimension = "cat";
-        cat_ds.value_type = "string";
         cat_ds.observe("POSIX");
         cat_ds.observe("MPI");
         dftu_utils_test::put_dimension_stats(writer, 2, cat_ds, 2);
 
         ChunkDimensionStats name_ds;
         name_ds.dimension = "name";
-        name_ds.value_type = "string";
         name_ds.observe("read");
         name_ds.observe("send");
         dftu_utils_test::put_dimension_stats(writer, 2, name_ds, 2);
 
         ChunkDimensionStats dur_ds;
         dur_ds.dimension = "dur";
-        dur_ds.value_type = "uint";
+        dur_ds.numeric_text = true;
         dur_ds.observe("50");
         dur_ds.observe("1000");
         dftu_utils_test::put_dimension_stats(writer, 2, dur_ds, 2);

@@ -27,13 +27,17 @@ coro::CoroTask<void> handle_connection(int client_fd,
     constexpr std::size_t BUF_SIZE = 8192;
     char buf[BUF_SIZE];
     std::size_t buf_used = 0;
+    // Bytes left in buf by a pipelined request are parsed before any recv.
+    bool need_data = true;
 
     while (true) {
-        // Read data from socket.
-        ssize_t n = co_await runtime::io::recv(client_fd, buf + buf_used,
-                                               BUF_SIZE - buf_used, 0);
-        if (n <= 0) break;  // Connection closed or error
-        buf_used += static_cast<std::size_t>(n);
+        if (need_data) {
+            ssize_t n = co_await runtime::io::recv(client_fd, buf + buf_used,
+                                                   BUF_SIZE - buf_used, 0);
+            if (n <= 0) break;  // Connection closed or error
+            buf_used += static_cast<std::size_t>(n);
+        }
+        need_data = true;
 
         // Try to parse a complete request.
         HttpRequest req;
@@ -132,6 +136,7 @@ coro::CoroTask<void> handle_connection(int client_fd,
         if (consumed < buf_used) {
             std::memmove(buf, buf + consumed, buf_used - consumed);
             buf_used -= consumed;
+            need_data = false;
         } else {
             buf_used = 0;
         }

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""The duql builder: queries as Python values that print as duql text.
+r"""The duql builder: queries as Python values that print as duql text.
 
 A builder query parses to the same syntax tree as the equal text, so the two
 give the same plan and rows::

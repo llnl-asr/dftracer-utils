@@ -794,6 +794,16 @@ bool expr_as_col_is_in(const Expr& e, std::int32_t* col, Series* values) {
     return true;
 }
 
+bool expr_as_col_is_null(const Expr& e, std::int32_t* col, bool* null) {
+    const auto& n = e.node();
+    if (!n || n->kind != ExprKind::IsNull || !n->a ||
+        n->a->kind != ExprKind::Col)
+        return false;
+    *col = n->a->i;
+    *null = n->i != 0;
+    return true;
+}
+
 // ---- compiler: type inference + CSE + lowering to a slot program ----------
 
 namespace {

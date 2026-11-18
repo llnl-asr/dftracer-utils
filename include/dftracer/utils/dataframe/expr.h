@@ -188,6 +188,9 @@ bool expr_as_col_str_pred(const Expr& e, std::int32_t* col, StrPredOp* op,
                           dstd::StringView* pattern);
 /// If `e` is `col is_in values`, fill the parts and return true.
 bool expr_as_col_is_in(const Expr& e, std::int32_t* col, Series* values);
+/// If `e` is `col is null` (`*null` true) or `col is not null` (`*null` false),
+/// fill the parts and return true.
+bool expr_as_col_is_null(const Expr& e, std::int32_t* col, bool* null);
 Expr expr_cmp(CmpOp cmp, const Expr& a, Scalar rhs);
 Expr expr_logical(LogicalOp op, const Expr& a, const Expr& b);
 Expr expr_not(const Expr& a);

@@ -16,7 +16,8 @@ void ExplainLines::add(void* self, const char* key, std::uint64_t key_len,
         dstd::String(value, static_cast<std::size_t>(value_len))});
 }
 
-AbiScanRequest::AbiScanRequest(const dataframe::ScanRequest& req) : request_{} {
+AbiScanRequest::AbiScanRequest(const dataframe::ScanRequest& req)
+    : plan_(req.plan), request_{} {
     projection_.reserve(req.projection.size());
     for (const dstd::String& name : req.projection)
         projection_.push_back(name.c_str());
@@ -33,6 +34,7 @@ AbiScanRequest::AbiScanRequest(const dataframe::ScanRequest& req) : request_{} {
     request_.n_filters = static_cast<std::int32_t>(filters_.size());
     request_.limit = req.limit;
     request_.memory_budget = req.memory_budget;
+    request_.plan = plan_.get();
 }
 
 AbiScanRequest::~AbiScanRequest() {

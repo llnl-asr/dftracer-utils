@@ -141,6 +141,23 @@ struct Schema {
 
 class RunCounters;
 
+/// What a source plans for one scan before it opens a cursor (Source::plan):
+/// how completely it will apply each filter, what the scan costs and how many
+/// rows it gives, and a token for its own use that scan() reads back.
+struct ScanPlan {
+    /// One vote per @ref ScanRequest filter. The scan's votes are these, so the
+    /// engine keeps above the scan every filter not voted Exact.
+    dstd::Vector<Pushed> votes;
+    /// The relative price of the scan, one unit about one row read and decoded;
+    /// comparable only between plans of one source. Negative means unknown.
+    double cost = -1.0;
+    /// The rows the scan gives after the filters it voted Exact; negative means
+    /// unknown.
+    std::int64_t est_rows = -1;
+    /// Opaque to the engine: what the plan gave, passed back to scan().
+    std::uint64_t token = 0;
+};
+
 /// A pushdown request the optimizer hands a Source at scan time.
 struct ScanRequest {
     /// Columns the plan needs, in the order the scan must return them. Empty
@@ -159,6 +176,9 @@ struct ScanRequest {
     /// A source that runs plugin code keeps it for as long as its cursors live
     /// and adds the plugins' counters to it; a plain run has none.
     dstd::SharedPtr<RunCounters> counters;
+    /// What Source::plan gave for this request, or none for a source without a
+    /// plan. A source that planned scans as planned: its votes are the scan's.
+    dstd::Optional<ScanPlan> plan;
 };
 
 /// What Source::scan gives: a fresh async Cursor plus, per @ref ScanRequest
@@ -282,6 +302,14 @@ class Source {
     /// thread, and may read the source's own state but opens no cursor. The
     /// default says nothing.
     virtual SourceExplain explain(const ScanRequest&) const { return {}; }
+    /// What scan(`req`) will do, asked once before the scan opens a cursor: the
+    /// engine then sets ScanRequest::plan to the answer and scans with it. An
+    /// error ends the query. The default plans nothing (none), and the votes
+    /// come from scan().
+    virtual dstd::Result<dstd::Optional<ScanPlan>> plan(
+        const ScanRequest&) const {
+        return dstd::Optional<ScanPlan>{};
+    }
 
     virtual dstd::Optional<SourceApplication> apply_filter(const Expr&) const {
         return dstd::nullopt;

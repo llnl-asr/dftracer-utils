@@ -221,9 +221,15 @@ static dftu_status src_scan(dftu_ctx* ctx, void* self,
 
 static void src_destroy(void* self) { (void)self; }
 
-static const dftu_source_vt SRC_VT = {
-    sizeof(dftu_source_vt), src_schema, src_scan, src_destroy,
-    src_schema_types,       NULL,       NULL};
+static const dftu_source_vt SRC_VT = {sizeof(dftu_source_vt),
+                                      src_schema,
+                                      src_scan,
+                                      src_destroy,
+                                      src_schema_types,
+                                      NULL,
+                                      NULL,
+                                      NULL,
+                                      NULL};
 
 /* ---- Node: "reference_plugin.node", doubles column "n", passes "amount"
  * through unchanged.

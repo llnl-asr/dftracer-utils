@@ -152,12 +152,16 @@ static const dftu_source_vt SRC_VT = {sizeof(dftu_source_vt),
                                       src_destroy,
                                       NULL,
                                       NULL,
-                                      src_explain};
+                                      src_explain,
+                                      NULL,
+                                      NULL};
 
 static const dftu_source_vt QUIET_VT = {sizeof(dftu_source_vt),
                                         src_schema,
                                         quiet_scan,
                                         src_destroy,
+                                        NULL,
+                                        NULL,
                                         NULL,
                                         NULL,
                                         NULL};
@@ -181,6 +185,8 @@ static const dftu_source_vt FAIL_VT = {sizeof(dftu_source_vt),
                                        src_schema,
                                        fail_scan,
                                        src_destroy,
+                                       NULL,
+                                       NULL,
                                        NULL,
                                        NULL,
                                        NULL};

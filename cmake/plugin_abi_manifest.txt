@@ -555,6 +555,8 @@ field dftu_file_format_vt.destroy offset 72 size 8
 field dftu_file_format_vt.explain offset 88 size 8
 field dftu_file_format_vt.extensions offset 8 size 8
 field dftu_file_format_vt.open offset 24 size 8
+field dftu_file_format_vt.plan offset 96 size 8
+field dftu_file_format_vt.plan_duql offset 104 size 8
 field dftu_file_format_vt.probe offset 16 size 8
 field dftu_file_format_vt.scan offset 56 size 8
 field dftu_file_format_vt.schema offset 32 size 8
@@ -716,6 +718,16 @@ field dftu_path_entry.mtime_ns offset 16 size 8
 field dftu_path_entry.path offset 0 size 8
 field dftu_path_entry.path_len offset 24 size 4
 field dftu_path_entry.size offset 8 size 8
+field dftu_plan_duql.filter_index offset 24 size 8
+field dftu_plan_duql.n_filters offset 32 size 4
+field dftu_plan_duql.struct_size offset 0 size 4
+field dftu_plan_duql.text offset 8 size 8
+field dftu_plan_duql.text_len offset 16 size 8
+field dftu_plan_result.cost offset 16 size 8
+field dftu_plan_result.est_rows offset 24 size 8
+field dftu_plan_result.struct_size offset 0 size 4
+field dftu_plan_result.token offset 32 size 8
+field dftu_plan_result.votes offset 8 size 8
 field dftu_plugin.config_keys offset 88 size 8
 field dftu_plugin.consumes offset 80 size 8
 field dftu_plugin.destroy offset 64 size 8
@@ -765,6 +777,7 @@ field dftu_scan_request.limit offset 32 size 8
 field dftu_scan_request.memory_budget offset 40 size 8
 field dftu_scan_request.n_filters offset 24 size 4
 field dftu_scan_request.n_projection offset 8 size 4
+field dftu_scan_request.plan offset 48 size 8
 field dftu_scan_request.projection offset 0 size 8
 field dftu_sink_vt.abort offset 32 size 8
 field dftu_sink_vt.bind offset 8 size 8
@@ -775,6 +788,8 @@ field dftu_sink_vt.write offset 16 size 8
 field dftu_source_vt.apply offset 40 size 8
 field dftu_source_vt.destroy offset 24 size 8
 field dftu_source_vt.explain offset 48 size 8
+field dftu_source_vt.plan offset 56 size 8
+field dftu_source_vt.plan_duql offset 64 size 8
 field dftu_source_vt.scan offset 16 size 8
 field dftu_source_vt.schema offset 8 size 8
 field dftu_source_vt.schema_types offset 32 size 8
@@ -1051,6 +1066,8 @@ fnptr dftu_file_format_vt.close void (*)(void*)
 fnptr dftu_file_format_vt.destroy void (*)(void*)
 fnptr dftu_file_format_vt.explain dftu_status (*)(dftu_ctx*, void*, const dftu_scan_request*, const dftu_explain_out*)
 fnptr dftu_file_format_vt.open dftu_status (*)(dftu_ctx*, void*, const char*, void**)
+fnptr dftu_file_format_vt.plan dftu_status (*)(dftu_ctx*, void*, const dftu_scan_request*, dftu_plan_result*)
+fnptr dftu_file_format_vt.plan_duql dftu_status (*)(dftu_ctx*, void*, const dftu_scan_request*, const dftu_plan_duql*, dftu_plan_result*)
 fnptr dftu_file_format_vt.probe int32_t (*)(void*, const uint8_t*, uint64_t, const char*)
 fnptr dftu_file_format_vt.scan dftu_status (*)(dftu_ctx*, void*, uint64_t, const dftu_plugin_host*, const dftu_scan_request*, int32_t*, void**, const dftu_cursor_vt**)
 fnptr dftu_file_format_vt.schema dftu_status (*)(dftu_ctx*, void*, dftu_schema*)
@@ -1141,6 +1158,8 @@ fnptr dftu_sink_vt.write dftu_status (*)(dftu_ctx*, void*, const dftu_dataframe*
 fnptr dftu_source_vt.apply dftu_status (*)(dftu_ctx*, void*, const dftu_apply_request*, dftu_apply_result*)
 fnptr dftu_source_vt.destroy void (*)(void*)
 fnptr dftu_source_vt.explain dftu_status (*)(dftu_ctx*, void*, const dftu_scan_request*, const dftu_explain_out*)
+fnptr dftu_source_vt.plan dftu_status (*)(dftu_ctx*, void*, const dftu_scan_request*, dftu_plan_result*)
+fnptr dftu_source_vt.plan_duql dftu_status (*)(dftu_ctx*, void*, const dftu_scan_request*, const dftu_plan_duql*, dftu_plan_result*)
 fnptr dftu_source_vt.scan dftu_status (*)(dftu_ctx*, void*, const dftu_plugin_host*, const dftu_scan_request*, int32_t*, void**, const dftu_cursor_vt**)
 fnptr dftu_source_vt.schema dftu_status (*)(dftu_ctx*, void*, const char* const**, int32_t*)
 fnptr dftu_source_vt.schema_types dftu_status (*)(dftu_ctx*, void*, dftu_schema*)
@@ -1337,7 +1356,7 @@ struct dftu_ctx_vt size 32 align 8
 struct dftu_cursor_vt size 32 align 8
 struct dftu_error size 32 align 8
 struct dftu_explain_out size 24 align 8
-struct dftu_file_format_vt size 96 align 8
+struct dftu_file_format_vt size 112 align 8
 struct dftu_find_options size 48 align 8
 struct dftu_fs_stat size 40 align 8
 struct dftu_group_agg size 24 align 8
@@ -1359,15 +1378,17 @@ struct dftu_op_desc size 24 align 8
 struct dftu_op_val size 16 align 8
 struct dftu_open_how size 24 align 8
 struct dftu_path_entry size 32 align 8
+struct dftu_plan_duql size 40 align 8
+struct dftu_plan_result size 40 align 8
 struct dftu_plugin size 112 align 8
 struct dftu_plugin_host size 48 align 8
 struct dftu_plugin_info size 24 align 8
 struct dftu_quantiles size 64 align 8
 struct dftu_result_value size 24 align 8
 struct dftu_scalar size 16 align 8
-struct dftu_scan_request size 48 align 8
+struct dftu_scan_request size 56 align 8
 struct dftu_sink_vt size 48 align 8
-struct dftu_source_vt size 56 align 8
+struct dftu_source_vt size 72 align 8
 struct dftu_stat size 24 align 8
 struct dftu_state_desc size 80 align 8
 struct dftu_statx size 112 align 8

@@ -30,6 +30,7 @@
 #include <dftracer/utils/plugins/host/cursor_host.h>
 #include <dftracer/utils/plugins/host/explain_abi.h>
 #include <dftracer/utils/plugins/host/file_format_source.h>
+#include <dftracer/utils/plugins/host/plan_abi.h>
 #include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/host/plugin_task.h>
 #include <dftracer/utils/plugins/host/provider_source.h>
@@ -140,6 +141,9 @@ class FormatSource final : public dataframe::FormatFileSource,
         const dataframe::ScanRequest& req) const override;
 
     dataframe::SourceExplain explain(
+        const dataframe::ScanRequest& req) const override;
+
+    dstd::Result<dstd::Optional<dataframe::ScanPlan>> plan(
         const dataframe::ScanRequest& req) const override;
 
     dstd::StringView plugin_version() const override {
@@ -410,6 +414,8 @@ dstd::Result<OpenedChunk> FormatSource::scan_chunk(
     creq.n_filters = static_cast<std::int32_t>(filters.size());
     creq.limit = req.limit;
     creq.memory_budget = req.memory_budget;
+    const AbiPlan planned(req.plan);
+    creq.plan = planned.get();
 
     // Pre-filled DFTU_PUSHED_NO: a format that writes nothing, or writes only
     // some entries, degrades to "the engine re-applies", which is always sound.
@@ -453,9 +459,16 @@ dstd::Result<OpenedChunk> FormatSource::scan_chunk(
             dstd::Condition::Internal, file_->handle->name, chunk);
     }
 
+    // The plan's votes are the scan's, the same for every chunk; what the scan
+    // wrote is ignored.
     dstd::Vector<dataframe::Pushed> chunk_votes;
-    chunk_votes.reserve(out_pushed.size());
-    for (std::int32_t v : out_pushed) chunk_votes.push_back(plugin_pushed(v));
+    if (req.plan) {
+        chunk_votes = req.plan->votes;
+    } else {
+        chunk_votes.reserve(out_pushed.size());
+        for (std::int32_t v : out_pushed)
+            chunk_votes.push_back(plugin_pushed(v));
+    }
     if (expect && *expect != chunk_votes) {
         discard_cursor();
         return dstd::Error::from_format<
@@ -501,20 +514,43 @@ dataframe::SourceExplain FormatSource::explain(
     said.lines.push_back(dataframe::ExplainLine{
         "chunks",
         dstd::fmt<"{} of {} read">(chunks_to_read(req).size(), file_->chunks)});
-    if (!vt.explain) return said;
-    const AbiScanRequest creq(req);
-    ExplainLines lines;
-    plugins::AbiContext ctx({}, file_->handle->name);
-    const dftu_status status =
-        vt.explain(ctx.get(), file_->file, creq.get(), lines.out());
-    if (status < 0) {
-        DFTRACER_UTILS_LOG_WARN(
-            "{}", plugin_error(ctx, status, "file format explain").format());
-        return said;
+    // First, so an explain hook sees what the plan hook has just done.
+    const auto planned = plan(req);
+    if (vt.explain) {
+        const dataframe::ScanRequest planned_req = with_plan(req, planned);
+        const AbiScanRequest creq(planned_req);
+        ExplainLines lines;
+        plugins::AbiContext ctx({}, file_->handle->name);
+        const dftu_status status =
+            vt.explain(ctx.get(), file_->file, creq.get(), lines.out());
+        if (status < 0)
+            DFTRACER_UTILS_LOG_WARN(
+                "{}",
+                plugin_error(ctx, status, "file format explain").format());
+        else
+            for (dataframe::ExplainLine& l : lines.take())
+                said.lines.push_back(std::move(l));
     }
-    for (dataframe::ExplainLine& l : lines.take())
+    for (dataframe::ExplainLine& l : plan_lines(planned))
         said.lines.push_back(std::move(l));
     return said;
+}
+
+dstd::Result<dstd::Optional<dataframe::ScanPlan>> FormatSource::plan(
+    const dataframe::ScanRequest& req) const {
+    const ::dftu_file_format_vt& vt = file_->handle->vt;
+    if (!vt.plan && !vt.plan_duql) return dstd::Optional<dataframe::ScanPlan>{};
+    dstd::Vector<dstd::String> names;
+    names.reserve(file_->schema.fields.size());
+    for (const dataframe::Field& f : file_->schema.fields)
+        names.push_back(f.name);
+    PlanHooks hooks;
+    hooks.self = file_->file;
+    hooks.plan = vt.plan;
+    hooks.plan_duql = vt.plan_duql;
+    hooks.owner = file_->handle->name;
+    hooks.what = "file format plan";
+    return run_plan(hooks, req, names);
 }
 
 dstd::Result<dataframe::ScanResult> FormatSource::scan(

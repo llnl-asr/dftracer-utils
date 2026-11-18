@@ -2295,6 +2295,85 @@ file class of a format (``using File = MyFile;``, as for ``chunk_token``), and
 ``tests/plugins/explain_plugin.c`` is a C plugin with the hooks and counters,
 and ``tests/plugins/sdk_explain_plugin.cpp`` a C++ one.
 
+**Plan and plan_duql.** A source and a file format can plan a scan before it
+opens a cursor. ``dftu_source_vt::plan(ctx, self, req, out)`` and
+``dftu_file_format_vt::plan(ctx, file, req, out)`` come after ``explain`` at the
+end of each vtable, so a plugin built before them loads unchanged, and a plugin
+without ``plan`` behaves as before: its votes come from ``scan``. The host calls
+``plan`` once per scan, before ``scan``, with the same ``dftu_scan_request`` a
+scan gets, and also once for an explain. The plugin fills ``out``, a
+``dftu_plan_result``:
+
+- ``votes`` has one entry per filter, pre-filled ``DFTU_PUSHED_NO``. A value
+  outside ``DFTU_PUSHED_NO``, ``DFTU_PUSHED_INEXACT`` and ``DFTU_PUSHED_EXACT``
+  reads as ``DFTU_PUSHED_NO``.
+- ``cost`` is the relative price of the scan, one unit about one row read and
+  decoded. It is comparable only between plans of one plugin, and a negative or
+  NaN value means unknown (the pre-filled value is -1).
+- ``est_rows`` is the number of rows the scan gives after the filters it voted
+  ``DFTU_PUSHED_EXACT``; a negative value means unknown (pre-filled -1).
+- ``token`` is a ``uint64`` that the host stores and hands back unchanged in
+  ``dftu_scan_request::plan`` (the same ``dftu_plan_result``, borrowed for the
+  call; NULL when the plugin has no plan hook). It carries the work of planning
+  to ``scan``. The host never frees it, and ``scan`` may not run at all (an
+  explain plans without scanning), so a token names state that needs no release.
+
+The votes of a plan are the votes of the scan: the host decides before it scans
+which filters stay above the scan, and it ignores what ``scan`` writes to
+``out_pushed``. A scan therefore applies exactly the filters its plan voted
+``DFTU_PUSHED_EXACT``. For a file format the plan holds for every chunk of the
+scan, so the host does not compare the votes of the chunks, and each ``scan``
+call gets the plan in its request. A failing plan fails the query with the
+status and the message of the plugin; an explain, which has no error to return,
+prints the message in place of the plan. The ctx of a plan call is valid for the
+call only, and ``dftu_counter`` works inside it.
+
+``explain`` prints the plan after the lines of the plugin's own ``explain``
+hook, so a plugin that has neither hook prints nothing and one that has ``plan``
+prints a line for its source:
+
+.. code-block:: text
+
+   scan [id, v]
+     provider 'plan_plugin.src': plan_votes=exact; plan_cost=10; plan_est_rows=4
+   filter
+
+The host calls ``plan`` before the ``explain`` hook, so that hook gets the
+plan in ``req->plan`` (NULL when the plugin has no plan hook or the plan failed). The host does not use ``cost`` and ``est_rows`` to choose
+anything: no part of the planner chooses between sources or join sides by size
+today (the right side of a join is always the build side), so the two numbers
+are for explain and for the plugin's own tooling.
+
+``dftu_source_vt::plan_duql`` and ``dftu_file_format_vt::plan_duql`` are for a
+plugin that reads duql. The host says the filters it can in duql and calls
+``plan_duql(ctx, self, req, q, out)`` in place of ``plan``. ``q`` is a
+``dftu_plan_duql``: ``text`` is the conjunction of those filters as one duql
+condition (joined by ``and``, a compound filter in parentheses, a column named
+by its schema name and quoted with backticks when it is not a plain word),
+``text_len`` its length, and ``filter_index[i]`` for ``i < n_filters`` the index
+in ``req->filters`` of the i-th conjunct. ``req`` still carries every filter, so
+a filter the host could not say stays visible and the votes in ``out`` are
+indexed by ``req``. The duql the host says is a column against a number or a
+string (``> >= < <= == !=``), ``in`` a list of integers, floats or strings,
+``is null`` and ``is not null``, ``contains``, ``starts_with``, ``ends_with``
+and ``like`` on a string column, and ``and``, ``or`` and ``not`` over those. A
+filter outside that set (a regular expression, arithmetic, a column against a
+column, a NaN, an unsigned number above ``int64``) is not in the text. An
+unsigned literal that fits an ``int64`` reads as the signed one, which means the
+same value. When no filter can be said,
+the host calls ``plan`` if the plugin has it, and otherwise there is no plan.
+Parsing the text is the plugin's work.
+
+A C++ plugin adds the hooks to its class. A source has ``dstd::Result<PlanResult>
+plan(const ScanView&) const`` and ``dstd::Result<PlanResult> plan_duql(const
+ScanView&, dstd::StringView text, dstd::Span<const std::int32_t> filter_index)
+const``; the file class of a format (``using File = MyFile;``) has the same,
+not const. ``PlanResult`` holds ``votes`` (a ``dstd::Vector<Pushed>``), ``cost``,
+``est_rows`` and ``token``, and ``ScanView::plan`` is the answer in ``scan``.
+``PluginBuilder`` sets the vtable entries for a class that has the methods.
+``tests/plugins/plan_plugin.c`` is a C plugin with ``plan`` and ``plan_duql``,
+and ``tests/plugins/sdk_plan_plugin.cpp`` a C++ one with a source and a format.
+
 **Sinks.** ``DFTU_SVC_FILE_FORMATS`` also takes a ``dftu_sink_vt``
 (``register_sink``, ``PluginBuilder::sink<S>``): an output format whose ``bind``
 gets a ``BindView`` of the caller's column ``names``, their ``types`` and the

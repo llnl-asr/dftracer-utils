@@ -12,7 +12,7 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_series_math_bitwis
                            test_lazyframe.cpp test_join.cpp test_concat.cpp test_lazy_frame_ops.cpp
                            test_lazyframe_abi.cpp test_drop_rename_by_name.cpp test_lazy_ops.cpp test_lazy_plan.cpp test_source_hooks.cpp test_spill.cpp test_native_frame.cpp test_native_frame_alignment.cpp test_join_spill.cpp test_agg_state.cpp
                            test_agg_extended_ops.cpp test_sketch_quantile.cpp
-                           test_expr_string.cpp test_expr_string_ops.cpp test_expr_duql.cpp
+                           test_expr_string.cpp test_expr_string_ops.cpp test_expr_duql.cpp test_filter_duql.cpp
                            test_expr_infer_type.cpp
                            test_type_parameter_propagation.cpp
                            test_lazyframe_output_schema.cpp

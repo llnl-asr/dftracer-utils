@@ -157,6 +157,8 @@ const dftu_source_vt DERIVED_VT = {sizeof(dftu_source_vt),
                                    c_derived_destroy,
                                    nullptr,
                                    nullptr,
+                                   nullptr,
+                                   nullptr,
                                    nullptr};
 
 dftu_status c_apply(dftu_ctx*, void* self, const dftu_apply_request* req,
@@ -198,6 +200,8 @@ const dftu_source_vt ROOT_VT = {sizeof(dftu_source_vt),
                                 c_root_destroy,
                                 nullptr,
                                 c_apply,
+                                nullptr,
+                                nullptr,
                                 nullptr};
 
 dataframe::LazyFrame c_frame(ApplyFixture& fx) {
@@ -322,6 +326,8 @@ TEST_SUITE("source_hooks_c_abi") {
                                    c_root_destroy,
                                    nullptr,
                                    nullptr,
+                                   nullptr,
+                                   nullptr,
                                    nullptr};
         dataframe::LazyFrame lf =
             dataframe::LazyFrame::scan(
@@ -369,6 +375,8 @@ const dftu_source_vt CHAIN_VT = {sizeof(dftu_source_vt),
                                  chain_destroy,
                                  nullptr,
                                  chain_apply,
+                                 nullptr,
+                                 nullptr,
                                  nullptr};
 
 dftu_status chain_apply(dftu_ctx*, void* self, const dftu_apply_request*,

@@ -86,6 +86,8 @@ static const dftu_source_vt SRC_VT = {sizeof(dftu_source_vt),
                                       src_destroy,
                                       NULL,
                                       NULL,
+                                      NULL,
+                                      NULL,
                                       NULL};
 
 typedef struct {

@@ -133,6 +133,20 @@ typedef struct dftu_file_format_vt {
     dftu_status (*explain)(dftu_ctx* ctx, void* file,
                            const dftu_scan_request* req,
                            const dftu_explain_out* out);
+    /** Optional (NULL means the votes come from scan(), as before). Plan a scan
+       of `file` for `req`, as dftu_source_vt::plan does: fill `out` with a vote
+       for each filter, a cost, an estimated row count and a token. It is called
+       once per scan of the file, before the first chunk is opened, and also for
+       an explain; the votes and the token it gives hold for every chunk of the
+       scan, so the host does not compare the votes of the chunks, and each
+       scan() of the scan gets the answer in dftu_scan_request::plan. `file` is
+       borrowed and stays valid until close(). */
+    dftu_status (*plan)(dftu_ctx* ctx, void* file, const dftu_scan_request* req,
+                        dftu_plan_result* out);
+    /** Optional (NULL means plan() is used). As dftu_source_vt::plan_duql. */
+    dftu_status (*plan_duql)(dftu_ctx* ctx, void* file,
+                             const dftu_scan_request* req,
+                             const dftu_plan_duql* q, dftu_plan_result* out);
 } dftu_file_format_vt;
 
 /** A writer a plugin registers under a name: it takes whole dataframes and

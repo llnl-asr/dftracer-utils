@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi/core.h>
 #include <dftracer/utils/plugins/abi/providers.h>
+#include <dftracer/utils/plugins/host/plan_abi.h>
 
 namespace dftracer::utils::plugins::host {
 
@@ -33,8 +34,9 @@ class ExplainLines {
     dstd::Vector<dataframe::ExplainLine> lines_;
 };
 
-/// A ScanRequest as the dftu_scan_request a plugin explain callback reads. The
-/// request is valid while this object and the ScanRequest are.
+/// A ScanRequest as the dftu_scan_request a plugin explain or plan callback
+/// reads, with ScanRequest::plan as dftu_scan_request::plan. The request is
+/// valid while this object and the ScanRequest are.
 class AbiScanRequest {
    public:
     explicit AbiScanRequest(const dataframe::ScanRequest& req);
@@ -48,6 +50,7 @@ class AbiScanRequest {
     dstd::Vector<const char*> projection_;
     dstd::Vector<::dftu_expr*> owned_;
     dstd::Vector<const ::dftu_expr*> filters_;
+    AbiPlan plan_;
     ::dftu_scan_request request_;
 };
 

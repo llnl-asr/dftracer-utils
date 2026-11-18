@@ -25,6 +25,7 @@
 #include <dftracer/utils/plugins/host/cursor_host.h>
 #include <dftracer/utils/plugins/host/explain_abi.h>
 #include <dftracer/utils/plugins/host/frame_check.h>
+#include <dftracer/utils/plugins/host/plan_abi.h>
 #include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/host/plugin_task.h>
 #include <dftracer/utils/plugins/host/provider_source.h>
@@ -453,22 +454,48 @@ class ProviderSource final
     dataframe::SourceExplain explain(
         const dataframe::ScanRequest& req) const override {
         dataframe::SourceExplain said;
-        if (!handle_->vt.explain) return said;
-        const AbiScanRequest creq(req);
-        ExplainLines lines;
-        plugins::AbiContext ctx({}, handle_->name);
-        const dftu_status status = handle_->vt.explain(ctx.get(), handle_->self,
-                                                       creq.get(), lines.out());
-        if (status < 0) {
-            DFTRACER_UTILS_LOG_WARN(
-                "{}", plugin_error(ctx, status, "provider explain").format());
-            return said;
+        if (!handle_->vt.explain && !has_plan()) return said;
+        // First, so an explain hook sees what the plan hook has just done.
+        const auto planned = plan(req);
+        if (handle_->vt.explain) {
+            const dataframe::ScanRequest planned_req = with_plan(req, planned);
+            const AbiScanRequest creq(planned_req);
+            ExplainLines lines;
+            plugins::AbiContext ctx({}, handle_->name);
+            const dftu_status status = handle_->vt.explain(
+                ctx.get(), handle_->self, creq.get(), lines.out());
+            if (status < 0) {
+                DFTRACER_UTILS_LOG_WARN(
+                    "{}",
+                    plugin_error(ctx, status, "provider explain").format());
+                if (!has_plan()) return said;
+            } else {
+                said.lines = lines.take();
+            }
         }
         said.label = handle_->name.empty()
                          ? dstd::String("provider")
                          : dstd::fmt<"provider '{}'">(handle_->name);
-        said.lines = lines.take();
+        for (dataframe::ExplainLine& l : plan_lines(planned))
+            said.lines.push_back(std::move(l));
         return said;
+    }
+
+    dstd::Result<dstd::Optional<dataframe::ScanPlan>> plan(
+        const dataframe::ScanRequest& req) const override {
+        if (!has_plan()) return dstd::Optional<dataframe::ScanPlan>{};
+        auto read = read_schema();
+        if (!read) return read.error();
+        dstd::Vector<dstd::String> names;
+        names.reserve(read->fields.size());
+        for (const dataframe::Field& f : read->fields) names.push_back(f.name);
+        PlanHooks hooks;
+        hooks.self = handle_->self;
+        hooks.plan = handle_->vt.plan;
+        hooks.plan_duql = handle_->vt.plan_duql;
+        hooks.owner = handle_->name;
+        hooks.what = "provider plan";
+        return run_plan(hooks, req, names);
     }
 
     dstd::Result<dataframe::ScanResult> scan(
@@ -498,6 +525,8 @@ class ProviderSource final
         creq.n_filters = static_cast<std::int32_t>(filters.size());
         creq.limit = req.limit;
         creq.memory_budget = req.memory_budget;
+        const AbiPlan planned(req.plan);
+        creq.plan = planned.get();
 
         // Pre-filled DFTU_PUSHED_NO: a provider that writes nothing, or writes
         // only some entries, degrades to "the engine re-applies", which is
@@ -525,8 +554,12 @@ class ProviderSource final
                 "provider scan: the provider gave no valid cursor vtable">(
                 common::ErrorCode::Internal);
 
-        for (std::size_t i = 0; i < r.filters.size(); ++i)
-            r.filters[i] = to_pushed(out_pushed[i]);
+        // The plan's votes are the scan's: what the scan wrote is ignored.
+        if (req.plan)
+            r.filters = req.plan->votes;
+        else
+            for (std::size_t i = 0; i < r.filters.size(); ++i)
+                r.filters[i] = to_pushed(out_pushed[i]);
         auto read = read_schema();
         if (!read) return read.error();
         dstd::Vector<dataframe::TypeId> expected_types =
@@ -539,6 +572,10 @@ class ProviderSource final
     }
 
    private:
+    bool has_plan() const {
+        return handle_->vt.plan != nullptr || handle_->vt.plan_duql != nullptr;
+    }
+
     /* Who this source's cursor is, for a check-mode error naming the plugin
        and the callback that handed the frame back. */
     dstd::String label() const {

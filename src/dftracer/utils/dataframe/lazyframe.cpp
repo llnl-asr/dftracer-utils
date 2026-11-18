@@ -5953,6 +5953,10 @@ dstd::Result<CursorChain> lower_cursor_chain(
     const dstd::Vector<dstd::String> projection = req.projection;
     const dstd::Vector<std::size_t>& cand_pos = planned.cand_pos;
 
+    auto planned_scan = source.plan(req);
+    if (!planned_scan) return planned_scan.error();
+    req.plan = std::move(*planned_scan);
+
     auto scanned = source.scan(req);
     if (!scanned) return scanned.error();
     ScanResult r = std::move(*scanned);

@@ -210,6 +210,8 @@ dstd::SharedPtr<dataframe::Source> make_fixture_source(FixtureConfig& cfg) {
                                       fixture_destroy,
                                       nullptr,
                                       nullptr,
+                                      nullptr,
+                                      nullptr,
                                       nullptr};
     return plugins::host::make_provider_source(vt, &cfg);
 }
@@ -235,6 +237,8 @@ dstd::SharedPtr<dataframe::Source> make_scan_source(
                                fixture_schema,
                                scan,
                                fixture_destroy,
+                               nullptr,
+                               nullptr,
                                nullptr,
                                nullptr,
                                nullptr};

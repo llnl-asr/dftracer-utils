@@ -23,6 +23,7 @@
 #include <dftracer/utils/plugins/host/build_host.h>
 #include <dftracer/utils/plugins/host/config.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
+#include <dftracer/utils/plugins/host/global_plugins.h>
 #include <dftracer/utils/plugins/host/phase_seed.h>
 #include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/host/plugin_memory.h>
@@ -104,6 +105,10 @@ struct Plugins::Impl {
         dstd::String version;
         /* The channel ends and phase results the factory declared. */
         PortDecls ports;
+        /* A copy of an entry of the process-wide set: the set that holds the
+           path registered what the plugin adds and unregisters it, so this one
+           only keeps the library mapped. */
+        bool shared = false;
     };
 
     ~Impl() {
@@ -113,6 +118,11 @@ struct Plugins::Impl {
         // dftu_lazyframe_from_provider finds nothing, and what a plan or
         // cursor still holds keeps the library mapped until it is gone.
         for (auto& p : plugins) {
+            if (p.shared) {
+                p.library.reset();
+                p.memory.reset();
+                continue;
+            }
             for (const dstd::String& name : p.registered_ops)
                 ::dftu_op_unregister(name.c_str());
             for (const dstd::String& name : p.registered_udfs)
@@ -873,6 +883,15 @@ dstd::Result<Plugins> Plugins::Builder::build() {
             impl->configs.push_back(std::move(pending.config));
             root = impl->configs.back().root();
         }
+        bool shared = false;
+        if (with_global_plugin(pending.path, [&](const Plugins& held) {
+                const auto& source = PluginsInternalAccess::impl(held).plugins;
+                if (source.size() != 1) return;
+                impl->plugins.push_back(source.front());
+                impl->plugins.back().shared = true;
+                shared = true;
+            }))
+            if (shared) continue;
         auto loaded = load_plugin(pending.path, root);
         if (!loaded) return dstd::Unexpected(std::move(loaded).error());
         impl->plugins.push_back(std::move(*loaded));
@@ -936,6 +955,15 @@ dstd::Vector<Plugins::PluginInfo> Plugins::describe() const {
         out.push_back(std::move(info));
     }
     return out;
+}
+
+bool Plugins::in_use() const {
+    for (const auto& p : impl_->plugins)
+        for (const dstd::String& name : p.registered_file_formats)
+            if (auto format = dataframe::find_file_format(name);
+                format && format->open_file_count() > 0)
+                return true;
+    return false;
 }
 
 View Plugins::prune(const View& view) const {

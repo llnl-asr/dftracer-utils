@@ -48,6 +48,7 @@ class ServerArgParse : public cli::ArgParse {
 
     explicit ServerArgParse(cli::ArgParser& p) : ArgParse(p) {
         inputs.folder_only = true;
+        load_plugins_after_parse();
         schema(inputs, runtime_args);
     }
 

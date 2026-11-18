@@ -390,6 +390,22 @@ console-script.
        ``shutil.which("c++")`` then ``shutil.which("clang++")`` then
        ``"c++"`` when unset; it always selects a C++ compiler regardless of
        what ``CXX`` names.
+   * - ``DFTRACER_UTILS_PLUGINS``
+     - unset
+     - Plugin shared libraries every dftracer tool, the Python extension and
+       the server load once, at the first call that reads a trace, separated by
+       ``:``. An empty item is skipped, a path named twice loads once, and a
+       path that does not load is an error that names it: the tool exits with
+       1 and Python raises at the first read. The load is not marked done by a
+       failure: the next call retries the paths that are not loaded yet, so a
+       missing file can be created and the process go on. Only the tools that
+       pick a reader (``dftracer_index``, ``dftracer_view``, ``dftracer_run``,
+       ``dftracer_server``) load it, after the arguments are parsed, so
+       ``--help`` and ``--version`` never depend on it. A plugin the variable
+       loaded can be named again by ``--plugin`` or ``Plugins(path)``; the
+       second load shares the first. The file formats, ops and index
+       extensions the plugins register are then available to every reader in
+       the process. See :ref:`Plugins for the whole process <plugins-global>`.
    * - ``DFTRACER_UTILS_JIT_CACHE``
      - ``~/.cache/dftracer-utils/jit``
      - Directory for content-hashed compiled plugin/JIT shared objects, so an

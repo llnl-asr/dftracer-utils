@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dataframe/internal/file_format_registry.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/function.h>
@@ -375,10 +376,34 @@ dstd::Result<void> ensure_indexes_fresh(dstd::Span<const ViewFile> files) {
 
 }  // namespace
 
+namespace {
+
+/// The error of the first file that the built-in reader does not read: another
+/// format claims it or `format` names one.
+dstd::Result<void> check_readers(dstd::Span<const ViewFile> files) {
+    for (const ViewFile& f : files) {
+        auto reader = dataframe::claim_trace_reader(f.file_path, f.format);
+        if (!reader) return reader.error();
+        if (!reader->is_builtin())
+            return common::make_error<
+                "{} is read by the format '{}'; a View reads trace files "
+                "only, so open it with scan_file">(
+                common::ErrorCode::InvalidArgument, f.file_path, reader->name);
+    }
+    return {};
+}
+
+}  // namespace
+
 ScanPlan from_files(dstd::Vector<ViewFile> files) {
     for (auto& f : files)
         if (f.index_path.empty())
             f.index_path = internal::determine_index_path(f.file_path, "");
+    if (auto checked = check_readers(
+            dstd::Span<const ViewFile>(files.data(), files.size()));
+        !checked)
+        return failed_plan(dstd::make_shared<detail::ViewPlan>(),
+                           checked.error());
     auto fresh = ensure_indexes_fresh(files);
     auto plan = dstd::make_shared<detail::ViewPlan>();
     plan->files = std::move(files);
@@ -393,7 +418,8 @@ ScanPlan from_file(dstd::String file_path, dstd::String index_path) {
 }
 
 coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
-                                        dstd::String index_dir) {
+                                        dstd::String index_dir,
+                                        dstd::String format) {
     runtime::fs::FindOptions options;
     options.patterns =
         runtime::fs::names_of(common::constants::indexer::INPUT_FILE_PATTERNS);
@@ -416,7 +442,9 @@ coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
         dstd::String fp(e.path.str());
         const dstd::String index =
             internal::determine_index_path(fp, index_dir);
-        files.push_back(ViewFile{fp, dstd::String(index.data(), index.size())});
+        ViewFile vf{fp, dstd::String(index.data(), index.size())};
+        vf.format = format;
+        files.push_back(std::move(vf));
     }
     std::sort(files.begin(), files.end(),
               [](const ViewFile& a, const ViewFile& b) {

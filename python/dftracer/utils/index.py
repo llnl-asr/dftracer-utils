@@ -208,6 +208,10 @@ class Indexer:
             ``TraceViewer.memory_budget`` (an int or a size such as "4GB");
             0 is about a third of available memory. Past it, large files are
             indexed fewer at a time and spill to disk.
+        format: The reader of every file by name: ``"jsonl"`` (the built-in
+            trace reader) or a registered plugin file format. None picks one
+            per file by content; two readers that tie are an error naming both.
+            An unknown name raises ``DFTUtilsValueError`` listing the known ones.
 
     Example:
         >>> indexer = Indexer("/path/to/traces")
@@ -242,6 +246,7 @@ class Indexer:
         extensions: Optional[Sequence[str]] = None,
         memory_budget: Union[int, str] = 0,
         schema: "Union[str, Type[RecordSchema], None]" = None,
+        format: Optional[str] = None,
     ) -> None:
         checkpoint_size = coerce_bytes(checkpoint_size, "checkpoint_size")
 
@@ -273,6 +278,7 @@ class Indexer:
             extensions=list(extensions) if extensions is not None else None,
             memory_budget=coerce_bytes(memory_budget, "memory_budget"),
             schema=schema_id(schema) if schema is not None else None,
+            format=format,
         )
         self._aggregation_config = agg_config
         self._file_info_cache: Optional[FileInfo] = None

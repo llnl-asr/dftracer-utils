@@ -33,6 +33,8 @@
 #include <dftracer/utils/trace/index/format_index.h>
 #include <dlfcn.h>
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -52,6 +54,8 @@ struct FormatHandle {
     ::dftu_file_format_vt vt;
     void* self;
     bool owned;
+    // The files opened through this handle that are still open.
+    std::atomic<std::size_t> open_files{0};
 
     FormatHandle(dstd::SharedPtr<PluginLibrary> l,
                  dstd::SharedPtr<PluginMemory> m, dstd::StringView n,
@@ -92,11 +96,14 @@ struct FormatFile {
           file(f),
           chunks(c),
           schema(std::move(s)),
-          tokens(std::move(t)) {}
+          tokens(std::move(t)) {
+        handle->open_files.fetch_add(1, std::memory_order_relaxed);
+    }
     FormatFile(const FormatFile&) = delete;
     FormatFile& operator=(const FormatFile&) = delete;
     ~FormatFile() {
         if (file) handle->close_file(file);
+        handle->open_files.fetch_sub(1, std::memory_order_relaxed);
     }
 };
 
@@ -277,6 +284,10 @@ class VtableFormat final : public dataframe::FileFormatFactory {
     dstd::StringView name() const override { return handle_->name; }
 
     dstd::StringView version() const override { return handle_->version; }
+
+    std::size_t open_file_count() const override {
+        return handle_->open_files.load(std::memory_order_relaxed);
+    }
 
     int probe(const std::uint8_t* head, std::uint64_t n,
               dstd::StringView path) const override {

@@ -92,20 +92,46 @@ PyObject* py_memory_budget_advice(PyObject*, PyObject* args, PyObject* kwds) {
         (unsigned long long)a.suggested_nodes, "warning", warning.c_str());
 }
 
-// scan_file(path, index_dir="") -> LazyFrame: a deferred scan over `path`,
-// planned by the plugin file format that claims it. `index_dir` names the index
-// directory that lets the scan skip chunks; empty means the index beside the
-// file. A file no format claims, a tie between
-// two, or a beta feature the host does not support is an error the plan keeps
-// and collect() returns.
+// scan_file(path, index_dir="", format="") -> LazyFrame: a deferred scan over
+// `path`, planned by the reader that claims it, or by the one `format` names.
+// `index_dir` names the index directory that lets the scan skip chunks; empty
+// means the index beside the file. A file no reader claims, a tie between two,
+// or an unknown format is an error the plan keeps and collect() returns.
 PyObject* py_scan_file(PyObject*, PyObject* args) {
     const char* path = nullptr;
     const char* index_dir = "";
-    if (!PyArg_ParseTuple(args, "s|s", &path, &index_dir)) return nullptr;
+    const char* format = "";
+    if (!PyArg_ParseTuple(args, "s|ss", &path, &index_dir, &format))
+        return nullptr;
+    if (!dftracer::utils::python::core::ensure_plugins()) return nullptr;
     return dftracer::utils::python::frame::wrap_lazyframe(
         dftracer::utils::dataframe::LazyFrame::scan_file(
             dftracer::utils::dstd::StringView(path),
-            dftracer::utils::dstd::StringView(index_dir)));
+            dftracer::utils::dstd::StringView(index_dir),
+            dftracer::utils::dstd::StringView(format)));
+}
+
+// _load_plugin(path) / _unload_plugin(path): the process-wide plugin set of
+// dftracer.utils.load_plugin. An error of either names the path.
+PyObject* py_load_plugin(PyObject*, PyObject* args) {
+    const char* path = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
+    if (!dftracer::utils::python::core::ensure_plugins()) return nullptr;
+    return dftracer::utils::python::core::guard([&]() -> PyObject* {
+        dftracer::utils::python::core::py_unwrap(
+            dftracer::utils::plugins::host::load_plugin(path));
+        Py_RETURN_NONE;
+    });
+}
+
+PyObject* py_unload_plugin(PyObject*, PyObject* args) {
+    const char* path = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
+    return dftracer::utils::python::core::guard([&]() -> PyObject* {
+        dftracer::utils::python::core::py_unwrap(
+            dftracer::utils::plugins::host::unload_plugin(path));
+        Py_RETURN_NONE;
+    });
 }
 
 // _bind_types(*, Series=None, DataFrame=None, LazyFrame=None,
@@ -137,11 +163,23 @@ PyMethodDef dftracer_utils_methods[] = {
      "TraceViewer=None) -> None\n\n"
      "Make the native factories build these Python subclasses of the native\n"
      "types, so a native method returns the public class."},
+    {"_load_plugin", py_load_plugin, METH_VARARGS,
+     "_load_plugin(path: str) -> None\n\n"
+     "Load the plugin at `path` into the process, or join it if loaded."},
+    {"_unload_plugin", py_unload_plugin, METH_VARARGS,
+     "_unload_plugin(path: str) -> None\n\n"
+     "End one _load_plugin of `path`; an error while a scan through one of "
+     "its\n"
+     "formats is open."},
     {"scan_file", py_scan_file, METH_VARARGS,
-     "scan_file(path: str, index_dir: str = '') -> LazyFrame\n\n"
-     "A deferred scan over `path`, decompressed and parsed by the plugin file\n"
-     "format that claims it. Nothing runs until collect(), which returns the\n"
-     "error of a file no format claims."},
+     "scan_file(path: str, index_dir: str = '', format: str = '') -> "
+     "LazyFrame\n\n"
+     "A deferred scan over `path`, read by the reader that claims it (a "
+     "plugin\n"
+     "file format, or the built-in trace reader) or by the one `format` "
+     "names.\n"
+     "Nothing runs until collect(), which returns the error of a file no\n"
+     "format claims."},
     {"memory_budget_advice", DFTU_PYCFUNCTION(py_memory_budget_advice),
      METH_VARARGS | METH_KEYWORDS,
      "memory_budget_advice(required_bytes, available_bytes=0) -> dict\n\n"

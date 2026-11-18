@@ -52,6 +52,7 @@ from .lazyframe import (  # noqa: F401
     lazy,
     scan_file,
 )
+from .plugins import PluginHandle, load_plugin  # noqa: F401
 from .runtime import Runtime, TaskHandle, get_default_runtime, peek_default_runtime  # noqa: F401
 from .series import Series  # noqa: F401
 from .store import Store  # noqa: F401
@@ -108,6 +109,8 @@ __all__ = [
     "collect_all",
     "lazy",
     "scan_file",
+    "load_plugin",
+    "PluginHandle",
     "Series",
     "Runtime",
     "TaskHandle",

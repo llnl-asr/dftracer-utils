@@ -972,6 +972,7 @@ add_subdirectory(bench)
 
 set(TEST_BINARY_SOURCES
     binaries/test_dftracer_server.cpp
+    binaries/test_cli_global_plugins.cpp
     binaries/test_dftracer_event_count.cpp
     binaries/test_dftracer_validate.cpp
     binaries/test_dftracer_split.cpp
@@ -1190,6 +1191,9 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   elseif(bin_exec STREQUAL "binaries/test_dftracer_event_count")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_UTILS_EVENT_COUNT_PATH=$<TARGET_FILE:dftracer_event_count>;DFTRACER_UTILS_INDEX_PATH=$<TARGET_FILE:dftracer_index>")
+  elseif(bin_exec STREQUAL "binaries/test_cli_global_plugins")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_UTILS_INDEX_PATH=$<TARGET_FILE:dftracer_index>;DFTRACER_UTILS_STATS_PATH=$<TARGET_FILE:dftracer_stats>;DFTRACER_UTILS_PLUGIN_PATH=$<TARGET_FILE:dftracer_plugin>;DFTRACER_UTILS_CHUNKED_FORMAT_PLUGIN=$<TARGET_FILE:chunked_format_plugin>")
   elseif(bin_exec STREQUAL "binaries/test_dftracer_split")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_UTILS_SPLIT_PATH=$<TARGET_FILE:dftracer_split>")

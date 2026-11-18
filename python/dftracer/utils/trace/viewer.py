@@ -88,7 +88,13 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
     ``record_schema`` names a registered record
     schema (an id or a :class:`dftracer.utils.schemas.RecordSchema` class) to
     read the files as, instead of their recorded or detected one; an
-    unregistered id raises ``DFTUtilsValueError``."""
+    unregistered id raises ``DFTUtilsValueError``.
+
+    ``format`` names the reader of the files, ``"jsonl"``, the built-in trace
+    reader. With none, the files' content picks it, and a file that a plugin
+    file format claims raises ``DFTUtilsValueError``: a viewer reads trace
+    files only, so open such a file with :func:`dftracer.utils.scan_file`. An
+    unknown name raises ``DFTUtilsValueError`` listing the known ones."""
 
     __slots__ = ("_rt", "_pl")
 
@@ -101,6 +107,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         index_dir: str | None = None,
         runtime: Runtime | None = None,
         record_schema: str | type[RecordSchema] | None = None,
+        format: str | None = None,
     ) -> TraceViewer:
         if cls is not TraceViewer:
             raise TypeError(
@@ -112,7 +119,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
             out = cast("TraceViewer", files)
         else:
             out = _ext.TraceViewer.__new__(TraceViewer)
-            _ext.TraceViewer.__init__(out, files, index_dir)
+            _ext.TraceViewer.__init__(out, files, index_dir, format)
         if record_schema is not None:
             out = _ext.TraceViewer.record_schema(out, schema_id(record_schema))
         if runtime is not None:
@@ -125,6 +132,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         index_dir: str | None = None,
         runtime: Runtime | None = None,
         record_schema: str | type[RecordSchema] | None = None,
+        format: str | None = None,
     ) -> None:
         pass
 

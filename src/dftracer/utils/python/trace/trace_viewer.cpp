@@ -395,9 +395,17 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
     }
     PyObject* files = nullptr;
     PyObject* index_obj = nullptr;
-    if (!parse_kw<"O|O">(args, kwds, {"files", "index_dir"}, &files,
-                         &index_obj))
+    PyObject* format_obj = nullptr;
+    if (!dftracer::utils::python::core::ensure_plugins()) return -1;
+    if (!parse_kw<"O|OO">(args, kwds, {"files", "index_dir", "format"}, &files,
+                          &index_obj, &format_obj))
         return -1;
+    dftracer::utils::dstd::String format;
+    if (format_obj && format_obj != Py_None) {
+        const char* s = as_utf8(format_obj);
+        if (!s) return -1;
+        format = s;
+    }
     dftracer::utils::dstd::String index_dir;
     if (index_obj && index_obj != Py_None) {
         const char* s = as_utf8(index_obj);
@@ -412,7 +420,8 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
         if (!run_blocking([&] {
                 tv = dftracer::utils::python::core::py_unwrap(
                     python::runtime::get_default_runtime()
-                        ->submit(View::from_directory(*dir, DS(index_dir)))
+                        ->submit(View::from_directory(*dir, DS(index_dir),
+                                                      DS(format)))
                         .get());
                 dftracer::utils::python::core::py_unwrap(tv.status());
             }))
@@ -424,7 +433,9 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
             const auto index_path =
                 dftracer::utils::trace::internal::determine_index_path(
                     p, index_dir);
-            vfiles.push_back(trace::views::ViewFile{DS(p), index_path});
+            trace::views::ViewFile vf{DS(p), index_path};
+            vf.format = format;
+            vfiles.push_back(std::move(vf));
         }
         if (!run_blocking([&] {
                 tv = View::from_files(std::move(vfiles));

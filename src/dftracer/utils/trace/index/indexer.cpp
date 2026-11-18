@@ -104,9 +104,10 @@ struct Indexer::Impl {
     }
 
     /// `entries` split by reader: the files a registered plugin file format
-    /// claims (by the probe a scan uses), and every other file, which the
-    /// built-in trace reader indexes. Nothing is probed while no format is
-    /// registered. An error when two formats tie on a file.
+    /// claims (by the probe a scan uses, or the format `options.format`
+    /// names), and every other file, which the built-in trace reader indexes.
+    /// An error when two readers tie on a file, none claims it, or the format
+    /// name is unknown.
     struct Readers {
         dstd::Vector<runtime::fs::FoundFile> trace;
         dstd::Vector<FormatEntry> formats;
@@ -114,18 +115,15 @@ struct Indexer::Impl {
     dstd::Result<Readers> split_readers(
         dstd::Vector<runtime::fs::FoundFile> entries) const {
         Readers out;
-        const bool probing = dataframe::has_file_formats();
         for (auto& entry : entries) {
-            if (!probing) {
+            auto reader = dataframe::claim_trace_reader(
+                entry.path.str(), dstd::StringView(options.format));
+            if (!reader) return reader.error();
+            if (reader->is_builtin())
                 out.trace.push_back(std::move(entry));
-                continue;
-            }
-            auto claimed = dataframe::claim_file_format(entry.path.str());
-            if (!claimed) return claimed.error();
-            if (*claimed)
-                out.formats.push_back({std::move(entry), std::move(*claimed)});
             else
-                out.trace.push_back(std::move(entry));
+                out.formats.push_back(
+                    {std::move(entry), std::move(reader->plugin)});
         }
         return out;
     }
@@ -341,6 +339,11 @@ coro::CoroTask<dstd::Result<void>> build_format_files(
 Indexer::Indexer(dstd::SharedPtr<Impl> impl) : impl_(std::move(impl)) {}
 
 dstd::Result<void> Indexer::validate_options(Impl& impl) {
+    if (!impl.options.format.empty())
+        if (auto named = dataframe::claim_reader(
+                {}, dstd::StringView(impl.options.format));
+            !named)
+            return named.error();
     for (const auto& name : impl.options.extensions) {
         auto ext = store::parse_extension(name);
         if (!ext || !store::PRUNING_EXTENSIONS.has(*ext))

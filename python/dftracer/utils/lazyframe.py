@@ -1413,21 +1413,25 @@ def lazy(frame: DataFrame) -> LazyFrame:
     return frame.lazy()
 
 
-def scan_file(path: str, index_dir: str = "") -> LazyFrame:
-    """A plan over the file at ``path``, read by the plugin file format that
-    claims it (the one with the highest probe score for the file).
+def scan_file(path: str, index_dir: str = "", format: str = "") -> LazyFrame:
+    """A plan over the file at ``path``, read by the reader that claims it (the
+    one with the highest probe score for the file): a plugin file format, or
+    the built-in trace reader (``"jsonl"``) for gzip and JSON-lines files.
+
+    ``format`` names the reader and nothing is probed; an unknown name raises
+    ``DFTUtilsValueError`` listing the known ones.
 
     Nothing is read until :meth:`LazyFrame.collect`, which returns the error of
-    a file no registered format claims (``no format claims <path>``), of two
-    formats that tie, or of the winning format's own open failure. Use it to
-    read a format a plugin added.
+    a file no reader claims (``no format claims <path>``), of two readers that
+    tie, or of the winning reader's own open failure. Use it to read a format
+    a plugin added.
 
     ``index_dir`` is the index directory an :class:`Indexer` built for the file
     (``Indexer([path], index_dir=...)``); the scan skips the chunks that index
     proves hold no matching row. Empty means the index beside the file. A file
     with no index, or one that changed since it was indexed, is read whole.
     """
-    return _ext.scan_file(path, index_dir)
+    return _ext.scan_file(path, index_dir, format)
 
 
 _ALL_ROWS = (1 << 63) - 1

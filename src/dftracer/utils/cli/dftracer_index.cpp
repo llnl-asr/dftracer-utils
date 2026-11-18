@@ -36,6 +36,7 @@ class IndexArgParse : public cli::ArgParse {
         "Folder of trace files to index (default: the current folder)"};
     cli::RuntimeArgs runtime_args;
     cli::IndexingArgs indexing;
+    cli::ReaderArgs reader;
 
     dstd::StringView dimensions;
     std::size_t path_budget = 0;
@@ -52,7 +53,8 @@ class IndexArgParse : public cli::ArgParse {
             "Directory where .dftindex stores are created";
         indexing.force_help = "Force index recreation even if already built";
         inputs.folder_only = true;
-        schema(inputs, runtime_args, indexing);
+        load_plugins_after_parse();
+        schema(inputs, runtime_args, indexing, reader);
     }
 
    protected:
@@ -125,6 +127,20 @@ static coro::CoroTask<dstd::Result<int>> select_stale_task(ResolverInput input,
     if (!listed) co_return listed.error();
     *stale = std::move(*listed);
     co_return 0;
+}
+
+// Indexes `paths` through the Indexer, which reads them with the file format
+// that claims each. Split out for the same reason as select_stale_task.
+static coro::CoroTask<dstd::Result<trace::index::IndexStatus>>
+build_format_files(dstd::Vector<dstd::String> paths,
+                   trace::index::IndexerOptions options, bool force,
+                   coro::Scope& scope) {
+    auto opened =
+        trace::index::Indexer::open(std::move(paths), std::move(options));
+    if (!opened) co_return opened.error();
+    trace::index::Indexer indexer = std::move(*opened);
+    auto building = force ? indexer.rebuild(scope) : indexer.build(scope);
+    co_return co_await std::move(building);
 }
 
 static void print_summary(double seconds, std::size_t indexed,
@@ -249,6 +265,49 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     DFTRACER_UTILS_LOG_INFO("Found {} input files", matched_entries.size());
     log_stage("scan");
 
+    // A file that a plugin file format claims, or that --format gives to one,
+    // is indexed through the Indexer, one granule per chunk of the format.
+    dstd::Vector<dstd::String> format_files;
+    std::size_t format_count = 0;
+    {
+        dstd::Vector<runtime::fs::FoundFile> trace_entries;
+        for (auto& entry : matched_entries) {
+            auto reader = dataframe::claim_trace_reader(entry.path.str(),
+                                                        cli->reader.format);
+            if (!reader) co_return cli::report_error(reader.error());
+            if (reader->is_builtin())
+                trace_entries.push_back(std::move(entry));
+            else
+                format_files.emplace_back(entry.path.str());
+        }
+        matched_entries = std::move(trace_entries);
+    }
+    if (!format_files.empty()) {
+        trace::index::IndexerOptions options;
+        options.index_dir = index_dir;
+        options.format = dstd::String(cli->reader.format);
+        options.parallelism = executor_threads;
+        format_count = format_files.size();
+        auto formatted =
+            cli::run_on_pool("DFTracer Bloom Indexer", cli->runtime_args,
+                             [&](coro::Scope& scope) {
+                                 return build_format_files(
+                                     std::move(format_files),
+                                     std::move(options), force_rebuild, scope);
+                             });
+        if (!formatted) co_return cli::report_error(formatted.error());
+        DFTRACER_UTILS_LOG_INFO("Indexed {} files read by plugin file formats",
+                                format_count);
+        log_stage("format");
+        if (matched_entries.empty()) {
+            print_summary(
+                std::chrono::duration<double>(dstd::steady_now() - start_time)
+                    .count(),
+                format_count, 0, 0, 0, all_dimensions);
+            co_return 0;
+        }
+    }
+
     std::size_t skipped_fresh = 0;
     dstd::HashSet<dstd::String> stale_tiers;
     if (!force_rebuild) {
@@ -277,7 +336,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         print_summary(
             std::chrono::duration<double>(dstd::steady_now() - start_time)
                 .count(),
-            0, skipped_fresh, 0, 0, all_dimensions);
+            format_count, skipped_fresh, 0, 0, all_dimensions);
         co_return 0;
     }
 
@@ -380,10 +439,10 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     auto end_time = dstd::steady_now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
-    print_summary(duration.count() / 1000.0, batch_result.indexed,
-                  batch_result.skipped + skipped_fresh, batch_result.failed,
-                  static_cast<std::size_t>(batch_result.total_events),
-                  all_dimensions);
+    print_summary(
+        duration.count() / 1000.0, batch_result.indexed + format_count,
+        batch_result.skipped + skipped_fresh, batch_result.failed,
+        static_cast<std::size_t>(batch_result.total_events), all_dimensions);
 
     for (const auto& r : batch_result.results) {
         if (!r.success && !r.was_skipped) {

@@ -40,6 +40,7 @@ set(PLUGINS_TEST_SOURCES
     test_plugin_frame_check.cpp
     test_plugin_frame_check_off.cpp
     test_plugin_file_formats.cpp
+    test_global_plugins.cpp
     test_plugin_format_index.cpp
     test_plugin_sink_duql.cpp
     test_plugin_node_duql.cpp
@@ -556,6 +557,13 @@ if(TARGET plugins_test_example_sessionize AND TARGET sessionize_plugin)
     SESSIONIZE_INPUT_PLUGIN_PATH="$<TARGET_FILE:sessionize_input_plugin>")
   add_dependencies(plugins_test_example_sessionize sessionize_plugin
                    sessionize_input_plugin)
+endif()
+
+if(TARGET plugins_test_global_plugins)
+  target_compile_definitions(
+    plugins_test_global_plugins PRIVATE
+    TOY_FORMAT_PLUGIN_PATH="$<TARGET_FILE:toy_format_plugin>")
+  add_dependencies(plugins_test_global_plugins toy_format_plugin)
 endif()
 
 if(TARGET plugins_test_plugin_file_formats)

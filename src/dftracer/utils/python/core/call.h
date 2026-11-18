@@ -4,6 +4,8 @@
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/plugins/host/global_plugins.h>
+#include <dftracer/utils/python/core/error_exception.h>
 #include <dftracer/utils/python/core/errors.h>
 
 #include <cstddef>
@@ -260,6 +262,16 @@ template <class T>
 T *as_native_or_null(PyObject *o) {
     if (!PyObject_TypeCheck(o, NativeTraits<T>::type())) return nullptr;
     return NativeTraits<T>::get(o);
+}
+
+/// Registers the trace reader and loads the plugins DFTRACER_UTILS_PLUGINS
+/// names, once per process. False with a Python error set when a plugin does
+/// not load. Call it first in every entry point that reads trace files.
+inline bool ensure_plugins() {
+    return guard([] {
+        py_unwrap(dftracer::utils::plugins::host::ensure_global_plugins());
+        return true;
+    });
 }
 
 }  // namespace dftracer::utils::python::core

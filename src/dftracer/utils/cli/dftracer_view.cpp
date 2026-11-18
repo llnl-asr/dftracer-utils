@@ -60,6 +60,7 @@ class ViewArgParse : public cli::ArgParse {
         "Trace files, a folder of trace files, or a shard set"};
     cli::RuntimeArgs runtime_args;
     cli::IndexingArgs indexing;
+    cli::ReaderArgs reader;
     cli::DuqlArgs duql_args;
     cli::CommArgs comm_args;
 
@@ -108,7 +109,8 @@ class ViewArgParse : public cli::ArgParse {
         duql_args.help =
             "duql filter or pipeline (e.g., 'cat == \"POSIX\" | derive ms = "
             "dur / 1000 | sort -ms | take 5')";
-        schema(inputs, runtime_args, indexing, duql_args, comm_args);
+        load_plugins_after_parse();
+        schema(inputs, runtime_args, indexing, reader, duql_args, comm_args);
     }
 
    protected:
@@ -326,9 +328,11 @@ class NullSink : public ExportSink {
 };
 
 static ViewFile make_view_file(dstd::StringView file, dstd::String index_path,
-                               std::size_t checkpoint_size) {
+                               std::size_t checkpoint_size,
+                               dstd::StringView format = {}) {
     ViewFile vf;
     vf.file_path = file;
+    vf.format = format;
     vf.index_path = std::move(index_path);
     vf.checkpoint_size = checkpoint_size;
     return vf;
@@ -981,7 +985,8 @@ coro::CoroTask<dstd::Result<dstd::String>> ViewRun::shard_partial(
     }
     dstd::Vector<ViewFile> shard_files_vf;
     for (const auto& f : shard) {
-        shard_files_vf.push_back(make_view_file(f, rank_idx, checkpoint_size));
+        shard_files_vf.push_back(
+            make_view_file(f, rank_idx, checkpoint_size, cli->reader.format));
     }
     View shard_view = configure(View::from_files(std::move(shard_files_vf)));
     dataframe::LazyResult<dstd::String> partial_plan =
@@ -1080,8 +1085,9 @@ coro::CoroTask<dstd::Result<dstd::String>> ViewRun::shard_write(
     }
     dstd::Vector<ViewFile> shard_vf;
     for (const auto& f : shard) {
-        shard_vf.push_back(make_view_file(
-            f, internal::determine_index_path(f, rank_idx), checkpoint_size));
+        shard_vf.push_back(
+            make_view_file(f, internal::determine_index_path(f, rank_idx),
+                           checkpoint_size, cli->reader.format));
     }
     const dstd::String rank_out =
         dstd::fmt<"{}.rank_{}">(final_output, world.rank());
@@ -1402,7 +1408,7 @@ static coro::CoroTask<int> run_view_body(const ViewArgParse* cli, ViewRun& run,
     for (const auto& file : run.files) {
         run.view_files.push_back(make_view_file(
             file, internal::determine_index_path(file, run.index_dir),
-            run.checkpoint_size));
+            run.checkpoint_size, cli->reader.format));
     }
 
     if (const auto probe_rc = run.probe_duql()) co_return *probe_rc;

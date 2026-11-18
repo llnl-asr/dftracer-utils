@@ -17,6 +17,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/stop_token.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dataframe/internal/file_format_registry.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
@@ -32,6 +33,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/plugins/host/global_plugins.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/watchdog.h>
@@ -138,7 +140,13 @@ class ArgParse {
         (schemas_.push_back(&args), ...);
     }
 
+    /// Whether the tool picks a reader, so that cli_main loads the plugins of
+    /// DFTRACER_UTILS_PLUGINS after the parse.
+    bool loads_plugins() const { return loads_plugins_; }
+
    protected:
+    void load_plugins_after_parse() { loads_plugins_ = true; }
+
     virtual void register_args() {}
     virtual dstd::Result<void> post_parse() { return {}; }
     virtual bool validate() { return true; }
@@ -156,6 +164,7 @@ class ArgParse {
     ArgParser& parser_;
     dstd::Vector<CliSchema*> schemas_;
     dstd::StringView log_level_;
+    bool loads_plugins_ = false;
 };
 
 // Register schemas/args then parse argv. Returns the exit code when the run
@@ -190,6 +199,16 @@ int cli_main(int argc, char** argv, dstd::String name, dstd::String description,
                       std::move(description));
     CliT cli(program);
     if (auto code = setup_and_parse(cli, argc, argv)) return *code;
+    // After the parse, so help and version never depend on a plugin, and only
+    // for a tool that picks a reader.
+    if (cli.loads_plugins()) {
+        if (auto loaded =
+                dftracer::utils::plugins::host::ensure_global_plugins();
+            !loaded) {
+            DFTRACER_UTILS_LOG_ERROR("Error: {}", loaded.error().format());
+            return 1;
+        }
+    }
     auto outcome = run(cli);
     if constexpr (std::is_same_v<decltype(outcome), int>) {
         return outcome;
@@ -269,6 +288,39 @@ struct InputArgs : CliSchema {
    private:
     bool folder_error_ = false;
     dstd::StringView missing_;
+};
+
+/// --format, shared by the tools that read trace files: forces the reader of
+/// every input file by name, instead of the probe that picks one by content.
+/// The name is checked when the arguments are parsed.
+struct ReaderArgs : CliSchema {
+    dstd::StringView format;
+    dstd::StringView help =
+        "Reader of every input file, by name, instead of the one picked by "
+        "content: jsonl (the built-in trace reader) or a file format a "
+        "plugin registered";
+
+    void register_on(ArgParser& p) override {
+        p.group("Input");
+        p.option(format, {"--format"}, help);
+    }
+
+    bool validate() override {
+        if (format.empty()) return true;
+        // A plugin's formats are known names, so they load first.
+        if (auto loaded =
+                dftracer::utils::plugins::host::ensure_global_plugins();
+            !loaded) {
+            DFTRACER_UTILS_LOG_ERROR("--format: {}", loaded.error().c_str());
+            return false;
+        }
+        auto named = dftracer::utils::dataframe::claim_reader({}, format);
+        if (!named) {
+            DFTRACER_UTILS_LOG_ERROR("--format: {}", named.error().c_str());
+            return false;
+        }
+        return true;
+    }
 };
 
 /// --memory-budget, shared by every tool that bounds its memory. 0 means auto,

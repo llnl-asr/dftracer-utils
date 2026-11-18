@@ -148,6 +148,7 @@ class Indexer:
         extensions: Sequence[str] | None = None,
         memory_budget: int = 0,
         schema: str | None = None,
+        format: str | None = None,
     ) -> None:
         """Create an indexer for trace files.
 
@@ -178,6 +179,8 @@ class Indexer:
             memory_budget: Bytes the build may hold at once; 0 is about a
                 third of available memory.
             schema: A registered record schema id; None detects each file's.
+            format: The reader of every file by name, "jsonl" or a registered
+                file format; None picks one per file by content.
             extensions: Pruning extensions the bloom tier builds, from
                 "zonemap", "bloom", "counts" and "postings"; None builds all.
         """
@@ -1508,6 +1511,7 @@ class TraceViewer:
         self,
         files: str | os.PathLike[str] | Sequence[str | os.PathLike[str]],
         index_dir: str | None = ...,
+        format: str | None = ...,
     ) -> None:
         """``files`` is a path (``str`` or ``os.PathLike``) or a sequence of
         paths. One path that names a directory is scanned recursively for
@@ -1877,12 +1881,22 @@ def _bind_types(
     types, so a native method returns the public class."""
     ...
 
-def scan_file(path: str, index_dir: str = "", /) -> PublicLazyFrame:
-    """A deferred scan over `path`, planned by the plugin file format that
-    claims it. `index_dir` is the index directory that lets the scan skip
-    chunks; empty means the index beside the file. collect() returns the error
-    of a file no format claims.
+def scan_file(path: str, index_dir: str = "", format: str = "", /) -> PublicLazyFrame:
+    """A deferred scan over `path`, read by the reader that claims it (a plugin
+    file format or the built-in trace reader) or by the one `format` names.
+    `index_dir` is the index directory that lets the scan skip chunks; empty
+    means the index beside the file. collect() returns the error of a file no
+    format claims.
     """
+    ...
+
+def _load_plugin(path: str, /) -> None:
+    """Load the plugin at `path` into the process, or join it if loaded."""
+    ...
+
+def _unload_plugin(path: str, /) -> None:
+    """End one _load_plugin of `path`; an error while a scan through one of its
+    formats is open."""
     ...
 
 def memory_budget_advice(required_bytes: int, available_bytes: int = ...) -> dict[str, object]:

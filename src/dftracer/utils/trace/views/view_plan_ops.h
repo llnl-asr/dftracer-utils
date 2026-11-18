@@ -33,7 +33,8 @@ using detail::ScanPlan;
 ScanPlan from_files(dstd::Vector<ViewFile> files);
 ScanPlan from_file(dstd::String file_path, dstd::String index_path = "");
 coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
-                                        dstd::String index_dir = "");
+                                        dstd::String index_dir = "",
+                                        dstd::String format = "");
 dstd::Result<dstd::Vector<TraceConfig>> config(const ScanPlan& plan);
 dstd::Result<dstd::Vector<dstd::String>> columns(const ScanPlan& plan);
 dstd::Result<dstd::Vector<ColumnInfo>> schema(const ScanPlan& plan);

@@ -19,6 +19,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Remove the Python `Expr.bit_or`: `Expr.bitwise_or` replaces it. The `AggOp::BitOr` row stays (the C ABI, the JIT monoids and `DataFrame.reduce("bit_or")` use it).
   A bitwise or math method on a column of another type raises `DFTUtilsValueError` with the type the method needs, and a bitwise aggregate on such a column is an `InvalidArgument` error, an all-null column included.
   The state is a 64-bit word and a flag per group, so partial states merge in any order.
+- Load plugins for the whole process and pick every reader with one probe.
+  `DFTRACER_UTILS_PLUGINS` names plugin paths separated by `:`; the CLI tools, the Python extension and the server load them once, at the first call that reads a trace, and a path that does not load is an error that names it.
+  Python `dft.load_plugin(path)` returns a handle that works as a context manager and unloads the plugin at `close()` or the end of the block; it refuses, with an error, while a plan made by `scan_file` through one of its formats is alive.
+  The built-in trace reader (`jsonl`) joins the content probe with a score of 50 for a gzip file or text whose first lines are JSON objects, so `Indexer`, `TraceViewer` and `scan_file` pick a reader the same way: the highest score wins and a tie, now with the built-in reader too, is an error that names both.
+  `format=` of `scan_file`, `TraceViewer` and `Indexer` (C++: `LazyFrame::scan_file(path, index_dir, format)`, `IndexerOptions::format`, `ViewFile::format`) and `--format` of `dftracer_index`, `dftracer_view` and `dftracer_run` force a reader by name, and an unknown name is an error that lists the known ones.
+  `dftracer_index` indexes a file that a plugin file format claims through the Indexer.
+  `scan_file` reads a gzip or JSON-lines trace through the built-in reader; before it was a `no format claims` error.
 - Index the files a plugin file format reads.
   `dftu_file_format_vt` gets `chunk_token`, an optional callback that names each chunk of a file by its bytes (a byte offset, a row group number); it is the last field, so a plugin built before it loads unchanged.
   `Indexer` indexes a file that a registered format claims, one granule of the zonemap, bloom, counts, postings and plugin column extensions per chunk, and records the format name, the summary settings and the chunk tokens per file (`core.format`); a file whose size, mtime, format or settings changed is indexed again, and no other file or folder under the index root is.

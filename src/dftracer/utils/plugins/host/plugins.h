@@ -141,6 +141,10 @@ class Plugins {
     /// One entry per loaded plugin, in registration order.
     dstd::Vector<PluginInfo> describe() const;
 
+    /// Whether a file opened through a file format of this set is still open,
+    /// as a plan of @ref dataframe::LazyFrame::scan_file holds it.
+    bool in_use() const;
+
     /// Drive every plugin as a fold over one fused, pruned scan of `view`.
     coro::CoroTask<dstd::Result<PluginRun>> run(
         const trace::views::View& view) const;

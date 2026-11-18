@@ -28,6 +28,11 @@ inline constexpr std::int64_t BATCH_SIZE = 65536;
 }  // namespace dataframe
 
 namespace plugins {
+/// The plugins every tool, the Python extension and the server load once, at
+/// the first call that reads a trace: shared-library paths separated by ':'.
+/// An empty item is skipped, a path that does not load is an error that names
+/// it, and a path named twice loads once.
+inline constexpr const char* PLUGINS_ENV = "DFTRACER_UTILS_PLUGINS";
 /// "0", "false", "off" or "no" checks nothing; any other value makes the host
 /// validate every frame and column a plugin hands back, and fail the run
 /// naming the plugin, the callback and the broken rule.

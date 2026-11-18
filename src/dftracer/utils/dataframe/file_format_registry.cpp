@@ -18,6 +18,8 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/json/line.h>
+#include <dftracer/utils/json/value.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -184,8 +186,77 @@ bool has_file_formats() {
     return registries().formats && !registries().formats->empty();
 }
 
-dstd::Result<dstd::SharedPtr<FileFormatFactory>> claim_file_format(
-    dstd::StringView path) {
+namespace {
+
+/// How well the built-in reader matches `head`: see @ref claim_reader.
+int builtin_score(dstd::Span<const std::uint8_t> head) {
+    constexpr int CLAIM = 50;
+    constexpr int EMPTY = 10;
+    if (head.size() >= 2 && head[0] == 0x1f && head[1] == 0x8b) return CLAIM;
+    const char* text = reinterpret_cast<const char*>(head.data());
+    std::size_t size = head.size();
+    // A head cut at the limit ends in the middle of a line.
+    if (size == PROBE_HEAD_BYTES) {
+        const dstd::StringView whole(text, size);
+        const std::size_t last = whole.rfind('\n');
+        if (last == dstd::StringView::npos) return 0;
+        size = last + 1;
+    }
+    constexpr std::size_t PROBED_LINES = 8;
+    json::Document document;
+    std::size_t seen = 0;
+    std::size_t begin = 0;
+    while (begin < size && seen < PROBED_LINES) {
+        const dstd::StringView rest(text + begin, size - begin);
+        std::size_t end = rest.find('\n');
+        const dstd::StringView line =
+            end == dstd::StringView::npos ? rest : rest.substr(0, end);
+        begin += end == dstd::StringView::npos ? rest.size() : end + 1;
+        dstd::StringView trimmed;
+        if (!json::trim_and_validate_with_comma(line, trimmed)) continue;
+        auto parsed = document.parse(trimmed);
+        if (!parsed || parsed->type() != json::Value::Type::Object) return 0;
+        ++seen;
+    }
+    return seen > 0 ? CLAIM : EMPTY;
+}
+
+struct TraceHook {
+    std::mutex mutex;
+    TraceOpen open = nullptr;
+};
+
+TraceHook& trace_hook() { return dstd::Singleton<TraceHook>::get(); }
+
+}  // namespace
+
+dstd::Vector<dstd::String> reader_names() {
+    dstd::Vector<dstd::String> names;
+    names.push_back(dstd::String(BUILTIN_READER));
+    {
+        std::lock_guard<std::mutex> lock(registries().mutex);
+        if (registries().formats)
+            for (const auto& entry : *registries().formats)
+                names.push_back(entry.first);
+    }
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+dstd::Result<Reader> claim_reader(dstd::StringView path,
+                                  dstd::StringView forced) {
+    if (!forced.empty()) {
+        if (forced == BUILTIN_READER) return Reader{dstd::String(forced), {}};
+        if (auto plugin = find_file_format(forced))
+            return Reader{dstd::String(forced), std::move(plugin)};
+        dstd::String known;
+        for (const dstd::String& name : reader_names()) {
+            if (!known.empty()) known += ", ";
+            known += name;
+        }
+        return common::make_error<"unknown format '{}'; known formats: {}">(
+            common::ErrorCode::InvalidArgument, forced, known);
+    }
     // A snapshot, so the plugins' probe() runs without the registry lock.
     dstd::Vector<dstd::SharedPtr<FileFormatFactory>> candidates;
     {
@@ -199,37 +270,48 @@ dstd::Result<dstd::SharedPtr<FileFormatFactory>> claim_file_format(
     auto head = read_head(path);
     if (!head) return head.error();
 
-    dstd::SharedPtr<FileFormatFactory> best;
-    dstd::SharedPtr<FileFormatFactory> rival;
-    int best_score = 0;
+    Reader best;
+    dstd::String rival;
+    int best_score = builtin_score(
+        dstd::Span<const std::uint8_t>(head->data(), head->size()));
+    if (best_score > 0) best.name = BUILTIN_READER;
     for (const dstd::SharedPtr<FileFormatFactory>& candidate : candidates) {
         const int score =
             clamped_score(candidate->probe(head->data(), head->size(), path));
         if (score > best_score) {
-            best = candidate;
-            rival = nullptr;
+            best = Reader{dstd::String(candidate->name()), candidate};
+            rival.clear();
             best_score = score;
         } else if (score == best_score && score > 0) {
-            rival = candidate;
+            rival = candidate->name();
         }
     }
-    if (best && rival)
+    if (best_score == 0)
+        return common::make_error<"no format claims {}">(
+            common::ErrorCode::NotFound, path);
+    if (!rival.empty())
         return common::make_error<"file formats '{}' and '{}' both claim {}">(
-            common::ErrorCode::InvalidArgument, best->name(), rival->name(),
-            path);
+            common::ErrorCode::InvalidArgument, best.name, rival, path);
     return best;
 }
 
-dstd::Result<dstd::SharedPtr<const Source>> open_file_with_format(
-    dstd::StringView path, dstd::StringView index_dir) {
-    auto claimed = claim_file_format(path);
-    if (!claimed) return claimed.error();
-    if (!*claimed)
-        return common::make_error<"no format claims {}">(
-            common::ErrorCode::NotFound, path);
-    auto opened = (*claimed)->open(path, index_dir);
-    if (!opened) return opened.error();
-    return dstd::SharedPtr<const Source>(std::move(*opened));
+dstd::Result<Reader> claim_trace_reader(dstd::StringView path,
+                                        dstd::StringView forced) {
+    if (forced.empty() && !has_file_formats())
+        return Reader{dstd::String(BUILTIN_READER), {}};
+    return claim_reader(path, forced);
+}
+
+void set_trace_open(TraceOpen open) {
+    TraceHook& hook = trace_hook();
+    std::lock_guard<std::mutex> lock(hook.mutex);
+    hook.open = open;
+}
+
+TraceOpen trace_open() {
+    TraceHook& hook = trace_hook();
+    std::lock_guard<std::mutex> lock(hook.mutex);
+    return hook.open;
 }
 
 }  // namespace dftracer::utils::dataframe

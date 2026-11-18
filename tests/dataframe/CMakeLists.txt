@@ -49,7 +49,7 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_series_math_bitwis
                            test_governor.cpp
                            test_ddsketch.cpp test_distinct_sketch.cpp
                            test_field_stat.cpp test_log2_histogram.cpp
-                           test_validate.cpp
+                           test_validate.cpp test_reader_probe.cpp
                            test_plugin_frame.cpp test_udf_adapter.cpp
                            test_timestamp_histogram.cpp)
 

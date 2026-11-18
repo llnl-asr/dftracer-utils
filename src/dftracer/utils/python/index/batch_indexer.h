@@ -32,6 +32,7 @@ struct IndexerObject {
     PyObject* extensions;
     std::uint64_t memory_budget;
     PyObject* schema;  // str or nullptr (detect)
+    PyObject* format;  // str or nullptr (probe each file)
 
     // The aggregation tier's settings. Every build makes the tier.
     double time_interval_ms;

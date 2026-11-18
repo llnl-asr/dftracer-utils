@@ -4833,12 +4833,27 @@ class FailedSource final : public Source {
 }  // namespace
 
 LazyFrame LazyFrame::scan_file(dstd::StringView path,
-                               dstd::StringView index_dir) {
-    auto opened = open_file_with_format(path, index_dir);
-    if (!opened)
-        return LazyFrame(dstd::make_shared<FailedSource>(opened.error()), {})
-            .failed(opened.error());
-    return LazyFrame(std::move(*opened), {});
+                               dstd::StringView index_dir,
+                               dstd::StringView format) {
+    const auto failed_plan = [](dstd::Error error) {
+        return LazyFrame(dstd::make_shared<FailedSource>(error), {})
+            .failed(error);
+    };
+    auto reader = claim_reader(path, format);
+    if (!reader) return failed_plan(reader.error());
+    if (!reader->is_builtin()) {
+        auto opened = reader->plugin->open(path, index_dir);
+        if (!opened) return failed_plan(opened.error());
+        return LazyFrame(dstd::SharedPtr<const Source>(std::move(*opened)), {});
+    }
+    const TraceOpen open = trace_open();
+    if (!open)
+        return failed_plan(
+            common::make_error<
+                "the built-in reader is not available: the trace library did "
+                "not register it">(common::ErrorCode::NotFound)
+                .error());
+    return open(path, index_dir);
 }
 
 LazyFrame LazyFrame::select(dstd::Vector<dstd::String> names) const {

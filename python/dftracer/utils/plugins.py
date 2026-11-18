@@ -20,6 +20,7 @@ Example::
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, NamedTuple, Union, cast
 
@@ -27,15 +28,18 @@ from ._jit_errors import check_port_wiring, translate_plan_error, translate_run_
 from .dataframe import DataFrame
 from .dftracer_utils_ext import DataFrame as _NativeDataFrame
 from .dftracer_utils_ext import Plugins as _NativePlugins
+from .dftracer_utils_ext import _load_plugin, _unload_plugin
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     import pyarrow as pa
 
     from .dftracer_utils_ext import PluginRecord
     from .lazyframe import LazyFrame
     from .runtime import Runtime
 
-__all__ = ["Plugins", "PluginInfo", "PluginRun", "unnest"]
+__all__ = ["Plugins", "PluginHandle", "PluginInfo", "PluginRun", "load_plugin", "unnest"]
 
 # A JSON-serializable value tree (config is handed straight to json.dumps).
 JSONValue = Union[str, int, float, bool, None, List["JSONValue"], Dict[str, "JSONValue"]]
@@ -260,3 +264,67 @@ class Plugins:
         if isinstance(obj, _NativeDataFrame):
             return DataFrame(obj)
         return cast("_RunResult", obj)
+
+
+class PluginHandle:
+    """A plugin loaded into the process by :func:`load_plugin`.
+
+    The plugin's file formats and the rest it registers stay available to every
+    reader in the process (:func:`scan_file`, :class:`TraceViewer`,
+    :class:`Indexer`) until :meth:`close` or the end of the ``with`` block.
+    """
+
+    __slots__ = ("_path", "_closed")
+
+    def __init__(self, path: str) -> None:
+        self._path = path
+        self._closed = False
+
+    @property
+    def path(self) -> str:
+        """The path the plugin was loaded from."""
+        return self._path
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def close(self) -> None:
+        """Unload the plugin when no other handle of the same path holds it.
+
+        Raises ``DFTUtilsValueError``, and keeps the plugin loaded, while a
+        :class:`LazyFrame` made by :func:`scan_file` through one of its file
+        formats is alive: drop it first. A second call does nothing. A plugin
+        named by ``DFTRACER_UTILS_PLUGINS`` stays loaded for the process.
+        """
+        if self._closed:
+            return
+        _unload_plugin(self._path)
+        self._closed = True
+
+    def __enter__(self) -> PluginHandle:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        self.close()
+
+
+def load_plugin(path: str | os.PathLike[str]) -> PluginHandle:
+    """Load the compiled plugin at ``path`` into the process and return its
+    handle, which works as a context manager::
+
+        with dft.load_plugin("csv_reader.so"):
+            frame = dft.scan_file("data.csv").collect()
+
+    Loading a path that is already loaded, by the handle of an earlier call or
+    by ``DFTRACER_UTILS_PLUGINS``, loads nothing again. Raises a
+    ``DFTUtilsError`` that names the path when it does not load.
+    """
+    text = os.fspath(path)
+    _load_plugin(text)
+    return PluginHandle(text)

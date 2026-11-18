@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dataframe/internal/file_format_registry.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -531,6 +532,16 @@ View::View(detail::ScanPlan plan) : plan_(), lf_(detail::scan::collect(plan)) {
 View::View(detail::ScanPlan plan, dataframe::LazyFrame lf)
     : plan_(std::move(plan)), lf_(std::move(lf)) {}
 
+void register_trace_reader() {
+    dataframe::set_trace_open(
+        [](dstd::StringView path, dstd::StringView index_dir) {
+            const dstd::String file(path);
+            return View::from_file(
+                       file, internal::determine_index_path(file, index_dir))
+                .lazy();
+        });
+}
+
 View View::from_file(dstd::String file_path, dstd::String index_path) {
     dstd::Vector<ViewFile> files;
     files.push_back(ViewFile{std::move(file_path), std::move(index_path)});
@@ -544,9 +555,10 @@ View View::from_files(dstd::Vector<ViewFile> files) {
 }
 
 coro::CoroTask<View> View::from_directory(dstd::String dir,
-                                          dstd::String index_dir) {
-    auto listing =
-        detail::scan::from_directory(std::move(dir), std::move(index_dir));
+                                          dstd::String index_dir,
+                                          dstd::String format) {
+    auto listing = detail::scan::from_directory(
+        std::move(dir), std::move(index_dir), std::move(format));
     detail::ScanPlan plan = co_await std::move(listing);
     if (plan->error) co_return View().failed(*plan->error);
     co_return View(std::move(plan));

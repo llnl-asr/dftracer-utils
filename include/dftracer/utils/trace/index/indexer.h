@@ -44,6 +44,11 @@ struct BloomOptions {
 struct IndexerOptions {
     /// Directory holding the index; empty puts it beside each trace.
     dstd::String index_dir;
+    /// The reader of every file, by name: "jsonl" for the built-in trace
+    /// reader or a registered file format. Empty picks one per file by
+    /// content, as @ref dataframe::LazyFrame::scan_file does. An unknown name
+    /// is an INVALID_ARGUMENT error from open.
+    dstd::String format;
     std::size_t checkpoint_size =
         common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     /// Worker count; 0 uses all cores.
@@ -169,7 +174,8 @@ class Indexer {
     /// `paths` holds trace files and directories; a directory contributes the
     /// trace files (.pfw, .jsonl and .ndjson, plain or gzip) directly
     /// inside it. A file that a registered plugin file format claims (the
-    /// probe @ref dataframe::LazyFrame::scan_file uses) is read by that format,
+    /// probe @ref dataframe::LazyFrame::scan_file uses, or the format named by
+    /// IndexerOptions::format) is read by that format,
     /// one summary granule per chunk of the format, so name such a file itself,
     /// not its directory. Reads nothing else and writes nothing. An
     /// INVALID_ARGUMENT error for no paths or an invalid option, and NOT_FOUND

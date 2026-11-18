@@ -375,12 +375,15 @@ class LazyFrame {
    public:
     static LazyFrame scan(dstd::SharedPtr<const Source> source);
 
-    /// A plan over the file at `path`, opened by the registered file-format
-    /// factory with the highest probe score for it (a plugin's
-    /// dftu_file_format_vt). A file no format claims is a NotFound error kept
-    /// as @ref status(), and so is a tie between two formats (an
-    /// InvalidArgument one, naming both), as is the error the winning
-    /// format's open reported. The plan holds the open file, so a later
+    /// A plan over the file at `path`, opened by the reader with the highest
+    /// probe score for it: a registered file format (a plugin's
+    /// dftu_file_format_vt) or the built-in trace reader, which scores 50 for a
+    /// gzip file and for text whose first lines are JSON objects. A non-empty
+    /// `format` names the reader and nothing is probed; an unknown name is an
+    /// InvalidArgument error that lists the known ones. A file no reader claims
+    /// is a NotFound error kept as @ref status(), and so is a tie between two
+    /// readers (an InvalidArgument one, naming both), as is the error the
+    /// winning reader's open reported. The plan holds the open file, so a later
     /// unregistration does not affect it.
     ///
     /// A format that splits the file in chunks and gave it an index (built by
@@ -389,7 +392,8 @@ class LazyFrame {
     /// beside the file when `index_dir` is empty. A file with no index, or one
     /// that changed since it was indexed, is read whole.
     static LazyFrame scan_file(dstd::StringView path,
-                               dstd::StringView index_dir = {});
+                               dstd::StringView index_dir = {},
+                               dstd::StringView format = {});
 
     LazyFrame select(dstd::Vector<dstd::String> names) const;
     LazyFrame filter(Expr predicate) const;

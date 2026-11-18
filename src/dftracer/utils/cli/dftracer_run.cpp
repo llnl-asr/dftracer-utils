@@ -129,6 +129,7 @@ class RunArgParse : public cli::ArgParse {
                           "Trace files or a folder of trace files"};
     cli::RuntimeArgs runtime_args;
     cli::IndexingArgs indexing;
+    cli::ReaderArgs reader;
     cli::WatchdogArgs watchdog;
 
     bool no_auto_index = false;
@@ -138,7 +139,8 @@ class RunArgParse : public cli::ArgParse {
         indexing.with_force = false;
         indexing.index_dir_help =
             "Directory where .dftindex stores are created";
-        schema(inputs, runtime_args, indexing, watchdog);
+        load_plugins_after_parse();
+        schema(inputs, runtime_args, indexing, reader, watchdog);
     }
 
    protected:
@@ -270,6 +272,7 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
             internal::determine_index_path(file_path, index_dir);
         vf.index_path.assign(index_path.data(), index_path.size());
         vf.checkpoint_size = checkpoint_size;
+        vf.format = cli->reader.format;
         view_files.push_back(std::move(vf));
     }
 

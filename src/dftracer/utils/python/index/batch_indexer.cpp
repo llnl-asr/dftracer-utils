@@ -68,6 +68,7 @@ static void Indexer_dealloc(IndexerObject* self) {
     Py_XDECREF(self->bloom_fields);
     Py_XDECREF(self->extensions);
     Py_XDECREF(self->schema);
+    Py_XDECREF(self->format);
     Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
@@ -85,6 +86,7 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject*, PyObject*) {
         self->extensions = nullptr;
         self->memory_budget = 0;
         self->schema = nullptr;
+        self->format = nullptr;
         self->false_positive_rate = ChunkIndexerConfig{}.false_positive_rate;
         self->expected_entries =
             ChunkIndexerConfig{}.expected_entries_per_chunk;
@@ -127,8 +129,10 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     PyObject* extensions_obj = Py_None;
     unsigned long long memory_budget = 0;
     PyObject* schema_obj = Py_None;
+    PyObject* format_obj = Py_None;
 
-    if (!parse_kw<"O|spppdOppnnOOdnndnOKO">(
+    if (!dftracer::utils::python::core::ensure_plugins()) return -1;
+    if (!parse_kw<"O|spppdOppnnOOdnndnOKOO">(
             args, kwds,
             {"files",           "index_dir",           "require_checkpoint",
              "require_bloom",   "build_bloom",         "time_interval_ms",
@@ -136,13 +140,14 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
              "checkpoint_size", "parallelism",         "runtime",
              "bloom_fields",    "false_positive_rate", "expected_entries",
              "path_budget",     "stats_share",         "auto_max_distinct",
-             "extensions",      "memory_budget",       "schema"},
+             "extensions",      "memory_budget",       "schema",
+             "format"},
             &files_arg, &index_dir, &require_checkpoint, &require_bloom,
             &build_bloom, &time_interval_ms, &group_keys_obj,
             &compute_percentiles, &group_by_file, &checkpoint_size,
             &parallelism, &runtime_arg, &bloom_fields_obj, &false_positive_rate,
             &expected_entries, &path_budget, &stats_share, &auto_max_distinct,
-            &extensions_obj, &memory_budget, &schema_obj)) {
+            &extensions_obj, &memory_budget, &schema_obj, &format_obj)) {
         return -1;
     }
     if (!(false_positive_rate > 0.0 && false_positive_rate < 1.0)) {
@@ -186,6 +191,14 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
         }
         Py_INCREF(schema_obj);
         Py_XSETREF(self->schema, schema_obj);
+    }
+    if (format_obj != Py_None) {
+        if (!PyUnicode_Check(format_obj)) {
+            PyErr_SetString(PyExc_TypeError, "format must be a str or None");
+            return -1;
+        }
+        Py_INCREF(format_obj);
+        Py_XSETREF(self->format, format_obj);
     }
     self->false_positive_rate = false_positive_rate;
     self->expected_entries = static_cast<std::size_t>(expected_entries);
@@ -313,6 +326,10 @@ indexer_options(IndexerObject* self) {
     if (self->schema) {
         const char* p = as_utf8(self->schema);
         o.schema = p ? p : "";
+    }
+    if (self->format) {
+        const char* p = as_utf8(self->format);
+        o.format = p ? p : "";
     }
     if (!self->build_bloom) {
         o.bloom.reset();

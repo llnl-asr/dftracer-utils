@@ -201,7 +201,17 @@ struct ViewFile {
     /// With a pin, the view also leaves out the bytes before this uncompressed
     /// offset, which must be the start of a line.
     std::uint64_t pinned_uc_begin = 0;
+    /// The reader of the file by name; empty picks it by content. A View reads
+    /// trace files only, so a name other than "jsonl", or a file a plugin file
+    /// format claims, makes the View fail.
+    dstd::String format = {};
 };
+
+/// Makes @ref dataframe::LazyFrame::scan_file open a file the built-in reader
+/// claims as the @ref View of that file. Idempotent; every entry point that
+/// reads traces calls it once, and a process that never reads a trace file
+/// through scan_file needs not.
+void register_trace_reader();
 
 struct ExportStats {
     std::uint64_t events_matched = 0;
@@ -727,9 +737,11 @@ class View : public dataframe::LazyOps<View> {
     /// directories are skipped. Each file's index resolves under
     /// `index_dir` (empty = beside the trace). The files with records must
     /// share one record_schema. A directory that cannot be listed is an Io
-    /// error, kept as @ref status.
+    /// error, kept as @ref status. `format` is @ref ViewFile::format of every
+    /// file.
     static coro::CoroTask<View> from_directory(dstd::String dir,
-                                               dstd::String index_dir = "");
+                                               dstd::String index_dir = "",
+                                               dstd::String format = "");
 
     /// The error this view kept: that of a builder that refused, or of the
     /// files whose index could not be read; success when it holds none.

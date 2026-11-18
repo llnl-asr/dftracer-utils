@@ -48,6 +48,21 @@ repeated in each tool's section.
   size their output gzip members to match. See :ref:`multi-member-gzip`.
 - ``-f, --force`` - Force index recreation
 
+**Reader** (``ReaderArgs``)
+
+- ``--format <name>`` - Force the reader of every input file by name instead of
+  the content probe: ``jsonl`` (the built-in trace reader) or a file format a
+  plugin registered. An unknown name is an error that lists the known ones.
+  Given by ``dftracer_index``, ``dftracer_view`` and ``dftracer_run``. A
+  ``dftracer_index`` run indexes a file that a plugin file format reads through
+  that format; the other two read trace files only, so a file a plugin format
+  claims, or a plugin name here, stops them with an error that points to
+  ``scan_file``.
+
+Plugins named by ``DFTRACER_UTILS_PLUGINS`` (see :doc:`environment`) are loaded
+before any tool parses its arguments, so their formats are known to
+``--format``.
+
 **duql** (``DuqlArgs``)
 
 - ``-q, --query <duql>`` - duql filter
@@ -531,7 +546,7 @@ dftracer_index
 - ``--plugin <path>`` - Plugin shared library to load for the build. Its index extensions are built for every file (repeatable)
 
 This binary also accepts the shared :ref:`cli-shared-flags` (Pipeline,
-Indexing).
+Indexing, Reader).
 
 **Example:**
 

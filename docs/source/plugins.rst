@@ -2078,8 +2078,13 @@ extension over record lines: per chunk min and max of one number.
 ----------------------------------------
 
 A file format teaches the engine to read a file kind it does not know. The
-engine asks every registered format for a score, picks the highest, and scans
-the file through it: ``LazyFrame::scan_file(path)`` from C++,
+engine asks every reader for a score, picks the highest, and scans the file
+through it. The built-in trace reader is one of the readers, named ``jsonl``:
+it scores 50 for a gzip file (by its magic bytes) and for a text file whose
+first lines are JSON objects, and 10 for an empty one, so a format that scores
+above 50 wins such a file and a format at exactly 50 ties with it. The probe
+reads only the first 4 KiB of the file. The same probe picks the reader for
+``Indexer``, ``TraceViewer`` and ``scan_file``: ``LazyFrame::scan_file(path)`` from C++,
 ``dftu_lazyframe_scan_file(path, NULL, 0, &lf)`` from C. The planning, the columns and
 the result are the ones ``LazyFrame::scan`` gives, so every op works on the
 file without knowing its format.
@@ -2088,9 +2093,10 @@ A ``dftu_file_format_vt`` (``plugins/abi/file_formats.h``) is:
 
 - ``probe(self, head, n, path)`` returns 0 to 100. The head is the first 4 KiB
   of the file, read once for the whole choice. The highest score above 0 wins,
-  and two formats at the same top score are an error that names both, so a
-  format must not claim a file another one claims just as well. Nothing above
-  0 is ``NotFound``, "no format claims <path>". ``extensions`` is a hint only.
+  and two readers at the same top score, the built-in one included, are an
+  error that names both, so a format must not claim a file another one claims
+  just as well. Nothing above 0 is ``NotFound``, "no format claims <path>".
+  ``extensions`` is a hint only.
 - ``open(ctx, self, path, &file)`` opens the file, ``schema(ctx, file,
   &out)`` fills a ``dftu_schema`` with its names and types, and
   ``chunks(ctx, file, &n)`` says how many pieces of the file can be scanned
@@ -2481,5 +2487,37 @@ the file:
    frame = dft.scan_file("rows.toy").collect()
 
 The plan is lazy; ``collect()`` raises ``DFTUtilsNotFoundError``
-(``no format claims <path>``) for a file no registered format claims, and
-``DFTUtilsValueError`` when two formats tie for it.
+(``no format claims <path>``) for a file no reader claims, and
+``DFTUtilsValueError`` when two readers tie for it. ``scan_file(path,
+format="name")`` skips the probe and reads with the reader of that name:
+``"jsonl"`` or a registered format; an unknown name raises
+``DFTUtilsValueError`` and lists the known ones. ``Indexer(..., format=)`` and
+``TraceViewer(..., format=)`` take the same argument, and the tools
+``dftracer_index``, ``dftracer_view`` and ``dftracer_run`` take ``--format``. A
+``TraceViewer`` reads trace files only: a file a plugin format claims makes it
+fail with an error that points to ``scan_file``.
+
+.. _plugins-global:
+
+**Plugins for the whole process.** ``DFTRACER_UTILS_PLUGINS`` is a list of
+plugin paths separated by ``:``. The tools, the Python extension and the server
+load them once, at the first call that reads a trace, and keep them until the
+process ends. A path that does not load is an error that names the path, an
+empty item is skipped and a path named twice loads once.
+
+From Python, ``dft.load_plugin(path)`` loads one plugin and returns a handle
+that works as a context manager:
+
+.. code-block:: python
+
+   import dftracer.utils as dft
+
+   with dft.load_plugin("./csv_reader.so"):
+       frame = dft.scan_file("data.csv").collect()
+   # the format is gone here
+
+A path that is already loaded, by another handle or by the environment, loads
+nothing again, and a plugin goes when its last handle closes. ``close()`` raises
+``DFTUtilsValueError`` and keeps the plugin while a plan made by ``scan_file``
+through one of its formats is alive: drop the plan first. A plugin named by
+``DFTRACER_UTILS_PLUGINS`` stays loaded after its handle closes.

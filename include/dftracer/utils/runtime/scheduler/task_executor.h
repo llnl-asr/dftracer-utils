@@ -193,9 +193,9 @@ class TaskExecutor : public coro::Executor {
 
     /// Records `executor` as the I/O backend owner of the calling thread, or
     /// clears it with null. A worker calls it where it sets
-    /// @ref Executor::current, so a scope that suppresses that executor
-    /// falls back to blocking calls too. Not inherited by threads the executor
-    /// did not start.
+    /// @ref dftracer::utils::coro::Executor::current, so a scope that
+    /// suppresses that executor falls back to blocking calls too. Not inherited
+    /// by threads the executor did not start.
     static void set_current_backend(TaskExecutor* executor) noexcept;
 };
 

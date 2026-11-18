@@ -861,8 +861,9 @@ enum class JoinHow : std::int32_t {
     Nest = 8,
 };
 
-/// How completely a source applied a pushed-down filter, per @ref ScanRequest
-/// filter. Guides whether the engine must re-apply it over the survivors.
+/// How completely a source applied a pushed-down filter, per @ref
+/// dftracer::utils::dataframe::ScanRequest filter. Guides whether the engine
+/// must re-apply it over the survivors.
 enum class Pushed : std::int32_t {
     No = 0,       ///< Not applied by the source; engine applies it.
     Inexact = 1,  ///< Pruned I/O but did not filter; re-apply.

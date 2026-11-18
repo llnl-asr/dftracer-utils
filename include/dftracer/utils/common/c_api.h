@@ -5,9 +5,9 @@
 /** @file
  * The error and call-context types every C ABI shares.
  *
- * A fallible C function returns a @ref dftu_status: negative is an error,
- * zero or positive is success (positive values such as DFTU_END carry a
- * non-error outcome). Results go through out-parameters.
+ * A fallible C function returns a @ref dftu_status "dftu_status": negative is
+ * an error, zero or positive is success (positive values such as DFTU_END carry
+ * a non-error outcome). Results go through out-parameters.
  *
  * A library function (the caller calls the library) reports the error message
  * through a caller-owned @ref dftu_error. A callback (the host calls a plugin)
@@ -50,7 +50,7 @@ enum {
  *
  * Caller-owned. Initialize with DFTU_ERROR_INIT. A failing call releases what
  * the error held, then fills it; a successful call leaves it as it was. The
- * caller calls @ref dftu_error_release once it is done with the message.
+ * caller calls `dftu_error_release` once it is done with the message.
  * (domain, code) is the precise identity; `status` is the portable code.
  */
 typedef struct dftu_error {
@@ -70,7 +70,7 @@ static inline void dftu_error_release(dftu_error* e) {
 /** The host-owned context of one callback call.
  *
  * Valid only for the call. The plugin reports an error with
- * @ref dftu_fail and polls @ref dftu_check in long loops. A plugin never
+ * `dftu_fail` and polls `dftu_check` in long loops. A plugin never
  * copies or frees it.
  */
 typedef struct dftu_ctx dftu_ctx;

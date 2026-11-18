@@ -135,7 +135,7 @@ class ScopeTracer {
 
 /// Emission macros: compile-gated by DFTRACER_UTILS_LOGGER_LEVEL_* and runtime-
 /// gated by the current level. The first argument is a string literal in the
-/// @ref dstd::fmt syntax; every site is type-checked in every build. A disabled
+/// `dstd::fmt` syntax; every site is type-checked in every build. A disabled
 /// level costs nothing (its call sits in a discarded `if constexpr` branch) or
 /// one predicted branch with its arguments left unevaluated. Do not put
 /// DEBUG/TRACE in a per-event/per-byte inner loop; guard those with `#if`

@@ -23,8 +23,9 @@ namespace dftracer::utils::arrow {
 dstd::Result<Batch> to_arrow(const dataframe::Series& col);
 
 /**
- * @brief Exports `frame` as one @ref Batch: a struct array with one child per
- * column, zero copy, named by the frame's column names.
+ * @brief Exports `frame` as one @ref dftracer::utils::arrow::Batch "Batch": a
+ * struct array with one child per column, zero copy, named by the frame's
+ * column names.
  *
  * An InvalidArgument error for a frame with a column that holds no buffers.
  */

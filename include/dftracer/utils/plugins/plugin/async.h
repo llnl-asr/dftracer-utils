@@ -56,8 +56,8 @@ struct ProxyCtx {
 
 namespace detail {
 
-/// What `co_await fail(error)` does in a @ref Task: ends it with the error. The
-/// task is never resumed.
+/// What `co_await fail(error)` does in a @ref dftracer::utils::plugins::Task
+/// "Task": ends it with the error. The task is never resumed.
 struct [[nodiscard]] FailAwait {
     dstd::Error error;
 
@@ -177,8 +177,8 @@ class Task {
 
 namespace detail {
 
-/// What `co_await result` does in a @ref Task: the value, or the end of the
-/// task with the error.
+/// What `co_await result` does in a @ref dftracer::utils::plugins::Task "Task":
+/// the value, or the end of the task with the error.
 template <class T>
 struct ResultAwait {
     dstd::Result<T> result;
@@ -231,8 +231,8 @@ class [[nodiscard]] Settled {
 
 }  // namespace detail
 
-/// `co_await fail(error)` ends the awaiting @ref Task with `error`. Pass a
-/// named error or a call result, not a braced temporary.
+/// `co_await fail(error)` ends the awaiting @ref dftracer::utils::plugins::Task
+/// with `error`. Pass a named error or a call result, not a braced temporary.
 inline detail::FailAwait fail(dstd::Error error) noexcept {
     return detail::FailAwait{std::move(error)};
 }
@@ -244,10 +244,10 @@ class AsyncValue;
 
 /// Owns a started task until it is awaited or released, or the error of a call
 /// the host refused to start. `co_await op` hands the task to the host and ends
-/// the awaiting @ref Task with the task's error if it failed; the awaited value
-/// is the call's @ref dstd::Condition, @ref dstd::Condition
-/// "Condition::Unknown" when it succeeded. `co_await op.expected()` gives the
-/// failure as a
+/// the awaiting @ref dftracer::utils::plugins::Task with the task's error if it
+/// failed; the awaited value is the call's @ref dstd::Condition, @ref
+/// dstd::Condition "Condition::Unknown" when it succeeded. `co_await
+/// op.expected()` gives the failure as a
 /// @ref dstd::Result instead. An op dropped without either, for example
 /// when its coroutine frame is destroyed, gives its task back to the host.
 class [[nodiscard]] AsyncOp {
@@ -339,11 +339,11 @@ class [[nodiscard]] AsyncOp {
 
 /// Several tasks awaited together: the host resumes the Task when all of them
 /// finished. It takes what the SDK's release_op gives, so an op that never
-/// started fails the awaiting @ref Task with its own status and message, and
-/// the tasks that did start are given back to the host unrun. `co_await` ends
-/// the awaiting Task with the first error; `co_await all.expected()` gives it
-/// as a @ref dstd::Result. Owns the tasks until awaited and gives them back to
-/// the host when dropped unawaited.
+/// started fails the awaiting @ref dftracer::utils::plugins::Task with its own
+/// status and message, and the tasks that did start are given back to the host
+/// unrun. `co_await` ends the awaiting Task with the first error; `co_await
+/// all.expected()` gives it as a @ref dstd::Result. Owns the tasks until
+/// awaited and gives them back to the host when dropped unawaited.
 class [[nodiscard]] AsyncAll {
    public:
     AsyncAll(AsyncAll&& other) noexcept

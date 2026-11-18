@@ -57,8 +57,8 @@ class List {
     dstd::Span<const T> items_;
 };
 
-/// A text that is neither a string literal nor a @ref dstd::StringView, such
-/// as a @ref dstd::String. The literal has its own array form, which keeps it
+/// A text that is neither a string literal nor a `dstd::StringView`, such
+/// as a `dstd::String`. The literal has its own array form, which keeps it
 /// from decaying to a pointer and then to bool.
 template <class S>
 concept TextLike = !std::is_array_v<S> && !std::is_pointer_v<S> &&
@@ -121,6 +121,7 @@ class Expr {
     detail::QueryNodePtr node_;
 };
 
+/// @cond INTERNAL
 namespace detail {
 
 inline Expr QueryAccess::expr(QueryNodePtr node) {
@@ -130,6 +131,7 @@ inline const QueryNode& QueryAccess::node(const Expr& e) { return *e.node_; }
 inline QueryNodePtr QueryAccess::release(Expr& e) { return std::move(e.node_); }
 
 }  // namespace detail
+/// @endcond
 
 /// field op value with an explicit CompareOp and prebuilt literal.
 inline Expr field_cmp(dstd::StringView name, CompareOp op, LiteralNode value) {

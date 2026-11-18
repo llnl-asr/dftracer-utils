@@ -161,7 +161,7 @@ dstd::Result<Indexer> open_scanned(dstd::Vector<runtime::fs::FoundFile> files,
 ///
 /// Copies share one state. Use an Indexer from one thread at a time; separate
 /// Indexers over the same index root are serialized by the index write lock.
-/// Every call that can fail returns a @ref dftracer::utils::dstd::Result:
+/// Every call that can fail returns a `dstd::Result`:
 /// INVALID_ARGUMENT or NOT_FOUND from open, and the engine's I/O or
 /// compression error, naming the trace, from build.
 class Indexer {

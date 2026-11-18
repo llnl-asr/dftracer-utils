@@ -77,9 +77,9 @@ struct UdafOptions {
 /// bind gives a new `A` or an error, which fails the query. update feeds a
 /// batch to the states of its rows (null entries are skipped rows), combine
 /// merges `from` into `into` and leaves `from` unchanged, and finalize gives a
-/// @ref Column of one row per state, of the type bind chose (or an error). They
-/// only read `A`, so one `A` serves every state set. A UDAF that retracts rows
-/// is not written through this class.
+/// @ref dftracer::utils::dataframe::Column of one row per state, of the type
+/// bind chose (or an error). They only read `A`, so one `A` serves every state
+/// set. A UDAF that retracts rows is not written through this class.
 template <class A>
 concept UdafType =
     requires {
@@ -103,7 +103,8 @@ concept UdafType =
          { udaf.deserialize(state, in) } -> std::same_as<dstd::Result<void>>;
      });
 
-/// A @ref UdafType that names itself, for @ref make_udaf: `NAME` is the duql
+/// A @ref dftracer::utils::dataframe::UdafType that names itself, for
+/// @ref dftracer::utils::dataframe::make_udaf "make_udaf": `NAME` is the duql
 /// name, and `FLAGS`, `MIN_ARGS` and `MAX_ARGS` are optional (one argument by
 /// default).
 template <class A>

@@ -143,27 +143,27 @@ struct DataFrame {
     DataFrame head(std::int64_t n) const;
     DataFrame tail(std::int64_t n) const;
     DataFrame reverse() const;
-    /// Sort by column `name`; the errors of @ref dataframe::sort_by (a NotFound
+    /// Sort by column `name`; the errors of `dataframe::sort_by` (a NotFound
     /// error for an absent column, an InvalidArgument error for a nested one).
     dstd::Result<DataFrame> sort_by(dstd::StringView name,
                                     bool descending = false,
                                     bool nulls_last = true) const;
     /// Stable lexicographic sort by several key columns (nulls last, or first
-    /// when `nulls_last` is false); the errors of @ref
-    /// dataframe::sort_by_multi.
+    /// when `nulls_last` is false); the errors of
+    /// `dataframe::sort_by_multi`.
     dstd::Result<DataFrame> sort_by_multi(dstd::Span<const dstd::String> by,
                                           bool descending = false,
                                           bool nulls_last = true) const;
     /// Per-column form: `descending[i]` and `nulls_last[i]` (0 or 1) apply to
     /// `by[i]`. A span of size 1 broadcasts to every key; an empty span means
     /// ascending for `descending` and nulls last for `nulls_last`. The errors
-    /// of @ref dataframe::sort_by_multi.
+    /// of `dataframe::sort_by_multi`.
     dstd::Result<DataFrame> sort_by_multi(
         dstd::Span<const dstd::String> by,
         dstd::Span<const std::uint8_t> descending,
         dstd::Span<const std::uint8_t> nulls_last = {}) const;
     /// The k rows with the largest (or smallest) values of `name`; the errors
-    /// of @ref dataframe::topk.
+    /// of `dataframe::topk`.
     dstd::Result<DataFrame> topk(dstd::StringView name, std::int64_t k,
                                  bool largest = true) const;
 
@@ -179,7 +179,7 @@ struct DataFrame {
         return fill_null(to_scalar(value));
     }
     /// Distinct rows, keeping the first occurrence, keyed on every column or
-    /// on `subset` (empty = all); the errors of @ref dataframe::unique.
+    /// on `subset` (empty = all); the errors of `dataframe::unique`.
     dstd::Result<DataFrame> unique(
         dstd::Span<const dstd::String> subset = {}) const;
     /// Alias of unique().
@@ -211,7 +211,7 @@ struct DataFrame {
     dstd::Result<Series> is_unique() const;
     /// Int32 column: the part in [0, n_parts) each row lands in under a
     /// stable hash of the `keys` columns; the errors of
-    /// @ref dataframe::partition_id.
+    /// `dataframe::partition_id`.
     dstd::Result<Series> partition_id(dstd::Span<const dstd::String> keys,
                                       std::int64_t n_parts) const;
 
@@ -222,15 +222,15 @@ struct DataFrame {
     /// ordered comparison on a string or bool column).
     dstd::Result<Series> mask(const duql::Query& q) const;
 
-    /// Project the named columns; the errors of @ref dataframe::select.
+    /// Project the named columns; the errors of `dataframe::select`.
     dstd::Result<DataFrame> select(dstd::Span<const dstd::String> names) const;
-    /// Rename columns positionally; the errors of @ref dataframe::rename.
+    /// Rename columns positionally; the errors of `dataframe::rename`.
     dstd::Result<DataFrame> rename(
         dstd::Span<const dstd::String> new_names) const;
     DataFrame with_column(dstd::StringView name, const Series& col) const;
 
     /// Group rows by column `key` (first-seen order) and compute each
-    /// aggregate. The errors of @ref dataframe::group_by (a NotFound error for
+    /// aggregate. The errors of `dataframe::group_by` (a NotFound error for
     /// an unknown column or op).
     dstd::Result<DataFrame> group_by(dstd::StringView key,
                                      dstd::Span<const GroupAgg> aggs) const;
@@ -290,7 +290,7 @@ struct DataFrame {
 
     /// Reshape wide -> long: keep `id_vars`, stack `value_vars` into a
     /// `variable`/`value` column pair. `melt` is an alias. The errors of
-    /// @ref dataframe::unpivot.
+    /// `dataframe::unpivot`.
     dstd::Result<DataFrame> unpivot(
         dstd::Span<const dstd::String> id_vars,
         dstd::Span<const dstd::String> value_vars) const;
@@ -300,7 +300,7 @@ struct DataFrame {
 
     /// Expand a List `column`: each list element becomes its own row (other
     /// columns repeated); an empty/null list yields one null row. The errors
-    /// of @ref dataframe::explode.
+    /// of `dataframe::explode`.
     dstd::Result<DataFrame> explode(dstd::StringView column) const;
     /// UNNEST a List `column`: as explode, but an empty/null list drops the
     /// row unless `keep_empty`, and a List<Struct> flattens into one column
@@ -310,14 +310,14 @@ struct DataFrame {
 
     /// One-hot encode `column`: replace it with one Int8 column per distinct
     /// value (sorted), named `<column>_<value>`. The errors of
-    /// @ref dataframe::to_dummies.
+    /// `dataframe::to_dummies`.
     dstd::Result<DataFrame> to_dummies(dstd::StringView column) const;
 
     /// Reshape long -> wide: rows are the distinct `index` values (sorted), one
     /// value column per distinct `columns` value (sorted), each cell `values`
     /// aggregated over the matching rows. `agg` is the collision reducer
     /// (first|last|sum|min|max|mean; mean yields Float64). The errors of
-    /// @ref dataframe::pivot.
+    /// `dataframe::pivot`.
     dstd::Result<DataFrame> pivot(dstd::StringView index, dstd::StringView on,
                                   dstd::StringView values,
                                   dstd::StringView agg = "first") const;
@@ -331,7 +331,7 @@ struct DataFrame {
     /// (`period <= 0` means "= every"). One row per non-empty window, a leading
     /// Int64 `time_col` window-start column plus each aggregate. An
     /// InvalidArgument error when a non-null time is below the one before; the
-    /// other errors of @ref dataframe::group_by_dynamic.
+    /// other errors of `dataframe::group_by_dynamic`.
     dstd::Result<DataFrame> group_by_dynamic(dstd::StringView time_col,
                                              std::int64_t every,
                                              std::int64_t period,

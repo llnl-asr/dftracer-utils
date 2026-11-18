@@ -104,8 +104,16 @@ def test_float16_and_decimal_stay_native():
     assert mixed.to_polars().columns == ["a", "d"]
 
 
-def _pandas_native_strings(s):
-    return pd.Series(_native_numpy(s))
+def _pandas_documented(native):
+    """The column as ``to_pandas`` documents it, from the NumPy values: a
+    dictionary string column is ``category`` and an integer or bool column that
+    holds nulls is pandas' own nullable dtype."""
+    values = pd.Series(_native_numpy(native))
+    if native.encoding == 2:
+        return values.astype("category")
+    if native.null_count and pa.types.is_integer(pa.array(native).type):
+        return values.astype("Int64")
+    return values
 
 
 def _arrow_pandas_strings():
@@ -123,7 +131,7 @@ def test_series_to_pandas_strings_match_native(layout, chunked):
     s = _series(layout, chunked)
     _needs_capsule(s, "__arrow_c_array__")
     got = s.to_pandas()
-    want = _pandas_native_strings(s)
+    want = _pandas_documented(s)
     assert got.dtype == want.dtype
     assert got.equals(want)
     assert got.isna().tolist() == [v is None for v in VALUES]
@@ -136,7 +144,7 @@ def test_dataframe_to_pandas_matches_native(layout, chunked):
     df = _frame(layout, chunked)
     _needs_capsule(df["s"], "__arrow_c_array__")
     got = df.to_pandas()
-    want = pd.DataFrame({name: _native_numpy(df[name]) for name in df.columns})
+    want = pd.DataFrame({name: _pandas_documented(df[name]) for name in df.columns})
     assert (got.dtypes == want.dtypes).all()
     assert got.equals(want)
 
@@ -210,6 +218,6 @@ def test_collected_view_frame_to_pandas_strings():
     s = Series(arr)
     assert s.encoding == 2
     got = s.to_pandas()
-    assert got.dtype == _pandas_native_strings(s).dtype
+    assert got.dtype == _pandas_documented(s).dtype
     assert got.isna().tolist() == [v is None for v in values]
     assert [v for v in got if isinstance(v, str)] == [v for v in values if v is not None]

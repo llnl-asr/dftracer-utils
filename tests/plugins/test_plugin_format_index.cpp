@@ -536,9 +536,9 @@ TEST_CASE("a format with no chunk tokens is one chunk to the index") {
 
 // Rewrites `rows` ids from `first` in place with the same byte size as before
 // and an mtime a minute later, so only the stat's mtime says the file changed.
-void rewrite_same_size(dstd::StringView dir, dstd::StringView name,
-                       std::int64_t first, std::int64_t rows,
-                       dstd::StringView magic) {
+static void rewrite_same_size(dstd::StringView dir, dstd::StringView name,
+                              std::int64_t first, std::int64_t rows,
+                              dstd::StringView magic) {
     const dstd::String path = write_rows(dir, name, first, rows, magic);
     struct stat st;
     REQUIRE(::stat(path.c_str(), &st) == 0);
@@ -579,7 +579,7 @@ TEST_CASE("a scan of a rewritten file ignores its stale index") {
     }
 }
 
-dstd::Vector<dstd::String> column_names(const DataFrame& df) {
+static dstd::Vector<dstd::String> column_names(const DataFrame& df) {
     dstd::Vector<dstd::String> names;
     for (const Series& column : df.columns)
         names.push_back(dstd::String(column.name()));

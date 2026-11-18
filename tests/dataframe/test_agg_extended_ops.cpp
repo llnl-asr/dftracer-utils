@@ -56,9 +56,9 @@ constexpr std::int32_t VC_BITS = 2;
 constexpr std::int32_t VC_TAG = 3;
 constexpr std::int32_t VC_YV = 4;
 
-AggSpec quantile_spec(std::int32_t value_col, const char* out, double q,
+AggSpec quantile_spec(std::int32_t value_col, dstd::String out, double q,
                       Interpolation interp) {
-    AggSpec s{AggOp::Quantile, value_col, out, q};
+    AggSpec s{AggOp::Quantile, value_col, std::move(out), q};
     s.interp = interp;
     return s;
 }
@@ -120,7 +120,7 @@ dstd::String render(const Series& c, std::int64_t i) {
 }
 
 // Row index of key value `key` in a finalized frame keyed on one Int64 column.
-std::int64_t row_of(const DataFrame& d, const dstd::String& key_name,
+std::int64_t row_of(const DataFrame& d, dstd::StringView key_name,
                     std::int64_t key) {
     const Series c = d.column(key_name);
     for (std::int64_t i = 0; i < d.num_rows(); ++i)

@@ -530,11 +530,12 @@ def test_exact_agg_runs_median_quantile_nunique_and_sum_in_one_call(client):
 
 def test_exact_agg_accepts_a_quantile_agg_and_stays_partitioned(client):
     f = DaskFrame.from_function(make_keyed, range(3), client)
-    out = f.group_by("k").agg(exact=True, q=col("x").quantile(0.25))
-    assert out.npartitions == f.npartitions
-    got = out.to_frame().to_pandas().sort_values("k").reset_index(drop=True)
-    want = f.to_frame().group_by("k").quantile(0.25).to_pandas().sort_values("k")
-    assert np.abs(got["q"].to_numpy(float) - want["x"].to_numpy(float)).max() <= 1e-9
+    for interp in ("nearest", "lower", "higher", "midpoint", "linear"):
+        out = f.group_by("k").agg(exact=True, q=col("x").quantile(0.3, interp))
+        assert out.npartitions == f.npartitions
+        got = out.to_frame().to_pandas().sort_values("k").reset_index(drop=True)
+        want = f.to_frame().group_by("k").quantile(0.3, interp).to_pandas().sort_values("k")
+        assert np.abs(got["q"].to_numpy(float) - want["x"].to_numpy(float)).max() <= 1e-9
     f.close()
 
 

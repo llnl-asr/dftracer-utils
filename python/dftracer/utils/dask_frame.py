@@ -23,6 +23,7 @@ from typing import (
     Callable,
     Dict,
     List,
+    Literal,
     Optional,
     Sequence,
     Tuple,
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
 __all__ = ["DaskFrame"]
 
 Keys = Union[str, Sequence[str]]
+_Interpolation = Literal["linear", "nearest", "lower", "higher", "midpoint"]
 # One ``agg`` value: an ``Agg``, a ``(column, op)`` pair or ``(column, "quantile", q)``.
 AggSpec = Union[Agg, Tuple[str, str], Tuple[str, str, float]]
 # A plain value ``map_partitions`` hands to every call of ``fn`` after the partition.
@@ -282,15 +284,17 @@ def _finish(partial: DataFrame, keys: List[str], specs: List[Tuple[str, str, str
     return partial.with_columns(**out).select(*keys, *[name for name, _, _ in specs])
 
 
-def _parse(name: str, spec: AggSpec) -> Tuple[str, str, Optional[float]]:
-    """One ``agg`` value as ``(column, op, param)``: an ``Agg`` over one plain column, or a
-    ``(column, op)`` pair, or ``(column, "quantile", q)``. A ``col(c).quantile(q)`` Agg is a
-    quantile, ``median`` is the 0.5 quantile."""
+def _parse(name: str, spec: AggSpec) -> Tuple[str, str, Optional[float], _Interpolation]:
+    """One ``agg`` value as ``(column, op, param, interpolation)``: an ``Agg`` over one plain
+    column, or a ``(column, op)`` pair, or ``(column, "quantile", q)`` (linear). A
+    ``col(c).quantile(q)`` Agg is a quantile with its own interpolation, ``median`` is the 0.5
+    quantile."""
     if isinstance(spec, Agg):
         if isinstance(spec, _UdafAgg):
             raise TypeError(f"agg {name!r}: the udaf {spec.name!r} does not combine from partials")
         column = getattr(spec.value, "name", None)
         op, param = _AGG_OP.get(spec.op, spec.op), None
+        interpolation = cast(_Interpolation, getattr(spec, "interpolation", None) or "linear")
         if op == "pct":
             op, param = "quantile", spec.param
         elif op == "quantile":
@@ -298,29 +302,35 @@ def _parse(name: str, spec: AggSpec) -> Tuple[str, str, Optional[float]]:
     else:
         column, op, *rest = spec
         param = rest[0] if rest else None
+        interpolation: _Interpolation = "linear"
     if column is None:
         raise ValueError(
             f"agg {name!r}: only an aggregate over one plain column combines from partials"
         )
     if op == "quantile" and param is None:
         raise ValueError(f"agg {name!r}: a quantile needs its level, as (column, 'quantile', q)")
-    return column, op, param
+    return column, op, param, interpolation
 
 
 def _exact_part(
-    frame: DataFrame, keys: List[str], specs: List[Tuple[str, str, str, Optional[float]]]
+    frame: DataFrame,
+    keys: List[str],
+    specs: List[Tuple[str, str, str, Optional[float], _Interpolation]],
 ) -> DataFrame:
     """Every requested aggregate per group over one whole-group partition."""
     outs: List[DataFrame] = []
-    direct = {n: _DIRECT[op](c) for n, c, op, _ in specs if op in _DIRECT}
+    direct = {n: _DIRECT[op](c) for n, c, op, _, _ in specs if op in _DIRECT}
     if direct:
         outs.append(_aggregate(frame, keys, direct))
-    for name, c, op, param in specs:
+    for name, c, op, param, interpolation in specs:
         if op in ("median", "quantile"):
             g = (
                 frame.select(*keys, c)
                 .group_by(keys)
-                .quantile(0.5 if op == "median" else cast(float, param))
+                .quantile(
+                    0.5 if op == "median" else cast(float, param),
+                    "linear" if op == "median" else interpolation,
+                )
             )
             outs.append(g.with_columns(**{name: _s(g, c)}).select(*keys, name))
         elif op == "nunique":
@@ -332,7 +342,7 @@ def _exact_part(
     out = outs[0]
     for o in outs[1:]:
         out = out.join(o, on=keys, how="inner")
-    return out.select(*keys, *[n for n, _, _, _ in specs])
+    return out.select(*keys, *[n for n, _, _, _, _ in specs])
 
 
 class _GroupBy:
@@ -354,10 +364,10 @@ class _GroupBy:
         ``(column, "set_union")``. The result then stays hash-partitioned by the keys."""
         self._frame._need_parts("group_by().agg")
         specs: List[Tuple[str, str, str]] = []
-        full: List[Tuple[str, str, str, Optional[float]]] = []
+        full: List[Tuple[str, str, str, Optional[float], _Interpolation]] = []
         plan: Dict[str, Tuple[str, ...]] = {}
         for name, spec in named.items():
-            column, op, param = _parse(name, spec)
+            column, op, param, interpolation = _parse(name, spec)
             if op not in _NEEDS and op not in _HOLISTIC:
                 raise ValueError(
                     f"agg {name!r}: {op} does not combine from partials; shuffle by the group key first"
@@ -367,7 +377,7 @@ class _GroupBy:
                     f"agg {name!r}: {op} does not combine from partials; shuffle by the group "
                     "key first (or pass exact=True)"
                 )
-            full.append((name, column, op, param))
+            full.append((name, column, op, param, interpolation))
             if op in _NEEDS:
                 specs.append((name, column, op))
                 plan[column] = tuple(dict.fromkeys(plan.get(column, ()) + _NEEDS[op]))

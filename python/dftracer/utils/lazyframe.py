@@ -966,12 +966,12 @@ def agg_spec_strings(
         tail = ""
         if spec.op == "quantile":
             code = _check_quantile(spec.param, spec.interpolation)
-            tail = f"::{spec.param!r}:{code}"
+            tail = f"::{float(spec.param)!r}:{code}"
         elif spec.by is not None or spec.param not in (None, 0.0):
             by = spec.by.name if isinstance(spec.by, _Col) else ""
             tail = f":{by}"
             if spec.param not in (None, 0.0):
-                tail += f":{spec.param!r}"
+                tail += f":{float(spec.param)!r}"
         if spec.value is None:
             strings.append(
                 f"{spec.op}::{spec.out}{tail}" if spec.out != spec.op or tail else spec.op

@@ -223,3 +223,17 @@ def test_clip_with_one_bound_on_integers():
     assert col("x").clip(1, 3).apply(DataFrame({"x": s})).to_list() == [1, 1, 3, 3]
     u = Series([0, 5, 2**63], dtype="uint64")
     assert col("x").clip(lower_bound=3).apply(DataFrame({"x": u})).to_list() == [3, 5, 2**63]
+
+
+def test_lazy_group_quantile_takes_a_numpy_level():
+    df = DataFrame({"k": [1, 1, 1, 2, 2], "x": [1.0, 2.0, 3.0, 4.0, 6.0]})
+    for level in (np.float64(0.5), np.float32(0.5)):
+        got = (
+            df.lazy()
+            .group_by("k")
+            .agg(q=col("x").quantile(level, "linear"), p=col("x").percentile(level * 100))
+            .collect()
+            .sort("k")
+        )
+        assert got["q"].to_list() == [2.0, 5.0]
+        assert got["p"].to_list() == [2.0, 5.0]

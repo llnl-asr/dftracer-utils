@@ -358,9 +358,14 @@ class ProviderSource final
             keys.push_back({k.name.c_str(), loans.lend(k.expr)});
         dstd::Vector<::dftu_apply_agg> aggs;
         aggs.reserve(spec.aggs.size());
-        for (const dataframe::AggregateExpr& a : spec.aggs)
+        for (const dataframe::AggregateExpr& a : spec.aggs) {
+            // dftu_apply_agg has no interpolation field.
+            if (a.op == dataframe::Agg::Quantile &&
+                a.interp != dataframe::Interpolation::Linear)
+                return dstd::nullopt;
             aggs.push_back({to_string(a.op), loans.lend(a.input),
                             loans.lend(a.by), a.param, a.out.c_str()});
+        }
         ::dftu_apply_request req{};
         req.kind = DFTU_APPLY_AGGREGATION;
         req.u.aggregation.keys = keys.data();

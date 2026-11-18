@@ -258,6 +258,25 @@ TEST_SUITE("source_hooks_c_abi") {
         CHECK(fx.agg_has_input == dstd::Vector<bool>{false, true});
     }
 
+    TEST_CASE("a quantile is offered only with linear interpolation") {
+        for (const dataframe::Interpolation interp :
+             {dataframe::Interpolation::Linear,
+              dataframe::Interpolation::Lower}) {
+            ApplyFixture fx;
+            fx.answer = DFTU_APPLY_NO_CHANGE;
+            dataframe::GroupAgg q{dataframe::Agg::Quantile, "val", "q", 0.3};
+            q.interp = interp;
+            dstd::Vector<dataframe::GroupAgg> aggs;
+            aggs.push_back(std::move(q));
+            dataframe::LazyFrame lf = c_frame(fx).group_by(
+                dstd::Vector<dstd::String>{"id"}, std::move(aggs));
+            lf.explain();
+            const bool linear = interp == dataframe::Interpolation::Linear;
+            CHECK(fx.agg_ops == (linear ? dstd::Vector<dstd::String>{"quantile"}
+                                        : dstd::Vector<dstd::String>{}));
+        }
+    }
+
     TEST_CASE("tail marshals its row count") {
         ApplyFixture fx;
         fx.answer = DFTU_APPLY_NO_CHANGE;

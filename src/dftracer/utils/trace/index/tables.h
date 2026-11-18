@@ -130,6 +130,9 @@ dstd::Result<dstd::Optional<dstd::String>> path_file(const Snapshot& snapshot,
                                                      store::IndexExtension ext,
                                                      dstd::StringView path);
 
+/// Whether the file holds postings of `path` keyed by the current value hash
+/// version. Postings of another version answer false, so no query prunes by
+/// them. @ref put_path stores the version in the marker of a postings path.
 dstd::Result<bool> has_postings(const Snapshot& snapshot, const FileRef& file,
                                 dstd::StringView path);
 dstd::Result<bool> has_posting(const Snapshot& snapshot, const FileRef& file,

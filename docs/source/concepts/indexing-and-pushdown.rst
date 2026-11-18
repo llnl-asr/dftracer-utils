@@ -22,7 +22,13 @@ chunk and per field (a JSON path):
   the timestamps fall, and ``te`` (event end) gives each chunk's time span.
 - ``bloom``: a bloom filter of the field's values, per chunk and for the
   whole file. A negative test is certain (no false negatives), so a chunk or
-  file can be dropped on it; a positive one means "maybe".
+  file can be dropped on it; a positive one means "maybe". A value is
+  hashed by its type: every integer is an int64, a whole double is that
+  integer (``42.0`` is ``42``, ``-0.0`` is ``0``), every NaN is one value and
+  a string is its bytes, so ``"42"`` is not ``42``. A number literal is also
+  probed as text on a path the catalog says may hold strings. Each stored
+  filter and posting carries a hash version; one this build does not know is
+  never used to prune.
 - ``counts``: the field's values with their counts, up to a size cap. Over the
   cap the chunk keeps no counts and is never pruned on them.
 - ``postings``: for ``name``, exactly which chunks hold each value.

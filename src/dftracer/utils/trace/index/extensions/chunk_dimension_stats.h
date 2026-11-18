@@ -13,11 +13,11 @@
 
 namespace dftracer::utils::trace::index::extensions {
 
-/// Per-dimension per-chunk metadata for query optimization.
-/// The text a number has in a bloom filter, shared by the index and the
-/// pruner's probe: an integral value as a plain integer, any other as
-/// dstd::to_string. Distinct values may share a text, which only makes the
-/// probe answer "may match".
+/// The text a number has as a zone bound and a counts key, shared by the index
+/// and the pruner: an integral value as a plain integer, any other as
+/// dstd::to_string. A string path's bloom filter holds the text of a number
+/// too, hashed as a string. Distinct values may share a text, which only
+/// makes a probe answer "may match".
 inline dstd::String canonical_number_text(double v) {
     constexpr double INT64_BOUND = 9223372036854775808.0;
     if (std::isfinite(v) && std::trunc(v) == v && v >= -INT64_BOUND &&

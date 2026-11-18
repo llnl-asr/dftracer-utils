@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash/value_hash.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/index/build/chunk_indexer.h>
@@ -151,13 +152,18 @@ TEST_SUITE("ChunkIndexer") {
         CHECK(output.bloom_filters.count("io.size") == 1);
 
         // Level values are 0-4
-        CHECK(output.bloom_filters.at("level").possibly_contains("0"));
-        CHECK(output.bloom_filters.at("level").possibly_contains("1"));
-        CHECK(output.bloom_filters.at("level").possibly_contains("4"));
+        CHECK(output.bloom_filters.at("level").possibly_contains_hashed(
+            dftracer::utils::dstd::hash::value_hash_int64(0)));
+        CHECK(output.bloom_filters.at("level").possibly_contains_hashed(
+            dftracer::utils::dstd::hash::value_hash_int64(1)));
+        CHECK(output.bloom_filters.at("level").possibly_contains_hashed(
+            dftracer::utils::dstd::hash::value_hash_int64(4)));
 
         // io.size values: 1024, 2048, ...
-        CHECK(output.bloom_filters.at("io.size").possibly_contains("1024"));
-        CHECK(output.bloom_filters.at("io.size").possibly_contains("2048"));
+        CHECK(output.bloom_filters.at("io.size").possibly_contains_hashed(
+            dftracer::utils::dstd::hash::value_hash_int64(1024)));
+        CHECK(output.bloom_filters.at("io.size").possibly_contains_hashed(
+            dftracer::utils::dstd::hash::value_hash_int64(2048)));
 
         dstd::fs::remove_all(test_dir).discard();
     }

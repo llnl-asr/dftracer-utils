@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash/value_hash.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
@@ -344,15 +345,13 @@ TEST_SUITE("IndexBuilder") {
         // confined to one member yields exactly that chunk.
         auto rare_chunks = index_take(trace::index::posting_granules(
             snapshot, file, "name",
-            dftracer::utils::trace::index::extensions::kinds::value_hash(
-                "rare")));
+            dftracer::utils::dstd::hash::value_hash_string("rare")));
         REQUIRE(rare_chunks.size() == 1);
         CHECK(rare_chunks[0] == 1);
 
         auto common_chunks = index_take(trace::index::posting_granules(
             snapshot, file, "name",
-            dftracer::utils::trace::index::extensions::kinds::value_hash(
-                "op")));
+            dftracer::utils::dstd::hash::value_hash_string("op")));
         std::sort(common_chunks.begin(), common_chunks.end());
         REQUIRE(common_chunks.size() == 2);
         CHECK(common_chunks[0] == 0);

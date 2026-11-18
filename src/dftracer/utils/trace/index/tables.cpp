@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/hash/value_hash.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -557,7 +558,18 @@ dstd::Result<bool> has_postings(const Snapshot& snapshot, const FileRef& file,
                       return false;
                   });
     if (!scanned) return dstd::Unexpected<dstd::Error>(scanned.error());
-    return found;
+    if (!found) return false;
+    const dftracer::utils::store::Snapshot* snap =
+        IndexAccess::store_snapshot(snapshot);
+    if (snap == nullptr) return false;
+    const dstd::String marker = file_key(store::layout::path_kind::PATHS, path);
+    auto body = snap->get(read_ns(Ext::Postings), IndexAccess::scope(file),
+                          dstd::ByteView(marker));
+    if (!body) return dstd::Unexpected<dstd::Error>(body.error());
+    if (!body->has_value()) return false;
+    const dstd::StringView version = as_text((*body)->bytes());
+    return version.size() == 1 && static_cast<std::uint8_t>(version[0]) ==
+                                      dstd::hash::VALUE_HASH_VERSION;
 }
 
 dstd::Result<bool> has_posting(const Snapshot& snapshot, const FileRef& file,
@@ -986,7 +998,14 @@ void put_rowset(FileBuild& build, dstd::StringView name,
 void put_path(FileBuild& build, store::IndexExtension ext,
               dstd::StringView path) {
     if (!builtin(build, ext)) return;
-    put_bare(build, ext, file_key(store::layout::path_kind::PATHS, path));
+    // The postings of a path are keys without values, so the path's marker
+    // carries the version of the hash they are keyed by.
+    const char version = static_cast<char>(dstd::hash::VALUE_HASH_VERSION);
+    const dstd::StringView body = ext == Ext::Postings
+                                      ? dstd::StringView(&version, 1)
+                                      : dstd::StringView();
+    put_value(build, ext, file_key(store::layout::path_kind::PATHS, path),
+              body);
 }
 
 void put_path_granule(FileBuild& build, store::IndexExtension ext,

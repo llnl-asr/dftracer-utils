@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_INDEX_EXTENSIONS_BLOOM_FILTER_H
 #define DFTRACER_UTILS_TRACE_INDEX_EXTENSIONS_BLOOM_FILTER_H
 
+#include <dftracer/utils/dstd/hash/value_hash.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -29,15 +30,23 @@ namespace dftracer::utils::trace::index::extensions {
  *    https://github.com/apache/parquet-format/blob/master/BloomFilter.md
  *
  * Differs from canonical Parquet:
- *  - Underlying hash is XXH3-64 + SplitMix64 finisher (not xxhash64).
- *  - Custom 12-byte LE header (hash_count, entry_count, bit_count) instead
- *    of Thrift; hash_count is unused at insert/test (vestigial).
+ *  - Underlying hash is the canonical value hash (@ref
+ *    dstd::hash::value_hash_int64 and its siblings, XXH3-64) with a
+ *    SplitMix64 finisher (not xxhash64).
+ *  - Custom 13-byte LE header (hash_count, entry_count, bit_count, hash
+ *    version) instead of Thrift; hash_count is unused at insert/test
+ *    (vestigial).
  *
  * Serialization format (self-describing):
  *   [4 bytes: hash_count (uint32_t LE)]
  *   [4 bytes: entry_count (uint32_t LE)]
  *   [4 bytes: bit_count   (uint32_t LE)]
+ *   [1 byte: hash version (@ref dstd::hash::VALUE_HASH_VERSION)]
  *   [remaining: bit array bytes]
+ *
+ * A filter loaded with another hash version holds hashes this build cannot
+ * compute, so @ref has_known_hash_version is false and it answers every probe
+ * "may contain".
  */
 class BloomFilter {
    public:
@@ -54,12 +63,16 @@ class BloomFilter {
         std::uint64_t block;
         std::uint64_t mask;
     };
-    static Hashes hash(dstd::StringView value);
+    /// The block and mask hashes of a canonical value hash, as
+    /// @ref dstd::hash::value_hash_string and its siblings return it.
+    static Hashes hash(std::uint64_t value_hash);
 
-    void add(dstd::StringView value) { add(hash(value)); }
+    void add(dstd::StringView value) {
+        add(hash(dstd::hash::value_hash_string(value)));
+    }
     void add(const Hashes& hashes);
     bool possibly_contains(dstd::StringView value) const {
-        return possibly_contains(hash(value));
+        return possibly_contains(hash(dstd::hash::value_hash_string(value)));
     }
     bool possibly_contains(const Hashes& hashes) const;
     void merge_from(const BloomFilter& other);
@@ -70,6 +83,10 @@ class BloomFilter {
     std::size_t size_bytes() const { return bits_.size(); }
     std::size_t hash_function_count() const { return hash_count_; }
     std::size_t bit_count() const { return bit_count_; }
+    std::uint8_t hash_version() const { return hash_version_; }
+    bool has_known_hash_version() const {
+        return hash_version_ == dstd::hash::VALUE_HASH_VERSION;
+    }
 
     /// Bits a filter for `n` entries at rate `p` holds: a whole number of
     /// 512-bit blocks, at least one.
@@ -77,7 +94,8 @@ class BloomFilter {
 
    private:
     BloomFilter(dstd::Vector<unsigned char> bits, std::size_t bit_count,
-                std::size_t hash_count, std::size_t entry_count);
+                std::size_t hash_count, std::size_t entry_count,
+                std::uint8_t hash_version);
 
     static std::size_t optimal_hash_count(std::size_t m, std::size_t n);
 
@@ -85,6 +103,7 @@ class BloomFilter {
     std::size_t bit_count_;
     std::size_t hash_count_;
     std::size_t entry_count_;
+    std::uint8_t hash_version_ = dstd::hash::VALUE_HASH_VERSION;
 };
 
 }  // namespace dftracer::utils::trace::index::extensions

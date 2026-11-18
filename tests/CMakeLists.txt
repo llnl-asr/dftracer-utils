@@ -629,6 +629,7 @@ set(TEST_CPP_SOURCES
     trace/index/test_prune_oracle.cpp
     trace/index/test_layout.cpp
     trace/index/test_kinds.cpp
+    trace/index/test_value_hash.cpp
     trace/index/test_member_pieces.cpp
     trace/index/test_index_pass_parallel.cpp
     trace/index/test_index_skip.cpp

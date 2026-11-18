@@ -2,7 +2,6 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/hash/constants.h>
-#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -15,7 +14,7 @@
 namespace dftracer::utils::trace::index::extensions {
 
 namespace {
-constexpr std::size_t HEADER_SIZE = 12;
+constexpr std::size_t HEADER_SIZE = 13;
 constexpr std::size_t BLOCK_BYTES = 32;  // 8 x u32 = 256 bits
 constexpr std::size_t BLOCK_BITS = BLOCK_BYTES * 8;
 constexpr std::size_t BLOCK_WORDS = BLOCK_BYTES / 4;
@@ -77,11 +76,12 @@ BloomFilter::BloomFilter(std::size_t expected_entries,
 
 BloomFilter::BloomFilter(dstd::Vector<unsigned char> bits,
                          std::size_t bit_count, std::size_t hash_count,
-                         std::size_t entry_count)
+                         std::size_t entry_count, std::uint8_t hash_version)
     : bits_(std::move(bits)),
       bit_count_(bit_count),
       hash_count_(hash_count),
-      entry_count_(entry_count) {}
+      entry_count_(entry_count),
+      hash_version_(hash_version) {}
 
 dstd::Result<BloomFilter> BloomFilter::from_blob(const unsigned char* data,
                                                  std::size_t size) {
@@ -94,6 +94,7 @@ dstd::Result<BloomFilter> BloomFilter::from_blob(const unsigned char* data,
     std::uint32_t hash_count = dstd::read_u32_le(data);
     std::uint32_t entry_count = dstd::read_u32_le(data + 4);
     std::uint32_t bit_count = dstd::read_u32_le(data + 8);
+    std::uint8_t hash_version = data[12];
 
     std::size_t bit_bytes = size - HEADER_SIZE;
 
@@ -102,11 +103,10 @@ dstd::Result<BloomFilter> BloomFilter::from_blob(const unsigned char* data,
 
     return BloomFilter(std::move(bits), static_cast<std::size_t>(bit_count),
                        static_cast<std::size_t>(hash_count),
-                       static_cast<std::size_t>(entry_count));
+                       static_cast<std::size_t>(entry_count), hash_version);
 }
 
-BloomFilter::Hashes BloomFilter::hash(dstd::StringView value) {
-    const std::uint64_t raw = dstd::hash::xxh3_64(value);
+BloomFilter::Hashes BloomFilter::hash(std::uint64_t raw) {
     // Run a SplitMix64-style finisher over the XXH3 hash, then derive a
     // second hash for masking.
     std::uint64_t h1 = raw;
@@ -133,6 +133,7 @@ void BloomFilter::add(const Hashes& hashes) {
 }
 
 bool BloomFilter::possibly_contains(const Hashes& hashes) const {
+    if (!has_known_hash_version()) return true;
     std::size_t block_count = bit_count_ / BLOCK_BITS;
     std::size_t blk = block_index(hashes.block, block_count);
     const auto* block = reinterpret_cast<const std::uint32_t*>(
@@ -148,7 +149,8 @@ bool BloomFilter::possibly_contains(const Hashes& hashes) const {
 
 void BloomFilter::merge_from(const BloomFilter& other) {
     if (bits_.size() != other.bits_.size() || bit_count_ != other.bit_count_ ||
-        hash_count_ != other.hash_count_) {
+        hash_count_ != other.hash_count_ ||
+        hash_version_ != other.hash_version_) {
         dstd::fatal("BloomFilter::merge_from: incompatible filter parameters");
     }
 
@@ -173,6 +175,7 @@ void BloomFilter::serialize_into(dstd::Vector<unsigned char>& result) const {
                        static_cast<std::uint32_t>(entry_count_));
     dstd::write_u32_le(result.data() + 8,
                        static_cast<std::uint32_t>(bit_count_));
+    result[12] = hash_version_;
     std::memcpy(result.data() + HEADER_SIZE, bits_.data(), bits_.size());
 }
 

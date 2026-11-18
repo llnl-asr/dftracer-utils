@@ -41,7 +41,15 @@ void ScalableBloomFilter::open_level(std::size_t capacity) {
 }
 
 void ScalableBloomFilter::add(dstd::StringView value) {
-    const BloomFilter::Hashes hashes = BloomFilter::hash(value);
+    add_hashed(dstd::hash::value_hash_string(value));
+}
+
+bool ScalableBloomFilter::possibly_contains(dstd::StringView value) const {
+    return possibly_contains_hashed(dstd::hash::value_hash_string(value));
+}
+
+void ScalableBloomFilter::add_hashed(std::uint64_t value_hash) {
+    const BloomFilter::Hashes hashes = BloomFilter::hash(value_hash);
     ++hashed_;
     for (const auto& level : levels_)
         if (level.filter.possibly_contains(hashes)) return;
@@ -56,8 +64,9 @@ void ScalableBloomFilter::add(dstd::StringView value) {
     }
 }
 
-bool ScalableBloomFilter::possibly_contains(dstd::StringView value) const {
-    const BloomFilter::Hashes hashes = BloomFilter::hash(value);
+bool ScalableBloomFilter::possibly_contains_hashed(
+    std::uint64_t value_hash) const {
+    const BloomFilter::Hashes hashes = BloomFilter::hash(value_hash);
     for (const auto& level : levels_) {
         if (level.filter.possibly_contains(hashes)) return true;
     }
@@ -71,7 +80,8 @@ void ScalableBloomFilter::merge_from(const ScalableBloomFilter& other) {
                 return dst.capacity == src.capacity &&
                        dst.filter.bit_count() == src.filter.bit_count() &&
                        dst.filter.hash_function_count() ==
-                           src.filter.hash_function_count();
+                           src.filter.hash_function_count() &&
+                       dst.filter.hash_version() == src.filter.hash_version();
             });
         if (it != levels_.end()) {
             it->filter.merge_from(src.filter);
@@ -90,6 +100,12 @@ void ScalableBloomFilter::merge_from(const ScalableBloomFilter& other) {
     if (levels_.back().distinct >= levels_.back().capacity) {
         open_level(levels_.back().capacity * GROWTH_FACTOR);
     }
+}
+
+bool ScalableBloomFilter::has_known_hash_version() const {
+    for (const auto& level : levels_)
+        if (!level.filter.has_known_hash_version()) return false;
+    return true;
 }
 
 std::size_t ScalableBloomFilter::size_bytes() const {

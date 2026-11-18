@@ -84,18 +84,24 @@ struct FileIndexData {
     /// The file's path catalog; empty when it is not current.
     const Catalog& catalog();
 
+    /// Whether `path` may hold strings, so a number literal on it is also
+    /// probed by its text. True when the catalog does not say.
+    bool may_hold_strings(dstd::StringView path);
+
     /// The file-level bloom of `path`; nullptr when there is none.
     const trace::index::extensions::ScalableBloomFilter* file_bloom(
         dstd::StringView path);
 
-    /// Chunks holding `val` of `path` per its postings; empty when the
-    /// postings name none.
+    /// Chunks holding the value of canonical hash `value_hash` (see
+    /// @ref dstd::hash::value_hash_int64) of `path` per its postings; empty
+    /// when the postings name none.
     const dstd::Set<std::uint64_t>& posting_chunks(dstd::StringView path,
-                                                   dstd::StringView val);
-    /// Whether the file holds `val` of `path` per its postings; nullopt when
-    /// the file has no postings for the path.
+                                                   std::uint64_t value_hash);
+    /// Whether the file holds that value of `path` per its postings; nullopt
+    /// when the file has no postings for the path, or postings of another
+    /// hash version.
     dstd::Optional<bool> posting_contains(dstd::StringView path,
-                                          dstd::StringView val);
+                                          std::uint64_t value_hash);
 
    private:
     bool current(IndexExtension ext);

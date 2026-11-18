@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -73,6 +74,24 @@ const dstd::Optional<dstd::String>& FileIndexData::evidence_name(
             }
     }
     return evidence_names_.emplace(path, std::move(name)).first->second;
+}
+
+bool FileIndexData::may_hold_strings(dstd::StringView path) {
+    const auto& name = evidence_name(path);
+    if (!name) return true;
+    if (fixed_field(*name))
+        return *name != "pid" && *name != "tid" && *name != "ts" &&
+               *name != "dur" && *name != "te";
+    const dstd::String leaf = by_path ? *name : "args." + *name;
+    for (const auto& [p, stat] : catalog()) {
+        if (dstd::StringView(p) != leaf) continue;
+        constexpr auto STRING_BIT =
+            1U << static_cast<unsigned>(trace::index::store::PathType::String);
+        return (stat.seen & STRING_BIT) != 0 ||
+               stat.type == trace::index::store::PathType::String ||
+               stat.type == trace::index::store::PathType::Mixed;
+    }
+    return true;
 }
 
 const FileIndexData::Zones& FileIndexData::zones(dstd::StringView path) {
@@ -158,28 +177,27 @@ const trace::index::extensions::ScalableBloomFilter* FileIndexData::file_bloom(
 
 namespace {
 
-dstd::String posting_key(dstd::StringView path, dstd::StringView val) {
+dstd::String posting_key(dstd::StringView path, std::uint64_t value_hash) {
     dstd::String key;
-    key.reserve(path.size() + 1 + val.size());
+    key.reserve(path.size() + 1 + 8);
     key.append(path);
     key.push_back('\0');
-    key.append(val);
+    dstd::append_u64_be(key, value_hash);
     return key;
 }
 
 }  // namespace
 
 const dstd::Set<std::uint64_t>& FileIndexData::posting_chunks(
-    dstd::StringView path, dstd::StringView val) {
-    auto key = posting_key(path, val);
+    dstd::StringView path, std::uint64_t value_hash) {
+    auto key = posting_key(path, value_hash);
     auto it = posting_chunks_.find(key);
     if (it != posting_chunks_.end()) return it->second;
     auto& out = posting_chunks_[key];
     const auto& name = evidence_name(path);
     if (name && current(IndexExtension::Postings)) {
-        auto granules = trace::index::posting_granules(
-            *snapshot, *file, *name,
-            trace::index::extensions::kinds::value_hash(val));
+        auto granules =
+            trace::index::posting_granules(*snapshot, *file, *name, value_hash);
         if (!granules) {
             fail(std::move(granules).error());
             return out;
@@ -190,7 +208,7 @@ const dstd::Set<std::uint64_t>& FileIndexData::posting_chunks(
 }
 
 dstd::Optional<bool> FileIndexData::posting_contains(dstd::StringView path,
-                                                     dstd::StringView val) {
+                                                     std::uint64_t value_hash) {
     const auto& name = evidence_name(path);
     if (!name || !current(IndexExtension::Postings)) return dstd::nullopt;
     auto has = has_postings_.find(path);
@@ -203,12 +221,11 @@ dstd::Optional<bool> FileIndexData::posting_contains(dstd::StringView path,
         has = has_postings_.emplace(path, *found).first;
     }
     if (!has->second) return dstd::nullopt;
-    auto key = posting_key(path, val);
+    auto key = posting_key(path, value_hash);
     auto it = posting_membership_.find(key);
     if (it != posting_membership_.end()) return it->second;
-    const auto present = trace::index::has_posting(
-        *snapshot, *file, *name,
-        trace::index::extensions::kinds::value_hash(val));
+    const auto present =
+        trace::index::has_posting(*snapshot, *file, *name, value_hash);
     if (!present.has_value()) {
         fail(present.error());
         return dstd::nullopt;

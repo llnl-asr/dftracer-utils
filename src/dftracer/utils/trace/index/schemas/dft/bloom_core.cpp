@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash/value_hash.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -218,8 +219,7 @@ void write_chunk_to(Tier& t, std::uint64_t checkpoint_idx,
     // sinks agree.
     if (m.has(IndexExtension::Postings))
         for (const auto& [name, _] : chunk.statistics.name_counts)
-            t.posting_granule(DIM_NAME,
-                              trace::index::extensions::kinds::value_hash(name),
+            t.posting_granule(DIM_NAME, dstd::hash::value_hash_string(name),
                               checkpoint_idx);
 }
 
@@ -267,8 +267,7 @@ BloomCore::ChunkStatistics finish_file_to(
     if (m.has(IndexExtension::Postings)) {
         t.path(IndexExtension::Postings, DIM_NAME);
         for (const auto& [name, _] : acc.statistics.name_counts)
-            t.posting(DIM_NAME,
-                      trace::index::extensions::kinds::value_hash(name));
+            t.posting(DIM_NAME, dstd::hash::value_hash_string(name));
     }
 
     for (const auto& [path, stat] : catalog) t.catalog_path(path, stat);
@@ -304,7 +303,16 @@ dstd::Result<dstd::Vector<dstd::String>> BloomCore::seed_accumulator(
         }
         auto payload = std::move(*read);
         if (!payload) return dstd::nullopt;
-        return trace::index::extensions::kinds::decode_bloom(*payload);
+        auto bloom = trace::index::extensions::kinds::decode_bloom(*payload);
+        // New values cannot join a filter whose hashes this build cannot make.
+        if (bloom && !bloom->has_known_hash_version()) {
+            if (!failed)
+                failed = dstd::Error(
+                    dstd::Condition::InvalidArgument,
+                    "index: stored bloom filter has an unknown hash version");
+            return dstd::nullopt;
+        }
+        return bloom;
     };
     for (std::size_t b = 0; config.fixed_dimensions && b < BfCount; ++b) {
         auto bloom = file_bloom(FIXED_BLOOM_NAMES[b]);
@@ -534,23 +542,21 @@ void BloomCore::observe_value(ChunkDimensionStats& stats,
 
 void BloomCore::observe_extra(ChunkState& chunk, std::size_t e,
                               std::int64_t value) {
-    const dstd::String text = dstd::to_string(value);
-    chunk.extra_blooms[e].add(text);
-    observe_stats(chunk.extra_dim_stats[e], text, "int");
+    chunk.extra_blooms[e].add_hashed(dstd::hash::value_hash_int64(value));
+    observe_stats(chunk.extra_dim_stats[e], dstd::to_string(value), "int");
 }
 
 void BloomCore::observe_extra(ChunkState& chunk, std::size_t e,
                               std::uint64_t value) {
-    const dstd::String text = dstd::to_string(value);
-    chunk.extra_blooms[e].add(text);
-    observe_stats(chunk.extra_dim_stats[e], text, "uint");
+    chunk.extra_blooms[e].add_hashed(dstd::hash::value_hash_uint64(value));
+    observe_stats(chunk.extra_dim_stats[e], dstd::to_string(value), "uint");
 }
 
 void BloomCore::observe_extra(ChunkState& chunk, std::size_t e, double value) {
-    const dstd::String text =
-        trace::index::extensions::canonical_number_text(value);
-    chunk.extra_blooms[e].add(text);
-    observe_stats(chunk.extra_dim_stats[e], text, "double");
+    chunk.extra_blooms[e].add_hashed(dstd::hash::value_hash_double(value));
+    observe_stats(chunk.extra_dim_stats[e],
+                  trace::index::extensions::canonical_number_text(value),
+                  "double");
 }
 
 void BloomCore::observe_extra(ChunkState& chunk, std::size_t e,
@@ -650,10 +656,10 @@ void BloomCore::observe_data(ChunkState& chunk, EventCache& cache,
     // probe.
     auto observe_known = [&chunk](int bloom_idx, std::size_t dim_idx,
                                   dstd::StringView val, bool& in_bloom,
-                                  std::uint32_t& dim_slot) {
+                                  std::uint32_t& dim_slot, auto&& value_hash) {
         if (val.empty()) return;
         if (bloom_idx >= 0 && !in_bloom) {
-            chunk.fixed_blooms[bloom_idx].add(val);
+            chunk.fixed_blooms[bloom_idx].add_hashed(value_hash());
             in_bloom = true;
         }
         chunk.fixed_dim_stats[dim_idx].observe(val, dim_slot);
@@ -665,13 +671,17 @@ void BloomCore::observe_data(ChunkState& chunk, EventCache& cache,
         chunk.fixed_dim_stats[dim_idx].observe(val);
     };
 
-    observe_known(BfName, FdName, name, ns.name_in_bloom, ns.name_dim);
-    observe_known(BfCat, FdCat, cat, ns.cat_in_bloom, ns.cat_dim);
+    observe_known(BfName, FdName, name, ns.name_in_bloom, ns.name_dim,
+                  [name] { return dstd::hash::value_hash_string(name); });
+    observe_known(BfCat, FdCat, cat, ns.cat_in_bloom, ns.cat_dim,
+                  [cat] { return dstd::hash::value_hash_string(cat); });
 
     const dstd::StringView pid_sv(ps.pid_buf, ps.pid_size);
     const dstd::StringView tid_sv(ps.tid_buf, ps.tid_size);
-    observe_known(BfPid, FdPid, pid_sv, ps.pid_in_bloom, ps.pid_dim);
-    observe_known(BfTid, FdTid, tid_sv, ps.tid_in_bloom, ps.tid_dim);
+    observe_known(BfPid, FdPid, pid_sv, ps.pid_in_bloom, ps.pid_dim,
+                  [pid] { return dstd::hash::value_hash_uint64(pid); });
+    observe_known(BfTid, FdTid, tid_sv, ps.tid_in_bloom, ps.tid_dim,
+                  [tid] { return dstd::hash::value_hash_uint64(tid); });
 
     char pt_buf[52];
     std::memcpy(pt_buf, ps.pid_buf, ps.pid_size);
@@ -679,7 +689,8 @@ void BloomCore::observe_data(ChunkState& chunk, EventCache& cache,
     std::memcpy(pt_buf + ps.pid_size + 1, ps.tid_buf, ps.tid_size);
     const dstd::StringView pt_sv(pt_buf, ps.pid_size + 1 + ps.tid_size);
     bool no_bloom = false;
-    observe_known(-1, FdPidTid, pt_sv, no_bloom, ps.pid_tid_dim);
+    observe_known(-1, FdPidTid, pt_sv, no_bloom, ps.pid_tid_dim,
+                  [] { return std::uint64_t{0}; });
 
     chunk.fixed_dim_stats[FdTs].observe_range_only(ts);
     chunk.fixed_dim_stats[FdDur].observe_range_only(dur);

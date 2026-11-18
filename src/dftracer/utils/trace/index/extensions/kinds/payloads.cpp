@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/big_endian.h>
-#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -86,10 +85,6 @@ dstd::Optional<ScalableBloomFilter> decode_bloom(dstd::StringView bytes) {
         bytes.size() - 8);
     if (!filter) return dstd::nullopt;
     return std::move(*filter);
-}
-
-std::uint64_t value_hash(dstd::StringView value) {
-    return dstd::hash::xxh3_64(value);
 }
 
 }  // namespace dftracer::utils::trace::index::extensions::kinds

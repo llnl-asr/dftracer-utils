@@ -175,6 +175,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- The index hashes each value by its type, once, for every bloom filter and posting list (`dstd/hash/value_hash.h`): every integer hashes as an int64, a double that is a whole number hashes as that integer (`42.0` is `42`, `-0.0` is `0`), any other double by its bits, every NaN as one value, a uint64 above the int64 maximum as itself and a string as its bytes.
+  A query on `args.size == 42` now finds a column of `42.0`, and `42.5` never matches `42`; a number literal also probes the text of the number only on a path the catalog says may hold strings, or when the file has no catalog.
+  Each stored bloom filter carries a hash version byte after its three header words, and the marker of each postings path stores it; a reader that finds another version does not prune and reads the chunk.
+  The `index` version in `VERSION` is 1, so an index built before this change is built again; a sharded view root made before it is refused with its format version and must be indexed again.
 - Move the Python modules to one table per fact. The deep import paths change; the names in `dftracer.utils.__all__` and their imports from `dftracer.utils` stay.
   - `dftracer.utils.columnar` is gone: the expression nodes, `Expr`, `Agg`, `Udf`, `when`, `F` and `ColumnOp` are in `dftracer.utils.expr`; `udaf`, `Udaf`, `count` and the aggregate helpers in `dftracer.utils.agg`; `GroupBy` in `dftracer.utils.groupby`; `Columnar`, `columnar`, `where` and `eval_many` in `dftracer.utils._eval`.
   - Helpers that other modules import lost their leading underscore (`Col`, `Lit`, `Bin`, `emit_ast`, `collect_columns`, `AGG_CODE`, `single_index`, `as_names` and the like).

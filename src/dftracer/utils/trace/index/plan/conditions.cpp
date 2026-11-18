@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/hash/value_hash.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -52,6 +53,41 @@ dstd::String literal_to_string(const duql::LiteralNode& lit) {
                 return {};
         },
         lit.value);
+}
+
+// The hashes under which the index may hold a value equal to `lit`: its
+// canonical hash (so 42 and 42.0 are one) and, when the path may hold strings,
+// the hash of its text. A uint64 above INT64_MAX also probes the double it
+// rounds to, as a fold stores it.
+dstd::Vector<std::uint64_t> literal_hashes(const duql::LiteralNode& lit,
+                                           bool string_form) {
+    dstd::Vector<std::uint64_t> out;
+    std::visit(
+        [&](auto&& v) {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, dstd::String>) {
+                out.push_back(dstd::hash::value_hash_string(v));
+            } else if constexpr (std::is_same_v<T, bool>) {
+                out.push_back(dstd::hash::value_hash_bool(v));
+            } else {
+                if constexpr (std::is_same_v<T, std::int64_t>) {
+                    out.push_back(dstd::hash::value_hash_int64(v));
+                } else if constexpr (std::is_same_v<T, std::uint64_t>) {
+                    out.push_back(dstd::hash::value_hash_uint64(v));
+                    if (v > static_cast<std::uint64_t>(
+                                std::numeric_limits<std::int64_t>::max()))
+                        out.push_back(dstd::hash::value_hash_double(
+                            static_cast<double>(v)));
+                } else {
+                    out.push_back(dstd::hash::value_hash_double(v));
+                }
+                if (string_form)
+                    out.push_back(
+                        dstd::hash::value_hash_string(literal_to_string(lit)));
+            }
+        },
+        lit.value);
+    return out;
 }
 
 bool is_numeric_type(dstd::StringView vtype) {
@@ -389,9 +425,13 @@ class FileBloom final : public Condition {
     }
 
    private:
-    bool may_contain(dstd::StringView path, dstd::StringView val) {
+    bool may_contain(dstd::StringView path, const duql::LiteralNode& lit) {
         const auto* bf = d_.file_bloom(path);
-        return !bf || bf->possibly_contains(val);
+        if (!bf) return true;
+        for (const std::uint64_t h :
+             literal_hashes(lit, d_.may_hold_strings(path)))
+            if (bf->possibly_contains_hashed(h)) return true;
+        return false;
     }
 
     bool may_match_file(const duql::detail::QueryNode& node) {
@@ -400,13 +440,11 @@ class FileBloom final : public Condition {
                 using T = std::decay_t<decltype(n)>;
                 if constexpr (std::is_same_v<T, duql::detail::CompareNode>) {
                     if (n.op != duql::CompareOp::Eq) return true;
-                    return may_contain(dstd::String(n.field.path),
-                                       literal_to_string(n.value));
+                    return may_contain(dstd::String(n.field.path), n.value);
                 } else if constexpr (std::is_same_v<T, duql::detail::InNode>) {
                     if (n.values.elements.size() > SEMI_JOIN_CAP) return true;
                     for (const auto& elem : n.values.elements)
-                        if (may_contain(dstd::String(n.field.path),
-                                        literal_to_string(elem)))
+                        if (may_contain(dstd::String(n.field.path), elem))
                             return true;
                     return false;
                 } else if constexpr (std::is_same_v<T, duql::detail::AndNode>) {
@@ -497,26 +535,30 @@ class Postings final : public Condition {
         if (const auto* n =
                 std::get_if<duql::detail::CompareNode>(&leaf.data)) {
             if (n->op != duql::CompareOp::Eq) return dstd::nullopt;
-            const auto val = literal_to_string(n->value);
-            const auto contains =
-                d_.posting_contains(dstd::String(n->field.path), val);
-            if (!contains) return dstd::nullopt;
-            if (!*contains) return ChunkSet{};
-            const auto& chunks =
-                d_.posting_chunks(dstd::String(n->field.path), val);
-            if (chunks.empty()) return dstd::nullopt;
-            return chunks;
+            const dstd::String path(n->field.path);
+            ChunkSet out;
+            for (const std::uint64_t h :
+                 literal_hashes(n->value, d_.may_hold_strings(path))) {
+                const auto contains = d_.posting_contains(path, h);
+                if (!contains) return dstd::nullopt;
+                if (!*contains) continue;
+                const auto& chunks = d_.posting_chunks(path, h);
+                if (chunks.empty()) return dstd::nullopt;
+                out.insert(chunks.begin(), chunks.end());
+            }
+            return out;
         }
         if (const auto* n = std::get_if<duql::detail::InNode>(&leaf.data)) {
+            const dstd::String path(n->field.path);
+            const bool strings = d_.may_hold_strings(path);
             ChunkSet out;
             for (const auto& elem : n->values.elements) {
-                const auto val = literal_to_string(elem);
-                const auto contains =
-                    d_.posting_contains(dstd::String(n->field.path), val);
-                if (!contains || !*contains) continue;
-                const auto& chunks =
-                    d_.posting_chunks(dstd::String(n->field.path), val);
-                out.insert(chunks.begin(), chunks.end());
+                for (const std::uint64_t h : literal_hashes(elem, strings)) {
+                    const auto contains = d_.posting_contains(path, h);
+                    if (!contains || !*contains) continue;
+                    const auto& chunks = d_.posting_chunks(path, h);
+                    out.insert(chunks.begin(), chunks.end());
+                }
             }
             if (out.empty()) return dstd::nullopt;
             return out;
@@ -786,21 +828,25 @@ class ChunkBloom final : public Condition {
     IndexExtension extension() const override { return IndexExtension::Bloom; }
     dstd::Optional<ChunkSet> may_match(const duql::detail::QueryNode& leaf,
                                        const ChunkSet& candidates) override {
-        dstd::Vector<dstd::String> vals;
+        dstd::Vector<const duql::LiteralNode*> lits;
         dstd::String path;
         if (const auto* n =
                 std::get_if<duql::detail::CompareNode>(&leaf.data)) {
             if (n->op != duql::CompareOp::Eq) return dstd::nullopt;
             path = n->field.path;
-            vals.push_back(literal_to_string(n->value));
+            lits.push_back(&n->value);
         } else if (const auto* in =
                        std::get_if<duql::detail::InNode>(&leaf.data)) {
             path = in->field.path;
-            for (const auto& elem : in->values.elements)
-                vals.push_back(literal_to_string(elem));
+            for (const auto& elem : in->values.elements) lits.push_back(&elem);
         } else {
             return dstd::nullopt;
         }
+        const bool strings = d_.may_hold_strings(path);
+        dstd::Vector<std::uint64_t> vals;
+        for (const auto* lit : lits)
+            for (const std::uint64_t h : literal_hashes(*lit, strings))
+                vals.push_back(h);
         const auto& blooms = d_.blooms(path);
         ChunkSet out;
         for (auto ckpt : candidates) {
@@ -809,8 +855,8 @@ class ChunkBloom final : public Condition {
                 if (!vals.empty()) out.insert(ckpt);
                 continue;
             }
-            for (const auto& v : vals)
-                if (it->second.possibly_contains(v)) {
+            for (const std::uint64_t v : vals)
+                if (it->second.possibly_contains_hashed(v)) {
                     out.insert(ckpt);
                     break;
                 }

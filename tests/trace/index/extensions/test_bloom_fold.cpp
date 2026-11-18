@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash/value_hash.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -106,6 +107,21 @@ bool file_bloom_contains(
         dstd::StringView(fb->data(), fb->size()));
     REQUIRE(bloom.has_value());
     return bloom->possibly_contains(value);
+}
+
+bool file_bloom_contains_hashed(
+    const dftracer::utils::trace::index::Snapshot& snapshot,
+    const dftracer::utils::trace::index::FileRef& file, dstd::StringView dim,
+    std::uint64_t value_hash) {
+    auto fb =
+        dftu_utils_test::index_take(dftracer::utils::trace::index::path_file(
+            snapshot, file,
+            dftracer::utils::trace::index::store::IndexExtension::Bloom, dim));
+    REQUIRE(fb.has_value());
+    auto bloom = dftracer::utils::trace::index::extensions::kinds::decode_bloom(
+        dstd::StringView(fb->data(), fb->size()));
+    REQUIRE(bloom.has_value());
+    return bloom->possibly_contains_hashed(value_hash);
 }
 
 dstd::String padded(dstd::String s) {
@@ -283,8 +299,10 @@ TEST_SUITE("BloomFold") {
             CHECK(file_bloom_contains(snapshot, file, "name", v));
         for (auto v : {"POSIX", "STDIO"})
             CHECK(file_bloom_contains(snapshot, file, "cat", v));
-        for (auto v : {"1", "2", "3", "4"})
-            CHECK(file_bloom_contains(snapshot, file, "pid", v));
+        for (std::uint64_t v : {1, 2, 3, 4})
+            CHECK(file_bloom_contains_hashed(
+                snapshot, file, "pid",
+                dftracer::utils::dstd::hash::value_hash_uint64(v)));
         for (auto v : {"fh0", "fh1", "fh2", "fh3", "fh4"})
             CHECK(file_bloom_contains(snapshot, file, "fhash", v));
         CHECK(file_bloom_contains(snapshot, file, "hhash", "hh1"));
@@ -600,8 +618,10 @@ TEST_SUITE("BloomCore") {
         CHECK(size.value_type == "double");
         CHECK(size.min_value == "2.500000");
         CHECK(size.max_value == "10");
-        CHECK(c.extra_blooms[0].possibly_contains("10"));
-        CHECK(c.extra_blooms[0].possibly_contains("2.500000"));
+        CHECK(c.extra_blooms[0].possibly_contains_hashed(
+            dftracer::utils::dstd::hash::value_hash_int64(10)));
+        CHECK(c.extra_blooms[0].possibly_contains_hashed(
+            dftracer::utils::dstd::hash::value_hash_double(2.5)));
 
         const auto& mode = c.extra_dim_stats[1];
         CHECK(mode.value_type == "string");

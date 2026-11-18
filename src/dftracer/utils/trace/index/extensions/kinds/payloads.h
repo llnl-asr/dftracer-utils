@@ -46,9 +46,6 @@ dstd::String encode_bloom(dstd::Span<const unsigned char> bloom,
                           std::uint64_t entry_count);
 dstd::Optional<ScalableBloomFilter> decode_bloom(dstd::StringView bytes);
 
-/// Postings key a value by this hash.
-std::uint64_t value_hash(dstd::StringView value);
-
 }  // namespace dftracer::utils::trace::index::extensions::kinds
 
 #endif  // DFTRACER_UTILS_TRACE_INDEX_EXTENSIONS_KINDS_PAYLOADS_H

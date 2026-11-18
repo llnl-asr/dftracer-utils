@@ -211,9 +211,10 @@ regardless of which entry point started it (a CLI binary, the Python
        DF --> Out["Arrow / pandas / CLI / plugin"]
 
 1. **Index.** ``dftracer_index`` (or an equivalent library call) builds a
-   per-file index in a ``.dftindex`` store: bloom filters over string
-   fields, min/max statistics per chunk, and checkpoints that mark where a
-   compressed member starts. See :doc:`indexing-and-pushdown`.
+   per-file index in a ``.dftindex`` store: bloom filters over field
+   values (hashed by type, so ``42`` and ``42.0`` are one value), min/max
+   statistics per chunk, and checkpoints that mark where a compressed member
+   starts. See :doc:`indexing-and-pushdown`.
 2. **Prune.** Given a query, the chunk pruner consults the index to decide
    which chunks of which files can possibly match, before any decompression
    happens. A query that touches a narrow slice of a large trace set never

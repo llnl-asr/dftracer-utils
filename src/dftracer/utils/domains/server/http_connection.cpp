@@ -123,6 +123,10 @@ coro::CoroTask<void> handle_connection(int client_fd,
             co_await runtime::io::send(client_fd, out.data(), out.size(), 0);
         }
 
+        // Decide before the shift: req holds views into buf.
+        const bool keep_alive =
+            req.minor_version != 0 && !req.has_header("connection", "close");
+
         // Consume parsed bytes; shift any remaining data.
         auto consumed = static_cast<std::size_t>(parsed);
         if (consumed < buf_used) {
@@ -132,10 +136,7 @@ coro::CoroTask<void> handle_connection(int client_fd,
             buf_used = 0;
         }
 
-        // Check Connection: close or HTTP/1.0 (no keep-alive).
-        if (req.minor_version == 0 || req.has_header("connection", "close")) {
-            break;
-        }
+        if (!keep_alive) break;
     }
 
     // Note: the caller (tcp_listener) is responsible for closing

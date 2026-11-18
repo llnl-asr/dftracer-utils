@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_DOMAINS_SERVER_CANCEL_H
 #define DFTRACER_UTILS_DOMAINS_SERVER_CANCEL_H
 
-#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 
@@ -60,7 +60,7 @@ class CancelRegistry {
 
    private:
     mutable std::mutex mu_;
-    dstd::HashMap<dstd::String, dstd::SharedPtr<CancelState>> tokens_;
+    dstd::Map<dstd::String, dstd::SharedPtr<CancelState>> tokens_;
 };
 
 }  // namespace dftracer::utils::domains::server

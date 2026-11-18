@@ -599,6 +599,7 @@ set(TEST_CPP_SOURCES
     domains/server/test_viz_refused.cpp
     domains/server/test_viz_schema.cpp
     domains/server/test_viz_errors.cpp
+    domains/server/test_http_connection.cpp
     domains/workload/genesis/test_genesis.cpp
     domains/analysis/provenance/test_provenance_graph.cpp
     trace/index/test_index_api.cpp

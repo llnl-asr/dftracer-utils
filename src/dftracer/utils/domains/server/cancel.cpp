@@ -65,7 +65,8 @@ CancelToken CancelRegistry::create(dstd::String id, int peer_fd) {
 void CancelRegistry::remove(dstd::StringView id) {
     if (id.empty()) return;
     std::lock_guard<std::mutex> lock(mu_);
-    tokens_.erase(id);
+    auto it = tokens_.find(id);
+    if (it != tokens_.end()) tokens_.erase(it);
 }
 
 bool CancelRegistry::cancel(dstd::StringView id) {

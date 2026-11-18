@@ -1010,6 +1010,111 @@ Conditions make_query_conditions(FileIndexData& data) {
     return cs;
 }
 
+namespace {
+
+// The path a leaf judges: the field of a comparison, `in` or match, or the
+// argument of `exists`.
+dstd::Optional<dstd::String> judged_path(const duql::detail::QueryNode& leaf) {
+    if (const auto path = exists_path(leaf)) return *path;
+    if (const auto* field = leaf_field(leaf))
+        return dstd::String(field->path.data(), field->path.size());
+    return dstd::nullopt;
+}
+
+void collect_leaf_paths(const duql::detail::QueryNode& node,
+                        dstd::Vector<dstd::String>& out) {
+    if (is_leaf(node)) {
+        if (auto path = judged_path(node))
+            if (std::find(out.begin(), out.end(), *path) == out.end())
+                out.push_back(std::move(*path));
+        return;
+    }
+    if (const auto* a = std::get_if<duql::detail::AndNode>(&node.data)) {
+        collect_leaf_paths(*a->left, out);
+        collect_leaf_paths(*a->right, out);
+    } else if (const auto* o = std::get_if<duql::detail::OrNode>(&node.data)) {
+        collect_leaf_paths(*o->left, out);
+        collect_leaf_paths(*o->right, out);
+    } else if (const auto* t = std::get_if<duql::detail::NotNode>(&node.data)) {
+        collect_leaf_paths(*t->operand, out);
+    }
+}
+
+// `inner`, asked about the leaves on one path only: every other leaf is a
+// leaf it has no evidence for.
+class PathScoped final : public Condition {
+   public:
+    PathScoped(dstd::UniquePtr<Condition> inner, dstd::String path)
+        : inner_(std::move(inner)), path_(std::move(path)) {}
+
+    IndexExtension extension() const override { return inner_->extension(); }
+    dstd::Optional<ChunkSet> may_match(const duql::detail::QueryNode& leaf,
+                                       const ChunkSet& candidates) override {
+        if (!on_path(leaf)) return dstd::nullopt;
+        return inner_->may_match(leaf, candidates);
+    }
+    dstd::Optional<ChunkSet> all_match(
+        const duql::detail::QueryNode& leaf) override {
+        if (!on_path(leaf)) return dstd::nullopt;
+        return inner_->all_match(leaf);
+    }
+
+   private:
+    bool on_path(const duql::detail::QueryNode& leaf) const {
+        const auto path = judged_path(leaf);
+        return path && *path == path_;
+    }
+
+    dstd::UniquePtr<Condition> inner_;
+    dstd::String path_;
+};
+
+}  // namespace
+
+dstd::Vector<SummarySkip> summary_skips(const duql::detail::QueryNode& root,
+                                        FileIndexData& data,
+                                        const ChunkSet& universe) {
+    dstd::Vector<dstd::String> paths;
+    collect_leaf_paths(root, paths);
+    // The summary kinds of the query's conditions: the built-in ones, then
+    // each registered index extension by name.
+    struct Kind {
+        IndexExtension ext;
+        dstd::String name;
+    };
+    dstd::Vector<Kind> kinds;
+    for (auto ext : {IndexExtension::Zonemap, IndexExtension::Bloom,
+                     IndexExtension::Counts, IndexExtension::Postings})
+        kinds.push_back(
+            {ext, dstd::String(trace::index::store::extension_name(ext))});
+    for (const auto& c : make_query_conditions(data))
+        if (c && c->extension() == IndexExtension::Plugin) {
+            const dstd::String name = c->name();
+            if (std::none_of(kinds.begin(), kinds.end(), [&](const Kind& k) {
+                    return k.ext == IndexExtension::Plugin && k.name == name;
+                }))
+                kinds.push_back({IndexExtension::Plugin, name});
+        }
+    dstd::Vector<SummarySkip> out;
+    for (const dstd::String& path : paths) {
+        for (const Kind& kind : kinds) {
+            Conditions scoped;
+            for (auto& c : make_query_conditions(data))
+                if (c && c->extension() == kind.ext &&
+                    (kind.ext != IndexExtension::Plugin ||
+                     c->name() == kind.name))
+                    scoped.push_back(
+                        dstd::make_unique<PathScoped>(std::move(c), path));
+            if (scoped.empty()) continue;
+            const ChunkSet kept = evaluate(root, scoped, universe);
+            if (kept.size() == universe.size()) continue;
+            out.push_back({path, kind.name, universe.size() - kept.size(),
+                           universe.size()});
+        }
+    }
+    return out;
+}
+
 bool file_may_match(const duql::detail::QueryNode& root,
                     const Conditions& conditions) {
     for (const auto& c : conditions)

@@ -32,6 +32,7 @@
 #include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
+#include <algorithm>
 #include <utility>
 
 namespace dftracer::utils::trace::index {
@@ -70,6 +71,25 @@ struct Indexer::Impl {
         c.auto_max_distinct = bloom.auto_max_distinct;
         c.expected_entries_per_chunk = bloom.expected_entries_per_chunk;
         c.extensions = extensions;
+        for (const SummaryChoice& choice : options.summaries) {
+            build::PathSummaries p;
+            p.path = build::extra_dimension_name(choice.path);
+            p.written = choice.path;
+            for (const dstd::String& name : choice.summaries)
+                if (const auto ext = store::parse_extension(name);
+                    ext && store::PRUNING_EXTENSIONS.has(*ext))
+                    p.kinds.add(*ext);
+            if (!p.kinds.empty() && !build::is_fixed_dimension(p.path) &&
+                std::find(c.extra_dimensions.begin(), c.extra_dimensions.end(),
+                          p.path) == c.extra_dimensions.end())
+                c.extra_dimensions.push_back(p.path);
+            c.path_summaries.push_back(std::move(p));
+        }
+        std::sort(
+            c.path_summaries.begin(), c.path_summaries.end(),
+            [](const build::PathSummaries& a, const build::PathSummaries& b) {
+                return a.path < b.path;
+            });
         return c;
     }
 
@@ -338,6 +358,80 @@ coro::CoroTask<dstd::Result<void>> build_format_files(
 
 Indexer::Indexer(dstd::SharedPtr<Impl> impl) : impl_(std::move(impl)) {}
 
+namespace {
+
+// Whether index extension `ext` takes the column of `path`, the path as
+// filters name it with or without "args.".
+bool takes_path(const extensions::Extension& ext, dstd::StringView path) {
+    const auto bare = [](dstd::StringView p) {
+        return p.starts_with("args.") ? p.substr(5) : p;
+    };
+    for (const dstd::String& column : ext.columns())
+        if (column == "*" || bare(column) == bare(path)) return true;
+    return false;
+}
+
+// The summaries of a choice must name zonemap, bloom or counts, once each,
+// among the extensions the build makes; a path is listed once.
+dstd::Result<void> validate_summaries(const IndexerOptions& options,
+                                      store::ExtensionMask extensions) {
+    dstd::Vector<dstd::String> seen;
+    for (const SummaryChoice& choice : options.summaries) {
+        const dstd::String path = build::extra_dimension_name(choice.path);
+        if (path.empty())
+            return common::make_error<
+                "Indexer::open: summaries has an empty path">(
+                common::ErrorCode::InvalidArgument);
+        if (std::find(seen.begin(), seen.end(), path) != seen.end())
+            return common::make_error<
+                "Indexer::open: summaries lists path {} twice">(
+                common::ErrorCode::InvalidArgument, choice.path);
+        seen.push_back(path);
+        if (choice.summaries.empty())
+            return common::make_error<
+                "Indexer::open: summaries of path {} is empty">(
+                common::ErrorCode::InvalidArgument, choice.path);
+        store::ExtensionMask chosen;
+        dstd::Vector<dstd::String> plugins;
+        for (const dstd::String& name : choice.summaries) {
+            if (const auto registered = extensions::find_extension(name)) {
+                if (std::find(plugins.begin(), plugins.end(), name) !=
+                    plugins.end())
+                    return common::make_error<
+                        "Indexer::open: summary {} listed twice for path {}">(
+                        common::ErrorCode::InvalidArgument, name, choice.path);
+                plugins.push_back(name);
+                if (!takes_path(*registered, path))
+                    return common::make_error<
+                        "Indexer::open: summary {} does not take path {}">(
+                        common::ErrorCode::InvalidArgument, name, choice.path);
+                continue;
+            }
+            const auto ext = store::parse_extension(name);
+            if (!ext || !(*ext == store::IndexExtension::Zonemap ||
+                          *ext == store::IndexExtension::Bloom ||
+                          *ext == store::IndexExtension::Counts))
+                return common::make_error<
+                    "Indexer::open: unknown summary {} for path {} (expected "
+                    "zonemap, bloom, counts or a registered index extension)">(
+                    common::ErrorCode::InvalidArgument, name, choice.path);
+            if (chosen.has(*ext))
+                return common::make_error<
+                    "Indexer::open: summary {} listed twice for path {}">(
+                    common::ErrorCode::InvalidArgument, name, choice.path);
+            if (!extensions.has(*ext))
+                return common::make_error<
+                    "Indexer::open: summary {} for path {} is not in "
+                    "extensions">(common::ErrorCode::InvalidArgument, name,
+                                  choice.path);
+            chosen.add(*ext);
+        }
+    }
+    return {};
+}
+
+}  // namespace
+
 dstd::Result<void> Indexer::validate_options(Impl& impl) {
     if (!impl.options.format.empty())
         if (auto named = dataframe::claim_reader(
@@ -353,6 +447,9 @@ dstd::Result<void> Indexer::validate_options(Impl& impl) {
                 common::ErrorCode::InvalidArgument, name);
         impl.extensions.add(*ext);
     }
+    if (auto chosen = validate_summaries(impl.options, impl.extensions);
+        !chosen)
+        return chosen;
     if (impl.options.bloom) return impl.bloom_config().validate();
     return {};
 }
@@ -685,10 +782,15 @@ coro::CoroTask<dstd::Result<dstd::Vector<FileExplain>>> Indexer::explain(
                           e.file_may_match,
                           e.total_chunks,
                           std::move(e.read),
+                          {},
                           {}};
             for (auto& by : e.by_extension)
                 f.extensions.push_back({std::move(by.name), by.file_ruled_out,
                                         std::move(by.removed)});
+            for (auto& by : e.by_summary)
+                f.summaries.push_back({std::move(by.path),
+                                       std::move(by.summary), by.skipped,
+                                       by.chunks});
             out.push_back(std::move(f));
         }
     }
@@ -908,10 +1010,33 @@ dstd::String to_json(dstd::Span<const FileExplain> explain) {
             append_chunks(out, e.removed);
             out.push_back('}');
         }
+        out.append("],\"summaries\":[");
+        for (std::size_t j = 0; j < f.summaries.size(); ++j) {
+            const auto& e = f.summaries[j];
+            if (j) out.push_back(',');
+            out.append("{\"path\":");
+            append_string(out, e.path);
+            out.append(",\"summary\":");
+            append_string(out, e.summary);
+            out.append(",\"skipped\":" + dstd::to_string(e.skipped));
+            out.append(",\"chunks\":" + dstd::to_string(e.chunks) + "}");
+        }
         out.append("]}");
     }
     out.push_back(']');
     return dstd::String(out);
+}
+
+dstd::String to_text(dstd::Span<const FileExplain> explain) {
+    dstd::String out;
+    for (const FileExplain& f : explain) {
+        dstd::fmt_append<"{}: read {} of {} chunks\n">(out, f.path,
+                                                       f.read.size(), f.chunks);
+        for (const SummarySkipped& s : f.summaries)
+            dstd::fmt_append<"  summary {} {}: skipped {} of {} chunks\n">(
+                out, s.path, s.summary, s.skipped, s.chunks);
+    }
+    return out;
 }
 
 const dstd::Vector<dstd::String>& Indexer::paths() const {

@@ -73,6 +73,27 @@ from ._flow import open as open
 from ._flow import sleep as sleep
 from ._flow import task as task
 from ._flow import yaml as yaml
+from ._summary import (
+    EQ as EQ,
+)
+from ._summary import (
+    GE as GE,
+)
+from ._summary import (
+    GT as GT,
+)
+from ._summary import (
+    LE as LE,
+)
+from ._summary import (
+    LT as LT,
+)
+from ._summary import (
+    Cond as Cond,
+)
+from ._summary import (
+    summary as summary,
+)
 from .maps import (
     Column as Column,
 )
@@ -450,6 +471,13 @@ from .vfold import (
 )
 
 __all__ = [
+    "Cond",
+    "EQ",
+    "GE",
+    "GT",
+    "LE",
+    "LT",
+    "summary",
     "JitError",
     "Error",
     "NotFound",

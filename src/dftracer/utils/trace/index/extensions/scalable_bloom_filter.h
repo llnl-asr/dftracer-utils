@@ -77,6 +77,8 @@ class ScalableBloomFilter {
     std::size_t level_count() const { return levels_.size(); }
     /// False when a level was saved with another hash version.
     bool has_known_hash_version() const;
+    /// The hash version of the first level, as written in its header.
+    std::uint8_t hash_version() const;
     std::size_t size_bytes() const;
 
    private:

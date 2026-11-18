@@ -333,10 +333,83 @@ rebuilding the rest.
 
 ``explain`` reports, per file, the chunks the query reads for its data events
 (the chunks a View row or aggregation scan reads) and, for each pruning extension, the chunks it would rule
-out if it were the only one. It writes nothing. A dropped extension is built
+out if it were the only one. It also reports, for each path the query filters
+and each summary kind (``zonemap``, ``bloom``, ``counts`` or ``postings``) that
+rules out at least one chunk, how many chunks that summary skips when it judges
+only that path: ``summaries`` in Python (C++ ``FileExplain::summaries``), and
+``explain_text`` (C++ ``to_text``) prints one line for each,
+``summary size zonemap: skipped 12 of 24 chunks``. It writes nothing. A dropped extension is built
 again by the next build only while ``extensions`` names it. ``core.members``,
 ``core.rowset`` and ``dftracer.agg`` (the aggregation partials, which every build
 makes) cannot be rebuilt or dropped alone.
+
+Choose the summaries of a path
+------------------------------
+
+By default every path gets every summary of ``extensions``. ``summaries`` picks
+the summaries of single paths in place of that, so a path that is only ever
+tested for equality keeps a bloom filter and no ranges, and a path that is only
+ever compared keeps ranges and no bloom filter:
+
+.. tab-set::
+
+   .. tab-item:: Python
+
+      .. code-block:: python
+
+         import dftracer.utils as dft
+
+         ix = dft.Indexer(
+             "traces/",
+             summaries={"args.fhash": ["bloom"], "size": ["zonemap"]},
+         )
+         status = ix.ensure()
+
+         # One row per stored summary per chunk: path, chunk, summary, bytes
+         # and hash_version (null for a summary that holds no hash).
+         rows = dft.Index(status.index_dir).summaries("traces/a.pfw.gz")
+         print(rows.to_pandas().groupby(["path", "summary"]).bytes.sum())
+
+         print(ix.explain_text("size >= 2000"))
+
+   .. tab-item:: C++
+
+      .. code-block:: cpp
+
+         IndexerOptions options;
+         options.summaries = {{"args.fhash", {"bloom"}}, {"size", {"zonemap"}}};
+         Indexer indexer = Indexer::open({"traces/"}, options);
+         indexer.build();
+
+A path is named as in a filter (``size``, ``args.size`` or a nested
+``io.size``). A path that is not a fixed field (``name``, ``cat``, ``pid``,
+``tid``, ``hhash``, ``fhash``, ``shash``, ``ts`` or ``dur``) is indexed by name
+like a ``BloomConfig.fields`` entry. Each list holds ``zonemap``, ``bloom`` or
+``counts``, once each, and each must be among ``extensions``; ``postings`` is
+built for ``name`` only and is not a choice. An empty or repeated path or an
+unknown summary is an ``InvalidArgument`` error (``DFTUtilsValueError`` in
+Python) that names it. ``summaries`` is a build input: a change rebuilds the
+zonemap, bloom and counts of the indexed files, and the same choice does not. A
+path whose summary is not built reads every chunk for the filters that summary
+would judge; it never skips a chunk wrongly. A file read by a plugin file
+format follows the same choices per column.
+
+``Index.summaries(file)`` (C++ ``summary_rows``) lists what is stored for a file
+in the index at ``status.index_dir``.
+
+Hash a value as the index does
+------------------------------
+
+``dft.hash_value(x)`` returns the canonical typed hash the index builds its
+bloom filters and posting lists with, the one a plugin gets from
+``dftu_svc_index.hash_value``. Every integer hashes as an int64 (one above int64
+as a uint64), a float that is a whole number in int64 range hashes as that
+integer (``42.0`` equals ``42``, ``-0.0`` equals ``0.0``), every NaN is one
+value, a bool is 0 or 1, ``str`` hashes as its UTF-8 bytes and ``bytes`` as the
+same bytes, ``None`` is the null value, and a string never equals a number. It
+takes ``None``, ``bool``, ``int``, ``float``, ``str`` and ``bytes``; any other
+type is a ``TypeError`` and an int outside int64 and uint64 an
+``OverflowError``.
 
 Index traces that are not dftracer traces
 ------------------------------------------

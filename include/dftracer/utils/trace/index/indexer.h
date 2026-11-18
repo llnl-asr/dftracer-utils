@@ -41,6 +41,19 @@ struct BloomOptions {
     std::size_t expected_entries_per_chunk = 1024;
 };
 
+/// The summaries one path is indexed with.
+struct SummaryChoice {
+    /// The path as a filter names it: `name`, `fhash`, `args.size` or a nested
+    /// `args.io.size`. A path that is not a fixed field is indexed by name.
+    dstd::String path;
+    /// "zonemap", "bloom" or "counts", each one named in @ref
+    /// IndexerOptions::extensions, or the name of a registered index extension
+    /// that takes the path (a summary compiled from Python by `jit.summary`);
+    /// at least one, none twice. A path with only registered extensions keeps
+    /// no built-in summary.
+    dstd::Vector<dstd::String> summaries;
+};
+
 struct IndexerOptions {
     /// Directory holding the index; empty puts it beside each trace.
     dstd::String index_dir;
@@ -61,6 +74,11 @@ struct IndexerOptions {
     /// with the tier.
     dstd::Vector<dstd::String> extensions = {"zonemap", "bloom", "counts",
                                              "postings"};
+    /// Per-path summary choices. A listed path keeps only the summaries named
+    /// and a path not listed keeps every one of `extensions`. A change
+    /// rebuilds the pruning extensions of the files. An INVALID_ARGUMENT error
+    /// from open names an empty or repeated path or an unknown summary.
+    dstd::Vector<SummaryChoice> summaries;
     /// The aggregation tier every build makes. A caller may change the windows,
     /// keys and sketches but cannot turn it off.
     schemas::dft::agg::AggregationConfig aggregation =
@@ -133,6 +151,18 @@ struct ExtensionPrune {
     dstd::Vector<std::uint64_t> removed;
 };
 
+/// What one summary kind alone skips on one path of a query.
+struct SummarySkipped {
+    /// The path as the query names it.
+    dstd::String path;
+    /// "zonemap", "bloom", "counts" or "postings".
+    dstd::String summary;
+    /// Chunks the summary rules out when it is the only evidence used and only
+    /// the filters on `path` are judged.
+    std::uint64_t skipped = 0;
+    std::uint64_t chunks = 0;
+};
+
 struct FileExplain {
     dstd::String path;
     /// False when the file is not in the index; nothing is pruned then.
@@ -143,6 +173,9 @@ struct FileExplain {
     dstd::Vector<std::uint64_t> read;
     /// One entry per pruning extension current for the file.
     dstd::Vector<ExtensionPrune> extensions;
+    /// One entry per (path, summary kind) whose summary rules out at least
+    /// one chunk for a filter of the query.
+    dstd::Vector<SummarySkipped> summaries;
 };
 
 /// The manifest or explanation as a JSON array of objects whose keys are the
@@ -150,6 +183,9 @@ struct FileExplain {
 /// number may not hold 64 bits.
 dstd::String to_json(dstd::Span<const FileManifest> manifest);
 dstd::String to_json(dstd::Span<const FileExplain> explain);
+/// The explanation as text: per file the chunks read, then a line
+/// `summary <path> <kind>: skipped K of N chunks` for each summary.
+dstd::String to_text(dstd::Span<const FileExplain> explain);
 
 class Indexer;
 

@@ -120,6 +120,12 @@ coro::CoroTask<dstd::Result<void>> build_format_index(
     const std::uint64_t total = tokens.empty() ? 1 : tokens.size();
 
     extensions::ColumnFeeder feeder(make_summaries(settings));
+    if (!settings.config.path_summaries.empty())
+        feeder.set_path_filter(
+            [&config = settings.config](dstd::StringView path,
+                                        store::IndexExtension ext) {
+                return config.builds(path, ext);
+            });
     dstd::UniquePtr<extensions::ExtensionBuilders> plugin_builders;
     auto registered = extensions::registered_extensions();
     if (!registered.empty()) {

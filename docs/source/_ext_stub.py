@@ -137,6 +137,7 @@ class Indexer:
         memory_budget: int = 0,
         schema: str | None = None,
         format: str | None = None,
+        summaries: Mapping[str, Sequence[str]] | None = None,
     ) -> None:
         """Create an indexer for trace files.
 
@@ -171,6 +172,10 @@ class Indexer:
                 file format; None picks one per file by content.
             extensions: Pruning extensions the bloom tier builds, from
                 "zonemap", "bloom", "counts" and "postings"; None builds all.
+            summaries: Per path, the summaries it is indexed with, from
+                "zonemap", "bloom" and "counts", or a loaded index extension
+                that takes the path, in place of the defaults; a path not
+                listed keeps every one of `extensions`.
         """
         ...
     def status(self) -> IndexStatusDict:
@@ -205,8 +210,13 @@ class Indexer:
         """The manifest of every indexed file, as a JSON string."""
         ...
     def explain(self, duql: str) -> str:
-        """Per file, the chunks the query reads and what each pruning
-        extension rules out alone, as a JSON string."""
+        """Per file, the chunks the query reads, what each pruning
+        extension rules out alone and the chunks each summary of each
+        filtered path skips, as a JSON string."""
+        ...
+    def explain_text(self, duql: str) -> str:
+        """As :meth:`explain`, as text: per file the chunks read and a line
+        ``summary <path> <kind>: skipped K of N chunks`` for each summary."""
         ...
     def rebuild_extension(self, name: str) -> IndexStatusDict:
         """Rewrite one tier extension of every file; returns the status."""
@@ -493,6 +503,11 @@ class Index:
     record the aggregation of a distributed build.
     """
     def __init__(self, index_dir: str) -> None: ...
+    def summaries(self, file: str) -> DataFrame:
+        """One row per stored summary per chunk of the indexed trace `file`:
+        columns ``path``, ``chunk``, ``summary``, ``bytes`` and
+        ``hash_version`` (null for a summary that holds no hash)."""
+        ...
     def find_stale_files(self, paths: list[str]) -> dict[str, list[str] | bool]:
         """Stat-only (mtime + size) staleness check of `paths` against the
         index. Returns a dict with keys `changed`, `added`, `removed`
@@ -1724,6 +1739,21 @@ def set_log_color(mode: str) -> None:
     ...
 
 
+@overload
+def _hash_value(x: None, /) -> int: ...
+@overload
+def _hash_value(x: bool, /) -> int: ...
+@overload
+def _hash_value(x: int, /) -> int: ...
+@overload
+def _hash_value(x: float, /) -> int: ...
+@overload
+def _hash_value(x: str, /) -> int: ...
+def _hash_value(x: bytes, /) -> int:
+    """The canonical typed hash of a scalar, as the index hashes it."""
+    ...
+
+
 def _schema_register(text: str, source: str = ..., /) -> str:
     """Register a YAML or JSON record schema spec; returns its id."""
 
@@ -1984,6 +2014,7 @@ _EXPORTS = (
     "Plugins",
     "get_log_level",
     "set_log_color",
+    "_hash_value",
     "_schema_register",
     "_schema_load",
     "_schema_list",

@@ -108,6 +108,10 @@ bool ScalableBloomFilter::has_known_hash_version() const {
     return true;
 }
 
+std::uint8_t ScalableBloomFilter::hash_version() const {
+    return levels_.empty() ? 0 : levels_.front().filter.hash_version();
+}
+
 std::size_t ScalableBloomFilter::size_bytes() const {
     std::size_t total = 0;
     for (const auto& level : levels_) total += level.filter.size_bytes();

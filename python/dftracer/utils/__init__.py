@@ -39,8 +39,10 @@ from .groupby import GroupBy  # noqa: F401
 from .index import (  # noqa: F401
     AggregationConfig,
     BloomConfig,
+    Index,
     Indexer,
     IndexStatus,
+    hash_value,
 )
 from .lazyframe import (  # noqa: F401
     BoundColumn,
@@ -88,8 +90,10 @@ __all__ = [
     "GroupBy",
     "count",
     "eval_many",
+    "Index",
     "Indexer",
     "IndexStatus",
+    "hash_value",
     "AggOp",
     "DType",
     "GroupKey",

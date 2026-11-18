@@ -272,6 +272,9 @@ dstd::Result<ChunkExplanation> explain_file_chunks(const Snapshot& snapshot,
         out.by_extension.push_back(
             explain_alone(query, std::move(name), std::move(own), ctx));
     }
+    out.by_summary = summary_skips(duql::detail::QueryAccess::root(query), ctx,
+                                   ctx.all_chunks);
+    if (ctx.error) return std::move(*ctx.error);
     return out;
 }
 

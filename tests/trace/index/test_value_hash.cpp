@@ -3,6 +3,7 @@
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/value_hash.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -22,6 +23,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 
 using namespace dftracer::utils;
@@ -34,9 +36,66 @@ namespace {
 constexpr std::int64_t INT64_TOP = std::numeric_limits<std::int64_t>::max();
 constexpr std::uint64_t UINT64_TOP = std::numeric_limits<std::uint64_t>::max();
 
+std::uint64_t hash_of_vector(dstd::StringView kind, dstd::StringView arg) {
+    const auto bytes = [&] {
+        dstd::String out;
+        if (arg == "-") return out;
+        const auto nibble = [](char c) {
+            return c <= '9' ? c - '0' : c - 'a' + 10;
+        };
+        for (std::size_t i = 0; i + 1 < arg.size(); i += 2)
+            out.push_back(
+                static_cast<char>(nibble(arg[i]) * 16 + nibble(arg[i + 1])));
+        return out;
+    };
+    const dstd::String text(arg);
+    if (kind == "null") return dstd::hash::value_hash_null();
+    if (kind == "bool") return dstd::hash::value_hash_bool(arg == "1");
+    if (kind == "i64")
+        return dstd::hash::value_hash_int64(
+            std::strtoll(text.c_str(), nullptr, 10));
+    if (kind == "u64")
+        return dstd::hash::value_hash_uint64(
+            std::strtoull(text.c_str(), nullptr, 10));
+    if (kind == "f64")
+        return dstd::hash::value_hash_double(
+            std::strtod(text.c_str(), nullptr));
+    return dstd::hash::value_hash_string(bytes());
+}
+
 }  // namespace
 
 TEST_SUITE("value hash") {
+    TEST_CASE("the vectors the Python hash_value is checked against hold") {
+        const dstd::String path((dstd::Path(DFTRACER_UTILS_TEST_SOURCE_DIR) /
+                                 "trace" / "index" / "data" /
+                                 "value_hash_vectors.txt")
+                                    .str());
+        const auto text = dstd::fs::read_file(dstd::PathView(path));
+        REQUIRE(text.has_value());
+        std::size_t checked = 0;
+        std::size_t at = 0;
+        const dstd::StringView all(text->data(), text->size());
+        while (at < all.size()) {
+            std::size_t end = all.find('\n', at);
+            if (end == dstd::StringView::npos) end = all.size();
+            const dstd::StringView line = all.substr(at, end - at);
+            at = end + 1;
+            if (line.empty() || line[0] == '#') continue;
+            const std::size_t a = line.find(' ');
+            const std::size_t b = line.find(' ', a + 1);
+            REQUIRE(b != dstd::StringView::npos);
+            const dstd::String expected(line.substr(b + 1));
+            const std::uint64_t want =
+                std::strtoull(expected.c_str(), nullptr, 16);
+            CAPTURE(line);
+            CHECK(hash_of_vector(line.substr(0, a),
+                                 line.substr(a + 1, b - a - 1)) == want);
+            ++checked;
+        }
+        CHECK(checked > 40);
+    }
+
     TEST_CASE("a whole double hashes as the integer it equals") {
         CHECK(dstd::hash::value_hash_double(42.0) ==
               dstd::hash::value_hash_int64(42));

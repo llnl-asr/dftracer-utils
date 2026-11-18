@@ -22,7 +22,7 @@ How the indexer types relate:
 .. mermaid:: /_generated/py_indexer.mmd
 
 .. autoclass:: dftracer.utils.Indexer
-   :members: status, ensure, build, get_checkpoint_indexer, rowset, query_file_pids, query_all_file_pids, query_file_info
+   :members: status, ensure, build, explain, explain_text, summaries, get_checkpoint_indexer, rowset, query_file_pids, query_all_file_pids, query_file_info
    :undoc-members:
    :show-inheritance:
 
@@ -78,6 +78,22 @@ Result of :meth:`~dftracer.utils.Indexer.status`,
    :members:
    :no-index:
    :undoc-members:
+
+Index and hash_value
+--------------------
+
+:class:`~dftracer.utils.Index` reads what an index root stores about a trace.
+:func:`~dftracer.utils.hash_value` is the canonical typed hash the index
+builds its filters with. Both are exported from ``dftracer.utils``; the guide
+:doc:`/guides/core/indexing` shows them in use.
+
+.. autoclass:: dftracer.utils.Index
+   :members:
+   :no-index:
+   :undoc-members:
+
+.. autofunction:: dftracer.utils.hash_value
+   :no-index:
 
 CheckpointIndexer Class
 -----------------------

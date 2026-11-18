@@ -9,6 +9,7 @@ from typing import (
     TYPE_CHECKING,
     Dict,
     List,
+    Mapping,
     Optional,
     Sequence,
     Set,
@@ -16,11 +17,14 @@ from typing import (
     TypedDict,
     Union,
     cast,
+    overload,
 )
 
 from .dataframe import DataFrame
 from .dftracer_utils_ext import CheckpointIndexer as _NativeCheckpointIndexer
+from .dftracer_utils_ext import Index as _NativeIndex
 from .dftracer_utils_ext import Indexer as _NativeIndexer
+from .dftracer_utils_ext import _hash_value
 from .enums import coerce_bytes, coerce_duration
 from .runtime import Runtime, TaskHandle
 from .schemas import RecordSchema, schema_id
@@ -119,6 +123,15 @@ class ExplainExtension(TypedDict):
     removed: List[int]
 
 
+class ExplainSummary(TypedDict):
+    """The chunks one summary of one path skips (``Indexer.explain``)."""
+
+    path: str
+    summary: str
+    skipped: int
+    chunks: int
+
+
 class ExplainEntry(TypedDict):
     """Why a query reads the chunks it reads in one file (``Indexer.explain``)."""
 
@@ -128,6 +141,7 @@ class ExplainEntry(TypedDict):
     chunks: int
     read: List[int]
     extensions: List[ExplainExtension]
+    summaries: List[ExplainSummary]
 
 
 @dataclass
@@ -208,6 +222,20 @@ class Indexer:
             ``TraceViewer.memory_budget`` (an int or a size such as "4GB");
             0 is about a third of available memory. Past it, large files are
             indexed fewer at a time and spill to disk.
+        summaries: Per path, the summaries it is indexed with, in place of the
+            defaults: ``{"args.fhash": ["bloom"], "size": ["zonemap"]}``. A
+            path is named as in filters (``"size"``, ``"args.size"`` or a
+            nested ``"io.size"``); a path that is not a fixed field is
+            indexed by name. Each list holds "zonemap", "bloom" or "counts",
+            once each, each among ``extensions``, or the name of a summary
+            compiled by :func:`dftracer.utils.jit.summary` that takes the
+            path and is loaded; a path not listed keeps every summary of
+            ``extensions``. A change of
+            ``summaries`` rebuilds the pruning tier of the indexed files. An
+            empty or repeated path or an unknown summary raises
+            ``DFTUtilsValueError`` naming it on the first ``status``,
+            ``ensure`` or ``build``; a bare ``str`` in place of a list raises
+            ``TypeError``.
         format: The reader of every file by name: ``"jsonl"`` (the built-in
             trace reader) or a registered plugin file format. None picks one
             per file by content; two readers that tie are an error naming both.
@@ -247,8 +275,11 @@ class Indexer:
         memory_budget: Union[int, str] = 0,
         schema: "Union[str, Type[RecordSchema], None]" = None,
         format: Optional[str] = None,
+        summaries: Optional[Mapping[str, Sequence[str]]] = None,
     ) -> None:
         checkpoint_size = coerce_bytes(checkpoint_size, "checkpoint_size")
+        if summaries is not None and not isinstance(summaries, Mapping):
+            raise TypeError("summaries must be a mapping of path to a list of summary names")
 
         agg_config = aggregation_config if aggregation_config is not None else AggregationConfig()
 
@@ -279,6 +310,7 @@ class Indexer:
             memory_budget=coerce_bytes(memory_budget, "memory_budget"),
             schema=schema_id(schema) if schema is not None else None,
             format=format,
+            summaries=dict(summaries) if summaries is not None else None,
         )
         self._aggregation_config = agg_config
         self._file_info_cache: Optional[FileInfo] = None
@@ -365,14 +397,32 @@ class Indexer:
 
         Returns:
             One dict per file with ``path``, ``indexed``, ``may_match``,
-            ``chunks``, ``read`` (the chunks a scan reads) and ``extensions``:
+            ``chunks``, ``read`` (the chunks a scan reads), ``extensions``:
             dicts with ``name``, ``file_ruled_out`` and ``removed`` (the
-            chunks that extension rules out alone).
+            chunks that extension rules out alone), and ``summaries``: dicts
+            with ``path``, ``summary``, ``skipped`` and ``chunks``, one for
+            each summary of each filtered path that rules out a chunk when it
+            judges only that path.
 
         Raises:
             DFTUtilsValueError: The duql text does not parse.
         """
         return cast("List[ExplainEntry]", json.loads(self._native.explain(duql)))
+
+    def explain_text(self, duql: str) -> str:
+        """:meth:`explain` as text: per file the chunks read, then a line
+        ``summary <path> <kind>: skipped K of N chunks`` for each summary that
+        rules chunks out."""
+        return self._native.explain_text(duql)
+
+    def summaries(self, file: "Union[str, os.PathLike[str]]") -> DataFrame:
+        """The summaries stored for an indexed file, as :meth:`Index.summaries`
+        returns them.
+
+        Raises:
+            DFTUtilsNotFoundError: The index holds no entry for `file`.
+        """
+        return Index(self.status().index_dir).summaries(file)
 
     def rebuild_extension(self, name: str) -> IndexStatus:
         """Rewrite one tier extension of every file, leaving the others.
@@ -464,6 +514,67 @@ class Indexer:
         if self._file_info_cache is None:
             self._file_info_cache = self._native.query_file_info()
         return self._file_info_cache
+
+
+class Index:
+    """A read-only handle to the index root of an :class:`Indexer`.
+
+    Args:
+        index_dir: The ``.dftindex`` store, as ``IndexStatus.index_dir`` names
+            it.
+    """
+
+    def __init__(self, index_dir: str) -> None:
+        self._native = _NativeIndex(index_dir)
+
+    def summaries(self, file: "Union[str, os.PathLike[str]]") -> DataFrame:
+        """What the index stores about the chunks of one trace file.
+
+        Args:
+            file: The trace path, as given to the indexer.
+
+        Returns:
+            A DataFrame with one row per stored summary per chunk and the
+            columns ``path`` (the indexed path), ``chunk``, ``summary``
+            ("zonemap", "bloom", "counts" or "postings"), ``bytes`` (the
+            stored size; for postings, 8 bytes per hash) and ``hash_version``
+            (the value hash version of a bloom filter or a posting list, null
+            for a summary that holds no hash).
+
+        Raises:
+            DFTUtilsNotFoundError: The index holds no entry for `file`.
+        """
+        return DataFrame(self._native.summaries(os.fspath(file)))
+
+
+@overload
+def hash_value(x: None) -> int: ...
+@overload
+def hash_value(x: bool) -> int: ...
+@overload
+def hash_value(x: int) -> int: ...
+@overload
+def hash_value(x: float) -> int: ...
+@overload
+def hash_value(x: str) -> int: ...
+@overload
+def hash_value(x: bytes) -> int: ...
+def hash_value(x: Union[None, bool, int, float, str, bytes]) -> int:
+    """The canonical typed hash the index builds its filters and postings with.
+
+    Every integer hashes as an int64 (an int above int64 as a uint64), a float
+    that is a whole number in int64 range hashes as that integer (``42.0`` and
+    ``42`` agree, ``-0.0`` and ``0.0`` agree), every NaN is one value, a bool
+    hashes as 0 or 1, a ``str`` hashes as its UTF-8 bytes and ``bytes`` as the
+    same bytes, so ``"a"`` and ``b"a"`` agree, and a string never equals a
+    number. ``None`` is the null value. It is the value a plugin gets from
+    ``dftu_svc_index.hash_value``.
+
+    Raises:
+        OverflowError: An int outside int64 and uint64.
+        TypeError: Any other type.
+    """
+    return _hash_value(x)
 
 
 def open_readonly_indexer(

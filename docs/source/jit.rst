@@ -1069,3 +1069,87 @@ So JIT covers everything the C ABI can: the structured subset for the common
 case, a raw body for the rest - both compiled to one native plugin. A body that
 steps outside the structured subset without ``raw=True`` raises ``JitError``
 pointing here, never a silent miscompile.
+
+Index summaries: ``jit.summary``
+--------------------------------
+
+``@jit.summary`` compiles a Python class to a native index extension, a summary
+that a build stores per chunk and a query reads to skip chunks. The class
+declares its state as annotated ``int`` or ``float`` fields with a default (the
+state of an empty chunk), and three methods:
+
+``add(self, value)``
+   Runs for each non-null, non-NaN value of each path in a chunk. Values are
+   widened to a double, which is exact up to 2**53: a chunk that holds an
+   integer with a magnitude above 2**53 (a nanosecond timestamp, say) stores
+   nothing and is never skipped, and a filter on an integer literal above 2**53
+   has no evidence.
+
+``merge(self, other)``
+   Folds the state of another chunk into ``self``. The build merges the chunks
+   into the file state, which a query uses to rule out the whole file.
+
+``may_contain(self, cond)``
+   Takes a ``jit.Cond`` (``cond.op`` and ``cond.value``) and returns ``False`` only when the state proves that no value in the chunk
+   satisfies the filter leaf ``path <op> cond.value``. ``cond.op`` is one of
+   ``jit.EQ``, ``jit.LT``, ``jit.LE``, ``jit.GT`` and ``jit.GE``; a leaf with
+   another operator, an ``any()`` leaf, a non-numeric literal or a path the
+   summary does not take has no evidence and never reaches it. Soundness is
+   yours: a wrong ``False`` drops matching rows.
+
+.. code-block:: python
+
+   import dftracer.utils as dft
+   from dftracer.utils import jit
+
+   @jit.summary(name="acme.size_range", paths=["args.size"])
+   class SizeRange:
+       n: int = 0
+       lo: float = 0.0
+       hi: float = 0.0
+
+       def add(self, value):
+           if self.n == 0 or value < self.lo:
+               self.lo = value
+           if self.n == 0 or value > self.hi:
+               self.hi = value
+           self.n += 1
+
+       def merge(self, other):
+           if other.n > 0:
+               if self.n == 0 or other.lo < self.lo:
+                   self.lo = other.lo
+               if self.n == 0 or other.hi > self.hi:
+                   self.hi = other.hi
+               self.n += other.n
+
+       def may_contain(self, cond):
+           if self.n == 0:
+               return False
+           if cond.op == jit.EQ:
+               return self.lo <= cond.value and cond.value <= self.hi
+           if cond.op == jit.GE:
+               return self.hi >= cond.value
+           return True
+
+   so = jit.build(SizeRange)
+   with dft.load_plugin(so):
+       ix = dft.Indexer("traces/", summaries={"size": ["acme.size_range"]})
+       ix.ensure()
+       print(ix.explain_text("size >= 1000"))
+       # traces/a.pfw.gz: read 2 of 12 chunks
+       #   summary size acme.size_range: skipped 10 of 12 chunks
+
+The body is a small subset: ``self`` fields, locals, numbers and booleans,
+``+ - * /``, comparisons (chained too), ``and``, ``or``, ``not``, conditional
+expressions, ``min``, ``max`` and ``abs``, ``if`` and ``elif`` and ``else``,
+assignments and augmented assignments, and ``return`` in ``may_contain``. A
+construct outside it raises ``JitError`` with its line and column. The built
+plugin is plain C that links no Python: after the build, a query runs
+the summary on native threads and no Python code runs, and it still prunes when
+the class has been deleted. A chunk whose path holds a string, or several
+types, stores nothing for the summary and is never skipped. The build hashes the
+compiled body into the extension's params hash, so a changed body rebuilds the
+data, and ``version`` rebuilds it by hand. A path in ``summaries`` that lists
+only registered summaries keeps no built-in summary; list ``"zonemap"``,
+``"bloom"`` or ``"counts"`` next to it to keep one.

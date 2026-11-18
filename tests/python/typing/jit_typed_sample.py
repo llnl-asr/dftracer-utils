@@ -583,3 +583,26 @@ class PortsIn:
 
 
 closed: Exception = jit.Closed("channel closed")
+
+
+@jit.summary(name="acme.typed_range", paths=["args.v"])
+class TypedRange:
+    n: int = 0
+    hi: float = 0.0
+
+    def add(self, value: float) -> None:
+        if value > self.hi:
+            self.hi = value
+        self.n += 1
+
+    def merge(self, other: "TypedRange") -> None:
+        if other.hi > self.hi:
+            self.hi = other.hi
+        self.n += other.n
+
+    def may_contain(self, cond: jit.Cond) -> bool:
+        if cond.op == jit.EQ or cond.op == jit.LT or cond.op == jit.LE:
+            return True
+        if cond.op == jit.GT or cond.op == jit.GE:
+            return self.hi >= cond.value
+        return True

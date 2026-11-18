@@ -22,6 +22,7 @@ void ColumnFeeder::feed(std::uint64_t granule,
         if (file.builders.empty()) file.builders.resize(summaries_.size());
         for (std::size_t s = 0; s < summaries_.size(); ++s) {
             const Summary& summary = *summaries_[s];
+            if (filter_ && !filter_(path, summary.extension())) continue;
             auto builder = summary.builder(column.type());
             if (!builder) continue;
             builder->set_observed(rows);

@@ -634,6 +634,7 @@ set(TEST_CPP_SOURCES
     trace/index/test_index_pass_parallel.cpp
     trace/index/test_index_skip.cpp
     trace/index/test_catalog.cpp
+    trace/index/test_summaries.cpp
     trace/index/test_spill_publish.cpp
     trace/index/test_bloom_open_counts.cpp
     trace/index/test_build_parallelism.cpp

@@ -762,3 +762,29 @@ TEST_CASE("an SDK format with a chunk_token hook is indexed and skipped") {
     CHECK(dstd::String(*logged) == "3\n");
     CHECK(show(ids_of(got)) == show(iota(13, 16)));
 }
+
+TEST_CASE("a summary choice applies to the columns of a format file") {
+    using trace::index::store::IndexExtension;
+    for (const char* spelling : {"id", "args.id"}) {
+        CAPTURE(spelling);
+        Scratch s;
+        auto plugins = load({CHUNKED_FORMAT_PLUGIN_PATH});
+        const dstd::String path = write_rows(s.data, "a.rows", 1, 16, "CHK1");
+        IndexerOptions o = options_in(s);
+        o.summaries = {{spelling, {"zonemap"}}};
+        auto ix = open_indexer({path}, o);
+        const auto built = dftu_utils_test::ok(ix.build());
+        const auto snapshot = snapshot_of(built);
+        const auto file = snapshot.file(fileio::get_logical_path(path));
+        REQUIRE(file.has_value());
+        const auto count = [&](IndexExtension ext) {
+            return dftu_utils_test::ok(
+                       trace::index::granules(snapshot, *file, ext, "id"))
+                .size();
+        };
+        CHECK(count(IndexExtension::Zonemap) == 4);
+        CHECK(count(IndexExtension::Bloom) == 0);
+        CHECK(count(IndexExtension::Counts) == 0);
+        CHECK(dftu_utils_test::ok(ix.status()).needs_work.empty());
+    }
+}

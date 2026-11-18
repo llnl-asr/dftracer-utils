@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TRACE_INDEX_EXTENSIONS_COLUMN_FEEDER_H
 
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -13,6 +14,7 @@
 #include <dftracer/utils/trace/index/store/file.h>
 
 #include <cstdint>
+#include <utility>
 
 namespace dftracer::utils::trace::index {
 class FileBuild;
@@ -37,6 +39,13 @@ class ColumnFeeder {
 
     explicit ColumnFeeder(
         dstd::Vector<dstd::SharedPtr<const Summary>> summaries);
+
+    /// Whether the summary of kind `ext` is built for path `path`; a summary
+    /// the filter refuses records nothing for that path. Unset builds every
+    /// summary for every path.
+    using PathFilter =
+        dstd::Function<bool(dstd::StringView, store::IndexExtension)>;
+    void set_path_filter(PathFilter filter) { filter_ = std::move(filter); }
 
     /// Also hands each frame to `builders`, whose extensions take the columns
     /// they asked for through step_column. `builders` must outlive the feeder.
@@ -66,6 +75,7 @@ class ColumnFeeder {
 
     dstd::Vector<dstd::SharedPtr<const Summary>> summaries_;
     ExtensionBuilders* builders_ = nullptr;
+    PathFilter filter_;
     dstd::Vector<Payload> granules_;
     dstd::Map<dstd::String, FileState> files_;
 };

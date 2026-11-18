@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/trace/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/trace/index/index_internal.h>
 #include <dftracer/utils/trace/index/store/internal/index_decoding.h>
 #include <dftracer/utils/trace/index/store/internal/index_encoding.h>
@@ -599,6 +600,111 @@ dstd::Result<bool> has_posting(const Snapshot& snapshot, const FileRef& file,
                            dstd::ByteView(key));
     if (!found) return dstd::Unexpected<dstd::Error>(found.error());
     return found->has_value();
+}
+
+dstd::Result<dstd::Vector<SummaryRow>> summary_rows(const Snapshot& snapshot,
+                                                    const FileRef& file) {
+    dstd::Vector<SummaryRow> out;
+    for (auto ext : {Ext::Zonemap, Ext::Bloom, Ext::Counts}) {
+        auto listed = paths(snapshot, file, ext);
+        if (!listed) return dstd::Unexpected<dstd::Error>(listed.error());
+        std::sort(listed->begin(), listed->end());
+        for (const dstd::String& path : *listed) {
+            auto stored = granules(snapshot, file, ext, path);
+            if (!stored) return dstd::Unexpected<dstd::Error>(stored.error());
+            for (const auto& [chunk, payload] : *stored) {
+                SummaryRow row;
+                row.path = path;
+                row.chunk = chunk;
+                row.summary = dstd::String(store::extension_name(ext));
+                row.bytes = payload.size();
+                if (ext == Ext::Bloom) {
+                    if (auto bloom = extensions::kinds::decode_bloom(payload))
+                        row.hash_version = bloom->hash_version();
+                }
+                out.push_back(std::move(row));
+            }
+        }
+    }
+    auto listed = paths(snapshot, file, Ext::Postings);
+    if (!listed) return dstd::Unexpected<dstd::Error>(listed.error());
+    std::sort(listed->begin(), listed->end());
+    for (const dstd::String& path : *listed) {
+        dstd::Map<std::uint64_t, std::uint64_t> per_chunk;
+        const dstd::String prefix =
+            path_prefix(store::layout::path_kind::IN_GRANULE, path);
+        auto scanned =
+            scan_keys(snapshot, file, read_ns(Ext::Postings), prefix,
+                      [&](dstd::StringView key) {
+                          if (key.size() == prefix.size() + 8 + 4)
+                              ++per_chunk[tail_u32(key, prefix.size() + 8)];
+                          return true;
+                      });
+        if (!scanned) return dstd::Unexpected<dstd::Error>(scanned.error());
+        const dftracer::utils::store::Snapshot* snap =
+            IndexAccess::store_snapshot(snapshot);
+        std::uint32_t version = 0;
+        if (snap != nullptr) {
+            const dstd::String marker =
+                file_key(store::layout::path_kind::PATHS, path);
+            auto body =
+                snap->get(read_ns(Ext::Postings), IndexAccess::scope(file),
+                          dstd::ByteView(marker));
+            if (!body) return dstd::Unexpected<dstd::Error>(body.error());
+            if (body->has_value()) {
+                const dstd::StringView text = as_text((*body)->bytes());
+                if (text.size() == 1)
+                    version = static_cast<std::uint8_t>(text[0]);
+            }
+        }
+        for (const auto& [chunk, count] : per_chunk) {
+            SummaryRow row;
+            row.path = path;
+            row.chunk = chunk;
+            row.summary = "postings";
+            row.bytes = count * 8;
+            row.hash_version = version;
+            out.push_back(std::move(row));
+        }
+    }
+    return out;
+}
+
+dataframe::DataFrame summary_frame(dstd::Span<const SummaryRow> rows) {
+    const std::size_t n = rows.size();
+    dstd::Vector<dstd::StringView> paths;
+    dstd::Vector<dstd::StringView> names;
+    dstd::Vector<std::int64_t> chunks;
+    dstd::Vector<std::int64_t> bytes;
+    dstd::Vector<std::int64_t> versions;
+    dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0);
+    for (std::size_t i = 0; i < n; ++i) {
+        paths.push_back(rows[i].path);
+        names.push_back(rows[i].summary);
+        chunks.push_back(static_cast<std::int64_t>(rows[i].chunk));
+        bytes.push_back(static_cast<std::int64_t>(rows[i].bytes));
+        versions.push_back(rows[i].hash_version ? static_cast<std::int64_t>(
+                                                      *rows[i].hash_version)
+                                                : 0);
+        if (rows[i].hash_version)
+            valid[i / 8] =
+                static_cast<std::uint8_t>(valid[i / 8] | (1U << (i % 8)));
+    }
+    const auto count = static_cast<std::int64_t>(n);
+    dataframe::DataFrame frame;
+    const auto add = [&](dstd::StringView name, dataframe::Series column) {
+        frame.names.emplace_back(name);
+        frame.columns.push_back(std::move(column));
+    };
+    add("path", dataframe::Series::strings(
+                    dstd::Span<const dstd::StringView>(paths.data(), n)));
+    add("chunk", dataframe::Series::flat_i64(chunks.data(), count));
+    add("summary", dataframe::Series::strings(
+                       dstd::Span<const dstd::StringView>(names.data(), n)));
+    add("bytes", dataframe::Series::flat_i64(bytes.data(), count));
+    add("hash_version",
+        dataframe::Series::flat_i64(versions.data(), count, valid.data()));
+    return frame;
 }
 
 dstd::Result<dstd::Vector<std::uint64_t>> posting_granules(

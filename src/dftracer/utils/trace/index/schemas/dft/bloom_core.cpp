@@ -128,8 +128,8 @@ void put_dimension(Tier& t, std::uint64_t checkpoint_idx,
                    BloomCore::ChunkDimensionStats& ds, std::uint64_t observed,
                    const BloomCore::ChunkIndexerConfig& config,
                    const BloomCore::ChunkStatistics& stats, bool extra) {
-    const bool zones = config.extensions.has(IndexExtension::Zonemap);
-    const bool counts = config.extensions.has(IndexExtension::Counts);
+    const bool zones = config.builds(ds.dimension, IndexExtension::Zonemap);
+    const bool counts = config.builds(ds.dimension, IndexExtension::Counts);
     if (!zones && !counts) return;
     // dftracer's ts and dur are on every data event; other dimensions count.
     const bool always_present =
@@ -176,6 +176,8 @@ void write_chunk_to(Tier& t, std::uint64_t checkpoint_idx,
     const auto observed = chunk.statistics.total_events;
 
     for (std::size_t b = 0; fixed && blooms && b < BloomCore::BfCount; ++b) {
+        if (!config.builds(FIXED_BLOOM_NAMES[b], IndexExtension::Bloom))
+            continue;
         put_bloom(t, checkpoint_idx, FIXED_BLOOM_NAMES[b],
                   chunk.fixed_blooms[b]);
         acc.fixed_blooms[b].merge_from(chunk.fixed_blooms[b]);
@@ -183,6 +185,7 @@ void write_chunk_to(Tier& t, std::uint64_t checkpoint_idx,
     for (std::size_t e = 0;
          blooms && e < extra_dims.size() && e < chunk.extra_dim_stats.size();
          ++e) {
+        if (!config.builds(extra_dims[e], IndexExtension::Bloom)) continue;
         if (chunk.extra_dim_stats[e].present == 0) continue;
         auto& file_bloom = acc.extra(extra_dims[e]);
         if (e < chunk.extra_bloom_skip.size() && chunk.extra_bloom_skip[e]) {
@@ -257,10 +260,13 @@ BloomCore::ChunkStatistics finish_file_to(
     const bool fixed = config.fixed_dimensions;
 
     for (std::size_t b = 0; fixed && blooms && b < BloomCore::BfCount; ++b) {
+        if (!config.builds(FIXED_BLOOM_NAMES[b], IndexExtension::Bloom))
+            continue;
         put_file_bloom(t, FIXED_BLOOM_NAMES[b], acc.fixed_blooms[b]);
         t.path(IndexExtension::Bloom, FIXED_BLOOM_NAMES[b]);
     }
     for (std::size_t e = 0; blooms && e < extra_dims.size(); ++e) {
+        if (!config.builds(extra_dims[e], IndexExtension::Bloom)) continue;
         auto& file_bloom = acc.extra(extra_dims[e]);
         if (!file_bloom.skip)
             put_file_bloom(t, extra_dims[e], file_bloom.bloom);
@@ -270,8 +276,9 @@ BloomCore::ChunkStatistics finish_file_to(
     for (auto ext : {IndexExtension::Zonemap, IndexExtension::Counts}) {
         if (!m.has(ext)) continue;
         for (auto dim : FIXED_DIM_NAMES)
-            if (fixed) t.path(ext, dim);
-        for (const auto& dim : extra_dims) t.path(ext, dim);
+            if (fixed && config.builds(dim, ext)) t.path(ext, dim);
+        for (const auto& dim : extra_dims)
+            if (config.builds(dim, ext)) t.path(ext, dim);
     }
 
     t.scalar_stats(acc.statistics, acc.chunks);

@@ -85,11 +85,13 @@ bool agg_current(const Snapshot& snapshot, const FileRef& file,
     return ready_with_params(snapshot, file, IndexExtension::Agg, params_hash);
 }
 
-// Paths the file's pruning tier indexed by value (bloom) or range (zonemap).
+// Paths the file's pruning tier indexed by value (bloom), range (zonemap) or
+// count (counts).
 dstd::Result<dstd::Vector<dstd::String>> indexed_paths(const Snapshot& snapshot,
                                                        const FileRef& file) {
     dstd::Vector<dstd::String> out;
-    for (auto ext : {IndexExtension::Bloom, IndexExtension::Zonemap}) {
+    for (auto ext : {IndexExtension::Bloom, IndexExtension::Zonemap,
+                     IndexExtension::Counts}) {
         auto listed = trace::index::paths(snapshot, file, ext);
         if (!listed) return listed.error();
         for (auto& p : *listed) out.emplace_back(p.data(), p.size());
@@ -147,12 +149,21 @@ dstd::Result<trace::index::store::ExtensionMask> stale_tier(
             stale.add(ext);
     }
     const bool paths = config->extensions.has(IndexExtension::Bloom) ||
-                       config->extensions.has(IndexExtension::Zonemap);
+                       config->extensions.has(IndexExtension::Zonemap) ||
+                       config->extensions.has(IndexExtension::Counts);
     if (paths) {
         const auto indexed = indexed_paths(snapshot, file);
         if (!indexed) return indexed.error();
-        if (!covers(*indexed, config->extra_dimensions)) {
-            for (auto ext : {IndexExtension::Bloom, IndexExtension::Zonemap})
+        // A dimension whose built-in summaries are all refused leaves no path.
+        dstd::Vector<dstd::String> wanted;
+        for (const dstd::String& dim : config->extra_dimensions)
+            if (config->builds(dim, IndexExtension::Bloom) ||
+                config->builds(dim, IndexExtension::Zonemap) ||
+                config->builds(dim, IndexExtension::Counts))
+                wanted.push_back(dim);
+        if (!covers(*indexed, wanted)) {
+            for (auto ext : {IndexExtension::Bloom, IndexExtension::Zonemap,
+                             IndexExtension::Counts})
                 if (config->extensions.has(ext)) stale.add(ext);
         }
     }

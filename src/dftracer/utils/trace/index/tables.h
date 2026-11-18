@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/coro/async_mutex.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/function.h>
@@ -133,6 +134,30 @@ dstd::Result<dstd::Optional<dstd::String>> path_file(const Snapshot& snapshot,
                                                      const FileRef& file,
                                                      store::IndexExtension ext,
                                                      dstd::StringView path);
+
+/// One stored summary of one chunk of a file.
+struct SummaryRow {
+    dstd::String path;
+    std::uint64_t chunk = 0;
+    /// "zonemap", "bloom", "counts" or "postings".
+    dstd::String summary;
+    /// The payload bytes; for postings, the hashes of the chunk at 8 bytes
+    /// each.
+    std::uint64_t bytes = 0;
+    /// The value hash version of a bloom filter or a posting list; nullopt for
+    /// a summary that holds no hash.
+    dstd::Optional<std::uint32_t> hash_version;
+};
+
+/// Every stored summary of every chunk of the file: zonemap, bloom, counts and
+/// postings, ordered by summary in that order, then by path, then by chunk.
+dstd::Result<dstd::Vector<SummaryRow>> summary_rows(const Snapshot& snapshot,
+                                                    const FileRef& file);
+
+/// The rows as a frame of columns `path`, `chunk`, `summary`, `bytes` and
+/// `hash_version`, in the order of @ref summary_rows; a null `hash_version` is
+/// a summary that holds no hash.
+dataframe::DataFrame summary_frame(dstd::Span<const SummaryRow> rows);
 
 /// Whether the file holds postings of `path` keyed by the current value hash
 /// version. Postings of another version answer false, so no query prunes by

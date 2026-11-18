@@ -69,6 +69,7 @@ static void Indexer_dealloc(IndexerObject* self) {
     Py_XDECREF(self->extensions);
     Py_XDECREF(self->schema);
     Py_XDECREF(self->format);
+    Py_XDECREF(self->summaries);
     Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
@@ -87,6 +88,7 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject*, PyObject*) {
         self->memory_budget = 0;
         self->schema = nullptr;
         self->format = nullptr;
+        self->summaries = nullptr;
         self->false_positive_rate = ChunkIndexerConfig{}.false_positive_rate;
         self->expected_entries =
             ChunkIndexerConfig{}.expected_entries_per_chunk;
@@ -130,24 +132,41 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     unsigned long long memory_budget = 0;
     PyObject* schema_obj = Py_None;
     PyObject* format_obj = Py_None;
+    PyObject* summaries_obj = Py_None;
 
     if (!dftracer::utils::python::core::ensure_plugins()) return -1;
-    if (!parse_kw<"O|spppdOppnnOOdnndnOKOO">(
+    if (!parse_kw<"O|spppdOppnnOOdnndnOKOOO">(
             args, kwds,
-            {"files",           "index_dir",           "require_checkpoint",
-             "require_bloom",   "build_bloom",         "time_interval_ms",
-             "group_keys",      "compute_percentiles", "group_by_file",
-             "checkpoint_size", "parallelism",         "runtime",
-             "bloom_fields",    "false_positive_rate", "expected_entries",
-             "path_budget",     "stats_share",         "auto_max_distinct",
-             "extensions",      "memory_budget",       "schema",
-             "format"},
+            {"files",
+             "index_dir",
+             "require_checkpoint",
+             "require_bloom",
+             "build_bloom",
+             "time_interval_ms",
+             "group_keys",
+             "compute_percentiles",
+             "group_by_file",
+             "checkpoint_size",
+             "parallelism",
+             "runtime",
+             "bloom_fields",
+             "false_positive_rate",
+             "expected_entries",
+             "path_budget",
+             "stats_share",
+             "auto_max_distinct",
+             "extensions",
+             "memory_budget",
+             "schema",
+             "format",
+             "summaries"},
             &files_arg, &index_dir, &require_checkpoint, &require_bloom,
             &build_bloom, &time_interval_ms, &group_keys_obj,
             &compute_percentiles, &group_by_file, &checkpoint_size,
             &parallelism, &runtime_arg, &bloom_fields_obj, &false_positive_rate,
             &expected_entries, &path_budget, &stats_share, &auto_max_distinct,
-            &extensions_obj, &memory_budget, &schema_obj, &format_obj)) {
+            &extensions_obj, &memory_budget, &schema_obj, &format_obj,
+            &summaries_obj)) {
         return -1;
     }
     if (!(false_positive_rate > 0.0 && false_positive_rate < 1.0)) {
@@ -199,6 +218,16 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
         }
         Py_INCREF(format_obj);
         Py_XSETREF(self->format, format_obj);
+    }
+    if (summaries_obj != Py_None) {
+        if (!PyDict_Check(summaries_obj)) {
+            PyErr_SetString(PyExc_TypeError,
+                            "summaries must be a dict of path to a list of "
+                            "summary names, or None");
+            return -1;
+        }
+        Py_INCREF(summaries_obj);
+        Py_XSETREF(self->summaries, summaries_obj);
     }
     self->false_positive_rate = false_positive_rate;
     self->expected_entries = static_cast<std::size_t>(expected_entries);
@@ -330,6 +359,32 @@ indexer_options(IndexerObject* self) {
     if (self->format) {
         const char* p = as_utf8(self->format);
         o.format = p ? p : "";
+    }
+    if (self->summaries) {
+        PyObject* key = nullptr;
+        PyObject* value = nullptr;
+        Py_ssize_t pos = 0;
+        while (PyDict_Next(self->summaries, &pos, &key, &value)) {
+            const char* path = PyUnicode_Check(key) ? as_utf8(key) : nullptr;
+            if (!path) {
+                PyErr_SetString(PyExc_TypeError,
+                                "summaries keys must be str paths");
+                return dftracer::utils::dstd::nullopt;
+            }
+            dftracer::utils::trace::index::SummaryChoice choice;
+            choice.path = path;
+            if (PyUnicode_Check(value)) {
+                PyErr_SetString(PyExc_TypeError,
+                                "summaries values must be lists of str, not "
+                                "a str");
+                return dftracer::utils::dstd::nullopt;
+            }
+            if (!dftracer::utils::python::core::parse_string_seq(
+                    value, "summaries values must be sequences of str",
+                    choice.summaries))
+                return dftracer::utils::dstd::nullopt;
+            o.summaries.push_back(std::move(choice));
+        }
     }
     if (!self->build_bloom) {
         o.bloom.reset();
@@ -543,6 +598,19 @@ static PyObject* Indexer_explain(IndexerObject* self, PyObject* args) {
         return nullptr;
     return PyUnicode_FromStringAndSize(json.data(),
                                        static_cast<Py_ssize_t>(json.size()));
+}
+
+static PyObject* Indexer_explain_text(IndexerObject* self, PyObject* args) {
+    const char* query = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &query)) return nullptr;
+    dftracer::utils::dstd::String text;
+    if (!with_indexer(self, [&](dftracer::utils::trace::index::Indexer ix) {
+            text = dftracer::utils::trace::index::to_text(
+                dftracer::utils::python::core::py_unwrap(ix.explain(query)));
+        }))
+        return nullptr;
+    return PyUnicode_FromStringAndSize(text.data(),
+                                       static_cast<Py_ssize_t>(text.size()));
 }
 
 static PyObject* Indexer_rebuild_extension(IndexerObject* self,
@@ -830,6 +898,11 @@ static PyMethodDef Indexer_methods[] = {
      "--\n\n"
      "Per file, the chunks the query reads and what each pruning extension\n"
      "rules out alone, as a JSON string.\n"},
+    {"explain_text", DFTU_PYCFUNCTION(Indexer_explain_text), METH_VARARGS,
+     "explain_text(query)\n"
+     "--\n\n"
+     "Per file, the chunks the query reads and a line for each summary that\n"
+     "rules chunks out, as text.\n"},
     {"rebuild_extension", DFTU_PYCFUNCTION(Indexer_rebuild_extension),
      METH_VARARGS,
      "rebuild_extension(name)\n"

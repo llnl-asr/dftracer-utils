@@ -504,6 +504,21 @@ dstd::Result<dstd::Optional<dstd::String>> rowset(const Snapshot& snapshot,
                       path_prefix(store::layout::rowset_kind::FRAME, name));
 }
 
+dstd::Result<dstd::Optional<store::FormatRecord>> format_record(
+    const Snapshot& snapshot, const FileRef& file) {
+    if (!ready(snapshot, file, Ext::Format))
+        return dstd::Optional<store::FormatRecord>{};
+    auto body = get_string(snapshot, file, Ext::Format,
+                           file_key(store::layout::format_kind::RECORD));
+    if (!body) return dstd::Unexpected<dstd::Error>(body.error());
+    if (!*body) return dstd::Optional<store::FormatRecord>{};
+    auto record = store::layout::decode_format_record(**body);
+    if (!record)
+        return dstd::Unexpected<dstd::Error>(dstd::Error(
+            dstd::Condition::Parse, "format record: malformed value"));
+    return dstd::Optional<store::FormatRecord>(std::move(*record));
+}
+
 dstd::Result<dstd::Vector<dstd::String>> paths(const Snapshot& snapshot,
                                                const FileRef& file,
                                                store::IndexExtension ext) {
@@ -993,6 +1008,11 @@ void put_rowset(FileBuild& build, dstd::StringView name,
                 dstd::StringView frame) {
     put_value(build, Ext::Rowset,
               path_prefix(store::layout::rowset_kind::FRAME, name), frame);
+}
+
+void put_format_record(FileBuild& build, const store::FormatRecord& record) {
+    put_value(build, Ext::Format, file_key(store::layout::format_kind::RECORD),
+              store::layout::encode_format_record(record));
 }
 
 void put_path(FileBuild& build, store::IndexExtension ext,

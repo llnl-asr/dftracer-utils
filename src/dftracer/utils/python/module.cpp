@@ -92,16 +92,20 @@ PyObject* py_memory_budget_advice(PyObject*, PyObject* args, PyObject* kwds) {
         (unsigned long long)a.suggested_nodes, "warning", warning.c_str());
 }
 
-// scan_file(path) -> LazyFrame: a deferred scan over `path`, planned by the
-// plugin file format that claims it. A file no format claims, a tie between
+// scan_file(path, index_dir="") -> LazyFrame: a deferred scan over `path`,
+// planned by the plugin file format that claims it. `index_dir` names the index
+// directory that lets the scan skip chunks; empty means the index beside the
+// file. A file no format claims, a tie between
 // two, or a beta feature the host does not support is an error the plan keeps
 // and collect() returns.
 PyObject* py_scan_file(PyObject*, PyObject* args) {
     const char* path = nullptr;
-    if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
+    const char* index_dir = "";
+    if (!PyArg_ParseTuple(args, "s|s", &path, &index_dir)) return nullptr;
     return dftracer::utils::python::frame::wrap_lazyframe(
         dftracer::utils::dataframe::LazyFrame::scan_file(
-            dftracer::utils::dstd::StringView(path)));
+            dftracer::utils::dstd::StringView(path),
+            dftracer::utils::dstd::StringView(index_dir)));
 }
 
 // _bind_types(*, Series=None, DataFrame=None, LazyFrame=None,
@@ -134,7 +138,7 @@ PyMethodDef dftracer_utils_methods[] = {
      "Make the native factories build these Python subclasses of the native\n"
      "types, so a native method returns the public class."},
     {"scan_file", py_scan_file, METH_VARARGS,
-     "scan_file(path: str) -> LazyFrame\n\n"
+     "scan_file(path: str, index_dir: str = '') -> LazyFrame\n\n"
      "A deferred scan over `path`, decompressed and parsed by the plugin file\n"
      "format that claims it. Nothing runs until collect(), which returns the\n"
      "error of a file no format claims."},

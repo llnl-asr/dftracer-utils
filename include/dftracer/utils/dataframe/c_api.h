@@ -1905,14 +1905,21 @@ DFTU_EXPORT void dftu_lazyframe_free(dftu_lazyframe* lf);
 
 /** A plan over the file at `path`, opened by the plugin file format that
  * claims it (dftu_file_format_vt, registered through
- * dftu_svc_file_formats). `path` is borrowed for the call. Writes a new
+ * dftu_svc_file_formats). `path` is a NUL-terminated string borrowed for the
+ * call. `index_dir` is the index directory the scan reads to skip the chunks
+ * an index built by the Indexer proves hold no matching row: `index_dir_len`
+ * bytes, borrowed for the call and copied, not NUL-terminated; NULL (with
+ * `index_dir_len` 0) means the index beside the file. A file with no index, or
+ * one that changed since it was indexed, is read whole. Writes a new
  * caller-owned handle to `*out` and returns 0; the caller frees it with
  * dftu_lazyframe_free. A file no format claims, two formats that tie for it, or
  * a failing plugin all produce a plan whose dftu_lazyframe_collect returns
  * NULL, exactly as they do in C++; to tell them apart, read the reason from the
  * C++ LazyFrame::status(). Returns non-zero and writes nothing when `path` or
- * `out` is NULL. */
+ * `out` is NULL, or `index_dir` is NULL and `index_dir_len` is not 0. */
 DFTU_EXPORT int dftu_lazyframe_scan_file(const char* path,
+                                         const char* index_dir,
+                                         size_t index_dir_len,
                                          dftu_lazyframe** out);
 
 /** Remove the file format registered as `name`. Only the name is removed: a

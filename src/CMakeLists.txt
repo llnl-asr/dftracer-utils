@@ -272,6 +272,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/c_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/store/root_layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/format_index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/indexer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/key.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/record_schema.cpp

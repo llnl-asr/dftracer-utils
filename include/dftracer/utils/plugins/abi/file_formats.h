@@ -110,6 +110,22 @@ typedef struct dftu_file_format_vt {
     /** Release the format's `self`; called once, after every registration is
        gone and every file it opened is closed. */
     void (*destroy)(void* self);
+    /** Optional (NULL means the file's chunks have no identity). Set `*token`
+       to the token of chunk `chunk` of `file`, a value below the count
+       chunks() reported. A token names one chunk of one file by what is in the
+       file, such as the byte offset of the chunk or the number of its row
+       group, so scan() with that chunk reads the same rows whenever the file
+       has the same bytes. It is deterministic (the same bytes always give the
+       same tokens) and strictly increasing with `chunk`. The host stores the
+       tokens of a file it indexes, and uses the index at scan time only when
+       the file's tokens still equal the stored ones, so an index never speaks
+       for a chunk it did not see. A format that leaves this NULL is indexed as
+       one chunk, the whole file: the index can rule out the file, never one of
+       its chunks. Called once per open, after chunks(), with a `ctx` the host
+       frees when the call returns; on failure the status and its ctx message
+       are the error the host reports and the file is not indexed. */
+    dftu_status (*chunk_token)(dftu_ctx* ctx, void* file, uint64_t chunk,
+                               uint64_t* token);
 } dftu_file_format_vt;
 
 /** A writer a plugin registers under a name: it takes whole dataframes and

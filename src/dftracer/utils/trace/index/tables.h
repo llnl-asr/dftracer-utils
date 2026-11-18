@@ -115,6 +115,10 @@ dstd::Result<dstd::Optional<dstd::String>> schema(const Snapshot& snapshot,
 dstd::Result<dstd::Optional<dstd::String>> rowset(const Snapshot& snapshot,
                                                   const FileRef& file,
                                                   dstd::StringView name);
+/// The record of the plugin file format that read the file; nullopt when the
+/// file was not read by one, or its record is not ready.
+dstd::Result<dstd::Optional<store::FormatRecord>> format_record(
+    const Snapshot& snapshot, const FileRef& file);
 
 /// The paths a path-keyed extension indexed for the file.
 dstd::Result<dstd::Vector<dstd::String>> paths(const Snapshot& snapshot,
@@ -243,6 +247,7 @@ void put_catalog_path(FileBuild& build, dstd::StringView path,
                       const store::PathStat& stat);
 void put_rowset(FileBuild& build, dstd::StringView name,
                 dstd::StringView frame);
+void put_format_record(FileBuild& build, const store::FormatRecord& record);
 
 /// Path-keyed data of the pruning extensions, not of a plugin.
 void put_path(FileBuild& build, store::IndexExtension ext,

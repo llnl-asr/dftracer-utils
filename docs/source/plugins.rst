@@ -2080,7 +2080,7 @@ extension over record lines: per chunk min and max of one number.
 A file format teaches the engine to read a file kind it does not know. The
 engine asks every registered format for a score, picks the highest, and scans
 the file through it: ``LazyFrame::scan_file(path)`` from C++,
-``dftu_lazyframe_scan_file(path, &lf)`` from C. The planning, the columns and
+``dftu_lazyframe_scan_file(path, NULL, 0, &lf)`` from C. The planning, the columns and
 the result are the ones ``LazyFrame::scan`` gives, so every op works on the
 file without knowing its format.
 
@@ -2106,9 +2106,14 @@ A ``dftu_file_format_vt`` (``plugins/abi/file_formats.h``) is:
   anything short of exact. Every chunk of one scan must report the same
   votes, so a filter counts as pushed only when all chunks took it, and a
   chunk that disagrees fails the scan.
+- ``chunk_token(ctx, file, chunk, &token)`` is optional (NULL for none), the
+  last field of the vtable, so a plugin built before it loads and runs
+  unchanged. It names chunk ``chunk`` by what is in the file, such as the byte
+  offset of the chunk or the number of its row group, and is described under
+  "Indexing a file format" below.
 - ``close(file)`` and ``destroy(self)``, each called once.
 
-The engine walks chunks 0 to n-1 in order, one cursor at a time. The file
+The engine walks the chunks of a scan in order, one cursor at a time. The file
 stays open while any plan or cursor made from it lives, and the plugin's
 library stays loaded for as long as they do, so a plan keeps working after
 the plugin set is dropped; after that a new ``scan_file`` no longer finds the
@@ -2159,6 +2164,59 @@ cell is a whole number, double when every cell is a number, string otherwise),
 splits the rows into chunks of 1024 so the chunks scan in parallel, keeps
 exactly the projected columns, and votes on no filter. Its golden test is
 ``examples/plugins/tests/csv_reader/basic.test``.
+
+**Indexing a file format.** ``Indexer::open`` takes the path of a file that a
+registered format claims (the same probe ``scan_file`` uses; name the file, since
+a directory contributes only the trace files it holds) and builds the index the
+trace files get: the zonemap, bloom, counts and postings of ``IndexerOptions::
+extensions``, and every registered plugin index extension that takes columns.
+The format is the reader, and one chunk of the format is one granule: the
+host scans the chunk, collects it as one frame, and the summaries of each
+column of the frame become granule ``chunk``. The index is written under
+``index_dir`` as for any trace. ``Indexer::status`` and ``build`` treat these
+files like the others. A directory given to ``Indexer::open`` contributes only
+the files that match the trace patterns (``.pfw``, ``.pfw.gz`` and the like), so
+a format's files are never found by listing a folder: pass each of them by its
+path.
+
+``chunk_token`` makes the granules mean something later. A token is a 64-bit
+value that identifies one chunk of one file by its bytes. It is the same for the
+same bytes, and it increases from one chunk to the next, which a host checks
+when it opens the file. The host stores the tokens next to the summaries. A
+format that leaves ``chunk_token`` NULL has chunks the index cannot name, so
+the whole file is one granule: the index can rule out the file, never one of
+its chunks.
+
+The index records, per file, the format name, the settings of the summaries,
+and the size and mtime of the file. A file is indexed again, and only that
+file, when its size or mtime changed, when another format or the built-in trace
+reader claims it, when the format is registered under another name, when the
+plugin that registers it declares another version, when the
+extensions or the bloom settings changed, or when a plugin index extension is
+registered that the file's index lacks. The index of another file, or of a
+file under another folder that shares the ``index_dir``, is not read or removed.
+
+``LazyFrame::scan_file(path, index_dir)`` (``index_dir`` empty looks beside the
+file, as the tools do) uses the index. The same argument is
+``dftu_lazyframe_scan_file(path, index_dir, index_dir_len, &lf)`` from C (NULL
+and 0 for the default; the string is borrowed and copied) and
+``dftracer.utils.scan_file(path, index_dir="")`` from Python. The comparisons ``column <, <=, >, >=,
+== literal``, joined by AND, of the filters of the scan are asked of the
+summaries of each chunk, and the chunks that none of them can hold a row for
+are never scanned: ``scan`` is not called for them. No other filter shape
+prunes. Nothing is skipped without evidence. A file with no index, one that
+changed since it was indexed, one another reader indexed, and one whose
+``chunk_token`` values are not the stored ones is read in full, and the filters
+are always applied again to the rows, so a scan gives the same rows with or
+without the index. As the first chunk to scan is no longer chunk 0, its votes are
+the votes of the scan. ``tests/plugins/chunked_format_plugin.c`` is a complete
+format with tokens, and the same format without them. A C++ format gives its
+chunks tokens by naming its file class and giving it a method:
+``using File = MyFile;`` in the ``FileFormat`` class and
+``dstd::Result<std::uint64_t> MyFile::chunk_token(std::uint64_t chunk)``;
+``PluginBuilder::file_format<F>`` then sets the ``chunk_token`` entry, and
+leaves it NULL for a class without both. ``tests/plugins/
+sdk_chunked_format_plugin.cpp`` is an example.
 
 **Sinks.** ``DFTU_SVC_FILE_FORMATS`` also takes a ``dftu_sink_vt``
 (``register_sink``, ``PluginBuilder::sink<S>``): an output format whose ``bind``

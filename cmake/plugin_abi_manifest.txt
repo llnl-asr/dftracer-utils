@@ -537,6 +537,7 @@ field dftu_error.message offset 16 size 8
 field dftu_error.release offset 24 size 8
 field dftu_error.status offset 12 size 4
 field dftu_file_format_vt.chunk_stats offset 48 size 8
+field dftu_file_format_vt.chunk_token offset 80 size 8
 field dftu_file_format_vt.chunks offset 40 size 8
 field dftu_file_format_vt.close offset 64 size 8
 field dftu_file_format_vt.destroy offset 72 size 8
@@ -1028,6 +1029,7 @@ fnptr dftu_cursor_vt.narrow dftu_status (*)(dftu_ctx*, void*, const dftu_expr*, 
 fnptr dftu_cursor_vt.next dftu_status (*)(dftu_ctx*, void*, int64_t, dftu_dataframe**, dftu_task**)
 fnptr dftu_error.release void (*)(struct dftu_error*)
 fnptr dftu_file_format_vt.chunk_stats dftu_status (*)(dftu_ctx*, void*, uint64_t, dftu_chunk_stats*)
+fnptr dftu_file_format_vt.chunk_token dftu_status (*)(dftu_ctx*, void*, uint64_t, uint64_t*)
 fnptr dftu_file_format_vt.chunks dftu_status (*)(dftu_ctx*, void*, uint64_t*)
 fnptr dftu_file_format_vt.close void (*)(void*)
 fnptr dftu_file_format_vt.destroy void (*)(void*)
@@ -1315,7 +1317,7 @@ struct dftu_ctx size 24 align 8
 struct dftu_ctx_vt size 24 align 8
 struct dftu_cursor_vt size 32 align 8
 struct dftu_error size 32 align 8
-struct dftu_file_format_vt size 80 align 8
+struct dftu_file_format_vt size 88 align 8
 struct dftu_find_options size 48 align 8
 struct dftu_fs_stat size 40 align 8
 struct dftu_group_agg size 24 align 8

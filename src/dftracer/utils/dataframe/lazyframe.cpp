@@ -4832,8 +4832,9 @@ class FailedSource final : public Source {
 
 }  // namespace
 
-LazyFrame LazyFrame::scan_file(dstd::StringView path) {
-    auto opened = open_file_with_format(path);
+LazyFrame LazyFrame::scan_file(dstd::StringView path,
+                               dstd::StringView index_dir) {
+    auto opened = open_file_with_format(path, index_dir);
     if (!opened)
         return LazyFrame(dstd::make_shared<FailedSource>(opened.error()), {})
             .failed(opened.error());

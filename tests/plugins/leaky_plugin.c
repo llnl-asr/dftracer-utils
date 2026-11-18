@@ -113,6 +113,7 @@ static const dftu_file_format_vt LEAKY_FORMAT = {sizeof(dftu_file_format_vt),
                                                  NULL,
                                                  leaky_scan,
                                                  leaky_close,
+                                                 NULL,
                                                  NULL};
 
 DFTU_PLUGIN_INFO("leaky", "1.0")

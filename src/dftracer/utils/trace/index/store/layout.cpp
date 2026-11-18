@@ -37,6 +37,8 @@ dstd::StringView ext_name(Ext ext) {
             return "dftracer.agg";
         case Ext::Rowset:
             return "core.rowset";
+        case Ext::Format:
+            return "core.format";
     }
     return "";
 }
@@ -95,6 +97,53 @@ dstd::Optional<PathStat> decode_path_stat(dstd::StringView body) {
     return PathStat{static_cast<PathType>(type),
                     static_cast<std::uint8_t>(body[1]),
                     read_u64(body.substr(2))};
+}
+
+dstd::String encode_format_record(const FormatRecord& record) {
+    dstd::String out;
+    out.push_back(static_cast<char>(record.feeder));
+    dstd::append_u64_be(out, record.params_hash);
+    dstd::append_u64_be(out, record.chunk_count);
+    dstd::append_u64_be(out, record.tokens.size());
+    dstd::append_u32_be(out, static_cast<std::uint32_t>(record.format.size()));
+    out.append(record.format);
+    dstd::append_u32_be(
+        out, static_cast<std::uint32_t>(record.plugin_version.size()));
+    out.append(record.plugin_version);
+    for (const std::uint64_t token : record.tokens)
+        dstd::append_u64_be(out, token);
+    return out;
+}
+
+dstd::Optional<FormatRecord> decode_format_record(dstd::StringView body) {
+    constexpr std::size_t HEAD = 1 + 8 + 8 + 8 + 4;
+    if (body.size() < HEAD) return dstd::nullopt;
+    const auto feeder = static_cast<std::uint8_t>(body[0]);
+    if (feeder > static_cast<std::uint8_t>(FeederKind::Column))
+        return dstd::nullopt;
+    FormatRecord record;
+    record.feeder = static_cast<FeederKind>(feeder);
+    record.params_hash = read_u64(body.substr(1));
+    record.chunk_count = read_u64(body.substr(9));
+    const std::uint64_t tokens = read_u64(body.substr(17));
+    const std::uint32_t name = read_u32(body.substr(25));
+    body.remove_prefix(HEAD);
+    if (body.size() < name) return dstd::nullopt;
+    record.format.assign(body.data(), name);
+    body.remove_prefix(name);
+    if (body.size() < 4) return dstd::nullopt;
+    const std::uint32_t version = read_u32(body);
+    body.remove_prefix(4);
+    if (body.size() < version) return dstd::nullopt;
+    record.plugin_version.assign(body.data(), version);
+    body.remove_prefix(version);
+    if (body.size() / 8 != tokens || body.size() % 8 != 0) return dstd::nullopt;
+    record.tokens.reserve(tokens);
+    for (std::uint64_t i = 0; i < tokens; ++i) {
+        record.tokens.push_back(read_u64(body));
+        body.remove_prefix(8);
+    }
+    return record;
 }
 
 namespace {

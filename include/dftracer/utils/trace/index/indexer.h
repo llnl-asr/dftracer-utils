@@ -168,9 +168,12 @@ class Indexer {
    public:
     /// `paths` holds trace files and directories; a directory contributes the
     /// trace files (.pfw, .jsonl and .ndjson, plain or gzip) directly
-    /// inside it. Reads nothing else and writes nothing.
-    /// An INVALID_ARGUMENT error for no paths or an invalid option, and
-    /// NOT_FOUND for a path that does not exist.
+    /// inside it. A file that a registered plugin file format claims (the
+    /// probe @ref dataframe::LazyFrame::scan_file uses) is read by that format,
+    /// one summary granule per chunk of the format, so name such a file itself,
+    /// not its directory. Reads nothing else and writes nothing. An
+    /// INVALID_ARGUMENT error for no paths or an invalid option, and NOT_FOUND
+    /// for a path that does not exist.
     static dstd::Result<Indexer> open(dstd::Vector<dstd::String> paths,
                                       IndexerOptions options = {});
 
@@ -189,7 +192,9 @@ class Indexer {
         coro::Scope& scope) const;
     /// Per file, the chunks `query` reads and what each pruning extension
     /// rules out alone. Writes nothing. An INVALID_ARGUMENT error when the
-    /// query does not parse.
+    /// query does not parse. A plugin-format file lists all its chunks as
+    /// read and no extension: its chunks are skipped by the filters of a
+    /// @ref dataframe::LazyFrame::scan_file, not by a query.
     coro::CoroTask<dstd::Result<dstd::Vector<FileExplain>>> explain(
         coro::Scope& scope, dstd::String query) const;
     /// Rewrites one tier extension ("zonemap", "bloom", "counts", "postings",

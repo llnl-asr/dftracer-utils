@@ -104,6 +104,7 @@ struct ChunkIndexerConfig {
             case store::IndexExtension::Metadata:
             case store::IndexExtension::Plugin:
             case store::IndexExtension::Agg:
+            case store::IndexExtension::Format:
                 return 0;
         }
         return hasher.hash().value;

@@ -43,8 +43,8 @@ constexpr StructLimit PLUGIN_STRUCT_LIMITS[] = {
      static_cast<std::uint32_t>(offsetof(dftu_cursor_vt, narrow))},
     {"dftu_source_vt",
      static_cast<std::uint32_t>(offsetof(dftu_source_vt, apply))},
-    {"dftu_file_format_vt", static_cast<std::uint32_t>(sizeof(
-                                dftu_file_format_vt))},  // no optional tail
+    {"dftu_file_format_vt",
+     static_cast<std::uint32_t>(offsetof(dftu_file_format_vt, chunk_token))},
     {"dftu_sink_vt",
      static_cast<std::uint32_t>(sizeof(dftu_sink_vt))},  // no optional tail
     {"dftu_index_extension",

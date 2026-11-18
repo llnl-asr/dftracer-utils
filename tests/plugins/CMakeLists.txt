@@ -40,6 +40,7 @@ set(PLUGINS_TEST_SOURCES
     test_plugin_frame_check.cpp
     test_plugin_frame_check_off.cpp
     test_plugin_file_formats.cpp
+    test_plugin_format_index.cpp
     test_plugin_sink_duql.cpp
     test_plugin_node_duql.cpp
     test_provider_pushdown.cpp
@@ -227,7 +228,7 @@ endif()
 # +++++++++++++++++++++++++++++++++++++++++
 
 foreach(fh_plugin toy_format_plugin toy_format_tie_plugin
-                  toy_bad_sink_plugin
+                  chunked_format_plugin toy_bad_sink_plugin
                   factory_registers_op_plugin factory_escapes_plugin
                   scan_registers_op_plugin index_minmax_plugin
                   index_columns_plugin index_no_step_plugin udf_plugin
@@ -249,11 +250,47 @@ foreach(fh_plugin toy_format_plugin toy_format_tie_plugin
                                      ${CMAKE_BINARY_DIR}/include)
 endforeach()
 
+# The same plugin built as another name, so a test can change a file's owner by
+# loading the other one.
+add_library(chunked_alt_plugin MODULE chunked_format_plugin.c)
+target_set_warnings(chunked_alt_plugin)
+set_target_properties(
+  chunked_alt_plugin
+  PROPERTIES OUTPUT_NAME chunked_alt_plugin
+             PREFIX ""
+             POSITION_INDEPENDENT_CODE ON
+             C_STANDARD 11
+             C_STANDARD_REQUIRED ON
+             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+             LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+target_include_directories(chunked_alt_plugin
+                           PRIVATE ${CMAKE_SOURCE_DIR}/include
+                                   ${CMAKE_BINARY_DIR}/include)
+target_compile_definitions(chunked_alt_plugin PRIVATE CHUNKED_FORMAT_ALT)
+
+# The same plugin name at a newer version, so a test can upgrade a plugin.
+add_library(chunked_v2_plugin MODULE chunked_format_plugin.c)
+target_set_warnings(chunked_v2_plugin)
+set_target_properties(
+  chunked_v2_plugin
+  PROPERTIES OUTPUT_NAME chunked_v2_plugin
+             PREFIX ""
+             POSITION_INDEPENDENT_CODE ON
+             C_STANDARD 11
+             C_STANDARD_REQUIRED ON
+             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+             LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+target_include_directories(chunked_v2_plugin
+                           PRIVATE ${CMAKE_SOURCE_DIR}/include
+                                   ${CMAKE_BINARY_DIR}/include)
+target_compile_definitions(chunked_v2_plugin PRIVATE CHUNKED_FORMAT_V2)
+
 foreach(cxx_plugin builder_plugin config_keys_plugin reads_projection_plugin
                   provider_fixture_plugin toy_sink_plugin toy_node_plugin
                   broken_frame_plugin borrowed_frame_plugin
                   sessionize_input_plugin macro_plugin macro_error_plugin
-                  error_after_register_plugin empty_config_key_plugin)
+                  error_after_register_plugin empty_config_key_plugin
+                  sdk_chunked_format_plugin)
   add_library(${cxx_plugin} MODULE ${cxx_plugin}.cpp)
   target_set_warnings(${cxx_plugin})
   set_target_properties(
@@ -278,7 +315,8 @@ endforeach()
 
 # It reads the batch dataframe and runs its own registered op, so it links the
 # dataframe C ABI like the examples that do the same.
-foreach(df_plugin toy_format_plugin toy_format_tie_plugin toy_sink_plugin
+foreach(df_plugin toy_format_plugin toy_format_tie_plugin
+                  chunked_format_plugin chunked_alt_plugin chunked_v2_plugin toy_sink_plugin
                   toy_node_plugin
                   factory_registers_op_plugin builder_plugin udf_plugin
                   udaf_plugin
@@ -287,7 +325,8 @@ foreach(df_plugin toy_format_plugin toy_format_tie_plugin toy_sink_plugin
                   borrowed_frame_plugin sessionize_input_plugin
                   macro_plugin macro_error_plugin
                   error_after_register_plugin empty_config_key_plugin
-                  leaky_plugin crash_plugin index_columns_plugin)
+                  leaky_plugin crash_plugin index_columns_plugin
+                  sdk_chunked_format_plugin)
   if(TARGET dftracer_utils_dataframe::shared)
     target_link_libraries(${df_plugin} PRIVATE dftracer_utils_dataframe::shared)
   elseif(TARGET dftracer_utils_dataframe::static)
@@ -528,6 +567,19 @@ if(TARGET plugins_test_plugin_file_formats)
     TOY_BAD_SINK_PLUGIN_PATH="$<TARGET_FILE:toy_bad_sink_plugin>")
   add_dependencies(plugins_test_plugin_file_formats toy_format_plugin
                    toy_format_tie_plugin toy_sink_plugin toy_bad_sink_plugin)
+endif()
+
+if(TARGET plugins_test_plugin_format_index)
+  target_compile_definitions(
+    plugins_test_plugin_format_index PRIVATE
+    CHUNKED_FORMAT_PLUGIN_PATH="$<TARGET_FILE:chunked_format_plugin>"
+    CHUNKED_ALT_PLUGIN_PATH="$<TARGET_FILE:chunked_alt_plugin>"
+    CHUNKED_V2_PLUGIN_PATH="$<TARGET_FILE:chunked_v2_plugin>"
+    INDEX_COLUMNS_PLUGIN_PATH="$<TARGET_FILE:index_columns_plugin>"
+    SDK_CHUNKED_PLUGIN_PATH="$<TARGET_FILE:sdk_chunked_format_plugin>")
+  add_dependencies(plugins_test_plugin_format_index chunked_format_plugin
+                   chunked_alt_plugin chunked_v2_plugin index_columns_plugin
+                   sdk_chunked_format_plugin)
 endif()
 
 if(TARGET plugins_test_plugin_sink_duql)

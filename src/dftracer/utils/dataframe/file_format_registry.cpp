@@ -179,11 +179,13 @@ dstd::Vector<dstd::String> registered_sink_names() {
     return names;
 }
 
-dstd::Result<dstd::SharedPtr<const Source>> open_file_with_format(
-    dstd::StringView path) {
-    auto head = read_head(path);
-    if (!head) return head.error();
+bool has_file_formats() {
+    std::lock_guard<std::mutex> lock(registries().mutex);
+    return registries().formats && !registries().formats->empty();
+}
 
+dstd::Result<dstd::SharedPtr<FileFormatFactory>> claim_file_format(
+    dstd::StringView path) {
     // A snapshot, so the plugins' probe() runs without the registry lock.
     dstd::Vector<dstd::SharedPtr<FileFormatFactory>> candidates;
     {
@@ -194,6 +196,8 @@ dstd::Result<dstd::SharedPtr<const Source>> open_file_with_format(
                 candidates.push_back(entry.second);
         }
     }
+    auto head = read_head(path);
+    if (!head) return head.error();
 
     dstd::SharedPtr<FileFormatFactory> best;
     dstd::SharedPtr<FileFormatFactory> rival;
@@ -209,15 +213,23 @@ dstd::Result<dstd::SharedPtr<const Source>> open_file_with_format(
             rival = candidate;
         }
     }
-
-    if (!best)
-        return common::make_error<"no format claims {}">(
-            common::ErrorCode::NotFound, path);
-    if (rival)
+    if (best && rival)
         return common::make_error<"file formats '{}' and '{}' both claim {}">(
             common::ErrorCode::InvalidArgument, best->name(), rival->name(),
             path);
-    return best->open(path);
+    return best;
+}
+
+dstd::Result<dstd::SharedPtr<const Source>> open_file_with_format(
+    dstd::StringView path, dstd::StringView index_dir) {
+    auto claimed = claim_file_format(path);
+    if (!claimed) return claimed.error();
+    if (!*claimed)
+        return common::make_error<"no format claims {}">(
+            common::ErrorCode::NotFound, path);
+    auto opened = (*claimed)->open(path, index_dir);
+    if (!opened) return opened.error();
+    return dstd::SharedPtr<const Source>(std::move(*opened));
 }
 
 }  // namespace dftracer::utils::dataframe
@@ -227,9 +239,13 @@ int dftu_format_unregister(const char* name) {
     return dftracer::utils::dataframe::unregister_file_format(name) ? 0 : 1;
 }
 
-int dftu_lazyframe_scan_file(const char* path, dftu_lazyframe** out) {
-    if (!path || !out) return 1;
+int dftu_lazyframe_scan_file(const char* path, const char* index_dir,
+                             std::size_t index_dir_len, dftu_lazyframe** out) {
+    if (!path || !out || (!index_dir && index_dir_len != 0)) return 1;
+    const dftracer::utils::dstd::StringView dir =
+        index_dir ? dftracer::utils::dstd::StringView(index_dir, index_dir_len)
+                  : dftracer::utils::dstd::StringView();
     *out = dftracer::utils::dataframe::lazyframe_handle_wrap(
-        dftracer::utils::dataframe::LazyFrame::scan_file(path));
+        dftracer::utils::dataframe::LazyFrame::scan_file(path, dir));
     return 0;
 }

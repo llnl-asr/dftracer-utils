@@ -1843,9 +1843,11 @@ def _bind_types(
     types, so a native method returns the public class."""
     ...
 
-def scan_file(path: str, /) -> PublicLazyFrame:
+def scan_file(path: str, index_dir: str = "", /) -> PublicLazyFrame:
     """A deferred scan over `path`, planned by the plugin file format that
-    claims it. collect() returns the error of a file no format claims.
+    claims it. `index_dir` is the index directory that lets the scan skip
+    chunks; empty means the index beside the file. collect() returns the error
+    of a file no format claims.
     """
     ...
 

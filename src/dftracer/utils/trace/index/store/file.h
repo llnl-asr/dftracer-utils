@@ -57,6 +57,39 @@ enum class IndexExtension : std::uint16_t {
     /// Per file and row set: the rows of each row set of the schema's source
     /// that the build evaluates, as an Arrow IPC frame keyed by its name.
     Rowset = 14,
+    /// Per file: the plugin file format that read the file, the feeder that
+    /// summarized it and the token of each of its chunks. Its manifest entry
+    /// holds the hash of the format name, the feeder and the summaries'
+    /// settings.
+    Format = 15,
+};
+
+/// What read a file's records into the summaries.
+enum class FeederKind : std::uint8_t {
+    /// The dftracer JSON lines of a gzip or plain trace.
+    Json = 0,
+    /// One typed frame per chunk of a plugin file format.
+    Column = 1,
+};
+
+/// The record of a file a plugin file format read: which format, with which
+/// feeder and settings, and how its chunks are named. Chunk `i` of the file is
+/// granule `i` of every summary.
+struct FormatRecord {
+    FeederKind feeder = FeederKind::Column;
+    /// The registered name of the format.
+    dstd::String format;
+    /// The version text of the plugin that registered it, empty when it
+    /// declared none. A plugin of the same name at another version is another
+    /// reader.
+    dstd::String plugin_version;
+    /// The hash of the summaries' settings the file was indexed with.
+    std::uint64_t params_hash = 0;
+    /// The format's chunk tokens, one per chunk, in order; empty when the
+    /// format gives none, and then the whole file is the one granule 0.
+    dstd::Vector<std::uint64_t> tokens;
+    /// How many chunks the format reported.
+    std::uint64_t chunk_count = 0;
 };
 
 /// The type of a JSON path. A number is INT when it fits in int64 and UINT
@@ -150,7 +183,7 @@ inline constexpr IndexExtension ALL_EXTENSIONS[] = {
     IndexExtension::Members, IndexExtension::Zonemap,  IndexExtension::Bloom,
     IndexExtension::Counts,  IndexExtension::Postings, IndexExtension::Stats,
     IndexExtension::Catalog, IndexExtension::Profile,  IndexExtension::Metadata,
-    IndexExtension::Agg,     IndexExtension::Rowset};
+    IndexExtension::Agg,     IndexExtension::Rowset,   IndexExtension::Format};
 
 /// The extension's name, such as "zonemap" or "core.members".
 dstd::StringView extension_name(IndexExtension ext);

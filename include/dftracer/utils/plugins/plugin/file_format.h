@@ -16,6 +16,7 @@
 #include <dftracer/utils/plugins/plugin/types.h>
 
 #include <algorithm>
+#include <concepts>
 #include <cstdint>
 #include <type_traits>
 #include <utility>
@@ -61,6 +62,14 @@ class FormatFile {
 ///   dstd::Result<dstd::UniquePtr<FormatFile>> open(dstd::StringView path);
 /// Register it with PluginBuilder::file_format<F>(). The extension hint of
 /// dftu_file_format_vt stays NULL for a C++ format: a host matches on probe().
+///
+/// A format whose chunks have a stable identity (such as the byte offset of the
+/// chunk's first row) names its file class and gives it a token per chunk:
+///   using File = MyFile;  // derives from FormatFile, and open() returns it
+///   dstd::Result<std::uint64_t> MyFile::chunk_token(std::uint64_t chunk);
+/// The host then sets dftu_file_format_vt::chunk_token, which an index of the
+/// file needs to skip chunks; tokens must rise strictly with the chunk number.
+/// A format without both stays one granule per file to the index.
 ///
 /// As everywhere else in the SDK, a callback reports failure as a dstd::Result
 /// or a std::int32_t score, and the trampolines hold no catch, so a callback
@@ -129,6 +138,12 @@ struct SinkBox {
 
 struct SinkWriterBox {
     dstd::UniquePtr<SinkWriter> writer;
+};
+
+template <class F>
+concept HasChunkToken = requires(typename F::File& file, std::uint64_t chunk) {
+    requires std::is_base_of_v<FormatFile, typename F::File>;
+    { file.chunk_token(chunk) } -> std::same_as<dstd::Result<std::uint64_t>>;
 };
 
 template <class F>
@@ -215,6 +230,27 @@ struct FileFormatVt {
         });
     }
 
+    static dftu_status chunk_token(dftu_ctx* ctx, void* file,
+                                   std::uint64_t chunk,
+                                   std::uint64_t* token) noexcept {
+        if constexpr (HasChunkToken<F>) {
+            return to_status(ctx, [&]() -> dftu_status {
+                auto got = static_cast<typename F::File*>(
+                               static_cast<FormatFileBox*>(file)->file.get())
+                               ->chunk_token(chunk);
+                if (!got.has_value()) return report(ctx, got.error());
+                *token = *got;
+                return DFTU_OK;
+            });
+        } else {
+            (void)ctx;
+            (void)file;
+            (void)chunk;
+            (void)token;
+            return DFTU_E_INTERNAL;
+        }
+    }
+
     static void close(void* file) { delete static_cast<FormatFileBox*>(file); }
 
     static void destroy(void* self) { delete static_cast<Box*>(self); }
@@ -231,6 +267,7 @@ struct FileFormatVt {
             t.scan = scan;
             t.close = close;
             t.destroy = destroy;
+            if constexpr (HasChunkToken<F>) t.chunk_token = chunk_token;
             return t;
         }();
         return &VT;

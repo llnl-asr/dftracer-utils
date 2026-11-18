@@ -271,7 +271,7 @@ TEST_CASE("the C ABI scans a file through its registered format") {
     const dstd::String path = write_temp("toy_c_abi.toy", TOY_ROWS);
 
     dftu_lazyframe* lf = nullptr;
-    REQUIRE(dftu_lazyframe_scan_file(path.c_str(), &lf) == 0);
+    REQUIRE(dftu_lazyframe_scan_file(path.c_str(), nullptr, 0, &lf) == 0);
     REQUIRE(lf != nullptr);
     dftu_dataframe* out = dftu_lazyframe_collect(lf, -1);
     REQUIRE(out != nullptr);
@@ -279,8 +279,8 @@ TEST_CASE("the C ABI scans a file through its registered format") {
     dftu_dataframe_free(out);
     dftu_lazyframe_free(lf);
 
-    CHECK(dftu_lazyframe_scan_file(nullptr, &lf) != 0);
-    CHECK(dftu_lazyframe_scan_file(path.c_str(), nullptr) != 0);
+    CHECK(dftu_lazyframe_scan_file(nullptr, nullptr, 0, &lf) != 0);
+    CHECK(dftu_lazyframe_scan_file(path.c_str(), nullptr, 0, nullptr) != 0);
     remove_file(path.c_str());
 }
 

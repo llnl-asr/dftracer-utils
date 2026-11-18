@@ -9,6 +9,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Index the files a plugin file format reads.
+  `dftu_file_format_vt` gets `chunk_token`, an optional callback that names each chunk of a file by its bytes (a byte offset, a row group number); it is the last field, so a plugin built before it loads unchanged.
+  `Indexer` indexes a file that a registered format claims, one granule of the zonemap, bloom, counts, postings and plugin column extensions per chunk, and records the format name, the summary settings and the chunk tokens per file (`core.format`); a file whose size, mtime, format or settings changed is indexed again, and no other file or folder under the index root is.
+  `LazyFrame::scan_file(path, index_dir)` skips the chunks the index proves hold no row that a conjunction of `column <, <=, >, >=, == literal` filters keeps, and reads every chunk when the index is missing, stale, another reader's or built over other chunks.
+  A format without `chunk_token` is one granule: the index can rule out the file, not a chunk.
+  `dftu_lazyframe_scan_file` takes `index_dir` and its length (NULL and 0 for the index beside the file), Python `scan_file(path, index_dir="")` takes it too, and a C++ format gives its chunks tokens with `using File = MyFile;` and `MyFile::chunk_token(chunk)`.
+  `Indexer::open` on a directory still takes only trace-pattern files: name each format file.
+  The index of a format file records the version of the plugin that registered the format, so a plugin of the same name at another version indexes its files again, and `Indexer::rebuild_extension` builds the named summary for a format file too.
 - Let a plugin index extension take typed columns in place of record lines. `dftu_index_extension` gets `columns` (a NULL-ended list of paths, `{"*", NULL}` for every path) and `step_column`, which receives one borrowed column per path and chunk with the dtype int64, uint64, float64 or string; `step` is now optional, and an extension with neither is refused at registration with a message that names it.
   A path whose values have no single type in a chunk is not passed, and the host stores nothing for that chunk, so it is never pruned.
   `dftu_index_leaf` gets `type`, the dtype of the column the leaf targets, and `dftu_svc_index` gets `hash_version`, `hash_value` and `hash_series`, the host's canonical value hash for a literal and for a whole column.

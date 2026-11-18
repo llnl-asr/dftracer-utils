@@ -382,7 +382,14 @@ class LazyFrame {
     /// InvalidArgument one, naming both), as is the error the winning
     /// format's open reported. The plan holds the open file, so a later
     /// unregistration does not affect it.
-    static LazyFrame scan_file(dstd::StringView path);
+    ///
+    /// A format that splits the file in chunks and gave it an index (built by
+    /// @ref trace::index::Indexer) skips the chunks the index proves hold no
+    /// row a filter keeps. The index is the one in `index_dir`, or the one
+    /// beside the file when `index_dir` is empty. A file with no index, or one
+    /// that changed since it was indexed, is read whole.
+    static LazyFrame scan_file(dstd::StringView path,
+                               dstd::StringView index_dir = {});
 
     LazyFrame select(dstd::Vector<dstd::String> names) const;
     LazyFrame filter(Expr predicate) const;

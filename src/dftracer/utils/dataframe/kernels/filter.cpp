@@ -191,12 +191,28 @@ Series mask_index_column(const std::uint8_t* bits, std::int64_t n) {
     return Series{out};
 }
 
+namespace {
+
+// The rows a flat Bool mask selects: a null entry selects no row, whatever bit
+// its data holds.
+BufferView flat_mask_to_indices(const dftu_series& mask, std::int64_t& count) {
+    if (!mask.validity.block())
+        return mask_to_indices(mask.data.data(), mask.length, count);
+    const auto bytes = static_cast<std::size_t>((mask.length + 7) / 8);
+    dstd::Vector<std::uint8_t> bits(bytes);
+    for (std::size_t i = 0; i < bytes; ++i)
+        bits[i] = mask.data.data()[i] & mask.validity.data()[i];
+    return mask_to_indices(bits.data(), mask.length, count);
+}
+
+}  // namespace
+
 BufferView mask_to_indices(const dftu_series& mask, std::int64_t& count) {
     if (!mask.is_chunked()) {
         if (mask.encoding == Encoding::Flat)
-            return mask_to_indices(mask.data.data(), mask.length, count);
+            return flat_mask_to_indices(mask, count);
         const auto flat = adopt_series(dftu_series_materialize(&mask));
-        return mask_to_indices(flat->data.data(), flat->length, count);
+        return flat_mask_to_indices(*flat, count);
     }
     const auto* starts =
         reinterpret_cast<const std::int64_t*>(mask.data.data());

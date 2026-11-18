@@ -63,10 +63,15 @@ AggExprSpec agg_kurt_unbiased(Expr value, dstd::String out) {
 AggExprSpec agg_pct(Expr value, double q, dstd::String out) {
     return {AggOp::Pct, std::move(value), std::move(out), q};
 }
-AggExprSpec agg_quantile(Expr value, double q, Interpolation interp,
-                         dstd::String out) {
-    return {AggOp::Quantile, std::move(value), std::move(out),
-            quantile_param(q, interp)};
+dstd::Result<AggExprSpec> agg_quantile(Expr value, double q,
+                                       Interpolation interp, dstd::String out) {
+    if (!(q >= 0.0 && q <= 1.0))
+        return common::make_error<
+            "agg_quantile: the level must be in [0, 1], not {}">(
+            common::ErrorCode::InvalidArgument, q);
+    AggExprSpec s{AggOp::Quantile, std::move(value), std::move(out), q};
+    s.interp = interp;
+    return s;
 }
 AggExprSpec agg_hist(Expr value, dstd::String out) {
     return {AggOp::Hist, std::move(value), std::move(out)};
@@ -119,6 +124,7 @@ dstd::Result<DataFrame> group_agg_expr(
         cs.op = sp.op;
         cs.out = sp.out;
         cs.param = sp.param;
+        cs.interp = sp.interp;
         cs.fn = sp.fn;
         if (sp.op == AggOp::Count || !sp.value.valid()) {
             cs.value_col = -1;
@@ -236,8 +242,9 @@ dstd::Result<DataFrame> group_agg_expr(
 namespace {
 dftu_agg_spec make_spec(std::int32_t op, const dftu_expr* value,
                         const char* out, double param = 0.0,
-                        const dftu_expr* by = nullptr) {
-    return {op, value, out, param, by};
+                        const dftu_expr* by = nullptr,
+                        std::int32_t interp = 0) {
+    return {op, value, out, param, by, interp};
 }
 }  // namespace
 
@@ -288,13 +295,7 @@ dftu_agg_spec dftu_agg_pct(const dftu_expr* value, double q, const char* out) {
 }
 dftu_agg_spec dftu_agg_quantile(const dftu_expr* value, double q,
                                 std::int32_t interp, const char* out) {
-    const bool known =
-        interp >= DFTU_INTERP_LINEAR && interp <= DFTU_INTERP_MIDPOINT;
-    return make_spec(
-        DFTU_AGG_QUANTILE, value, out,
-        dataframe::quantile_param(
-            q, known ? static_cast<dataframe::Interpolation>(interp)
-                     : dataframe::Interpolation::Linear));
+    return make_spec(DFTU_AGG_QUANTILE, value, out, q, nullptr, interp);
 }
 dftu_agg_spec dftu_agg_hist(const dftu_expr* value, const char* out) {
     return make_spec(DFTU_AGG_HIST, value, out);
@@ -325,6 +326,7 @@ std::int32_t dftu_dataframe_group_agg_expr(
             s.value = dataframe::expr_handle_unwrap(specs[i].value);
         s.out = specs[i].out ? specs[i].out : "";
         s.param = specs[i].param;
+        s.interp = static_cast<dataframe::Interpolation>(specs[i].interp);
         if (specs[i].by) s.by = dataframe::expr_handle_unwrap(specs[i].by);
         cxx.push_back(std::move(s));
     }

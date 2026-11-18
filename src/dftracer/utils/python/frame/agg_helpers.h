@@ -10,6 +10,8 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/core/seq_helpers.h>
 
+#include <cmath>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 
@@ -32,9 +34,10 @@ inline double parse_double(dftracer::utils::dstd::StringView text) {
     return value;
 }
 
-// Parse an "op[:column[:out[:by[:param]]]]" aggregate spec (the output name
-// defaults to "op" or "op_column"; `by` is the second input column of the
-// two-column aggregates, `param` the quantile / k of the parameterized ones);
+// Parse an "op[:column[:out[:by[:param[:interp]]]]]" aggregate spec (the output
+// name defaults to "op" or "op_column"; `by` is the second input column of the
+// two-column aggregates, `param` the quantile / k of the parameterized ones,
+// `interp` the interpolation code of a quantile);
 // throws std::invalid_argument on a bad op or a bad param.
 inline dftracer::utils::dataframe::GroupAgg group_agg_from_spec(
     const dftracer::utils::dstd::String& spec) {
@@ -63,6 +66,13 @@ inline dftracer::utils::dataframe::GroupAgg group_agg_from_spec(
                 : dftracer::utils::dstd::fmt<"{}_{}">(parts[0], a.column);
     if (parts.size() > 3) a.by = parts[3];
     if (parts.size() > 4 && !parts[4].empty()) a.param = parse_double(parts[4]);
+    if (parts.size() > 5 && !parts[5].empty()) {
+        const double code = parse_double(parts[5]);
+        if (!(code >= 0.0 && code <= 4.0) || code != std::floor(code))
+            throw std::invalid_argument("bad quantile interpolation code");
+        a.interp = static_cast<dataframe::Interpolation>(
+            static_cast<std::int32_t>(code));
+    }
     return a;
 }
 

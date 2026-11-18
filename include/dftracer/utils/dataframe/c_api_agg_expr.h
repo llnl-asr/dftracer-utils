@@ -16,14 +16,16 @@ extern "C" {
 
 /** One aggregate: `op` is a DFTU_AGG_* code, `value` the value expression
  * (borrowed; NULL for COUNT), `out` the result column name (borrowed), `param`
- * the quantile level for DFTU_AGG_PCT (0 otherwise), `by` the value maximized
- * for DFTU_AGG_ARGMAX (borrowed; NULL otherwise). */
+ * the quantile level for DFTU_AGG_PCT and DFTU_AGG_QUANTILE (0 otherwise), `by`
+ * the value maximized for DFTU_AGG_ARGMAX (borrowed; NULL otherwise), `interp`
+ * the dftu_interpolation of DFTU_AGG_QUANTILE (0 otherwise). */
 typedef struct dftu_agg_spec {
     int32_t op;
     const dftu_expr* value;
     const char* out;
     double param;
     const dftu_expr* by;
+    int32_t interp; /**< DFTU_AGG_QUANTILE: a dftu_interpolation; 0 otherwise */
 } dftu_agg_spec;
 
 dftu_agg_spec dftu_agg_count(const char* out);
@@ -46,8 +48,10 @@ dftu_agg_spec dftu_agg_last(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_pct(const dftu_expr* value, double q, const char* out);
 /** The exact quantile at level `q` in [0, 1] (`interp` a dftu_interpolation
  * from dataframe/c_api.h); null for a group with no present value. The group
- * state keeps every present value, 8 bytes each. An `interp` outside the enum
- * is read as DFTU_INTERP_LINEAR. */
+ * state keeps every present value, 8 bytes each. The spec is a plain value, so
+ * a `q` outside [0, 1] (or NaN) and an `interp` outside the enum are not
+ * reported here: dftu_dataframe_group_agg_expr returns -1 for such a spec and
+ * writes no output. */
 dftu_agg_spec dftu_agg_quantile(const dftu_expr* value, double q,
                                 int32_t interp, const char* out);
 dftu_agg_spec dftu_agg_hist(const dftu_expr* value, const char* out);

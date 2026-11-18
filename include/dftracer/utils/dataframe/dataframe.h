@@ -71,8 +71,8 @@ enum class Agg {
     KurtUnbiased,  ///< pandas sample excess kurtosis of `column`, Float64 (NaN
                    ///< below four values and for a constant column)
     Quantile       ///< the exact quantile of `column`, Float64: `param` is
-                   ///< quantile_param(q, interpolation); the state keeps every
-                   ///< value (see AggOp::Quantile)
+                   ///< the level and GroupAgg::interp the interpolation; the
+                   ///< state keeps every value (see AggOp::Quantile)
 };
 
 /// Canonical lowercase name of `agg` (the string the C ABI accepts).
@@ -96,7 +96,7 @@ struct GroupAgg {
     dstd::String column;
     dstd::String out;
     double param = 0.0;  ///< Pct, SketchQuantile: quantile q in [0, 1];
-                         ///< Quantile: quantile_param(q, interpolation);
+                         ///< Quantile: the quantile level q in [0, 1];
                          ///< occupancy: occ_cell_us;
                          ///< Distinct/TopK/BottomK/ApproxTopK/Sample: k;
                          ///< SetUnion: nonzero asks for the typed list
@@ -106,10 +106,12 @@ struct GroupAgg {
     dstd::Vector<dstd::String> args{};  ///< Udaf: the columns after `column`,
                                         ///< which is argument 0 (empty for a
                                         ///< UDAF that takes no argument)
+    Interpolation interp = Interpolation::Linear;  ///< Quantile: the result
+                                                   ///< between two ranks
 };
 
-class LazyFrame;                        // dataframe/lazyframe.h
-class GroupBy;                          // below
+class LazyFrame;                                   // dataframe/lazyframe.h
+class GroupBy;                                     // below
 
 /// A named ordered set of columns (the RecordBatch / DataChunk analogue). The
 /// eager methods return a new DataFrame (move-only); projection ops share the

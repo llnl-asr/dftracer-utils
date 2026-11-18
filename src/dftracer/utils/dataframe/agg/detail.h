@@ -1166,6 +1166,17 @@ class AggState : public dstd::HeapObject {
         n_qv = 0;
         for (std::size_t s = 0; s < specs.size(); ++s) {
             if (specs[s].op != AggOp::Quantile) continue;
+            if (!(specs[s].param >= 0.0 && specs[s].param <= 1.0) &&
+                init_error.empty())
+                init_error = dstd::fmt<
+                    "group_by: the quantile level of '{}' must be in [0, 1]">(
+                    specs[s].out);
+            if ((specs[s].interp < Interpolation::Linear ||
+                 specs[s].interp > Interpolation::Midpoint) &&
+                init_error.empty())
+                init_error = dstd::fmt<
+                    "group_by: the quantile interpolation of '{}' is "
+                    "unknown">(specs[s].out);
             int slot = -1;
             for (std::size_t k = 0; k < n_qv; ++k)
                 if (qv_val_col[k] == specs[s].value_col) {

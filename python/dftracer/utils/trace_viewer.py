@@ -17,7 +17,6 @@ naming the first op it cannot take.
 from __future__ import annotations
 
 import json
-import math
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -116,7 +115,7 @@ def _agg_specs(specs: Sequence[Union[str, Agg]]) -> "tuple[List[str], List[str],
         if s.op == "pct":
             spec += f":{s.param}"
         elif s.op == "quantile":
-            spec += f":{s.param - 2.0 * math.floor(s.param / 2.0)}"
+            spec += f":{s.param}"
         strings.append(spec)
         if s.op in _OCCUPANCY and s.param:
             grids.add(int(s.param))

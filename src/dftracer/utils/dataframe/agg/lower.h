@@ -33,6 +33,7 @@ dstd::Result<AggSpec> lower_group_agg(const GroupAgg& a, Resolve&& resolve) {
     sp.op = to_agg_op(a.op);
     sp.out = a.out;
     sp.param = a.param;
+    sp.interp = a.interp;
     if (sp.op == AggOp::Udaf) {
         sp.fn = a.fn;
         if (!a.column.empty()) {

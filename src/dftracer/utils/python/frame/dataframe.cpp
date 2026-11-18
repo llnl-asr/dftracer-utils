@@ -795,14 +795,16 @@ PyObject* DataFrame_hash_partition(PyObject* self, PyObject* args) {
     return list;
 }
 
-// One (op, ast, out[, param[, by_ast[, udaf]]]) spec tuple, appended to `out`.
+// One (op, ast, out[, param[, by_ast[, udaf[, interp]]]]) spec tuple, appended
+// to `out`; `by_ast` and `udaf` may be None, `interp` is the interpolation code
+// of a quantile.
 bool agg_expr_spec_from_tuple(
     PyObject* t, dftracer::utils::dstd::Vector<dataframe::AggExprSpec>& out) {
     const Py_ssize_t tn = PyTuple_Check(t) ? PyTuple_GET_SIZE(t) : 0;
-    if (tn < 3 || tn > 6) {
+    if (tn < 3 || tn > 7) {
         PyErr_SetString(
             PyExc_TypeError,
-            "each spec is (op, ast, out[, param[, by_ast[, udaf]]])");
+            "each spec is (op, ast, out[, param[, by_ast[, udaf[, interp]]]])");
         return false;
     }
     dataframe::AggExprSpec s;
@@ -828,7 +830,7 @@ bool agg_expr_spec_from_tuple(
             s.by = std::move(by);
         }
     }
-    if (tn == 6) {
+    if (tn >= 6 && PyTuple_GET_ITEM(t, 5) != Py_None) {
         // (name, [arg_ast, ...]): the UDAF the spec calls and its
         // arguments after `value`.
         PyObject* call = PyTuple_GET_ITEM(t, 5);
@@ -851,6 +853,16 @@ bool agg_expr_spec_from_tuple(
                 return false;
             s.args.push_back(std::move(arg));
         }
+    }
+    if (tn == 7) {
+        const long interp = PyLong_AsLong(PyTuple_GET_ITEM(t, 6));
+        if (interp == -1 && PyErr_Occurred()) return false;
+        if (interp < 0 || interp > 4) {
+            PyErr_SetString(PyExc_ValueError,
+                            "a quantile interpolation code is 0 to 4");
+            return false;
+        }
+        s.interp = static_cast<dataframe::Interpolation>(interp);
     }
     const char* out_name = PyUnicode_AsUTF8(PyTuple_GET_ITEM(t, 2));
     if (!out_name) return false;
@@ -1634,7 +1646,8 @@ PyMethodDef DataFrame_methods[] = {
      "expressions (F.x.sum(), ...); no aggs returns a GroupBy for .agg(...)."},
     {"_group_agg_expr", DataFrame_group_agg_expr, METH_VARARGS,
      "_group_agg_expr(key, specs) -> DataFrame; specs is a list of "
-     "(op_int, value_ast|None, out_name[, param[, by_ast]]). Internal: the "
+     "(op_int, value_ast|None, out_name[, param[, by_ast[, udaf[, interp]]]]). "
+     "Internal: the "
      "GroupBy expression path (CSE across value expressions + pruner)."},
     {"join", DFTU_PYCFUNCTION(DataFrame_join), METH_VARARGS | METH_KEYWORDS,
      "join(other, on=None, how='inner', left_on=None, right_on=None, "

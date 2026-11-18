@@ -636,8 +636,8 @@ static DataFrame finalize_impl(const AggState& st_in,
         } else if (sp.op == AggOp::Quantile) {
             const int slot = st.spec_qv[s];
             const auto n = static_cast<std::size_t>(ng);
-            const double q = quantile_level(sp.param);
-            const Interpolation interp = quantile_interpolation(sp.param);
+            const double q = sp.param;
+            const Interpolation interp = sp.interp;
             dstd::Vector<double> v(n, 0.0);
             dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0);
             for (std::size_t g = 0; g < n && slot >= 0; ++g) {

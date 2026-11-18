@@ -249,6 +249,8 @@ dstd::String agg_serialize(const AggState& st_in, bool compact) {
         put_bytes(s, sp.out);
         put(s, sp.param);
         put(s, sp.by_col);
+        if (sp.op == AggOp::Quantile)
+            put(s, static_cast<std::int32_t>(sp.interp));
         if (sp.op != AggOp::Udaf) continue;
         put_bytes(s, sp.fn);
         put(s, static_cast<std::uint32_t>(sp.args.size()));
@@ -574,6 +576,13 @@ dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
         st->specs[i].out = r.get_bytes();
         st->specs[i].param = r.get<double>();
         st->specs[i].by_col = r.get<std::int32_t>();
+        if (st->specs[i].op == AggOp::Quantile) {
+            const std::int32_t interp = r.get<std::int32_t>();
+            if (interp < static_cast<std::int32_t>(Interpolation::Linear) ||
+                interp > static_cast<std::int32_t>(Interpolation::Midpoint))
+                return corrupt_blob();
+            st->specs[i].interp = static_cast<Interpolation>(interp);
+        }
         if (st->specs[i].op != AggOp::Udaf) continue;
         st->specs[i].fn = r.get_bytes();
         const std::uint32_t nargs = r.get<std::uint32_t>();

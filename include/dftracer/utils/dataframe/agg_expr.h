@@ -25,13 +25,15 @@ struct AggExprSpec {
     AggOp op = AggOp::Count;
     Expr value;
     dstd::String out;
-    double param = 0.0;  ///< Pct: the quantile level q in [0, 1]; SetUnion:
-                         ///< nonzero asks for the typed list
+    double param = 0.0;  ///< Pct, Quantile: the quantile level q in [0, 1];
+                         ///< SetUnion: nonzero asks for the typed list
     Expr by{};           ///< ArgMax: the value maximized (value is the field
                          ///< represented); unused otherwise
     dstd::String fn{};   ///< Udaf: the registered name of the aggregate
     dstd::Vector<Expr> args{};  ///< Udaf: the arguments after `value`, which
                                 ///< is argument 0 (unset for no argument)
+    Interpolation interp = Interpolation::Linear;  ///< Quantile: the result
+                                                   ///< between two ranks
 
     /// Rename the output column (fluent), e.g. `agg_sum(a + b).as("sum_ab")`.
     AggExprSpec as(dstd::String name) const {
@@ -66,10 +68,11 @@ AggExprSpec agg_kurt_unbiased(Expr value, dstd::String out = "kurt");
 AggExprSpec agg_pct(Expr value, double q, dstd::String out = "pct");
 /// The exact quantile at level `q` in [0, 1], @p interp choosing the result
 /// between two ranks; null for a group with no present value. The state keeps
-/// every present value (see @ref AggOp::Quantile).
-AggExprSpec agg_quantile(Expr value, double q,
-                         Interpolation interp = Interpolation::Linear,
-                         dstd::String out = "quantile");
+/// every present value (see @ref AggOp::Quantile). An InvalidArgument error
+/// for a level outside [0, 1] or NaN.
+dstd::Result<AggExprSpec> agg_quantile(
+    Expr value, double q, Interpolation interp = Interpolation::Linear,
+    dstd::String out = "quantile");
 /// The DDSketch histogram of `value`, a list<struct{lo,hi,count}> per group.
 AggExprSpec agg_hist(Expr value, dstd::String out = "hist");
 /// Sum of squares of `value` (Float64), from the shared @ref FieldStat.

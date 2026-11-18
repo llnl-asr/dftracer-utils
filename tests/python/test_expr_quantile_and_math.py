@@ -42,6 +42,28 @@ def test_group_quantile_is_exact(interpolation, numpy_method):
     assert out["q"].to_list() == pytest.approx(want, rel=1e-12)
 
 
+@pytest.mark.parametrize("n", [11, 100])
+@pytest.mark.parametrize("interpolation", ["linear", "nearest", "lower", "higher", "midpoint"])
+def test_group_quantile_equals_series_quantile_at_every_level(n, interpolation):
+    values = [float((i * 7) % n) for i in range(n)]
+    df = DataFrame({"k": Series([0] * n), "x": Series(values)})
+    reference = df["x"]
+    levels = [i / 100 for i in range(101)]
+    out = df.group_by("k").agg(
+        *[col("x").quantile(q, interpolation).alias(f"q{i}") for i, q in enumerate(levels)]
+    )
+    lazy = (
+        df.lazy()
+        .group_by("k")
+        .agg(*[col("x").quantile(q, interpolation).alias(f"q{i}") for i, q in enumerate(levels)])
+        .collect()
+    )
+    for i, q in enumerate(levels):
+        want = reference.quantile(q, interpolation=interpolation)
+        assert out[f"q{i}"].to_list() == [want], (n, interpolation, q)
+        assert lazy[f"q{i}"].to_list() == [want], (n, interpolation, q)
+
+
 def test_quantile_default_is_nearest_and_percentile_is_linear():
     df = _frame()
     nearest = df.group_by("k").agg(q=col("i").quantile(0.5)).sort_by("k")["q"].to_list()
@@ -153,6 +175,19 @@ def test_expr_str_find_is_null_on_a_miss_and_series_keeps_minus_one():
     df = DataFrame({"s": Series(["abcabc", "xyz", None, "bc"])})
     assert col("s").str.find("bc").apply(df).to_list() == [1, None, None, 0]
     assert df["s"].str.find("bc").to_list() == [1, -1, None, 0]
+
+
+def test_expr_str_find_matches_series_find_in_every_form():
+    texts = ["abcabc", "xyz", None, "bc", "", "\u00e9bc", "b"]
+    df = DataFrame({"s": Series(texts)})
+    for needle in ["bc", "", "b", "\u00e9", "zz"]:
+        series_find = df["s"].str.find(needle).to_list()
+        want = [None if v is None or v < 0 else v for v in series_find]
+        assert col("s").str.find(needle).apply(df).to_list() == want, needle
+        lazy = df.lazy().with_column("p", col("s").str.find(needle)).collect()["p"].to_list()
+        assert lazy == want, needle
+        kept = df.lazy().filter(col("s").str.find(needle) >= 0).collect()["s"].to_list()
+        assert kept == [t for t, v in zip(texts, want) if v is not None], needle
 
 
 def test_log1p_and_expm1_are_exact_for_a_tiny_x():

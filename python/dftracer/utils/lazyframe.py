@@ -34,7 +34,7 @@ from typing import (
 
 from . import dftracer_utils_ext as _ext
 from ._aliases import install as _install_aliases
-from .columnar import Expr, _as_expr, _Col, _emit_ast, col
+from .columnar import Expr, _as_expr, _check_quantile, _Col, _emit_ast, col
 from .dataframe import DataFrame, JoinHow, WindowSpec, _names, _norm_window_spec
 from .runtime import TaskHandle
 from .series import Series
@@ -964,11 +964,14 @@ def agg_spec_strings(
                 "the streaming group-by aggregates columns by name"
             )
         tail = ""
-        if spec.by is not None or spec.param not in (None, 0.0):
+        if spec.op == "quantile":
+            code = _check_quantile(spec.param, spec.interpolation)
+            tail = f"::{spec.param!r}:{code}"
+        elif spec.by is not None or spec.param not in (None, 0.0):
             by = spec.by.name if isinstance(spec.by, _Col) else ""
             tail = f":{by}"
             if spec.param not in (None, 0.0):
-                tail += f":{spec.param}"
+                tail += f":{spec.param!r}"
         if spec.value is None:
             strings.append(
                 f"{spec.op}::{spec.out}{tail}" if spec.out != spec.op or tail else spec.op
@@ -994,12 +997,14 @@ def group_quantile(
     ``GroupBy.quantile``, linear interpolation by default), as one streaming
     group-by of the engine's exact ``quantile`` aggregate. The result is sorted
     by the keys, one Float64 column per input column, named as the input."""
-    from .columnar import Agg, _Col, _quantile_param
+    from .columnar import Agg, _Col
 
-    param = _quantile_param(q, interpolation)
+    _check_quantile(q, interpolation)
     if not columns:
         raise ValueError("quantile: no numeric column to reduce")
-    out = LazyGroupBy(plan, keys).agg(*[Agg("quantile", _Col(c), c, param=param) for c in columns])
+    out = LazyGroupBy(plan, keys).agg(
+        *[Agg("quantile", _Col(c), c, param=float(q), interpolation=interpolation) for c in columns]
+    )
     return out.sort_by_multi(keys) if keys else out
 
 

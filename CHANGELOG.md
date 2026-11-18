@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ### Added
 
 - Add the exact quantile aggregate, `AggOp::Quantile` / `Agg::Quantile` / `DFTU_AGG_QUANTILE` ("quantile"), with `agg_quantile` and `dftu_agg_quantile`: the group keeps every present value (8 bytes each), partial states merge by concatenation, the aggregation spill path bounds the state across groups and a group with no value is null.
+  The level and the interpolation are separate fields (`AggSpec::interp`, `dftu_agg_spec::interp`); a level outside [0, 1] or NaN is an `InvalidArgument` error from `agg_quantile` and the engine, and `dftu_dataframe_group_agg_expr` returns -1 for it.
   `Expr.quantile(q, interpolation="nearest")` (Polars), `Expr.percentile(p, interpolation="linear")` and `Expr.median()` are exact; `Expr.approx_quantile(q)` is the DDSketch estimate they used to be.
   `GroupBy.quantile` and `LazyGroupBy.quantile` take `interpolation` and run on the aggregate.
   A level outside [0, 1] or NaN raises `ValueError`.

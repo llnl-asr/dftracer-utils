@@ -2082,6 +2082,44 @@ TEST_SUITE("vec") {
                                 Interpolation::Nearest)));
     }
 
+    TEST_CASE("exp/log: one bad value in any position and any length is IEEE") {
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        const double inf = std::numeric_limits<double>::infinity();
+        const double specials[] = {0.0, -1.0, inf, -inf, nan, 710.0, -800.0};
+        auto same = [](double got, double want) {
+            if (std::isnan(want)) return std::isnan(got);
+            if (std::isinf(want) || want == 0.0) return got == want;
+            return std::fabs(got - want) <= 1e-13 * std::fabs(want);
+        };
+        // Lengths below one group of four vectors, a whole group and a group
+        // plus a tail, for any vector width.
+        for (std::int64_t n = 1; n <= 130; ++n) {
+            for (std::int64_t at = 0; at < n; ++at) {
+                for (const double bad : specials) {
+                    dstd::Vector<double> x(static_cast<std::size_t>(n));
+                    for (std::int64_t i = 0; i < n; ++i)
+                        x[static_cast<std::size_t>(i)] =
+                            0.25 + 0.01 * static_cast<double>(i);
+                    x[static_cast<std::size_t>(at)] = bad;
+                    Series c = Series::flat_f64(x.data(), n);
+                    Series ex = dataframe::exp(c);
+                    Series lg = dataframe::log(c);
+                    std::int64_t wrong = -1;
+                    for (std::int64_t i = 0; i < n && wrong < 0; ++i) {
+                        const double v = x[static_cast<std::size_t>(i)];
+                        if (!same(ex.data<double>()[i], std::exp(v)) ||
+                            !same(lg.data<double>()[i], std::log(v)))
+                            wrong = i;
+                    }
+                    CAPTURE(n);
+                    CAPTURE(at);
+                    CAPTURE(bad);
+                    CHECK(wrong == -1);
+                }
+            }
+        }
+    }
+
     TEST_CASE("clip: an infinite or out-of-range bound saturates on integers") {
         const double inf = std::numeric_limits<double>::infinity();
         const std::int64_t i64min = std::numeric_limits<std::int64_t>::min();
@@ -3450,4 +3488,23 @@ TEST_CASE("string_at reads a SELECTION column from filter") {
     REQUIRE(flat.length() == 2);
     CHECK(flat.string_at(0) == "alpha");
     CHECK(flat.string_at(1) == "gamma");
+}
+
+TEST_CASE(
+    "a null entry of a filter mask selects no row, whatever its data bit") {
+    Series s = Series::strings({"a", "b", "c", "d", "e"});
+    // Rows 0, 2 and 4 are true by data; row 2 is null, so it is not kept.
+    dstd::Vector<std::uint8_t> bits{0b0001'0101};
+    dstd::Vector<std::uint8_t> valid{0b0001'1011};
+    Series mask = Series::flat(TypeId::Bool, bits.data(), 5, valid.data());
+    Series kept = s.filter(mask).materialize();
+    REQUIRE(kept.length() == 2);
+    CHECK(kept.string_at(0) == "a");
+    CHECK(kept.string_at(1) == "e");
+
+    DataFrame df;
+    df.names = dstd::make_shared_strings({"s"});
+    df.columns.push_back(s.share());
+    DataFrame out = df.filter(mask);
+    REQUIRE(out.num_rows() == 2);
 }

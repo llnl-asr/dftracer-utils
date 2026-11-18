@@ -187,13 +187,15 @@ struct NamedExpr {
 /// One aggregate of an @ref AggregateSpec. `input` and `by` are positional
 /// against the offering source's schema(). `input` is unset for count; `by` is
 /// set only for the ops that read a second column (agg_uses_by_col). `param` is
-/// the quantile or k where the op takes one.
+/// the quantile or k where the op takes one, and `interp` how a Quantile picks
+/// its result between two ranks.
 struct AggregateExpr {
     Agg op = Agg::Count;
     Expr input;
     Expr by;
     double param = 0.0;
     dstd::String out;
+    Interpolation interp = Interpolation::Linear;
 };
 
 /// A group-by offered to Source::apply_aggregation. The output is one column

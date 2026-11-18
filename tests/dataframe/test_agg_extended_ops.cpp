@@ -56,6 +56,13 @@ constexpr std::int32_t VC_BITS = 2;
 constexpr std::int32_t VC_TAG = 3;
 constexpr std::int32_t VC_YV = 4;
 
+AggSpec quantile_spec(std::int32_t value_col, const char* out, double q,
+                      Interpolation interp) {
+    AggSpec s{AggOp::Quantile, value_col, out, q};
+    s.interp = interp;
+    return s;
+}
+
 dstd::Vector<AggSpec> all_specs() {
     return {
         AggSpec{AggOp::ArgMin, VC_NAME, "argmin", 0.0, VC_BY},
@@ -73,12 +80,9 @@ dstd::Vector<AggSpec> all_specs() {
         AggSpec{AggOp::RegrIntercept, VC_YV, "regr_intercept", 0.0, VC_BY},
         AggSpec{AggOp::RegrR2, VC_YV, "regr_r2", 0.0, VC_BY},
         AggSpec{AggOp::Prod, VC_BY, "prod"},
-        AggSpec{AggOp::Quantile, VC_BY, "q_linear",
-                quantile_param(0.4, Interpolation::Linear)},
-        AggSpec{AggOp::Quantile, VC_BY, "q_nearest",
-                quantile_param(0.4, Interpolation::Nearest)},
-        AggSpec{AggOp::Quantile, VC_YV, "q_mid",
-                quantile_param(0.4, Interpolation::Midpoint)},
+        quantile_spec(VC_BY, "q_linear", 0.4, Interpolation::Linear),
+        quantile_spec(VC_BY, "q_nearest", 0.4, Interpolation::Nearest),
+        quantile_spec(VC_YV, "q_mid", 0.4, Interpolation::Midpoint),
     };
 }
 
@@ -213,8 +217,7 @@ TEST_CASE("Quantile skips nulls, ranks NaN last and is null with no value") {
     Series sk = Series::flat_i64(k.data(), 7);
     Series sv = Series::flat_f64(v.data(), 7, valid.data());
     dstd::Vector<AggSpec> specs{
-        AggSpec{AggOp::Quantile, 0, "median",
-                quantile_param(0.5, Interpolation::Linear)}};
+        quantile_spec(0, "median", 0.5, Interpolation::Linear)};
     DataFrame r =
         dftu_utils_test::ok(dataframe::group_agg({&sk}, {&sv}, specs, {"k"}));
     const Series med = r.column("median");
@@ -227,13 +230,77 @@ TEST_CASE("Quantile skips nulls, ranks NaN last and is null with no value") {
     CHECK(med.is_null(g2));
 }
 
+// The exact quantile of every level i/100 and every interpolation must equal
+// Series::quantile, which is the reference, for one group of n values.
+static void check_quantile_against_series(std::int64_t n) {
+    dstd::Vector<std::int64_t> keys(static_cast<std::size_t>(n), 0);
+    dstd::Vector<double> vals(static_cast<std::size_t>(n));
+    for (std::int64_t i = 0; i < n; ++i)
+        vals[static_cast<std::size_t>(i)] = static_cast<double>((i * 7) % n);
+    Series sk = Series::flat_i64(keys.data(), n);
+    Series sv = Series::flat_f64(vals.data(), n);
+    const Interpolation interps[] = {
+        Interpolation::Linear, Interpolation::Nearest, Interpolation::Lower,
+        Interpolation::Higher, Interpolation::Midpoint};
+    for (const Interpolation interp : interps) {
+        for (int i = 0; i <= 100; ++i) {
+            const double q = static_cast<double>(i) / 100.0;
+            dstd::Vector<AggSpec> specs{quantile_spec(0, "q", q, interp)};
+            DataFrame r = dftu_utils_test::ok(
+                dataframe::group_agg({&sk}, {&sv}, specs, {"k"}));
+            CAPTURE(n);
+            CAPTURE(static_cast<int>(interp));
+            CAPTURE(q);
+            CHECK(r.column("q").data<double>()[0] == sv.quantile(q, interp));
+        }
+    }
+}
+
+TEST_CASE("Quantile equals Series::quantile at every level and interpolation") {
+    check_quantile_against_series(11);
+    check_quantile_against_series(100);
+}
+
+TEST_CASE("Quantile refuses a level outside [0, 1] and NaN") {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    dstd::Vector<std::int64_t> k{0, 0, 0};
+    dstd::Vector<double> v{1.0, 2.0, 3.0};
+    Series sk = Series::flat_i64(k.data(), 3);
+    Series sv = Series::flat_f64(v.data(), 3);
+    for (const double q : {-0.1, 1.5, 2.3, nan}) {
+        CAPTURE(q);
+        CHECK_FALSE(
+            dataframe::agg_quantile(dataframe::expr_col(0), q).has_value());
+        dstd::Vector<AggSpec> specs{
+            quantile_spec(0, "q", q, Interpolation::Linear)};
+        CHECK_FALSE(
+            dataframe::group_agg({&sk}, {&sv}, specs, {"k"}).has_value());
+        dftu_expr* key = dftu_expr_col(0);
+        dftu_expr* value = dftu_expr_col(1);
+        const dftu_agg_spec c =
+            dftu_agg_quantile(value, q, DFTU_INTERP_LOWER, "q");
+        CHECK(c.interp == DFTU_INTERP_LOWER);
+        const dftu_series* inputs[] = {sk.handle(), sv.handle()};
+        dftu_series* out_key = nullptr;
+        dftu_series* out_value = nullptr;
+        CHECK(dftu_dataframe_group_agg_expr(key, &c, 1, inputs, 2, &out_key,
+                                            &out_value) == -1);
+        dftu_expr_free(key);
+        dftu_expr_free(value);
+    }
+    CHECK(dataframe::agg_quantile(dataframe::expr_col(0), 0.0).has_value());
+    CHECK(dataframe::agg_quantile(dataframe::expr_col(0), 1.0).has_value());
+    dstd::Vector<AggSpec> bad{
+        quantile_spec(0, "q", 0.5, static_cast<Interpolation>(9))};
+    CHECK_FALSE(dataframe::group_agg({&sk}, {&sv}, bad, {"k"}).has_value());
+}
+
 TEST_CASE("a keyless aggregate over no rows is one row") {
     dstd::Vector<std::int64_t> none;
     Series sv = Series::flat_i64(none.data(), 0);
     dstd::Vector<AggSpec> specs{
         AggSpec{AggOp::Sum, 0, "sum"}, AggSpec{AggOp::Mean, 0, "mean"},
-        AggSpec{AggOp::Quantile, 0, "q",
-                quantile_param(0.5, Interpolation::Linear)}};
+        quantile_spec(0, "q", 0.5, Interpolation::Linear)};
     DataFrame r = dftu_utils_test::ok(
         dataframe::group_agg({}, {&sv}, specs, dstd::Vector<dstd::String>{}));
     REQUIRE(r.num_rows() == 1);

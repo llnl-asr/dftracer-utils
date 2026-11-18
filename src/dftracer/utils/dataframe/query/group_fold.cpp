@@ -200,7 +200,8 @@ GroupFold::GroupFold(dstd::Vector<dataframe::DataType> key_types,
         const dstd::String name = dstd::fmt<"__duql_fold_{}">(a);
         dstd::String spec_name(name.data(), name.size());
         specs.push_back({aggs_[a].engine, aggs_[a].in, std::move(spec_name),
-                         aggs_[a].param, -1, aggs_[a].fn, aggs_[a].args});
+                         aggs_[a].param, -1, dataframe::Interpolation::Linear,
+                         aggs_[a].fn, aggs_[a].args});
     }
     if (!specs.empty()) engine_ = dataframe::agg_new(std::move(specs));
 }

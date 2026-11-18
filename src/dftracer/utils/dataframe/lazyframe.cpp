@@ -4035,6 +4035,7 @@ dstd::Optional<AggregateSpec> aggregate_spec(
         AggregateExpr e;
         e.op = a.op;
         e.param = a.param;
+        e.interp = a.interp;
         e.out = a.out;
         if (a.op != Agg::Count) {
             dstd::Optional<Expr> in = expr_of(a.column);
@@ -5069,6 +5070,7 @@ LazyFrame desugar_expr_group_by(const LazyFrame& self, dstd::Vector<Expr> keys,
         g.op = from_agg_op(a.op);
         g.out = a.out;
         g.param = a.param;
+        g.interp = a.interp;
         if (a.op == AggOp::Udaf) {
             g.fn = a.fn;
             if (a.value.valid()) g.column = resolve_val(a.value, "v");
@@ -6514,6 +6516,7 @@ void fingerprint_group_aggs(Fingerprint& fp,
         fp.str(a.column);
         fp.str(a.out);
         fp.pod(a.param);
+        fp.pod(a.interp);
         fp.str(a.by);
         fp.str(a.fn);
         fp.strs(a.args);

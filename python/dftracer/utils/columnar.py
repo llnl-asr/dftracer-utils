@@ -287,9 +287,9 @@ _AGG_CODE = {
 _INTERPOLATIONS = {"linear": 0, "nearest": 1, "lower": 2, "higher": 3, "midpoint": 4}
 
 
-def _quantile_param(q: float, interpolation: str) -> float:
-    """The ``param`` of the exact ``quantile`` aggregate: the level plus twice
-    the interpolation code (``quantile_param`` in agg.h)."""
+def _check_quantile(q: float, interpolation: str) -> int:
+    """The checked level ``q`` and ``interpolation`` of the exact ``quantile``
+    aggregate; the interpolation's code (``Interpolation`` in types.h)."""
     if not 0.0 <= q <= 1.0:
         raise ValueError(f"quantile: q must be in [0, 1], not {q!r}")
     code = _INTERPOLATIONS.get(interpolation) if isinstance(interpolation, str) else None
@@ -297,7 +297,7 @@ def _quantile_param(q: float, interpolation: str) -> float:
         raise ValueError(
             "quantile: interpolation must be 'linear', 'nearest', 'lower', 'higher' or 'midpoint'"
         )
-    return float(q) + 2.0 * code
+    return code
 
 
 _NOT_PUSHABLE = (
@@ -1114,7 +1114,8 @@ class Expr:
         group state keeps every present value (8 bytes each), spilled across
         groups under the memory budget; :meth:`approx_quantile` is the bounded
         memory sketch."""
-        return Agg("quantile", self, param=_quantile_param(quantile, interpolation))
+        _check_quantile(quantile, interpolation)
+        return Agg("quantile", self, param=float(quantile), interpolation=interpolation)
 
     def median(self) -> "Agg":
         """The exact median per group (an :class:`Agg`): :meth:`quantile` at
@@ -1163,7 +1164,8 @@ class Expr:
         ``F.dur.quantile(0.99, "linear")``."""
         if not 0.0 <= p <= 100.0:
             raise ValueError(f"percentile: p must be in [0, 100], not {p!r}")
-        return Agg("quantile", self, param=_quantile_param(p / 100.0, interpolation))
+        _check_quantile(p / 100.0, interpolation)
+        return Agg("quantile", self, param=p / 100.0, interpolation=interpolation)
 
     def busy(self, resolution: "Union[int, float, str, None]" = None) -> "Agg":
         """Trace occupancy (``TraceViewer.agg`` only): the time at least one
@@ -3106,15 +3108,17 @@ class Agg:
         out: "str | None" = None,
         param: float = 0.0,
         by: "Expr | None" = None,
+        interpolation: str = "linear",
     ) -> None:
         self.op = op
         self.value = value
         self._out = out
         self.param = param
         self.by = by
+        self.interpolation = interpolation
 
     def alias(self, name: str) -> "Agg":
-        return Agg(self.op, self.value, name, self.param, self.by)
+        return Agg(self.op, self.value, name, self.param, self.by, self.interpolation)
 
     def over(self, keys: "Union[str, Sequence[str]]") -> Expr:
         """This aggregate per group of ``keys``, broadcast back onto every
@@ -3191,8 +3195,7 @@ class Agg:
             if self.op == "pct":
                 return f"p{int(round(self.param * 100))}_{self.value.name}"
             if self.op == "quantile":
-                level = self.param - 2.0 * math.floor(self.param / 2.0)
-                return f"p{int(round(level * 100))}_{self.value.name}"
+                return f"p{int(round(self.param * 100))}_{self.value.name}"
             op = "count" if self.op == "count_valid" else self.op
             return f"{op}_{self.value.name}"
         return self.op
@@ -3203,6 +3206,16 @@ class Agg:
             return (code, None, self.out, self.param)
         ast: List[tuple] = []
         _emit_ast(self.value, names.index, ast)
+        if self.op == "quantile":
+            return (
+                code,
+                ast,
+                self.out,
+                self.param,
+                None,
+                None,
+                _check_quantile(self.param, self.interpolation),
+            )
         if self.by is None:
             return (code, ast, self.out, self.param)
         by_ast: List[tuple] = []
@@ -3649,7 +3662,7 @@ class GroupBy:
         frame = self._frame()
         columns = self._value_columns()
         if frame.num_rows == 0:
-            _quantile_param(q, interpolation)
+            _check_quantile(q, interpolation)
             picked = frame[self._keys + columns]
             return picked.astype({c: "float64" for c in columns})
         out = group_quantile(frame.lazy(), self._keys, columns, float(q), interpolation).collect()

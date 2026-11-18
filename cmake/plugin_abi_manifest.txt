@@ -459,6 +459,7 @@ field dftu_agg_col.out offset 16 size 8
 field dftu_agg_col.param offset 24 size 8
 field dftu_agg_col.value offset 8 size 8
 field dftu_agg_spec.by offset 32 size 8
+field dftu_agg_spec.interp offset 40 size 4
 field dftu_agg_spec.op offset 0 size 4
 field dftu_agg_spec.out offset 16 size 8
 field dftu_agg_spec.param offset 24 size 8
@@ -1285,7 +1286,7 @@ fnptr dftu_udf_desc.bind dftu_status (*)(dftu_ctx*, void*, const dftu_type_info*
 fnptr dftu_udf_desc.exec dftu_status (*)(dftu_ctx*, void*, const dftu_series* const*, uint32_t, uint64_t, dftu_series**)
 fnptr dftu_udf_desc.free_bound void (*)(void*)
 struct dftu_agg_col size 40 align 8
-struct dftu_agg_spec size 40 align 8
+struct dftu_agg_spec size 48 align 8
 struct dftu_apply_agg size 40 align 8
 struct dftu_apply_aggregation_args size 32 align 8
 struct dftu_apply_filter_args size 8 align 8

@@ -114,7 +114,9 @@ enum class AggOp {
     /// and when they are all equal.
     KurtUnbiased = 39,
     /// The exact quantile of the present values of `value_col`, Float64 (null
-    /// for a group with none). `param` is quantile_param(q, interpolation).
+    /// for a group with none). `param` is the level in [0, 1] and
+    /// AggSpec::interp chooses the result between two ranks; a level outside
+    /// [0, 1] or NaN is refused by agg_accumulate.
     /// The state keeps every present value (8 bytes each) and merges by
     /// concatenation, so it grows with the rows of a group; the spill path of
     /// the aggregation engine bounds it across groups, but one group's values
@@ -126,21 +128,6 @@ enum class AggOp {
 /// The last row of agg_ops.def, which bounds every serialized op code. A row
 /// appended to the table moves it (c_api_enum_lockstep.cpp checks).
 inline constexpr AggOp AGG_OP_LAST = AggOp::Quantile;
-
-/// The AggSpec::param of AggOp::Quantile: the level @p q in [0, 1] plus twice
-/// the @ref Interpolation code, so one number carries both.
-inline double quantile_param(double q, Interpolation interp) noexcept {
-    return q + 2.0 * static_cast<double>(static_cast<std::int32_t>(interp));
-}
-/// The @ref Interpolation half of a quantile_param.
-inline Interpolation quantile_interpolation(double param) noexcept {
-    return static_cast<Interpolation>(static_cast<std::int32_t>(param / 2.0));
-}
-/// The level half of a quantile_param.
-inline double quantile_level(double param) noexcept {
-    return param -
-           2.0 * static_cast<double>(static_cast<std::int32_t>(param / 2.0));
-}
 
 /// Ops taking a second input through `by_col`: the extremum ArgMax/ArgMin
 /// maximize/minimize, the ordered list/top-k ops order by, the co-moment ops
@@ -197,12 +184,15 @@ struct AggSpec {
     AggOp op;
     std::int32_t value_col = -1;
     dstd::String out;
-    double param = 0.0;  ///< Pct: quantile q in [0, 1]; occupancy: occ_cell_us;
+    double param = 0.0;  ///< Pct, Quantile: quantile q in [0, 1]; occupancy:
+                         ///< occ_cell_us;
                          ///< Distinct/TopK/BottomK/ApproxTopK/Sample: k;
                          ///< SetUnion: nonzero asks for the typed list
     std::int32_t by_col = -1;  ///< the second input for the ops
                                ///< agg_uses_by_col() names; unused otherwise
-    dstd::String fn{};         ///< Udaf: the registered name of the aggregate
+    Interpolation interp = Interpolation::Linear;  ///< Quantile: the result
+                                                   ///< between two ranks
+    dstd::String fn{};  ///< Udaf: the registered name of the aggregate
     dstd::Vector<std::int32_t> args{};  ///< Udaf: the arguments after
                                         ///< `value_col`, which is argument 0
                                         ///< (-1 when the UDAF takes none)

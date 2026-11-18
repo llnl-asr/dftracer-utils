@@ -294,7 +294,7 @@ def _parse(name: str, spec: AggSpec) -> Tuple[str, str, Optional[float]]:
         if op == "pct":
             op, param = "quantile", spec.param
         elif op == "quantile":
-            param = spec.param - 2.0 * math.floor(spec.param / 2.0)
+            param = spec.param
     else:
         column, op, *rest = spec
         param = rest[0] if rest else None

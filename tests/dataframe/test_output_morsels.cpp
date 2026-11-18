@@ -377,6 +377,17 @@ TEST_SUITE("output morsels") {
         const DataFrame whole_add =
             joined(morsels(column_op("dftu.series.add_scalar", five)));
         expect_same_rows(joined(add), whole_add);
+        // The Python-semantics arithmetic is elementwise too: it streams and
+        // gives the rows of the whole-input run.
+        for (const char* op :
+             {"dftu.series.pow_scalar", "dftu.series.floordiv_scalar",
+              "dftu.series.mod_scalar"}) {
+            const auto parts = morsels(column_op(op, five), 1000);
+            CHECK_MESSAGE(parts.size() >= 6, op);
+            CHECK_MESSAGE(most_rows(parts) <= 1000, op);
+            expect_same_rows(joined(parts),
+                             joined(morsels(column_op(op, five))));
+        }
         // A running sum needs the whole column: one result, whole.
         const auto sum = morsels(column_op("dftu.series.cumsum", zero), 1000);
         const DataFrame whole_sum =

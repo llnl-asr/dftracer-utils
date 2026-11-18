@@ -94,12 +94,12 @@ def test_trace_viewer_keeps_its_runtime_through_builders(trace):
 
 def test_a_frame_carries_its_index_through_native_ops():
     df = _frame().set_index("a")
-    assert df._index == ["a"]
-    assert df.head(2)._index == ["a"]
-    assert df.sort_by("b")._index == ["a"]
-    assert _frame()._index is None
+    assert df.index_names() == ["a"]
+    assert df.head(2).index_names() == ["a"]
+    assert df.sort_by("b").index_names() == ["a"]
+    assert _frame().index_names() == []
     lf = _frame().lazy().set_index("a")
-    assert lf.head(1)._index == ["a"]
+    assert lf.head(1).index_names() == ["a"]
 
 
 def test_setitem_rebinds_this_frame_only():
@@ -135,7 +135,7 @@ def test_share_makes_a_distinct_object_over_the_same_columns():
     df = _frame()
     same = _ext.DataFrame.share(df)
     assert same is not df and type(same) is DataFrame
-    assert same["a"].to_list() == df["a"].to_list() and same._index is None
+    assert same["a"].to_list() == df["a"].to_list() and same.index_names() == []
     lf = df.lazy()
     again = _ext.LazyFrame.share(lf)
     assert again is not lf and type(again) is LazyFrame
@@ -220,12 +220,12 @@ def test_copy_and_deepcopy_of_frames(trace):
     df = _frame().set_index("a")
     for dup in (copy.copy(df), copy.deepcopy(df)):
         assert type(dup) is DataFrame and dup is not df
-        assert dup.to_dict() == df.to_dict() and dup._index == ["a"]
+        assert dup.to_dict() == df.to_dict() and dup.index_names() == ["a"]
     rt = d.Runtime(threads=1)
     lf = LazyFrame(_frame().lazy(), rt).set_index("a")
     for dup in (copy.copy(lf), copy.deepcopy(lf)):
         assert type(dup) is LazyFrame and dup is not lf
-        assert dup._runtime is rt and dup._index == ["a"]
+        assert dup._runtime is rt and dup.index_names() == ["a"]
         assert dup.collect().to_dict() == lf.collect().to_dict()
     _ext.LazyFrame._replace(dup, DataFrame({"z": [1]}).lazy())
     assert lf.columns == ["a", "b"]

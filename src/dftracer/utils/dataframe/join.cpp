@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
+#include <dftracer/utils/dataframe/internal/frame_index.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/join.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
@@ -1031,11 +1032,12 @@ DataFrame HashJoin::flush(dstd::Span<const dstd::SharedString> left_names,
     return out;
 }
 
-dstd::Result<DataFrame> join(const DataFrame& left, const DataFrame& right,
-                             dstd::Span<const dstd::String> left_on,
-                             dstd::Span<const dstd::String> right_on,
-                             JoinHow how, dstd::StringView suffix,
-                             bool nulls_equal) {
+static dstd::Result<DataFrame> join_raw(const DataFrame& left,
+                                        const DataFrame& right,
+                                        dstd::Span<const dstd::String> left_on,
+                                        dstd::Span<const dstd::String> right_on,
+                                        JoinHow how, dstd::StringView suffix,
+                                        bool nulls_equal) {
     dstd::Vector<Series> shared;
     shared.reserve(right.columns.size());
     for (const Series& c : right.columns) shared.push_back(c.share());
@@ -1072,9 +1074,9 @@ DataFrame prefix_metrics(const DataFrame& b, std::size_t n_key,
 
 }  // namespace
 
-dstd::Result<DataFrame> compare_agg(const DataFrame& base,
-                                    const DataFrame& variant,
-                                    std::int64_t n_key) {
+static dstd::Result<DataFrame> compare_agg_raw(const DataFrame& base,
+                                               const DataFrame& variant,
+                                               std::int64_t n_key) {
     if (n_key < 1) return invalid_argument<"compare_agg: n_key < 1">();
     const auto nk = static_cast<std::size_t>(n_key);
     if (nk > base.names.size() || nk > variant.names.size())
@@ -1118,4 +1120,22 @@ dstd::Result<DataFrame> compare_agg(const DataFrame& base,
     return joined;
 }
 
+dstd::Result<DataFrame> join(const DataFrame& left, const DataFrame& right,
+                             dstd::Span<const dstd::String> left_on,
+                             dstd::Span<const dstd::String> right_on,
+                             JoinHow how, dstd::StringView suffix,
+                             bool nulls_equal) {
+    dstd::Result<DataFrame> out =
+        join_raw(left, right, left_on, right_on, how, suffix, nulls_equal);
+    if (out) index_joined<"join">(left, right, left_on, right_on, *out);
+    return out;
+}
+
+dstd::Result<DataFrame> compare_agg(const DataFrame& base,
+                                    const DataFrame& variant,
+                                    std::int64_t n_key) {
+    dstd::Result<DataFrame> out = compare_agg_raw(base, variant, n_key);
+    if (out) index_drop<"compare_agg">(*out);
+    return out;
+}
 }  // namespace dftracer::utils::dataframe

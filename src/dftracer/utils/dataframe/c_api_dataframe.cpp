@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -199,6 +200,45 @@ const dftu_series* dftu_dataframe_column_at(const dftu_dataframe* df,
     if (!df || i < 0 || static_cast<std::size_t>(i) >= df->df.columns.size())
         return nullptr;
     return df->df.columns[static_cast<std::size_t>(i)].handle();
+}
+
+std::int32_t dftu_frame_index_count(const dftu_dataframe* frame) {
+    return frame ? static_cast<std::int32_t>(frame->df.index_names().size())
+                 : 0;
+}
+
+std::int32_t dftu_frame_index_name(const dftu_dataframe* frame, std::int32_t i,
+                                   const char** ptr, std::size_t* len) {
+    if (!frame || !ptr || i < 0) return -1;
+    const auto names = frame->df.index_names();
+    if (static_cast<std::size_t>(i) >= names.size()) return -1;
+    const auto& name = names[static_cast<std::size_t>(i)];
+    *ptr = name.c_str();
+    if (len) *len = name.size();
+    return 0;
+}
+
+std::int32_t dftu_frame_with_index(const dftu_dataframe* frame,
+                                   const char* const* names,
+                                   const std::size_t* lens, std::int32_t n,
+                                   dftu_dataframe** out) {
+    if (out) *out = nullptr;
+    if (!frame || !out || n < 0 || (n > 0 && (!names || !lens)))
+        return DFTU_FRAME_INDEX_BAD_ARGUMENT;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> views;
+    views.reserve(static_cast<std::size_t>(n));
+    for (std::int32_t i = 0; i < n; ++i) {
+        if (!names[i]) return DFTU_FRAME_INDEX_BAD_ARGUMENT;
+        views.emplace_back(names[i], lens[i]);
+    }
+    auto indexed = frame->df.with_index(views);
+    if (!indexed)
+        return dftracer::utils::common::errorcode_of(indexed.error()) ==
+                       dftracer::utils::common::ErrorCode::NotFound
+                   ? DFTU_FRAME_INDEX_NOT_FOUND
+                   : DFTU_FRAME_INDEX_INVALID;
+    *out = wrap(std::move(*indexed));
+    return DFTU_FRAME_INDEX_OK;
 }
 
 dftu_dataframe* dftu_dataframe_take(const dftu_dataframe* df,

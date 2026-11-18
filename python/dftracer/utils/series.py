@@ -1744,7 +1744,7 @@ class _StrAccessor(_ext.StrAccessor):
             ints = {c: Series.from_list([], dtype=DType.INT64) for c in ["row", "match"]}
             text = {c: Series.from_list([], dtype=DType.STRING) for c in labels}
             return DataFrame.from_dict({**ints, **text})
-        rows = rows.assign(match=rows.groupby("row").cumcount()["cumcount"])
+        rows = rows.assign(match=rows.groupby("row", as_index=False).cumcount()["cumcount"])
         m = rows["m"]
         groups = {c: _StrAccessor(m).extract(pat, g) for g, c in enumerate(labels, 1)}
         return DataFrame.from_dict({"row": rows["row"], "match": rows["match"], **groups})

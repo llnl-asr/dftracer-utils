@@ -292,6 +292,11 @@ class Source {
     /// (rows produced only by streaming). collect() runs a resident source
     /// whole-column, matching the eager path instead of paying the morsel tax.
     virtual const DataFrame* as_frame() const { return nullptr; }
+    /// The row index names of the rows this source produces; empty for none.
+    /// Unlike as_frame() it never runs a scan.
+    virtual dstd::Span<const dstd::SharedString> index_names() const {
+        return {};
+    }
     /// Whether scan() may return morsels whose name_ids carry columns that
     /// schema() does not declare. A plan over such a source keeps them through
     /// every op that keeps rows and returns them, by name, after the declared
@@ -405,6 +410,7 @@ class InMemorySource : public Source {
     Schema schema() const override;
     dstd::Result<ScanResult> scan(const ScanRequest& req) const override;
     const DataFrame* as_frame() const override { return frame_.get(); }
+    dstd::Span<const dstd::SharedString> index_names() const override;
 
    private:
     dstd::SharedPtr<const DataFrame> frame_;
@@ -423,7 +429,8 @@ class LazyOp;
 class LazyGroupBy;
 namespace detail {
 struct PlanAccess;
-}
+struct IndexDecl;
+}  // namespace detail
 
 class LazyFrame {
    public:
@@ -725,6 +732,20 @@ class LazyFrame {
     /// determine statically is TypeId::Unknown, never a guess.
     Schema output_schema() const;
 
+    /// The columns that form the row index of this plan's result, in order;
+    /// empty for none. The index of the source frame (a plan over
+    /// DataFrame::lazy()) or the one set by @ref with_index, run through the
+    /// index rule of each op (frame_op_index_rules.def), so collect() gives
+    /// the index the same eager ops give.
+    dstd::Vector<dstd::String> index_names() const;
+
+    /// This plan with the row index `names`; an empty vector drops it. A
+    /// NotFound error for a name that is no column of the plan (checked when
+    /// the plan declares all its columns), an InvalidArgument error for a
+    /// repeated name or a column of a type with no hash and equality (List,
+    /// Struct).
+    dstd::Result<LazyFrame> with_index(dstd::Vector<dstd::String> names) const;
+
     /// Whether the query can return columns beyond @ref
     /// LazyFrame::output_schema "output_schema": its source, or the source of a
     /// joined or concatenated plan, has columns that its schema does not
@@ -803,14 +824,18 @@ class LazyFrame {
     LazyFrame(dstd::SharedPtr<const Source> source,
               dstd::Vector<dstd::SharedPtr<const LazyOp>> ops,
               std::uint64_t memory_budget = 0,
-              dstd::SharedPtr<const dstd::Error> error = nullptr)
+              dstd::SharedPtr<const dstd::Error> error = nullptr,
+              dstd::SharedPtr<const detail::IndexDecl> index = nullptr)
         : source_(std::move(source)),
           ops_(std::move(ops)),
           memory_budget_(memory_budget),
-          error_(std::move(error)) {}
-    // Clone with a new op list, preserving the source, budget and error.
+          error_(std::move(error)),
+          index_(std::move(index)) {}
+    // Clone with a new op list, preserving the source, budget, error and the
+    // declared index.
     LazyFrame with_ops(dstd::Vector<dstd::SharedPtr<const LazyOp>> ops) const {
-        return LazyFrame(source_, std::move(ops), memory_budget_, error_);
+        return LazyFrame(source_, std::move(ops), memory_budget_, error_,
+                         index_);
     }
     // The ops over a resident frame, whole-column: an op with an eager form
     // runs it, any other runs its own cursor over the frame as one morsel.
@@ -827,6 +852,9 @@ class LazyFrame {
     // The EXPLAIN ANALYZE run this plan is a partner of (a join's or concat's
     // other side), or null; set only by the plan that holds it.
     dstd::SharedPtr<RunCounters> run_counters_;
+    // The index set by with_index and the op count it applies after; null
+    // when the plan only carries its source's index.
+    dstd::SharedPtr<const detail::IndexDecl> index_;
 };
 
 /// The two-step lazy group-by: a plan and its key columns, with the

@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
+#include <dftracer/utils/dataframe/internal/frame_index.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/kernels/running.h>
 #include <dftracer/utils/dataframe/ops/ops_common.h>
@@ -1655,10 +1656,10 @@ WindowColumn window_column(const dftu_window_spec& s) {
     return c;
 }
 
-dstd::Result<DataFrame> window(const DataFrame& df,
-                               dstd::Span<const dstd::String> partition_by,
-                               dstd::Span<const dstd::String> order_by,
-                               dstd::Span<const WindowColumn> specs) {
+static dstd::Result<DataFrame> window_raw(
+    const DataFrame& df, dstd::Span<const dstd::String> partition_by,
+    dstd::Span<const dstd::String> order_by,
+    dstd::Span<const WindowColumn> specs) {
     dstd::Result<dstd::Vector<ColumnReader>> part_views =
         ops::views_of(df, partition_by, "window");
     if (!part_views) return part_views.error();
@@ -1833,4 +1834,12 @@ dstd::Result<DataFrame> window_checked(
     return window(df, *parts, *order, cols);
 }
 
+dstd::Result<DataFrame> window(const DataFrame& df,
+                               dstd::Span<const dstd::String> partition_by,
+                               dstd::Span<const dstd::String> order_by,
+                               dstd::Span<const WindowColumn> specs) {
+    dstd::Result<DataFrame> out = window_raw(df, partition_by, order_by, specs);
+    if (out) index_keep<"window">(df, *out);
+    return out;
+}
 }  // namespace dftracer::utils::dataframe

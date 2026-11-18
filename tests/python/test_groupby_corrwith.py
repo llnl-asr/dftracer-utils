@@ -43,7 +43,7 @@ def test_corrwith_a_frame_matches_pandas():
     for c in ("a", "b"):
         _close(got[c].to_list(), want[c].tolist())
     _close(got["s"].to_list(), want["s"].tolist())
-    assert got.columns == ["k", "a", "b", "s"]
+    assert got.columns == ["a", "b", "s"] and got.index_names() == ["k"]
 
 
 def test_corrwith_a_series_and_drop_match_pandas():
@@ -54,7 +54,7 @@ def test_corrwith_a_series_and_drop_match_pandas():
     for c in ("a", "b"):
         _close(got[c].to_list(), want[c].tolist())
     dropped = dft.DataFrame(DATA).groupby("k").corrwith(dft.DataFrame(OTHER), drop=True)
-    assert dropped.columns == ["k", "a", "b"]
+    assert dropped.columns == ["a", "b"] and dropped.index_names() == ["k"]
 
 
 def test_corrwith_errors():

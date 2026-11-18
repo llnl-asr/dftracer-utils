@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: MIT
+/* What each frame op does to the row index (DataFrame::index_names). One row
+ * per op named in exported_frame_ops.def. APPEND ONLY; the ctest
+ * dataframe/test_frame_index fails on an op row without a rule here.
+ *
+ *   DFTU_FRAME_INDEX_RULE(name, rule)
+ *     name - the op name in exported_frame_ops.def, without the prefix.
+ *     rule - Keep: the result carries the input's index names that are still
+ *                  columns of the result (a row op, a projection, a
+ *                  column-adding op: the label columns move with the rows).
+ *            Rebuild: the result is indexed by the columns the op names, and
+ *                  only when its input was indexed (an unindexed frame stays
+ *                  unindexed): group_by, group_by_dynamic and pivot the
+ *                  key / index / time column, rename the renamed index
+ *                  columns, join the left key names when both sides are
+ *                  indexed on exactly their join keys (else none), concat and
+ *                  union the shared index names when every input has the same
+ *                  ones (else none).
+ *            Drop: the result has no index (the result is a summary, a
+ *                  generated grid, a pair comparison, a positional column, a
+ *                  reshape to long form such as unpivot, as pandas melt gives
+ *                  a RangeIndex, or not a frame).
+ * The rules are applied in one place, frame_index.cpp, by the free functions
+ * of batch_ops.h and the window, gap_fill, asof and interval ops, which every
+ * surface (C++, C ABI, Python, the op registry) reaches.
+ */
+
+#ifndef DFTU_FRAME_INDEX_RULE
+#define DFTU_FRAME_INDEX_RULE(name, rule)
+#endif
+
+DFTU_FRAME_INDEX_RULE(drop_nulls, Keep)
+DFTU_FRAME_INDEX_RULE(unique, Keep)
+DFTU_FRAME_INDEX_RULE(drop_duplicates, Keep)
+DFTU_FRAME_INDEX_RULE(reverse, Keep)
+DFTU_FRAME_INDEX_RULE(describe, Drop)
+DFTU_FRAME_INDEX_RULE(null_count, Drop)
+DFTU_FRAME_INDEX_RULE(head, Keep)
+DFTU_FRAME_INDEX_RULE(tail, Keep)
+DFTU_FRAME_INDEX_RULE(slice, Keep)
+DFTU_FRAME_INDEX_RULE(fill_null, Keep)
+DFTU_FRAME_INDEX_RULE(filter, Keep)
+DFTU_FRAME_INDEX_RULE(with_row_index, Drop)
+DFTU_FRAME_INDEX_RULE(explode, Keep)
+DFTU_FRAME_INDEX_RULE(to_dummies, Keep)
+DFTU_FRAME_INDEX_RULE(sort_by, Keep)
+DFTU_FRAME_INDEX_RULE(select, Keep)
+DFTU_FRAME_INDEX_RULE(rename, Rebuild)
+DFTU_FRAME_INDEX_RULE(sort_by_multi, Keep)
+DFTU_FRAME_INDEX_RULE(sort_by_multi_per_col, Keep)
+DFTU_FRAME_INDEX_RULE(with_column, Keep)
+DFTU_FRAME_INDEX_RULE(unpivot, Drop)
+DFTU_FRAME_INDEX_RULE(topk, Keep)
+DFTU_FRAME_INDEX_RULE(pivot, Rebuild)
+DFTU_FRAME_INDEX_RULE(value_counts, Drop)
+DFTU_FRAME_INDEX_RULE(is_duplicated, Drop)
+DFTU_FRAME_INDEX_RULE(is_unique, Drop)
+DFTU_FRAME_INDEX_RULE(mask, Drop)
+DFTU_FRAME_INDEX_RULE(take, Keep)
+DFTU_FRAME_INDEX_RULE(sample, Keep)
+DFTU_FRAME_INDEX_RULE(group_by_dynamic, Rebuild)
+DFTU_FRAME_INDEX_RULE(group_by, Rebuild)
+DFTU_FRAME_INDEX_RULE(join, Rebuild)
+DFTU_FRAME_INDEX_RULE(concat, Rebuild)
+DFTU_FRAME_INDEX_RULE(union, Rebuild)
+DFTU_FRAME_INDEX_RULE(compare_agg, Drop)
+DFTU_FRAME_INDEX_RULE(unnest, Keep)
+DFTU_FRAME_INDEX_RULE(partition_id, Drop)
+DFTU_FRAME_INDEX_RULE(unique_by, Keep)
+DFTU_FRAME_INDEX_RULE(reduce, Drop)
+DFTU_FRAME_INDEX_RULE(group_transform, Keep)
+DFTU_FRAME_INDEX_RULE(column_op, Keep)
+DFTU_FRAME_INDEX_RULE(window, Keep)
+DFTU_FRAME_INDEX_RULE(gap_fill, Drop)
+DFTU_FRAME_INDEX_RULE(asof, Keep)
+DFTU_FRAME_INDEX_RULE(interval, Keep)
+
+#undef DFTU_FRAME_INDEX_RULE

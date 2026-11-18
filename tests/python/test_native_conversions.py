@@ -277,14 +277,15 @@ def test_from_pandas_index_becomes_columns():
     pd = pytest.importorskip("pandas")
     frame = pd.DataFrame({"a": [1, 2]}, index=pd.Index(["x", "y"], name="key"))
     out = dftu.DataFrame.from_pandas(frame)
-    assert out.columns == ["a", "key"] and out["key"].to_list() == ["x", "y"]
+    assert out.columns == ["a"] and out.index_names() == [
+        "key"
+    ]  # as pandas, the index is not a column
+    assert out["key"].to_list() == ["x", "y"] and sorted(out.schema) == ["a", "key"]
     assert dftu.DataFrame.from_pandas(pd.DataFrame({"a": [1]})).columns == ["a"]
     multi = pd.DataFrame({"a": [1]}, index=pd.MultiIndex.from_tuples([(1, "p")]))
-    assert dftu.DataFrame.from_pandas(multi).columns == [
-        "a",
-        "__index_level_0__",
-        "__index_level_1__",
-    ]
+    got = dftu.DataFrame.from_pandas(multi)
+    assert got.columns == ["a"]
+    assert got.index_names() == ["__index_level_0__", "__index_level_1__"]
 
 
 def test_from_pandas_equals_pyarrow():

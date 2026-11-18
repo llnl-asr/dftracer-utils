@@ -21,6 +21,7 @@
 #include <dftracer/utils/dataframe/internal/file_format_registry.h>
 #include <dftracer/utils/dataframe/internal/fingerprint.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
+#include <dftracer/utils/dataframe/internal/frame_index.h>
 #include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/internal/join_names.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
@@ -3148,7 +3149,18 @@ class LazyOp {
 
 namespace detail {
 
+// The row index a plan declared with with_index: `names` apply after the first
+// `op_count` ops.
+struct IndexDecl {
+    dstd::Vector<dstd::String> names;
+    std::size_t op_count = 0;
+};
+
 struct PlanAccess {
+    static const dstd::SharedPtr<const IndexDecl>& index_decl(
+        const LazyFrame& lf) {
+        return lf.index_;
+    }
     static const Source& source(const LazyFrame& lf) { return *lf.source_; }
     static const dstd::SharedPtr<const Source>& source_ptr(
         const LazyFrame& lf) {
@@ -3172,8 +3184,10 @@ struct PlanAccess {
     }
     static LazyFrame make(dstd::SharedPtr<const Source> source,
                           dstd::Vector<dstd::SharedPtr<const LazyOp>> ops,
-                          std::uint64_t memory_budget) {
-        return LazyFrame(std::move(source), std::move(ops), memory_budget);
+                          std::uint64_t memory_budget,
+                          dstd::SharedPtr<const IndexDecl> index = nullptr) {
+        return LazyFrame(std::move(source), std::move(ops), memory_budget,
+                         nullptr, std::move(index));
     }
     static LazyFrame failed(const LazyFrame& lf, dstd::Error error) {
         return lf.failed(std::move(error));
@@ -3388,6 +3402,154 @@ dstd::Vector<dstd::String> out_schema(const LazyOp& op,
                 return names;
             }},
         op.node);
+}
+
+using IndexList = dstd::Vector<dstd::String>;
+
+IndexList index_without(IndexList index, dstd::Span<const dstd::String> gone) {
+    index.erase(std::remove_if(index.begin(), index.end(),
+                               [&](dstd::StringView n) {
+                                   return std::find(gone.begin(), gone.end(),
+                                                    n) != gone.end();
+                               }),
+                index.end());
+    return index;
+}
+
+IndexList index_present(IndexList index,
+                        dstd::Span<const dstd::String> columns) {
+    if (columns.empty()) return index;
+    index.erase(std::remove_if(index.begin(), index.end(),
+                               [&](dstd::StringView n) {
+                                   return std::find(columns.begin(),
+                                                    columns.end(),
+                                                    n) == columns.end();
+                               }),
+                index.end());
+    return index;
+}
+
+IndexList plan_index(const LazyFrame& lf);
+
+// The index after `op` runs on a plan whose index is `index` and whose columns
+// are `in`: the rules of frame_op_index_rules.def, as the eager ops apply
+// them. `out` is the output columns (empty when only the run knows them).
+IndexList index_through(const LazyOp& op, IndexList index,
+                        dstd::Span<const dstd::String> in,
+                        dstd::Span<const dstd::String> out) {
+    const auto keys_only = [](dstd::Span<const dstd::String> keys) {
+        return IndexList(keys.begin(), keys.end());
+    };
+    return std::visit(
+        Overloaded{
+            [&](const FilterOp&) { return index; },
+            [&](const SliceOp&) { return index; },
+            [&](const TailOp&) { return index; },
+            [&](const DropNullsOp&) { return index; },
+            [&](const FillNullOp&) { return index; },
+            [&](const WithColumnOp&) { return index; },
+            [&](const ExplodeOp&) { return index; },
+            [&](const TopkOp&) { return index; },
+            [&](const SortByOp&) { return index; },
+            [&](const SortByMultiOp&) { return index; },
+            [&](const UniqueOp&) { return index; },
+            [&](const SampleOp&) { return index; },
+            [&](const HeadByOp&) { return index; },
+            [&](const ReverseOp&) { return index; },
+            [&](const TakeOp&) { return index; },
+            [&](const FilterMaskOp&) { return index; },
+            [&](const TapOp&) { return index; },
+            [&](const SelectOp& o) { return index_present(index, o.names); },
+            [&](const DropOp& o) { return index_without(index, o.names); },
+            [&](const ToDummiesOp& o) {
+                return index_without(
+                    index, dstd::Span<const dstd::String>(&o.column, 1));
+            },
+            [&](const UnnestOp& o) {
+                return index_without(
+                    index, dstd::Span<const dstd::String>(&o.column, 1));
+            },
+            [&](const RenameOp& o) {
+                IndexList renamed;
+                for (const dstd::String& n : index) {
+                    const auto at = std::find(in.begin(), in.end(), n);
+                    if (at != in.end() && static_cast<std::size_t>(
+                                              at - in.begin()) < o.names.size())
+                        renamed.push_back(
+                            o.names[static_cast<std::size_t>(at - in.begin())]);
+                }
+                return renamed;
+            },
+            [&](const RenameColumnsOp& o) {
+                for (dstd::String& n : index)
+                    for (std::size_t i = 0; i < o.from.size(); ++i)
+                        if (o.from[i] == n) {
+                            n = o.to[i];
+                            break;
+                        }
+                return index;
+            },
+            [&](const WithRowIndexOp&) { return IndexList{}; },
+            [&](const NullCountOp&) { return IndexList{}; },
+            [&](const IsDupOp&) { return IndexList{}; },
+            [&](const DescribeOp&) { return IndexList{}; },
+            [&](const UnpivotOp&) { return IndexList{}; },
+            [&](const GroupByOp& o) { return keys_only(o.keys); },
+            [&](const GroupByDynamicOp& o) {
+                return keys_only(
+                    dstd::Span<const dstd::String>(&o.time_col, 1));
+            },
+            [&](const PivotOp& o) {
+                return keys_only(dstd::Span<const dstd::String>(&o.index, 1));
+            },
+            [&](const JoinOp& o) {
+                const IndexList right = plan_index(o.other);
+                return index_join_keeps<dstd::String, dstd::String>(
+                           index, right, o.left_on, o.right_on)
+                           ? keys_only(o.left_on)
+                           : IndexList{};
+            },
+            [&](const ConcatOp& o) {
+                const IndexList other = plan_index(o.other);
+                return index_same<dstd::String, dstd::String>(index, other)
+                           ? index
+                           : IndexList{};
+            },
+            [&](const FrameOp& o) {
+                const dstd::Optional<IndexRule> rule = index_rule_of(o.name);
+                return rule && *rule == IndexRule::Keep
+                           ? index_present(index, o.out_names)
+                           : IndexList{};
+            },
+            [&](const NodeOp&) { return index_present(index, out); }},
+        op.node);
+}
+
+// The index the result of `lf` carries: its source frame's index run through
+// each op. An unindexed plan costs one check.
+IndexList plan_index(const LazyFrame& lf) {
+    using detail::PlanAccess;
+    IndexList index;
+    const Source& source = PlanAccess::source(lf);
+    const dstd::SharedPtr<const detail::IndexDecl>& decl =
+        PlanAccess::index_decl(lf);
+    const dstd::Span<const dstd::SharedString> from_source =
+        source.index_names();
+    if (from_source.empty() && !decl) return index;
+    for (const dstd::SharedString& n : from_source)
+        index.emplace_back(dstd::StringView(n));
+    dstd::Vector<dstd::String> names;
+    for (const Field& f : source.schema().fields) names.push_back(f.name);
+    const auto& ops = PlanAccess::ops(lf);
+    if (decl && decl->op_count == 0) index = decl->names;
+    for (std::size_t i = 0; i < ops.size(); ++i) {
+        dstd::Vector<dstd::String> next = out_schema(*ops[i], names);
+        index = index_through(*ops[i], std::move(index), names, next);
+        names = std::move(next);
+        if (decl && decl->op_count == i + 1) index = decl->names;
+        if (index.empty() && (!decl || decl->op_count <= i + 1)) break;
+    }
+    return index;
 }
 
 const Field* find_field(const Schema& s, dstd::StringView name) {
@@ -4673,6 +4835,10 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
 InMemorySource::InMemorySource(DataFrame frame)
     : frame_(dstd::make_shared<const DataFrame>(std::move(frame))) {}
 
+dstd::Span<const dstd::SharedString> InMemorySource::index_names() const {
+    return frame_->index_names();
+}
+
 Schema InMemorySource::schema() const {
     Schema s;
     s.fields.reserve(frame_->columns.size());
@@ -5522,7 +5688,8 @@ dstd::Optional<LazyFrame> native_group_transform(
     return detail::PlanAccess::with_error_of(
         detail::PlanAccess::make(detail::PlanAccess::source_ptr(plan),
                                  std::move(ops),
-                                 detail::PlanAccess::memory_budget(plan)),
+                                 detail::PlanAccess::memory_budget(plan),
+                                 detail::PlanAccess::index_decl(plan)),
         plan);
 }
 
@@ -5752,13 +5919,14 @@ dstd::String LazyFrame::explain() const {
 }
 
 LazyFrame LazyFrame::memory_budget(std::uint64_t bytes) const {
-    return LazyFrame(source_, ops_, bytes, error_);
+    return LazyFrame(source_, ops_, bytes, error_, index_);
 }
 
 LazyFrame LazyFrame::auto_spill() const {
     // Same policy as the default (0) and as View: ~1/3 of available
     // memory.
-    return LazyFrame(source_, ops_, memory::resolve_spill_budget(0), error_);
+    return LazyFrame(source_, ops_, memory::resolve_spill_budget(0), error_,
+                     index_);
 }
 
 dstd::Result<void> LazyFrame::status() const {
@@ -5766,15 +5934,43 @@ dstd::Result<void> LazyFrame::status() const {
     return {};
 }
 
+dstd::Vector<dstd::String> LazyFrame::index_names() const {
+    return plan_index(*this);
+}
+
+dstd::Result<LazyFrame> LazyFrame::with_index(
+    dstd::Vector<dstd::String> names) const {
+    const Schema schema = output_schema();
+    const bool complete = !has_undeclared_columns();
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        const Field* field = find_field(schema, names[i]);
+        if (!field && complete)
+            return not_found<"with_index: no column named {}">(names[i]);
+        for (std::size_t j = 0; j < i; ++j)
+            if (names[j] == names[i])
+                return invalid_argument<"with_index: column {} repeats">(
+                    names[i]);
+        if (field && (field->type.id == TypeId::List ||
+                      field->type.id == TypeId::Struct))
+            return invalid_argument<
+                "with_index: column {} has type {}, which has no hash and "
+                "equality">(names[i], type_name(field->type.id));
+    }
+    auto decl = dstd::make_shared<const detail::IndexDecl>(
+        detail::IndexDecl{std::move(names), ops_.size()});
+    return LazyFrame(source_, ops_, memory_budget_, error_, std::move(decl));
+}
+
 LazyFrame LazyFrame::failed(dstd::Error error) const {
     if (error_) return *this;
     return LazyFrame(source_, ops_, memory_budget_,
-                     dstd::make_shared<const dstd::Error>(std::move(error)));
+                     dstd::make_shared<const dstd::Error>(std::move(error)),
+                     index_);
 }
 
 LazyFrame LazyFrame::with_error_of(const LazyFrame& other) const {
     if (error_ || !other.error_) return *this;
-    return LazyFrame(source_, ops_, memory_budget_, other.error_);
+    return LazyFrame(source_, ops_, memory_budget_, other.error_, index_);
 }
 
 LazyFrame LazyFrame::op(dstd::String name, OpArgs args) const {
@@ -6568,6 +6764,7 @@ namespace {
 coro::CoroTask<dstd::Result<DataFrame>> collect_owned(LazyFrame plan,
                                                       std::uint64_t budget,
                                                       std::int64_t batch_size) {
+    const IndexList index = plan_index(plan);
     PlannedTree tree = plan_tree(plan);
     if (!tree.children.empty()) {
         dstd::Vector<PlannedTree*> leaves;
@@ -6579,7 +6776,9 @@ coro::CoroTask<dstd::Result<DataFrame>> collect_owned(LazyFrame plan,
     auto collecting =
         collect_plan(finish_tree(std::move(tree)), budget, batch_size,
                      detail::PlanAccess::run_counters(plan));
-    co_return co_await std::move(collecting);
+    auto collected = co_await std::move(collecting);
+    if (collected) apply_index_names(index, *collected);
+    co_return collected;
 }
 
 // A task that ends with `error`, for a terminal on a plan that failed to
@@ -6624,7 +6823,12 @@ coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_all(
         if (auto status = lf.status(); !status) co_return status.error();
     dstd::Vector<PlannedTree> trees;
     trees.reserve(plans.size());
-    for (const LazyFrame& lf : plans) trees.push_back(plan_tree(lf));
+    dstd::Vector<IndexList> indexes;
+    indexes.reserve(plans.size());
+    for (const LazyFrame& lf : plans) {
+        indexes.push_back(plan_index(lf));
+        trees.push_back(plan_tree(lf));
+    }
     dstd::Vector<PlannedTree*> leaves;
     dstd::Vector<PlannedTree*> roots;
     for (PlannedTree& t : trees) {
@@ -6648,9 +6852,10 @@ coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_all(
     auto results = co_await coro::when_all(std::move(runs));
     dstd::Vector<DataFrame> frames;
     frames.reserve(results.size());
-    for (auto& r : results) {
-        if (!r) co_return r.error();
-        frames.push_back(std::move(*r));
+    for (std::size_t i = 0; i < results.size(); ++i) {
+        if (!results[i]) co_return results[i].error();
+        apply_index_names(indexes[i], *results[i]);
+        frames.push_back(std::move(*results[i]));
     }
     co_return frames;
 }
@@ -6728,12 +6933,7 @@ coro::CoroTask<dstd::Result<AggStatePtr>> LazyFrame::collect_group_state(
 }
 
 LazyFrame DataFrame::lazy() const {
-    DataFrame shared;
-    shared.names = names;
-    shared.columns.reserve(columns.size());
-    for (const Series& c : columns) shared.columns.push_back(c.share());
-    return LazyFrame::scan(
-        dstd::make_shared<InMemorySource>(std::move(shared)));
+    return LazyFrame::scan(dstd::make_shared<InMemorySource>(share()));
 }
 
 LazyFrame lazy(DataFrame frame) {
@@ -6969,7 +7169,8 @@ LazyFrame tap(const LazyFrame& lf, dstd::SharedPtr<const Tap> tap) {
     ops.push_back(dstd::make_shared<LazyOp>(LazyOp{TapOp{std::move(tap)}}));
     return PlanAccess::with_error_of(
         PlanAccess::make(PlanAccess::source_ptr(lf), std::move(ops),
-                         PlanAccess::memory_budget(lf)),
+                         PlanAccess::memory_budget(lf),
+                         PlanAccess::index_decl(lf)),
         lf);
 }
 
@@ -6980,7 +7181,8 @@ LazyFrame fail_plan(const LazyFrame& lf, dstd::Error error) {
 LazyFrame rebase(const LazyFrame& lf, dstd::SharedPtr<const Source> source) {
     return PlanAccess::with_error_of(
         PlanAccess::make(std::move(source), PlanAccess::ops(lf),
-                         PlanAccess::memory_budget(lf)),
+                         PlanAccess::memory_budget(lf),
+                         PlanAccess::index_decl(lf)),
         lf);
 }
 

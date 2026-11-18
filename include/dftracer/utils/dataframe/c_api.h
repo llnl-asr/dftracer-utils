@@ -1410,6 +1410,46 @@ DFTU_EXPORT dftu_series* dftu_dataframe_column(const dftu_dataframe* df,
 DFTU_EXPORT const dftu_series* dftu_dataframe_column_at(
     const dftu_dataframe* df, int32_t i);
 
+/* The row index: the ordered columns that label the rows. The columns are
+ * ordinary columns of the frame; an empty index is the positional RangeIndex.
+ * A frame carries its index through the frame ops by the rules in
+ * frame_op_index_rules.def, and through Arrow as schema metadata. */
+
+/** Status codes of dftu_frame_with_index. */
+enum {
+    DFTU_FRAME_INDEX_OK = 0,
+    /** `frame`, `out`, or `names` or `lens` with `n` > 0 is NULL, or `n` is
+     * negative. */
+    DFTU_FRAME_INDEX_BAD_ARGUMENT = 1,
+    /** A name is no column of the frame. */
+    DFTU_FRAME_INDEX_NOT_FOUND = 2,
+    /** A name repeats, or names a column whose type has no hash and equality
+     * (list, struct). */
+    DFTU_FRAME_INDEX_INVALID = 3
+};
+
+/** The number of index columns of `frame`: 0 when it has no index or `frame`
+ * is NULL. */
+DFTU_EXPORT int32_t dftu_frame_index_count(const dftu_dataframe* frame);
+/** Index column `i` of `frame`: stores its name in `*ptr` (NUL-terminated, not
+ * owned) and its byte length in `*len` (`len` may be NULL). The text stays
+ * valid for the lifetime of `frame`, which is never modified. Returns 0, or -1
+ * and leaves `*ptr` and `*len` untouched when `frame` or `ptr` is NULL or `i`
+ * is out of range. */
+DFTU_EXPORT int32_t dftu_frame_index_name(const dftu_dataframe* frame,
+                                          int32_t i, const char** ptr,
+                                          size_t* len);
+/** A zero-copy copy of `frame` whose index is the `n` columns named by `names`
+ * (each `lens[i]` bytes, not necessarily NUL-terminated); `n` == 0 drops the
+ * index. On DFTU_FRAME_INDEX_OK stores an owned frame in `*out`, which the
+ * caller frees with dftu_dataframe_free; `frame` is not consumed and may be
+ * freed independently. On any other status `*out` is set to NULL (when `out` is
+ * not NULL) and nothing is allocated. */
+DFTU_EXPORT int32_t dftu_frame_with_index(const dftu_dataframe* frame,
+                                          const char* const* names,
+                                          const size_t* lens, int32_t n,
+                                          dftu_dataframe** out);
+
 /* Row ops (return a new frame). */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_take(const dftu_dataframe* df,
                                                 const int64_t* idx, int64_t n);

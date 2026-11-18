@@ -9,6 +9,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Give the `DataFrame` a native row index: `DataFrame::index_names()`, `with_index(names)` and `without_index()` (C++), `dftu_frame_index_count`, `dftu_frame_index_name` and `dftu_frame_with_index` (C ABI) and `index_names()` / `with_index(names)` on the Python `DataFrame` and `LazyFrame`.
+  The index is an ordered list of column names that the frame holds behind one pointer, so a frame with no index pays 8 bytes; the columns stay ordinary columns.
+  `frame_op_index_rules.def` gives every frame op a rule, and a ctest fails on an op without one: row ops, projections and column-adding ops keep the names whose columns survive, `rename`, `group_by`, `group_by_dynamic`, `pivot`, `join`, `concat` and `union` rebuild them (only for an indexed input), and `describe`, `reduce`, `with_row_index`, `unpivot` (as pandas `melt` gives a RangeIndex) and the summaries drop them.
+  A lazy plan applies the same rules, and `LazyFrame.set_index` declares the index on the plan.
+  Arrow IPC, the C Data Interface and the C Stream Interface carry the names in the schema metadata key `dftracer.utils.index`, and an Arrow schema with pandas metadata maps its `index_columns` to them.
+  Python `set_index`, `reset_index`, `index` and `index_levels` read and write the native field in place of the Python-only attribute, `to_pandas()` moves the index columns into the pandas index and `from_pandas` records a non-`RangeIndex`.
+  `select` of some of the index columns now keeps the remaining names, where the old attribute was dropped unless every index column survived.
+  A `DataFrame` with an index shows as pandas shows it: `columns`, `dtypes`, `shape`, `keys()`, `items()`, `to_numpy()`, `df[list]`, the reducers and the positions of `iloc` leave out the index columns, and the Polars names (`schema`, `select`, `filter`, `with_columns`, `group_by`, `col`) still see them; a frame with no index changes in nothing.
+  The pandas `groupby(...)` has `as_index` (default `True`): an aggregate result is indexed by the keys, as pandas does, even for a frame with no index; `as_index=False` and the Polars `group_by` keep the keys as columns.
+  The pandas-named `describe`, `drop_duplicates`, `dropna`, `fillna`, `to_dict`, `to_csv`, `to_string`, `to_markdown`, `to_html` and `drop(columns=...)` read only the visible columns and keep the index columns in step with the rows; `drop(columns=[index column])` raises `KeyError`, and `unique`, `drop_nulls`, `fill_null` and `drop("k")` still see every column.
+  `get_group` and a native frame's bytes carry the index too (the bytes only when there is one).
 - Add the Polars elementwise math methods `sin`, `cos`, `tan`, `cot`, `arcsin`, `arccos`, `arctan`, `sinh`, `cosh`, `tanh`, `arcsinh`, `arccosh`, `arctanh`, `cbrt`, `log10`, `erf` and `erfc` to `Series` and `Expr`, and the kernels `dftu_series_sin` to `dftu_series_erfc`.
   A Float32 column stays Float32 and every other numeric column gives Float64; a value outside the domain is NaN (`arcsin(2)`), `cot` is `1 / tan`, nulls stay null, and a Bool or text column is refused.
   `Expr.log10` is the `log10` kernel now, exact for a power of ten, where it was `log(x) / log(10)`.

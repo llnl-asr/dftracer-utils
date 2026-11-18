@@ -628,9 +628,12 @@ def test_matches_pandas(kind, method, letter, args, kwargs):
     if ours_err is not None:
         pytest.fail(f"[error] ours raised {type(ours_err).__name__}: {ours_err}")
     if kind == "groupby" and isinstance(theirs, (pd.Series, pd.DataFrame)):
-        # Ours has no row index: its group keys are columns, which is what
-        # pandas gives with as_index=False.
+        # Both sides are indexed by the group keys (as_index=True); compare
+        # the index names, then the keys as columns.
         if not isinstance(theirs.index, pd.RangeIndex):
+            if isinstance(ours, DataFrame):
+                assert ours.index_names() == [str(n) for n in theirs.index.names]
+                ours = ours.reset_index()
             theirs = theirs.reset_index()
     diff = compare(ours, theirs, norm_pandas(pd, theirs))
     assert diff is None, diff

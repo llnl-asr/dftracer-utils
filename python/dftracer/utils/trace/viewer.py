@@ -153,9 +153,6 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         out._runtime = self._runtime
         return out
 
-    def _finish(self, out: DataFrame) -> DataFrame:
-        return out
-
     def _schema_plan(self) -> LazyFrame:
         """The plan that :attr:`columns` and :attr:`schema` read, built once: a
         viewer never changes."""

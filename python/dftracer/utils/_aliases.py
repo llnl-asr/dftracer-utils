@@ -145,7 +145,15 @@ ADAPTERS = {
         "between",
     ),
     "Expr": ("between",),
-    "DataFrame": ("groupby", "sort_values", "nlargest", "nsmallest"),
+    "DataFrame": (
+        "groupby",
+        "sort_values",
+        "nlargest",
+        "nsmallest",
+        "dropna",
+        "fillna",
+        "drop_duplicates",
+    ),
     "LazyFrame": ("sort_values",),
 }
 

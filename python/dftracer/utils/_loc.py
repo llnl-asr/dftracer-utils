@@ -453,7 +453,7 @@ class ILoc:
             return Row({c: out[c][0] for c in cols})
         if one_col:
             return out[cols[0]]
-        return out.select(*cols) if ck is not None else out
+        return out.select(*cols, *df.index_names()) if ck is not None else out
 
     def __setitem__(self, key: object, value: object) -> None:
         df = self._df
@@ -484,7 +484,7 @@ class Loc:
         out = _apply_rows(df, rows)
         if one_col:
             return out[cols[0]]
-        return out.select(*cols) if ck is not None else out
+        return out.select(*cols, *df.index_names()) if ck is not None else out
 
     def __setitem__(self, key: object, value: object) -> None:
         df = self._df
@@ -641,6 +641,7 @@ def lazy_assign_rows(lf: LazyFrame, rows: Rows, columns: list[str], value: objec
             f"a lazy assignment takes a number or an expression, not {type(value).__name__}"
         )
     schema = lf.columns
+    index = lf.index_names()
     plan, mask = _lazy_mask_expr(lf, rows)
     fill: Expr = value if isinstance(value, Expr) else lit(value)
     for name in columns:
@@ -654,6 +655,8 @@ def lazy_assign_rows(lf: LazyFrame, rows: Rows, columns: list[str], value: objec
         )
     if plan.columns != schema:
         plan = plan.select(*schema)
+    # The positional steps above add a row index column, which has no index.
+    plan = _ext.LazyFrame.with_index(plan, index)
     _ext.LazyFrame._replace(lf, plan)
 
 

@@ -282,7 +282,7 @@ FRAME_CASES: Dict[str, Tuple[Callable, Callable]] = {
         lambda f: f[["a", "b"]].aggregate("sum").to_frame().T,
     ),
     "groupby": (
-        lambda f: f.select("k", "a").groupby("k").sum(),
+        lambda f: f.select("k", "a").groupby("k").sum().reset_index(),
         lambda f: f[["k", "a"]].groupby("k").sum().reset_index(),
     ),
     "backfill": (lambda f: f.select("a", "b").backfill(), lambda f: f[["a", "b"]].bfill()),
@@ -397,10 +397,10 @@ def test_an_expr_alias_gives_what_pandas_gives_for_the_pandas_keywords(alias):
 def test_the_groupby_aliases_give_what_pandas_gives(cls):
     ours = _ours().groupby("k")
     theirs = _pdf().groupby("k")
-    got = _frame_dict(ours.aggregate("sum"))
+    got = _frame_dict(ours.aggregate("sum").reset_index())
     want = _frame_dict(theirs.aggregate("sum").reset_index())
     assert _sorted_dict(got, "k") == _sorted_dict(want, "k")
-    got = _frame_dict(ours.product())
+    got = _frame_dict(ours.product().reset_index())
     want = _frame_dict(theirs.prod().reset_index())
     assert _sorted_dict(got, "k") == _sorted_dict(want, "k")
 

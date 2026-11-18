@@ -200,9 +200,7 @@ frame.pct_change#1[N] | keyword | [error] ours raised TypeError: _FramePandasMix
 frame.rank#1[N] | semantics | [values] a: [1.0, None, 4.0, 2.5, 2.5] vs [1.0, nan, 4.0, 2.5, 2.5]
 frame.rank#2[N] | semantics | [values] a: [4.0, None, 1.0, 2.0, 2.0] vs [4.0, nan, 1.0, 2.0, 2.0]
 frame.dropna#2[M] | needs-index | [index] the library result has row labels
-frame.dropna#3[M] | needs-index | [error] ours raised TypeError: DataFrame.drop_nulls() got an unexpected keyword argument 'how'
 frame.dropna#4[M] | needs-index | [error] ours raised TypeError: DataFrame.drop_nulls() got an unexpected keyword argument 'subset'
-frame.dropna#5[M] | needs-index | [error] ours raised TypeError: DataFrame.drop_nulls() got an unexpected keyword argument 'axis'
 frame.mask#1[N] | semantics | [values] a: [-1, None, -1, 2, -1] vs [-1, -1, -1, 2, -1]
 frame.astype#1[N] | semantics | [values] a: [1.0, None, 3.0, 2.0, 2.0] vs [1.0, nan, 3.0, 2.0, 2.0]
 frame.astype#2[N] | semantics | [values] a: [1.0, None, 3.0, 2.0, 2.0] vs [1.0, nan, 3.0, 2.0, 2.0]

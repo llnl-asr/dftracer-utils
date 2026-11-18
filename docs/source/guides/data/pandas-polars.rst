@@ -169,12 +169,62 @@ Removed: ``ColumnExpr`` and ``Field`` (use ``Expr`` and ``col``),
 The index is a named column
 -----------------------------
 
-There is no separate index object. ``set_index("ts")`` records the column
-name; the column stays a column, ``reset_index`` forgets the name. ``loc``
-therefore filters by the value of that column, ``iloc`` by position, and
-``set_index`` over several columns records them all (``loc[(a, b)]`` filters
-on both). Slicing follows pandas: ``iloc[1:3]`` is two rows, ``loc[1:3]`` is
-inclusive.
+A frame holds its row index as a list of column names, ``index_names()``, next
+to its columns. ``set_index("ts")`` records the column name; the column stays a
+column, ``reset_index`` forgets the name. ``loc`` therefore filters by the value
+of that column, ``iloc`` by position, and ``set_index`` over several columns
+records them all (``loc[(a, b)]`` filters on both). A frame with no index is the
+positional ``RangeIndex``: nothing is stored. Slicing follows pandas:
+``iloc[1:3]`` is two rows, ``loc[1:3]`` is inclusive.
+
+The names travel with the frame. Every frame op has one rule, in
+``frame_op_index_rules.def``: a row filter, sort, slice, ``take``, ``head``,
+``unique``, ``select``, ``with_columns`` and ``explode`` keep the names whose
+columns are still there; ``rename`` follows the renamed columns; ``group_by``,
+``group_by_dynamic`` and ``pivot`` index the result by their key,
+time columns when the input was indexed; ``join`` keeps the left key names
+when both sides are indexed on exactly their join keys, and ``concat`` and
+``union`` the shared names when every input has the same ones; ``describe``,
+``reduce``, ``with_row_index``, ``unpivot`` (pandas ``melt`` gives a
+``RangeIndex``) and the like give no index. A lazy plan applies
+the same rules, so ``collect()`` has the index the eager op gives. An unindexed
+frame stays unindexed under every rule.
+
+``select`` keeps the index names whose columns it keeps: ``select("k", "v")`` on
+a frame indexed by ``k`` and ``j`` keeps ``k`` as the index and drops ``j`` from
+the names. The index follows the rule of each op, never "all or nothing".
+
+The pandas names show a frame with an index as pandas does. ``columns``,
+``dtypes``, ``shape``, ``keys()``, ``items()``, ``to_numpy()``, ``df[list]`` and
+the reducers (``sum``, ``mean``, ...) leave out the index columns, ``loc`` and
+``iloc`` count positions without them, and ``df[["k"]]`` on an index column is a
+``KeyError``. The Polars names see every column: ``schema``, ``width``,
+``select``, ``filter``, ``with_columns``, ``group_by``, ``col("k")`` and
+``df["k"]`` still name an index column, because the column is still there. A
+frame with no index lists every column, as before. ``df["k"]`` and ``"k" in
+df`` still see an index column, because the Polars names need it. A ``LazyFrame`` lists every
+column of its plan in ``columns``; its ``collect()`` result follows these rules.
+
+The pandas names that read data columns skip the index columns and keep them
+in step with the rows: ``describe``, ``drop_duplicates``, ``dropna``,
+``fillna``, ``to_dict``, ``to_csv`` (which writes the index when there is one),
+and ``drop(columns=[...])``, which raises ``KeyError`` for an index column. The
+Polars names ``unique``, ``drop_nulls``, ``fill_null`` and ``drop("k")`` see all
+columns. The pandas ``groupby(...)`` has ``as_index`` (default ``True``): an
+aggregate result is indexed by the keys, as in pandas, even when the frame had
+no index; ``groupby(..., as_index=False)`` and the Polars ``group_by`` keep the
+keys as columns.
+
+The index crosses the formats. ``to_pandas()`` moves the index columns into the
+pandas index (a ``MultiIndex`` for several; a level that ``from_pandas`` named
+``__index_level_<i>__`` is unnamed again), and ``from_pandas`` records a
+non-``RangeIndex`` as ``index_names``. Arrow IPC, the C Data Interface and the
+C Stream Interface carry the names in the schema metadata key
+``dftracer.utils.index`` (a JSON array), and an Arrow schema with pandas
+metadata maps its ``index_columns`` to the names (a ``RangeIndex`` is none). The
+C ABI reads them with ``dftu_frame_index_count`` and ``dftu_frame_index_name``
+and sets them with ``dftu_frame_with_index``. A list or struct column cannot be
+an index.
 
 .. code-block:: python
 
@@ -188,9 +238,8 @@ Assignment through ``loc`` / ``iloc`` / ``at`` / ``iat`` is copy-on-write:
 the name is rebound to a new frame, the old one is untouched, so a frame
 another variable holds never changes under it.
 
-Not there, on purpose: label alignment in arithmetic (``df + other`` is
-positional) and a ``MultiIndex`` type. Both would put an index object
-between the user and the columns.
+Not there yet: label alignment in arithmetic (``df + other`` is positional) and
+a ``MultiIndex`` type; a ``Series`` carries no index of its own.
 
 Several columns can be assigned at once from a frame or a list of Series. The
 targets and the value's columns pair by position (the value's own names are

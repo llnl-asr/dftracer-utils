@@ -77,16 +77,27 @@ class GroupBy:
         )
         out._single = picked[0] if len(picked) == 1 else None
         out._sort = self._sort
+        out._as_index = self._as_index
+        out._origin = self._origin
         out._rows = self._rows
         return out
 
     _single: Optional[str] = None
     _rows: Optional[Series] = None
     _sort: bool = False
+    _as_index: Optional[bool] = None
+    _origin: Optional[DataFrame] = None
 
     def _sorted(self, out: DataFrame) -> DataFrame:
         if self._sort and self._keys:
-            return out.sort_by_multi(self._keys)
+            out = out.sort_by_multi(self._keys)
+        if self._as_index is None or not self._keys:
+            return out
+        if self._as_index:
+            if all(k in out for k in self._keys):
+                out = out.set_index(self._keys)
+        elif out.index_names():
+            out = out.reset_index()
         return out
 
     def agg(self, *specs: AggForm, **named: AggKeyword) -> DataFrame:
@@ -186,9 +197,43 @@ class GroupBy:
     def _transform(
         self, kind: str, n: int = 0, method: str = "average", ascending: bool = True
     ) -> DataFrame:
-        return _ext.DataFrame._group_transform(
-            self._batch, self._keys, kind, int(n), method, bool(ascending)
+        if self._origin is None:
+            return _ext.DataFrame._group_transform(
+                self._batch, self._keys, kind, int(n), method, bool(ascending)
+            )
+        # The engine's row positions ride along as a column, so the rows that
+        # survive (head, tail, nth) get their own index labels back.
+        pos = "__dftu_pos__"
+        out = _ext.DataFrame._group_transform(
+            _ext.DataFrame.with_row_index(self._batch, pos),
+            self._keys,
+            kind,
+            int(n),
+            method,
+            bool(ascending),
         )
+        positions = self._col(out, pos) if kind in ("head", "tail", "nth") else None
+        out = _ext.DataFrame.select(out, *[c for c in out._names() if c != pos])
+        return self._labelled(out, positions)
+
+    def _labelled(self, out: DataFrame, positions: Series | Sequence[int] | None) -> DataFrame:
+        """``out`` with the index the grouped frame had: its index columns,
+        taken at ``positions`` (rows of the grouped frame, or all its rows in
+        order when ``None``), come back as the index, as pandas keeps the
+        labels of the rows a group method returns."""
+        origin = self._origin
+        if origin is None:
+            return out
+        rows: Series | Sequence[int] | None = positions
+        if self._rows is not None:
+            rows = self._rows if positions is None else self._rows.take(positions)
+        names = _ext.DataFrame.index_names(origin)
+        for name in names:
+            column = _ext.DataFrame.__getitem__(origin, name)
+            out = _ext.DataFrame.with_column(
+                out, name, column if rows is None else column.take(rows)
+            )
+        return _ext.DataFrame.with_index(out, names)
 
     def cumsum(self) -> DataFrame:
         return self._transform("cumsum")
@@ -326,7 +371,7 @@ class GroupBy:
             raise NotImplementedError(f"{name}: keep={keep!r}; only 'first'")
         frame = self._frame()
         label = "index"
-        if label in frame.columns:
+        if label in frame._names():
             raise ValueError(f"{name}: a column is already named {label!r}")
         frame = frame.with_row_index(label)
         if n <= 0:
@@ -417,7 +462,7 @@ class GroupBy:
                 "rows pair by position"
             )
         value_cols = self._value_columns()
-        names = [c for c in frame.columns if c not in self._keys]
+        names = [c for c in frame._names() if c not in self._keys]
         if numeric_only:
             names = [c for c in names if c in value_cols]
         if isinstance(other, Series):
@@ -489,7 +534,8 @@ class GroupBy:
         if not picked:
             return frame.head(0)
         out = picked[0].concat(*picked[1:]) if len(picked) > 1 else picked[0]
-        return out.unique(row).sort_by(row).select(*frame.columns)
+        out = out.unique(row).sort_by(row)
+        return self._labelled(out.select(*frame._names()), self._col(out, row))
 
     def sample(self, n: int, seed: int = 0, *, random_state: int | None = None) -> DataFrame:
         """A deterministic sample of ``n`` rows per group (fewer for a smaller
@@ -504,7 +550,8 @@ class GroupBy:
         hashed = indexed.with_column(key, (Col(row) + int(seed)).mix64().apply(indexed))
         ordered = hashed.sort_by_multi(self._keys + [key])
         picked = GroupBy(ordered, self._keys).head(int(n))
-        return picked.sort_by(row).select(*frame.columns)
+        picked = picked.sort_by(row)
+        return self._labelled(picked.select(*frame._names()), self._col(picked, row))
 
     def resample(self, rule: int | str, on: str | None = None, unit: str = "us") -> GroupResample:
         """Tumbling time windows of ``rule`` within each group (pandas
@@ -513,7 +560,7 @@ class GroupBy:
         (``.sum()``, ``.agg(...)``, ``.size()``, ...) is one ``group_by`` over
         keys + bucket, rows by key then time."""
         frame = self._frame()
-        time = on if on is not None else single_index(frame._index, "resample")
+        time = on if on is not None else single_index(frame.index_names(), "resample")
         if time not in frame:
             raise KeyError(f"resample: no column named {time!r}")
         if time in self._keys:
@@ -546,7 +593,7 @@ class GroupBy:
             raise ValueError("get_group: the group-by has no keys")
         out = self._frame().set_index(self._keys).loc[key, :]
         assert isinstance(out, DataFrame)
-        return out
+        return out.reset_index()
 
     @property
     def groups(self) -> dict[GroupKey, list[int]]:
@@ -557,7 +604,7 @@ class GroupBy:
         if len(frame) == 0:
             return {}
         row = "_row"
-        while row in frame.columns:
+        while row in frame._names():
             row = "_" + row
         marked = (
             frame.with_row_index(row) if self._rows is None else frame.with_column(row, self._rows)
@@ -589,7 +636,7 @@ class GroupBy:
         group-by over the keys plus the column, then a count per key."""
         frame = self._frame()
         out: DataFrame | None = None
-        for c in [n for n in frame.columns if n not in self._keys]:
+        for c in [n for n in frame._names() if n not in self._keys]:
             present = frame.filter(self._col(frame, c).notna())
             pairs = GroupBy(present, self._keys + [c]).size()
             counts = GroupBy(pairs, self._keys).agg(Agg("count", None, c))
@@ -639,8 +686,8 @@ class GroupBy:
     def _arg(self, op: str) -> DataFrame:
         frame = self._frame()
         label = "__dftu_pos__"
-        index = getattr(frame, "_index", None)
-        if index is not None and len(index) == 1:
+        index = frame.index_names()
+        if len(index) == 1:
             label = index[0]
         else:
             frame = frame.with_row_index(label)
@@ -697,13 +744,14 @@ class GroupBy:
         """Distinct rows of the non-key columns within each group with their
         count, most frequent first."""
         frame = self._frame()
-        cols = [c for c in frame.columns if c not in self._keys]
+        cols = [c for c in frame._names() if c not in self._keys]
         for c in cols:  # pandas drops a row with a null value (dropna=True)
             frame = frame.filter(self._col(frame, c).notna())
         out = GroupBy(frame, self._keys + cols).size().rename({"size": "count"})
-        return out.sort_values(
+        out = out.sort_values(
             self._keys + ["count"], ascending=[True] * len(self._keys) + [ascending]
         )
+        return out.set_index(self._keys + cols) if self._as_index else out
 
     def transform(self, func: str) -> DataFrame:
         """A group aggregate (``"mean"``, ``"sum"``, ...) broadcast back to
@@ -723,11 +771,11 @@ class GroupBy:
                 assert isinstance(v, (int, float))
                 broadcast = self._col(frame, c).full_like(v)
                 out = out.with_column(c, broadcast)
-            return out.select(*cols)
+            return self._labelled(out.select(*cols), None)
         joined = indexed.join(grouped, on=self._keys).sort_values(row)
         for c in cols:
             joined = joined.with_column(c, self._col(joined, f"__dftu_t_{c}__"))
-        return joined.select(*cols)
+        return self._labelled(joined.select(*cols), self._col(joined, row))
 
     # -- user functions: traced into the engine, else run per group -----------
     def apply(self, func: Callable[[DataFrame], object]) -> DataFrame | Series:
@@ -739,7 +787,7 @@ class GroupBy:
         input order). A body the trace cannot follow runs in Python per group
         with a warning: a scalar result per group gives the keys + ``value``
         frame, a Series or frame result the concatenation."""
-        traced = trace_group(func, self._frame().columns)
+        traced = trace_group(func, self._frame()._names())
         if traced is not None:
             return self._lower_apply(traced)
         return self._apply_python(func)
@@ -749,7 +797,7 @@ class GroupBy:
         ``GroupBy.filter``): ``lambda g: g["v"].sum() > 10`` lowers to one
         group-by and a join; a body the trace cannot follow runs in Python per
         group with a warning. Rows come back in input order."""
-        traced = trace_group(func, self._frame().columns, "GroupBy.filter")
+        traced = trace_group(func, self._frame()._names(), "GroupBy.filter")
         if traced is not None:
             return self._lower_filter(traced)
         return self._filter_python(func)
@@ -802,11 +850,11 @@ class GroupBy:
         grouped, rewritten = self._group_values(traced)
         keep = grouped.filter(rewritten.apply(grouped))
         if not self._keys:
-            return frame if len(keep) else frame.head(0)
+            return self._labelled(frame if len(keep) else frame.head(0), None if len(keep) else [])
         row = "__dftu_row__"
         indexed = frame.with_row_index(row)
         out = indexed.join(keep.select(*self._keys), on=self._keys).sort_values(row)
-        return out.select(*frame.columns)
+        return self._labelled(out.select(*frame._names()), self._col(out, row))
 
     def _groups_in_order(self) -> list[tuple[object, list[int]]]:
         return list(self.groups.items())
@@ -815,7 +863,7 @@ class GroupBy:
         frame = self._frame()
         results: list[tuple[object, object]] = []
         for label, rows in self._groups_in_order():
-            results.append((label, func(frame.take(rows))))
+            results.append((label, func(self._labelled(frame.take(rows), rows))))
         if not results:
             return frame.head(0)
         first = results[0][1]
@@ -845,7 +893,8 @@ class GroupBy:
         for _, rows in self._groups_in_order():
             if func(frame.take(rows)):
                 keep.extend(rows)
-        return frame.take(sorted(keep))
+        kept = sorted(keep)
+        return self._labelled(frame.take(kept), kept)
 
 
 class GroupRolling:
@@ -971,10 +1020,9 @@ class GroupResample:
 
         def call(*args: object, **kwargs: object) -> object:
             out = attr(*args, **kwargs)
-            names = out.columns if hasattr(out, "columns") else None
+            names = out._names() if isinstance(out, DataFrame) else getattr(out, "columns", None)
             if names is not None and all(c in names for c in self._order):
-                out = out.sort_by_multi(self._order)
-                out._index = list(self._order)
+                out = out.sort_by_multi(self._order).set_index(list(self._order))
             return out
 
         return call

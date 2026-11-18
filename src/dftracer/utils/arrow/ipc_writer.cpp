@@ -36,6 +36,9 @@ using dataframe::Series;
 DataFrame as_written(const DataFrame& frame) {
     DataFrame out;
     out.names = frame.names;
+    if (frame.row_index)
+        out.row_index = dstd::make_unique<dstd::Vector<dstd::SharedString>>(
+            *frame.row_index);
     out.columns.reserve(frame.columns.size());
     for (const Series& col : frame.columns)
         out.columns.push_back(col.is_flat() ? col.share() : col.materialize());

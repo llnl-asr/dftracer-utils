@@ -127,6 +127,21 @@ TEST_SUITE("native frame") {
         CHECK(b->names == empty.names);
     }
 
+    TEST_CASE("the row index round-trips") {
+        const DataFrame f = sample();
+        const dstd::StringView index[] = {"s", "i"};
+        auto indexed = f.with_index(index);
+        REQUIRE(indexed);
+        const dstd::String bytes = bytes_of(*indexed);
+        const auto back = frame_from_native(bytes);
+        REQUIRE(back);
+        REQUIRE(back->index_names().size() == 2);
+        CHECK(dstd::StringView(back->index_names()[0]) == "s");
+        CHECK(dstd::StringView(back->index_names()[1]) == "i");
+        CHECK(bytes_of(*back) == bytes);
+        CHECK(frame_from_native(bytes_of(f))->index_names().empty());
+    }
+
     TEST_CASE("a slice writes its own rows") {
         const DataFrame f = sample();
         DataFrame cut;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/internal/frame_index.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
@@ -150,11 +151,7 @@ GroupBy DataFrame::group_by(dstd::Vector<dstd::String> keys) const {
 }
 
 GroupBy::GroupBy(const DataFrame& frame, dstd::Vector<dstd::String> keys)
-    : keys_(std::move(keys)) {
-    frame_.names = frame.names;
-    frame_.columns.reserve(frame.columns.size());
-    for (const Series& c : frame.columns) frame_.columns.push_back(c.share());
-}
+    : frame_(frame.share()), keys_(std::move(keys)) {}
 
 dstd::Result<DataFrame> GroupBy::agg(dstd::Span<const GroupAgg> aggs) const {
     return dataframe::group_by(frame_, keys_, aggs);
@@ -184,7 +181,12 @@ dstd::Result<DataFrame> DataFrame::group_by(
     dstd::Vector<const Series*> inputs;
     inputs.reserve(columns.size());
     for (const Series& c : columns) inputs.push_back(&c);
-    return group_agg_expr(key, aggs, inputs, key_name);
+    dstd::Result<DataFrame> out = group_agg_expr(key, aggs, inputs, key_name);
+    if (out) {
+        index_keys<"group_by">(
+            *this, dstd::Span<const dstd::String>(&key_name, 1), *out);
+    }
+    return out;
 }
 
 dstd::Result<DataFrame> DataFrame::group_by(
@@ -202,7 +204,9 @@ dstd::Result<DataFrame> DataFrame::group_by(
     dstd::Vector<const Series*> inputs;
     inputs.reserve(columns.size());
     for (const Series& c : columns) inputs.push_back(&c);
-    return group_agg_expr(keys, aggs, inputs, key_names);
+    dstd::Result<DataFrame> out = group_agg_expr(keys, aggs, inputs, key_names);
+    if (out) index_keys<"group_by">(*this, key_names, *out);
+    return out;
 }
 
 dstd::Result<DataFrame> DataFrame::join(const DataFrame& other,

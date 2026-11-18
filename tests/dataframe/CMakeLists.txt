@@ -20,7 +20,7 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_series_math_bitwis
                            test_morsel_ordering.cpp
                            test_order.cpp test_sort_nulls.cpp test_frame_window.cpp test_output_morsels.cpp
                            test_frame_gap_fill.cpp test_frame_asof.cpp test_lazy_asof_interval.cpp
-                           test_frame_ops.cpp test_reduce_types.cpp
+                           test_frame_ops.cpp test_frame_index.cpp test_reduce_types.cpp
                            test_count_nulls.cpp test_set_union.cpp test_cast_pairs.cpp
                            test_filter_columns.cpp test_rank_pct.cpp test_rank_nan.cpp test_cut_flags.cpp test_fillna_bool_string.cpp test_cast_followups.cpp
                            test_where_null.cpp test_constant_column.cpp

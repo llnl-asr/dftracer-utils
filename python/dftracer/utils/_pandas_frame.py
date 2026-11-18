@@ -15,7 +15,6 @@ from typing import (
     List,
     Literal,
     Mapping,
-    Optional,
     Sequence,
     TypeVar,
     Union,
@@ -68,7 +67,6 @@ class FramePandasMixin(_ext.DataFrame):
     __slots__ = ()
 
     columns: List[str]
-    _index: Optional[List[str]]
 
     def _frame(self) -> DataFrame:
         from .dataframe import DataFrame
@@ -86,14 +84,11 @@ class FramePandasMixin(_ext.DataFrame):
         out: DataFrame = self._frame()
         names = self.columns if keep_others else [c for c in self.columns if c in columns]
         if not keep_others:
-            out = _ext.DataFrame.select(out, *names)
+            out = _ext.DataFrame.select(out, *names, *_ext.DataFrame.index_names(self))
         for name in names:
             if name in columns:
                 out = _ext.DataFrame.with_column(out, name, columns[name])
-        frame = _ext.DataFrame.share(out) if out is self else out
-        if self._index is not None and all(n in frame for n in self._index):
-            frame._index = self._index
-        return frame
+        return _ext.DataFrame.share(out) if out is self else out
 
     def _map_columns(
         self, fn: Callable[[Series], Series], numeric_only: bool = True, keep_others: bool = True
@@ -459,7 +454,8 @@ class FramePandasMixin(_ext.DataFrame):
         return self._positions(lambda s: s.idxmin())
 
     def _positions(self, fn: Callable[[Series], int]) -> DataFrame:
-        labels = self._index[0] if self._index is not None and len(self._index) == 1 else None
+        names = self.index_names()
+        labels = names[0] if len(names) == 1 else None
         index = self._col(labels) if labels else None
 
         def one(s: Series) -> object:
@@ -574,9 +570,7 @@ class FramePandasMixin(_ext.DataFrame):
 
     def copy(self, deep: bool = True) -> Self:
         """A new handle on the same immutable columns (nothing is copied)."""
-        out = _ext.DataFrame.share(self)
-        out._index = self._index
-        return out
+        return _ext.DataFrame.share(self)
 
     def convert_dtypes(
         self,
@@ -632,8 +626,9 @@ class FramePandasMixin(_ext.DataFrame):
 
         cols = {c: self._col(c).to_list() for c in self.columns}
         labels: Sequence[object] = list(range(len(self._frame())))
-        if self._index is not None and len(self._index) == 1:
-            labels = column_series(self._frame(), self._index[0]).to_list()
+        names = self.index_names()
+        if len(names) == 1:
+            labels = column_series(self._frame(), names[0]).to_list()
         for i in range(len(self._frame())):
             yield labels[i], Row({c: cols[c][i] for c in self.columns})
 
@@ -645,8 +640,9 @@ class FramePandasMixin(_ext.DataFrame):
         fields = (["Index"] if index else []) + list(self.columns)
         cols = {c: self._col(c).to_list() for c in self.columns}
         labels: Sequence[object] = list(range(len(self._frame())))
-        if index and self._index is not None and len(self._index) == 1:
-            labels = self._col(self._index[0]).to_list()
+        names = self.index_names()
+        if index and len(names) == 1:
+            labels = self._col(names[0]).to_list()
         make_tuple: Callable[..., Callable[..., tuple[Scalar, ...]]] = namedtuple
         Tup = make_tuple(name or "Row", fields, rename=True)
         for i in range(len(self._frame())):
@@ -660,7 +656,7 @@ class FramePandasMixin(_ext.DataFrame):
         """Remove ``name`` from this handle and return it."""
         out = self._col(name)
         _ext.DataFrame._replace(
-            self, _ext.DataFrame.select(self, *[c for c in self.columns if c != name])
+            self, _ext.DataFrame.select(self, *[c for c in self._frame()._names() if c != name])
         )
         return out
 
@@ -671,7 +667,7 @@ class FramePandasMixin(_ext.DataFrame):
         from ._loc import Rows, assign_rows
 
         assign_rows(self._frame(), Rows.all(), [column], value)
-        order = [c for c in self.columns if c != column]
+        order = [c for c in self._frame()._names() if c != column]
         order.insert(loc, column)
         _ext.DataFrame._replace(self, _ext.DataFrame.select(self, *order))
 
@@ -726,14 +722,15 @@ class FramePandasMixin(_ext.DataFrame):
         name instead, ascending unless ``ascending=False``; the values of every
         column are unchanged and any index columns stay first."""
         if axis in (1, "columns"):
-            keys = list(self._index or ())
+            keys = list(self.index_names())
             rest = sorted((c for c in self.columns if c not in keys), reverse=not ascending)
             return self._frame().select(*keys, *rest)
         if axis not in (0, "index"):
             raise ValueError(f"sort_index: axis must be 0/'index' or 1/'columns', got {axis!r}")
-        if self._index is None:
+        keys = list(self.index_names())
+        if not keys:
             return self._frame() if ascending else self._frame().reverse()
-        return self._frame().sort_values(list(self._index), ascending=ascending)
+        return self._frame().sort_values(keys, ascending=ascending)
 
     def first_valid_index(self) -> object | None:
         """The label of the first row with any present value (``None`` when
@@ -892,10 +889,8 @@ class FramePandasMixin(_ext.DataFrame):
         ``rename_axis``); needs ``set_index`` first."""
         from .dataframe import single_index
 
-        current = single_index(self._index, "rename_axis")
-        out = self._frame().rename({current: name})
-        out._index = [name]
-        return out
+        current = single_index(self.index_names(), "rename_axis")
+        return self._frame().rename({current: name})
 
     def kurtosis(self, fisher: bool = True, bias: bool = True) -> DataFrame:
         """The polars ``kurtosis`` of every numeric column, one row (see
@@ -966,7 +961,7 @@ class FramePandasMixin(_ext.DataFrame):
     def _time_column(self, on: str | None, op: str) -> tuple[str, Series]:
         from .dataframe import single_index
 
-        name = on if on is not None else single_index(self._index, op)
+        name = on if on is not None else single_index(self.index_names(), op)
         if name not in self._frame():
             raise KeyError(f"{op}: no column named {name!r}")
         return name, self._col(name)
@@ -1083,32 +1078,41 @@ class FramePandasMixin(_ext.DataFrame):
             for c in others:
                 if is_numeric_series(self._col_of(out, c)):
                     out = out.with_column(c, self._col_of(out, c).fillna(fill_value))
-        return frame._like(_ext.DataFrame.select(out, *frame.columns))
+        return _ext.DataFrame.with_index(
+            _ext.DataFrame.select(out, *frame._names()), frame.index_names()
+        )
 
     @staticmethod
     def _col_of(frame: DataFrame, name: str) -> Series:
         return column_series(frame, name)
 
     # -- exports through pandas / pyarrow -----------------------------------------
-    def to_csv(self, path: str | None = None, index: bool = False, **kwargs: object) -> str | None:
+    def _writes_index(self, index: bool | None) -> bool:
+        """Whether a text export writes the row index: as asked, else when the
+        frame has one (a frame with no index writes none)."""
+        return bool(_ext.DataFrame.index_names(self)) if index is None else index
+
+    def to_csv(
+        self, path: str | None = None, index: bool | None = None, **kwargs: object
+    ) -> str | None:
         to_csv = cast("Callable[..., str | None]", self._frame().to_pandas().to_csv)
-        return to_csv(path, index=index, **kwargs)
+        return to_csv(path, index=self._writes_index(index), **kwargs)
 
     def to_json(self, path: str | None = None, **kwargs: object) -> str | None:
         to_json = cast("Callable[..., str | None]", self._frame().to_pandas().to_json)
         return to_json(path, **kwargs)
 
-    def to_string(self, **kwargs: object) -> str:
+    def to_string(self, index: bool | None = None, **kwargs: object) -> str:
         to_string = cast("Callable[..., str]", self._frame().to_pandas().to_string)
-        return to_string(index=False, **kwargs)
+        return to_string(index=self._writes_index(index), **kwargs)
 
-    def to_markdown(self, **kwargs: object) -> str:
+    def to_markdown(self, index: bool | None = None, **kwargs: object) -> str:
         to_markdown = cast("Callable[..., str]", self._frame().to_pandas().to_markdown)
-        return to_markdown(index=False, **kwargs)
+        return to_markdown(index=self._writes_index(index), **kwargs)
 
-    def to_html(self, **kwargs: object) -> str:
+    def to_html(self, index: bool | None = None, **kwargs: object) -> str:
         to_html = cast("Callable[..., str]", self._frame().to_pandas().to_html)
-        return to_html(index=False, **kwargs)
+        return to_html(index=self._writes_index(index), **kwargs)
 
     def to_records(self) -> list[tuple[Scalar, ...]]:
         return list(self.itertuples(index=False, name=None))

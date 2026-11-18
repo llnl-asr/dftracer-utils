@@ -116,7 +116,7 @@ def _as_plan(other: object) -> LazyFrame:
 class LazyFrame(_ext.LazyFrame):
     """A deferred query over a native batch; :meth:`collect` runs it."""
 
-    __slots__ = ("_ix", "_rt", "_open")
+    __slots__ = ("_rt", "_open")
     _open: bool
 
     # The native type has no constructor of its own: its factories build this
@@ -136,14 +136,6 @@ class LazyFrame(_ext.LazyFrame):
         pass
 
     @property
-    def _index(self) -> list[str] | None:
-        return getattr(self, "_ix", None)
-
-    @_index.setter
-    def _index(self, names: list[str] | None) -> None:
-        self._ix = names
-
-    @property
     def _runtime(self) -> Runtime | None:
         return getattr(self, "_rt", None)
 
@@ -156,21 +148,11 @@ class LazyFrame(_ext.LazyFrame):
         out._runtime = self._runtime
         return out
 
-    def _like(self, out: LazyFrame) -> LazyFrame:
-        """:meth:`_new`, also carrying this plan's index column names when the
-        result's schema still holds every one of them."""
-        out = self._new(out)
-        if self._index is not None:
-            names = out.columns
-            if all(name in names for name in self._index):
-                out._index = self._index
-        return out
-
     # -- the index: named columns, or the row position -------------------------
     def _index_names(self) -> list[str]:
         from ._loc import _ROW
 
-        return self._index if self._index is not None else [_ROW]
+        return self.index_names() or [_ROW]
 
     def set_index(self, names: str | Sequence[str]) -> LazyFrame:
         """Name the column(s) ``loc`` / ``resample`` read labels from; the
@@ -182,19 +164,18 @@ class LazyFrame(_ext.LazyFrame):
         resolve = self._resolve("set_index")
         for name in keys:
             resolve(name)
-        out = self._new(_ext.LazyFrame.share(self))
-        out._index = keys
-        return out
+        return self._new(_ext.LazyFrame.with_index(self, keys))
 
     def reset_index(self, drop: bool = False) -> LazyFrame:
         """Forget the index columns (kept as plain columns unless ``drop``);
         with no index set, prepend the row positions as ``index``."""
-        if self._index is None:
-            return self if drop else self._like(_ext.LazyFrame.with_row_index(self, "index"))
+        names = self.index_names()
+        if not names:
+            return self if drop else self._new(_ext.LazyFrame.with_row_index(self, "index"))
         if drop:
-            keep = [c for c in self.columns if c not in self._index]
+            keep = [c for c in self.columns if c not in names]
             return self._new(_ext.LazyFrame.select(self, keep))
-        return self._new(_ext.LazyFrame.share(self))
+        return self._new(_ext.LazyFrame.with_index(self, []))
 
     @property
     def iloc(self) -> LazyILoc:
@@ -220,7 +201,7 @@ class LazyFrame(_ext.LazyFrame):
         ``group_by_dynamic`` over the time-sorted plan."""
         from ._loc import Resampler
 
-        time = on if on is not None else single_index(self._index, "resample")
+        time = on if on is not None else single_index(self.index_names(), "resample")
         self._resolve("resample")(time)
         return Resampler(self, time, rule_to_units(rule, unit))
 
@@ -311,7 +292,7 @@ class LazyFrame(_ext.LazyFrame):
         plan, expr, temps = self._lowered(as_expr(predicate), "filter")
         ast: list[tuple[object, ...]] = []
         emit_ast(expr, plan._resolve("filter"), ast)
-        out = plan._like(_ext.LazyFrame.filter(plan, ast))
+        out = plan._new(_ext.LazyFrame.filter(plan, ast))
         return out.drop(temps) if temps else out
 
     def with_column(self, name: str, expr: Expr) -> LazyFrame:
@@ -319,7 +300,7 @@ class LazyFrame(_ext.LazyFrame):
         plan, expr, temps = self._lowered(as_expr(expr), "with_column")
         ast: list[tuple[object, ...]] = []
         emit_ast(expr, plan._resolve("with_column"), ast)
-        out = plan._like(_ext.LazyFrame.with_column(plan, name, ast))
+        out = plan._new(_ext.LazyFrame.with_column(plan, name, ast))
         return out.drop(temps) if temps else out
 
     def with_columns(self, *named: Named, **columns: Expr) -> LazyFrame:
@@ -381,30 +362,28 @@ class LazyFrame(_ext.LazyFrame):
                 missing = [k for k in names if k not in current]
                 if missing:
                     raise KeyError(f"rename: no column named {missing[0]!r}")
-            return self._like(
-                _ext.LazyFrame.rename_columns(self, list(names), list(names.values()))
-            )
-        return self._like(_ext.LazyFrame.rename(self, list(names)))
+            return self._new(_ext.LazyFrame.rename_columns(self, list(names), list(names.values())))
+        return self._new(_ext.LazyFrame.rename(self, list(names)))
 
     def slice(self, offset: int, length: int) -> LazyFrame:
         """The row window ``[offset, offset + length)``."""
-        return self._like(_ext.LazyFrame.slice(self, offset, length))
+        return self._new(_ext.LazyFrame.slice(self, offset, length))
 
     def head(self, n: int = 5) -> LazyFrame:
         """The first ``n`` rows."""
-        return self._like(_ext.LazyFrame.head(self, n))
+        return self._new(_ext.LazyFrame.head(self, n))
 
     def tail(self, n: int = 5) -> LazyFrame:
         """The last ``n`` rows."""
-        return self._like(_ext.LazyFrame.tail(self, n))
+        return self._new(_ext.LazyFrame.tail(self, n))
 
     def drop_nulls(self) -> LazyFrame:
         """Drop rows holding any null."""
-        return self._like(_ext.LazyFrame.drop_nulls(self))
+        return self._new(_ext.LazyFrame.drop_nulls(self))
 
     def fill_null(self, value: Value) -> LazyFrame:
         """Fill nulls in every column with ``value``."""
-        return self._like(_ext.LazyFrame.fill_null(self, value))
+        return self._new(_ext.LazyFrame.fill_null(self, value))
 
     def top_k(self, k: int, *, by: str | Sequence[str], reverse: bool = False) -> LazyFrame:
         """The ``k`` rows with the largest ``by`` (the smallest with
@@ -469,21 +448,21 @@ class LazyFrame(_ext.LazyFrame):
 
     def with_row_index(self, name: str = "index") -> LazyFrame:
         """Prepend an Int64 row-index column."""
-        return self._like(_ext.LazyFrame.with_row_index(self, name))
+        return self._new(_ext.LazyFrame.with_row_index(self, name))
 
     def null_count(self) -> LazyFrame:
         """A one-row frame of each column's null count."""
-        return self._like(_ext.LazyFrame.null_count(self))
+        return self._new(_ext.LazyFrame.null_count(self))
 
     def explode(self, column: str) -> LazyFrame:
         """Expand a List ``column``: each element becomes its own row."""
-        return self._like(_ext.LazyFrame.explode(self, column))
+        return self._new(_ext.LazyFrame.explode(self, column))
 
     def unnest(self, column: str, keep_empty: bool = False) -> LazyFrame:
         """UNNEST the List ``column`` per morsel, as :meth:`DataFrame.unnest`:
         an empty or null list drops the row unless ``keep_empty``, and a
         ``list<struct>`` flattens into one column per field."""
-        return self._like(_ext.LazyFrame.unnest(self, column, bool(keep_empty)))
+        return self._new(_ext.LazyFrame.unnest(self, column, bool(keep_empty)))
 
     def compare_agg(self, variant: LazyFrame, on: int | str | Sequence[str] = 1) -> LazyFrame:
         """:meth:`DataFrame.compare_agg` over the two collected plans. ``on`` is
@@ -494,7 +473,7 @@ class LazyFrame(_ext.LazyFrame):
         n_key = on if isinstance(on, int) else len(as_names(on))
         if n_key < 1:
             raise ValueError("compare_agg: 'on' must name at least one key column")
-        return self._like(_ext.LazyFrame.compare_agg(self, _as_plan(variant), n_key))
+        return self._new(_ext.LazyFrame.compare_agg(self, _as_plan(variant), n_key))
 
     def window(
         self,
@@ -505,7 +484,7 @@ class LazyFrame(_ext.LazyFrame):
         """:meth:`DataFrame.window` over the collected plan (a pipeline
         breaker); ``specs`` take the same tuples."""
         norm = [norm_window_spec(s) for s in (specs or [])]
-        return self._like(
+        return self._new(
             _ext.LazyFrame.window(self, as_names(partition_by), as_names(order_by), norm)
         )
 
@@ -541,7 +520,7 @@ class LazyFrame(_ext.LazyFrame):
         (:meth:`memory_budget`, else the automatic one), holding only the right
         rows of the current ``by`` group window, so neither plan is collected.
         Rows come out ordered by ``(by, on)``, as the eager join returns them."""
-        return self._like(
+        return self._new(
             _ext.LazyFrame.asof(self, _as_plan(other), on, as_names(by), direction, tolerance)
         )
 
@@ -563,15 +542,15 @@ class LazyFrame(_ext.LazyFrame):
 
     def unpivot(self, id_vars: list[str], value_vars: list[str]) -> LazyFrame:
         """Reshape wide to long."""
-        return self._like(_ext.LazyFrame.unpivot(self, list(id_vars), list(value_vars)))
+        return self._new(_ext.LazyFrame.unpivot(self, list(id_vars), list(value_vars)))
 
     def melt(self, id_vars: list[str], value_vars: list[str]) -> LazyFrame:
         """Alias of :meth:`unpivot`."""
-        return self._like(_ext.LazyFrame.melt(self, list(id_vars), list(value_vars)))
+        return self._new(_ext.LazyFrame.melt(self, list(id_vars), list(value_vars)))
 
     def topk(self, name: str, k: int, largest: bool = True) -> LazyFrame:
         """The ``k`` rows with the largest (or smallest) ``name`` values."""
-        return self._like(_ext.LazyFrame.topk(self, name, k, largest))
+        return self._new(_ext.LazyFrame.topk(self, name, k, largest))
 
     def group_by(
         self, key: str | Sequence[str] | None = None, *aggs: str, dropna: bool = True
@@ -586,14 +565,14 @@ class LazyFrame(_ext.LazyFrame):
         keys = as_names(key)
         if not aggs:
             return LazyGroupBy(self, keys, dropna=dropna)
-        out = self._like(_ext.LazyFrame.group_by(self, keys, list(aggs)))
+        out = self._new(_ext.LazyFrame.group_by(self, keys, list(aggs)))
         return _drop_null_key_groups(out, keys) if dropna else out
 
     def reduce(self, agg: str) -> LazyFrame:
         """:meth:`DataFrame.reduce` as a streaming one-group group-by: ``agg``
         over every eligible column, one row. The grouped form is
         ``group_by(keys).reduce(agg)``."""
-        return self._like(_ext.LazyFrame.reduce(self, agg))
+        return self._new(_ext.LazyFrame.reduce(self, agg))
 
     def agg(
         self, func: AggForm | None = None, axis: int | str = 0, **named: AggKeyword
@@ -633,22 +612,22 @@ class LazyFrame(_ext.LazyFrame):
 
     def sort_by(self, name: str, descending: bool = False, nulls_last: bool = True) -> LazyFrame:
         """Sort by one column (external merge sort, bounded memory)."""
-        return self._like(_ext.LazyFrame.sort_by(self, name, descending, nulls_last))
+        return self._new(_ext.LazyFrame.sort_by(self, name, descending, nulls_last))
 
     def gather(self, indices: Sequence[int]) -> LazyFrame:
         """Keep the rows at ``indices`` (any order, repeats allowed); ``take``
         is the pandas name. Not streaming: the whole frame is resident before
         the indices apply."""
-        return self._like(_ext.LazyFrame.take(self, list(indices)))
+        return self._new(_ext.LazyFrame.take(self, list(indices)))
 
     def filter_mask(self, mask: Series) -> LazyFrame:
         """Keep rows where the precomputed Bool ``mask`` is true, aligned by
         position to this frame's rows."""
-        return self._like(_ext.LazyFrame.filter_mask(self, mask))
+        return self._new(_ext.LazyFrame.filter_mask(self, mask))
 
     def reverse(self) -> LazyFrame:
         """Rows in reverse order. Not streaming."""
-        return self._like(_ext.LazyFrame.reverse(self))
+        return self._new(_ext.LazyFrame.reverse(self))
 
     def sort_by_multi(
         self,
@@ -658,7 +637,7 @@ class LazyFrame(_ext.LazyFrame):
     ) -> LazyFrame:
         """Stable lexicographic sort by several key columns. A single flag
         broadcasts; a sequence maps one flag per name."""
-        return self._like(_ext.LazyFrame.sort_by_multi(self, list(names), descending, nulls_last))
+        return self._new(_ext.LazyFrame.sort_by_multi(self, list(names), descending, nulls_last))
 
     def sort(
         self,
@@ -673,8 +652,8 @@ class LazyFrame(_ext.LazyFrame):
         and default): a hidden 0 / 1 presence column sorts ahead of each key."""
         names = [by] if isinstance(by, str) else list(by)
         if isinstance(by, str) and isinstance(descending, bool) and isinstance(nulls_last, bool):
-            return self._like(_ext.LazyFrame.sort_by(self, by, descending, nulls_last))
-        return self._like(_ext.LazyFrame.sort_by_multi(self, names, descending, nulls_last))
+            return self._new(_ext.LazyFrame.sort_by(self, by, descending, nulls_last))
+        return self._new(_ext.LazyFrame.sort_by_multi(self, names, descending, nulls_last))
 
     def sort_values(
         self,
@@ -726,7 +705,7 @@ class LazyFrame(_ext.LazyFrame):
         """Every row of this plan, then every row of each of ``others`` in
         turn (UNION ALL). All plans must share a schema. Streams each side in
         turn with no state; no filter or projection is moved across it."""
-        return self._like(_ext.LazyFrame.concat(self, *[_as_plan(o) for o in others]))
+        return self._new(_ext.LazyFrame.concat(self, *[_as_plan(o) for o in others]))
 
     def union(self, *others: LazyFrame) -> LazyFrame:
         """:meth:`concat` then :meth:`unique` (SQL UNION)."""
@@ -735,25 +714,25 @@ class LazyFrame(_ext.LazyFrame):
     def unique(self, subset: str | Sequence[str] | None = None) -> LazyFrame:
         """Distinct rows, first occurrence, in original order, keyed on every
         column or on ``subset`` (``drop_duplicates`` is the pandas name)."""
-        return self._like(_ext.LazyFrame.unique(self, subset))
+        return self._new(_ext.LazyFrame.unique(self, subset))
 
     def sample(self, n: int, seed: int = 0) -> LazyFrame:
         """A deterministic ``n``-row sample."""
-        return self._like(_ext.LazyFrame.sample(self, n, seed))
+        return self._new(_ext.LazyFrame.sample(self, n, seed))
 
     def head_by(self, keys: str | Sequence[str], n: int) -> LazyFrame:
         """For each distinct ``keys`` tuple, the first ``n`` rows with that
         key, in input order. A null key is its own key; equal numbers are one
         key. Streams, holding one counter per distinct key."""
-        return self._like(_ext.LazyFrame.head_by(self, keys, n))
+        return self._new(_ext.LazyFrame.head_by(self, keys, n))
 
     def is_duplicated(self) -> LazyFrame:
         """One Bool column: true where the whole row is duplicated."""
-        return self._like(_ext.LazyFrame.is_duplicated(self))
+        return self._new(_ext.LazyFrame.is_duplicated(self))
 
     def is_unique(self) -> LazyFrame:
         """One Bool column: true where the whole row is unique."""
-        return self._like(_ext.LazyFrame.is_unique(self))
+        return self._new(_ext.LazyFrame.is_unique(self))
 
     def group_by_dynamic(
         self,
@@ -774,30 +753,30 @@ class LazyFrame(_ext.LazyFrame):
 
     def pivot(self, index: str, on: str, values: str, agg: str = "first") -> LazyFrame:
         """Reshape long to wide (schema is data-dependent until collected)."""
-        return self._like(_ext.LazyFrame.pivot(self, index, on, values, agg))
+        return self._new(_ext.LazyFrame.pivot(self, index, on, values, agg))
 
     def to_dummies(self, column: str) -> LazyFrame:
         """One-hot encode ``column`` (schema is data-dependent)."""
-        return self._like(_ext.LazyFrame.to_dummies(self, column))
+        return self._new(_ext.LazyFrame.to_dummies(self, column))
 
     def describe(self) -> LazyFrame:
         """Per-column summary statistics (schema is data-dependent)."""
-        return self._like(_ext.LazyFrame.describe(self))
+        return self._new(_ext.LazyFrame.describe(self))
 
     def memory_budget(self, nbytes: int) -> LazyFrame:
         """Out-of-core spill budget for the pipeline breakers (bytes). 0 means
         auto (~1/3 of memory); a huge value disables spilling."""
-        return self._like(_ext.LazyFrame.memory_budget(self, nbytes))
+        return self._new(_ext.LazyFrame.memory_budget(self, nbytes))
 
     def auto_spill(self) -> LazyFrame:
         """Set the spill budget to ~1/3 of available memory."""
-        return self._like(_ext.LazyFrame.auto_spill(self))
+        return self._new(_ext.LazyFrame.auto_spill(self))
 
     def collect(self, batch_size: int = 0) -> DataFrame:
         """Run the pipeline and materialize a :class:`DataFrame`. ``batch_size``
         is the chunk a streaming source is pulled in; ``0`` (the default) is
         auto, and runs a resident source whole-column, as the eager path."""
-        return self._finish(_ext.LazyFrame.collect(self, batch_size, self._runtime))
+        return _ext.LazyFrame.collect(self, batch_size, self._runtime)
 
     def collect_async(self, batch_size: int = 0) -> TaskHandle[DataFrame]:
         """Start :meth:`collect` on the native pool and return at once.
@@ -811,13 +790,8 @@ class LazyFrame(_ext.LazyFrame):
             native=native,
             name=native.name,
             task_id=native.task_id,
-            finish=lambda out: self._finish(out),
+            finish=lambda out: out,
         )
-
-    def _finish(self, out: DataFrame) -> DataFrame:
-        if self._index is not None and all(name in out for name in self._index):
-            out._index = self._index
-        return out
 
     def sink(
         self,
@@ -851,11 +825,10 @@ class LazyFrame(_ext.LazyFrame):
         return _ext.LazyFrame.__arrow_c_stream__(self, requested_schema, self._runtime)
 
     def __copy__(self) -> LazyFrame:
-        """A new handle on the same plan, with its runtime, index and schema
+        """A new handle on the same plan, with its runtime and schema
         openness."""
         out = _ext.LazyFrame.share(self)
         out._runtime = self._runtime
-        out._index = self._index
         out._open = getattr(self, "_open", False)
         return out
 
@@ -1191,7 +1164,7 @@ class LazyGroupBy:
         index column or ``on``, in ``unit``) floored to its bucket joins the
         keys; each aggregate call is one ``group_by`` over keys + bucket,
         rows by key then time."""
-        time = on if on is not None else single_index(self._plan._index, "resample")
+        time = on if on is not None else single_index(self._plan.index_names(), "resample")
         self._plan._resolve("resample")(time)
         if time in self._keys:
             raise ValueError(f"resample: {time!r} is a group key")
@@ -1270,8 +1243,9 @@ class LazyGroupBy:
     def _arg(self, op: str) -> LazyFrame:
         plan = self._plan
         label = "__dftu_pos__"
-        if plan._index is not None and len(plan._index) == 1:
-            label = plan._index[0]
+        index = plan.index_names()
+        if len(index) == 1:
+            label = index[0]
         else:
             plan = plan.with_row_index(label)
         cols = self._value_columns("sum")
@@ -1279,7 +1253,7 @@ class LazyGroupBy:
         # The arg aggregates report the label's repr (a string); a row
         # position parses back to Int64 (a set index keeps its own type only
         # when it is numeric, which the collect-time cast decides).
-        if plan._index is None or len(plan._index) != 1:
+        if len(index) != 1:
             for c in cols:
                 out = out.with_column(c, col(c).cast("int64"))
         return out
@@ -1551,7 +1525,7 @@ def collect_all(
             out.append(root._finish(frames[at : at + n]))
             at += n
         else:
-            out.append(root._finish(frames[at]))
+            out.append(frames[at])
             at += 1
     return out
 

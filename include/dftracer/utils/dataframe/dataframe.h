@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/shared_string.h>
 #include <dftracer/utils/dstd/span.h>
@@ -127,6 +128,11 @@ class GroupBy;                                     // below
 struct DataFrame {
     dstd::Vector<dstd::SharedString> names;
     dstd::Vector<Series> columns;
+    /// The row-index column names (see @ref index_names); null when the frame
+    /// has no index, so an unindexed frame pays one pointer. Set it through
+    /// @ref with_index; the frame ops carry it by the rules in
+    /// frame_op_index_rules.def.
+    dstd::UniquePtr<dstd::Vector<dstd::SharedString>> row_index{};
 
     std::size_t num_columns() const noexcept { return columns.size(); }
     std::int64_t num_rows() const noexcept {
@@ -137,6 +143,24 @@ struct DataFrame {
     std::int64_t column_index(dstd::StringView name) const;
     /// A column by name, sharing its buffers zero-copy; invalid if absent.
     Series column(dstd::StringView name) const;
+
+    /// The columns that form the row index, in order; empty when the frame
+    /// has none (the positional RangeIndex, nothing materialized). Every name
+    /// is a column of this frame. The index columns are ordinary columns.
+    dstd::Span<const dstd::SharedString> index_names() const noexcept {
+        return row_index ? dstd::Span<const dstd::SharedString>(*row_index)
+                         : dstd::Span<const dstd::SharedString>();
+    }
+    /// A zero-copy copy of this frame whose row index is `names`. An empty
+    /// span drops the index. A NotFound error for a name that is no column
+    /// (naming it), an InvalidArgument error for a repeated name or for a
+    /// column of a type with no hash and equality (List, Struct), naming it.
+    dstd::Result<DataFrame> with_index(
+        dstd::Span<const dstd::StringView> names) const;
+    /// A zero-copy copy of this frame with no row index.
+    DataFrame without_index() const;
+    /// A zero-copy copy of this frame, row index included.
+    DataFrame share() const;
 
     /// Begin a deferred query over this frame; include dataframe/lazyframe.h.
     LazyFrame lazy() const;

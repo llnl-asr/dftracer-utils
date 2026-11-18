@@ -13,6 +13,7 @@ so callers may fall back to it when it is installed.
 from __future__ import annotations
 
 import functools
+import re
 from typing import TYPE_CHECKING, Any, Callable, Protocol, Sequence, cast
 
 from . import dftracer_utils_ext as _ext
@@ -347,10 +348,14 @@ def _pandas_nullable(native: Series) -> ExtensionArray | None:
     return None
 
 
-def _apply_index(pdf: pd.DataFrame, index: str | Sequence[str]) -> pd.DataFrame:
+def _apply_index(
+    pdf: pd.DataFrame, index: str | Sequence[str], restore_unnamed: bool = False
+) -> pd.DataFrame:
     """``pdf`` with the named columns moved into the pandas index, in the order
     given (a MultiIndex for several names). KeyError names an unknown column and
-    ValueError a repeated one."""
+    ValueError a repeated one. With ``restore_unnamed`` a level named
+    ``__index_level_<i>__`` (what :func:`index_columns` gives an unnamed level)
+    is unnamed again."""
     names = [index] if isinstance(index, str) else list(index)
     if not names:
         raise ValueError("to_pandas: index must name at least one column")
@@ -361,7 +366,12 @@ def _apply_index(pdf: pd.DataFrame, index: str | Sequence[str]) -> pd.DataFrame:
         if name in seen:
             raise ValueError(f"to_pandas: index column {name!r} is repeated")
         seen.add(name)
-    return pdf.set_index(names if len(names) > 1 else names[0])
+    out = pdf.set_index(names if len(names) > 1 else names[0])
+    if restore_unnamed:
+        out.index.names = [
+            None if re.fullmatch(r"__index_level_\d+__", n) else n for n in out.index.names
+        ]
+    return out
 
 
 def _arrow_native(name: str) -> Callable[..., Any]:

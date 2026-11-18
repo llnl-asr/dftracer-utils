@@ -569,6 +569,7 @@ DataFrame.idxmin | python-semantics | pandas container API on the frame, written
 DataFrame.iloc | python-semantics | accessor or shape property of the frame, not an op
 DataFrame.index | python-semantics | accessor or shape property of the frame, not an op
 DataFrame.index_levels | python-semantics | frame method written in Python over native calls
+DataFrame.index_names | python-semantics | native method of the binding, the row index of the frame, not one registry op
 DataFrame.infer_objects | python-semantics | pandas container API on the frame, written over native calls
 DataFrame.info | display | info describes the frame as text
 DataFrame.insert | python-semantics | pandas container API on the frame, written over native calls
@@ -711,6 +712,7 @@ DataFrame.width | python-semantics | accessor or shape property of the frame, no
 DataFrame.window | python-semantics | frame method written in Python over native calls
 DataFrame.with_column | python-semantics | frame method written in Python over native calls
 DataFrame.with_columns | python-semantics | frame method written in Python over native calls
+DataFrame.with_index | python-semantics | native method of the binding, sets the row index of the frame, not one registry op
 DataFrame.with_row_index | python-semantics | frame method written in Python over native calls
 DataFrame.write_csv | conversion | write_csv gives the data in another form
 DataFrame.write_ipc | conversion | write_ipc gives the data in another form
@@ -746,6 +748,7 @@ LazyFrame.group_by_dynamic | python-semantics | plan step written in Python over
 LazyFrame.head | python-semantics | plan step written in Python over native plan ops
 LazyFrame.head_by | python-semantics | plan step written in Python over native plan ops
 LazyFrame.iloc | python-semantics | accessor or shape property of the frame, not an op
+LazyFrame.index_names | python-semantics | native method of the binding, the row index of the plan, not one registry op
 LazyFrame.interval | python-semantics | plan step written in Python over native plan ops
 LazyFrame.is_duplicated | python-semantics | plan step written in Python over native plan ops
 LazyFrame.is_unique | python-semantics | plan step written in Python over native plan ops
@@ -795,6 +798,7 @@ LazyFrame.width | python-semantics | accessor or shape property of the frame, no
 LazyFrame.window | python-semantics | plan step written in Python over native plan ops
 LazyFrame.with_column | python-semantics | plan step written in Python over native plan ops
 LazyFrame.with_columns | python-semantics | plan step written in Python over native plan ops
+LazyFrame.with_index | python-semantics | native method of the binding, sets the row index of the plan, not one registry op
 LazyFrame.with_row_index | python-semantics | plan step written in Python over native plan ops
 # GroupBy
 GroupBy.agg | python-semantics | group-wise method written in Python over native calls

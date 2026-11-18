@@ -473,6 +473,7 @@ set(DFTRACER_UTILS_TRACE_SOURCES
 set(DFTRACER_UTILS_ARROW_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/arrow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/arrow_bridge.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/index_metadata.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/ipc_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/ipc_writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/schema_reconcile.cpp
@@ -1516,6 +1517,7 @@ set(DFTRACER_UTILS_DATAFRAME_SOURCES
     ${DFTRACER_UTILS_VEC_SOURCES}
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/series_methods.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/dataframe_methods.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/frame_index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/frame_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/order.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/ops/window.cpp
@@ -3029,6 +3031,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/prefilter_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/window_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/group_transform_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/frame_index_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/memory_attribution_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/counter_contention_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/heap_bench.cpp
@@ -3077,7 +3080,8 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
             index_bench
             fold_read_bench
             duql_eval_bench
-            group_transform_bench)
+            group_transform_bench
+            frame_index_bench)
       add_test(NAME ${bench}_smoke COMMAND ${bench} --smoke)
       set_tests_properties(${bench}_smoke PROPERTIES LABELS bench_smoke)
     endforeach()
@@ -3145,6 +3149,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
     set_tests_properties(
       view_api_bench_smoke view_batch_bench_smoke index_bench_smoke
       fold_read_bench_smoke duql_eval_bench_smoke group_transform_bench_smoke
+      frame_index_bench_smoke
       bench_smoke/memory_attribution bench_smoke/counter_contention
       bench_smoke/heap bench_smoke/coro bench_smoke/channel bench_smoke/fs
       bench_smoke/pool bench_smoke/io bench_smoke/fmt bench_smoke/log

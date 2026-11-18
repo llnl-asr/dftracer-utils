@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
+#include <dftracer/utils/dataframe/internal/frame_index.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -151,5 +152,6 @@ dftu_dataframe* dftu_dataframe_column_op(const dftu_dataframe* df,
         result.columns.push_back(static_cast<std::int64_t>(i) == ci
                                      ? Series{out}
                                      : frame.columns[i].share());
+    dftracer::utils::dataframe::index_keep<"column_op">(frame, result);
     return dftracer::utils::dataframe::dataframe_handle_wrap(std::move(result));
 }

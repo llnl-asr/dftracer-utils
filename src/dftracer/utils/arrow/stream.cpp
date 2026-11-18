@@ -99,7 +99,7 @@ class PartsBody final : public StreamBody {
             if (parts_.empty()) {
                 detail::column_schema(Series{}, built.get());
             } else {
-                detail::column_schema(column_of(parts_.front()), built.get());
+                column_schema_of(parts_.front(), built.get());
             }
             schema_ = std::move(built);
             have_schema_ = true;
@@ -118,6 +118,14 @@ class PartsBody final : public StreamBody {
     }
 
    private:
+    static void column_schema_of(const Part& part, ArrowSchema* schema) {
+        if constexpr (std::is_same_v<Part, DataFrame>) {
+            detail::frame_schema(part, schema);
+        } else {
+            detail::column_schema(part.share(), schema);
+        }
+    }
+
     static Series column_of(const Part& part) {
         if constexpr (std::is_same_v<Part, DataFrame>) {
             return detail::struct_column(part);
@@ -266,7 +274,7 @@ int LazyBody::prepare() {
     if (step == Step::Error) return fail(message_, EIO);
     if (!open_) {
         if (step == Step::Frame) {
-            detail::column_schema(detail::struct_column(first), fixed_.get());
+            detail::frame_schema(first, fixed_.get());
             pending_.emplace(std::move(first));
         } else {
             DataFrame empty;
@@ -371,6 +379,10 @@ dstd::Vector<DataFrame> frame_parts(const DataFrame& frame) {
         for (std::int32_t k = 0; per_chunk && k < chunks; ++k) {
             DataFrame part;
             part.names = frame.names;
+            if (frame.row_index)
+                part.row_index =
+                    dstd::make_unique<dstd::Vector<dstd::SharedString>>(
+                        *frame.row_index);
             part.columns.reserve(ncolumns);
             for (std::size_t i = 0; per_chunk && i < ncolumns; ++i) {
                 part.columns.emplace_back(
@@ -822,6 +834,7 @@ dstd::Result<DataFrame> dataframe_from_arrow_stream(ArrowArrayStream* in) {
         if (!column) return dstd::Unexpected<dstd::Error>(column.error());
         out.columns.push_back(std::move(*column));
     }
+    out.row_index = std::move(parts.front().row_index);
     return out;
 }
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
+#include <dftracer/utils/dataframe/internal/frame_index.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/ops/ops_common.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -22,11 +23,12 @@ struct RightPartition {
 
 }  // namespace
 
-dstd::Result<DataFrame> asof(const DataFrame& left, const DataFrame& right,
-                             dstd::StringView on,
-                             dstd::Span<const dstd::String> by,
-                             AsofDirection direction,
-                             dstd::Optional<double> tolerance) {
+static dstd::Result<DataFrame> asof_raw(const DataFrame& left,
+                                        const DataFrame& right,
+                                        dstd::StringView on,
+                                        dstd::Span<const dstd::String> by,
+                                        AsofDirection direction,
+                                        dstd::Optional<double> tolerance) {
     const dstd::Result<std::size_t> lt = ops::column_named(left, on, "asof");
     if (!lt) return lt.error();
     const dstd::Result<std::size_t> rt = ops::column_named(right, on, "asof");
@@ -144,4 +146,14 @@ dstd::Result<DataFrame> asof(const DataFrame& left, const DataFrame& right,
     return ops::join_columns(left, right, skip, lorder, right_rows, "asof");
 }
 
+dstd::Result<DataFrame> asof(const DataFrame& left, const DataFrame& right,
+                             dstd::StringView on,
+                             dstd::Span<const dstd::String> by,
+                             AsofDirection direction,
+                             dstd::Optional<double> tolerance) {
+    dstd::Result<DataFrame> out =
+        asof_raw(left, right, on, by, direction, tolerance);
+    if (out) index_keep<"asof">(left, *out);
+    return out;
+}
 }  // namespace dftracer::utils::dataframe

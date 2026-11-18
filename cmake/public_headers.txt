@@ -80,6 +80,7 @@ dftracer/utils/dataframe/exported_series_ops.def
 dftracer/utils/dataframe/expr.h
 dftracer/utils/dataframe/field.h
 dftracer/utils/dataframe/field_stat.h
+dftracer/utils/dataframe/frame_op_index_rules.def
 dftracer/utils/dataframe/lazy_ops.h
 dftracer/utils/dataframe/lazyframe.h
 dftracer/utils/dataframe/op.h

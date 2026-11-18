@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
+#include <dftracer/utils/dataframe/internal/frame_index.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/ops/ops_common.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -77,7 +78,7 @@ struct Real {
 
 }  // namespace
 
-dstd::Result<DataFrame> gap_fill(
+static dstd::Result<DataFrame> gap_fill_raw(
     const DataFrame& df, dstd::Span<const dstd::String> partition_by,
     dstd::StringView time, std::int64_t bucket,
     dstd::Span<const dstd::String> values, GapFillMode mode,
@@ -259,4 +260,14 @@ dstd::Result<DataFrame> gap_fill(
     return out;
 }
 
+dstd::Result<DataFrame> gap_fill(
+    const DataFrame& df, dstd::Span<const dstd::String> partition_by,
+    dstd::StringView time, std::int64_t bucket,
+    dstd::Span<const dstd::String> values, GapFillMode mode,
+    dstd::Optional<dstd::Pair<std::int64_t, std::int64_t>> range) {
+    dstd::Result<DataFrame> out =
+        gap_fill_raw(df, partition_by, time, bucket, values, mode, range);
+    if (out) index_drop<"gap_fill">(*out);
+    return out;
+}
 }  // namespace dftracer::utils::dataframe

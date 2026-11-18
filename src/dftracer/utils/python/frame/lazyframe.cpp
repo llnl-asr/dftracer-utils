@@ -241,6 +241,35 @@ PyObject* LazyFrame_share(PyObject* self, PyObject*) {
     return run_lazy_op([&] { return b->lf; });
 }
 
+// index_names() -> list[str]: the row index columns of the plan's result.
+PyObject* LazyFrame_index_names(PyObject* self, PyObject*) {
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
+    if (!b) return nullptr;
+    return guard([&]() -> PyObject* {
+        const auto names = b->lf.index_names();
+        PyObject* list = PyList_New(static_cast<Py_ssize_t>(names.size()));
+        if (!list) return nullptr;
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            PyObject* item = PyUnicode_FromString(names[i].c_str());
+            if (!item) {
+                Py_DECREF(list);
+                return nullptr;
+            }
+            PyList_SET_ITEM(list, static_cast<Py_ssize_t>(i), item);
+        }
+        return list;
+    });
+}
+
+// with_index(names) -> LazyFrame with the row index `names` ([] drops it).
+PyObject* LazyFrame_with_index(PyObject* self, PyObject* names) {
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
+    if (!b) return nullptr;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ns;
+    if (!parse_str_list(names, "names", ns)) return nullptr;
+    return run_lazy_op([&] { return b->lf.with_index(std::move(ns)); });
+}
+
 PyObject* LazyFrame_reverse(PyObject* self, PyObject*) {
     LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
@@ -1230,6 +1259,12 @@ PyMethodDef LazyFrame_methods[] = {
      "mask is true."},
     {"_replace", LazyFrame_replace, METH_O,
      "_replace(other) -> None\n\nBecome the plan of `other`, in place."},
+    {"index_names", LazyFrame_index_names, METH_NOARGS,
+     "index_names() -> list[str]\n\nThe row index columns of the plan's "
+     "result; [] for none."},
+    {"with_index", LazyFrame_with_index, METH_O,
+     "with_index(names) -> LazyFrame\n\nThe plan with the row index `names` "
+     "([] drops it)."},
     {"share", LazyFrame_share, METH_NOARGS,
      "share() -> LazyFrame\n\nA new LazyFrame over the same plan."},
     {"reverse", LazyFrame_reverse, METH_NOARGS,

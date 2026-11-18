@@ -98,9 +98,9 @@ def _table(
 def _frame_parts(
     frame: "DataFrame",
 ) -> "Tuple[bool, List[str], List[List[str]], List[str], List[List[str]]]":
-    columns = list(frame.columns)
+    columns = list(frame._names())
     cut, _ = _shown(len(frame))
-    index = getattr(frame, "_index", None)
+    index = frame.index_names()
     if index:
         index_names = list(index)
         index_cols = [_column(frame[c], cut) for c in index_names]
@@ -117,7 +117,7 @@ def _frame_parts(
 
 
 def frame_repr(frame: "DataFrame") -> str:
-    columns = list(frame.columns)
+    columns = list(frame._names())
     n = len(frame)
     if n == 0 or not columns:
         return f"Empty DataFrame\nColumns: [{', '.join(columns)}]\nIndex: []"
@@ -129,7 +129,7 @@ def frame_repr(frame: "DataFrame") -> str:
 
 
 def frame_html(frame: "DataFrame") -> str:
-    columns = list(frame.columns)
+    columns = list(frame._names())
     n = len(frame)
     if n == 0 or not columns:
         return f"<pre>{html.escape(frame_repr(frame))}</pre>"

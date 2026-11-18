@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_u64
 #include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
+#include <dftracer/utils/dataframe/internal/frame_index.h>
 #include <dftracer/utils/dataframe/internal/radix_dedup.h>  // parallel dedup
 #include <dftracer/utils/dataframe/internal/rest_column.h>  // struct_of_length
 #include <dftracer/utils/dataframe/internal/string_reader.h>
@@ -152,7 +153,8 @@ dstd::Result<Series> join_chunks(const Series& c) {
 // One gather per column, each fanning out over its rows. The result is
 // FLAT: a caller reads the buffers directly, and a frame that is filtered
 // once and read many times pays the gather once.
-DataFrame take(const DataFrame& b, dstd::Span<const std::int64_t> indices) {
+static DataFrame take_raw(const DataFrame& b,
+                          dstd::Span<const std::int64_t> indices) {
     DataFrame out;
     out.names = b.names;
     out.columns = take_all(b.columns, indices.data(),
@@ -161,7 +163,7 @@ DataFrame take(const DataFrame& b, dstd::Span<const std::int64_t> indices) {
 }
 
 // The same by an Int64 index column (an argsort's output), read in place.
-DataFrame take(const DataFrame& b, const Series& indices) {
+static DataFrame take_raw(const DataFrame& b, const Series& indices) {
     const Series flat =
         indices.is_flat() ? indices.share() : indices.materialize();
     DataFrame out;
@@ -174,7 +176,8 @@ DataFrame filter(const DataFrame& b, const Series& mask) {
     return take(b, mask_index_column(mask));
 }
 
-DataFrame slice(const DataFrame& b, std::int64_t offset, std::int64_t len) {
+static DataFrame slice_raw(const DataFrame& b, std::int64_t offset,
+                           std::int64_t len) {
     const std::int64_t nrows = b.num_rows();
     offset = std::clamp<std::int64_t>(offset, 0, nrows);
     len = std::clamp<std::int64_t>(len, 0, nrows - offset);
@@ -204,8 +207,8 @@ DataFrame slice(const DataFrame& b, std::int64_t offset, std::int64_t len) {
 
 DataFrame head(const DataFrame& b, std::int64_t n) { return slice(b, 0, n); }
 
-dstd::Result<DataFrame> select(const DataFrame& b,
-                               dstd::Span<const dstd::String> names) {
+static dstd::Result<DataFrame> select_raw(
+    const DataFrame& b, dstd::Span<const dstd::String> names) {
     DataFrame out;
     out.names.reserve(names.size());
     out.columns.reserve(names.size());
@@ -218,8 +221,8 @@ dstd::Result<DataFrame> select(const DataFrame& b,
     return out;
 }
 
-dstd::Result<DataFrame> rename(const DataFrame& b,
-                               dstd::Span<const dstd::String> new_names) {
+static dstd::Result<DataFrame> rename_raw(
+    const DataFrame& b, dstd::Span<const dstd::String> new_names) {
     if (new_names.size() != b.columns.size())
         return invalid_argument<"rename: name count must match columns">();
     DataFrame out;
@@ -231,8 +234,8 @@ dstd::Result<DataFrame> rename(const DataFrame& b,
     return out;
 }
 
-DataFrame with_column(const DataFrame& b, dstd::StringView name,
-                      const Series& col) {
+static DataFrame with_column_raw(const DataFrame& b, dstd::StringView name,
+                                 const Series& col) {
     DataFrame out;
     out.names = b.names;
     out.columns.reserve(b.columns.size() + 1);
@@ -247,8 +250,9 @@ DataFrame with_column(const DataFrame& b, dstd::StringView name,
     return out;
 }
 
-dstd::Result<DataFrame> sort_by(const DataFrame& b, dstd::StringView name,
-                                bool descending, bool nulls_last) {
+static dstd::Result<DataFrame> sort_by_raw(const DataFrame& b,
+                                           dstd::StringView name,
+                                           bool descending, bool nulls_last) {
     const dstd::Result<std::int64_t> k = require_index(b, name, "sort_by");
     if (!k) return k.error();
     Series order = argsort(b.columns[static_cast<std::size_t>(*k)], descending,
@@ -259,8 +263,9 @@ dstd::Result<DataFrame> sort_by(const DataFrame& b, dstd::StringView name,
     return take(b, order);
 }
 
-dstd::Result<DataFrame> topk(const DataFrame& b, dstd::StringView name,
-                             std::int64_t k, bool largest) {
+static dstd::Result<DataFrame> topk_raw(const DataFrame& b,
+                                        dstd::StringView name, std::int64_t k,
+                                        bool largest) {
     const dstd::Result<std::int64_t> j = require_index(b, name, "topk");
     if (!j) return j.error();
     Series ind =
@@ -842,9 +847,9 @@ dstd::Result<Series> concat_columns(dstd::Span<const Series* const> parts) {
     return Series{out};
 }
 
-dstd::Result<DataFrame> group_by(const DataFrame& b,
-                                 dstd::Span<const dstd::String> keys,
-                                 dstd::Span<const GroupAgg> aggs) {
+static dstd::Result<DataFrame> group_by_raw(const DataFrame& b,
+                                            dstd::Span<const dstd::String> keys,
+                                            dstd::Span<const GroupAgg> aggs) {
     dstd::Vector<const Series*> key_cols;
     key_cols.reserve(keys.size());
     for (const dstd::String& key : keys) {
@@ -1279,8 +1284,8 @@ dstd::Vector<Series> ConcatPlan::chunks(std::size_t c) const {
     return out;
 }
 
-dstd::Result<DataFrame> concat(dstd::Span<const DataFrame* const> parts,
-                               ConcatHow how) {
+static dstd::Result<DataFrame> concat_raw(
+    dstd::Span<const DataFrame* const> parts, ConcatHow how) {
     DataFrame out;
     if (parts.empty()) return out;
     const dstd::Result<ConcatPlan> plan = ConcatPlan::make(parts, how);
@@ -1363,7 +1368,7 @@ dstd::Result<Series> row_mask(const DataFrame& b, bool want_unique) {
 
 }  // namespace
 
-DataFrame drop_nulls(const DataFrame& b) {
+static DataFrame drop_nulls_raw(const DataFrame& b) {
     const std::int64_t n = b.num_rows();
     dstd::Vector<std::int64_t> idx;
     for (std::int64_t i = 0; i < n; ++i) {
@@ -1378,7 +1383,7 @@ DataFrame drop_nulls(const DataFrame& b) {
     return take(b, idx);
 }
 
-DataFrame fill_null(const DataFrame& b, dftu_scalar value) {
+static DataFrame fill_null_raw(const DataFrame& b, dftu_scalar value) {
     DataFrame out;
     out.names = b.names;
     out.columns.reserve(b.columns.size());
@@ -1389,8 +1394,8 @@ DataFrame fill_null(const DataFrame& b, dftu_scalar value) {
     return out;
 }
 
-dstd::Result<DataFrame> unique(const DataFrame& b,
-                               dstd::Span<const dstd::String> subset) {
+static dstd::Result<DataFrame> unique_raw(
+    const DataFrame& b, dstd::Span<const dstd::String> subset) {
     const std::int64_t n = b.num_rows();
     dstd::Vector<const Series*> cols;
     if (subset.empty()) {
@@ -1579,7 +1584,7 @@ bool radix_order(dstd::Span<const Series* const> keys,
 
 }  // namespace
 
-dstd::Result<DataFrame> sort_by_multi(
+static dstd::Result<DataFrame> sort_by_multi_raw(
     const DataFrame& b, dstd::Span<const dstd::String> names,
     dstd::Span<const std::uint8_t> descending,
     dstd::Span<const std::uint8_t> nulls_last) {
@@ -1710,13 +1715,13 @@ dstd::Result<DataFrame> sort_by_multi(const DataFrame& b,
                          dstd::Span<const std::uint8_t>(&last, 1));
 }
 
-DataFrame tail(const DataFrame& b, std::int64_t n) {
+static DataFrame tail_raw(const DataFrame& b, std::int64_t n) {
     const std::int64_t len = b.num_rows();
     n = std::clamp<std::int64_t>(n, 0, len);
     return slice(b, len - n, n);
 }
 
-DataFrame reverse(const DataFrame& b) {
+static DataFrame reverse_raw(const DataFrame& b) {
     const std::int64_t n = b.num_rows();
     dstd::Vector<std::int64_t> idx(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i)
@@ -1724,7 +1729,8 @@ DataFrame reverse(const DataFrame& b) {
     return take(b, idx);
 }
 
-DataFrame sample(const DataFrame& b, std::int64_t n, std::uint64_t seed) {
+static DataFrame sample_raw(const DataFrame& b, std::int64_t n,
+                            std::uint64_t seed) {
     const std::int64_t len = b.num_rows();
     n = std::clamp<std::int64_t>(n, 0, len);
     dstd::Vector<std::int64_t> order(static_cast<std::size_t>(len));
@@ -1742,7 +1748,7 @@ DataFrame sample(const DataFrame& b, std::int64_t n, std::uint64_t seed) {
     return take(b, order);
 }
 
-DataFrame with_row_index(const DataFrame& b, dstd::StringView name) {
+static DataFrame with_row_index_raw(const DataFrame& b, dstd::StringView name) {
     const std::int64_t n = b.num_rows();
     dstd::Vector<std::int64_t> ids(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i) ids[static_cast<std::size_t>(i)] = i;
@@ -1758,7 +1764,7 @@ DataFrame with_row_index(const DataFrame& b, dstd::StringView name) {
     return out;
 }
 
-DataFrame describe(const DataFrame& b) {
+static DataFrame describe_raw(const DataFrame& b) {
     const dstd::Vector<dstd::String> stat_names = {
         "count", "null_count", "mean", "std", "min", "max"};
     DataFrame out;
@@ -1782,7 +1788,7 @@ DataFrame describe(const DataFrame& b) {
     return out;
 }
 
-DataFrame null_count(const DataFrame& b) {
+static DataFrame null_count_raw(const DataFrame& b) {
     DataFrame out;
     out.names = b.names;
     out.columns.reserve(b.columns.size());
@@ -1904,8 +1910,8 @@ dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
     return reduce_specs_of<dstd::SharedString>(names, types, agg, keys);
 }
 
-dstd::Result<DataFrame> reduce(const DataFrame& b,
-                               dstd::Span<const GroupAgg> aggs) {
+static dstd::Result<DataFrame> reduce_raw(const DataFrame& b,
+                                          dstd::Span<const GroupAgg> aggs) {
     return group_by(b, dstd::Vector<dstd::String>{}, aggs);
 }
 
@@ -1975,9 +1981,9 @@ bool is_float_type(TypeId t) {
 
 }  // namespace
 
-dstd::Result<DataFrame> unpivot(const DataFrame& b,
-                                dstd::Span<const dstd::String> id_vars,
-                                dstd::Span<const dstd::String> value_vars) {
+static dstd::Result<DataFrame> unpivot_raw(
+    const DataFrame& b, dstd::Span<const dstd::String> id_vars,
+    dstd::Span<const dstd::String> value_vars) {
     if (value_vars.empty())
         return invalid_argument<"unpivot: value_vars must be non-empty">();
 
@@ -2098,17 +2104,19 @@ dstd::Result<DataFrame> explode_impl(const DataFrame& b,
 
 }  // namespace
 
-dstd::Result<DataFrame> explode(const DataFrame& b, dstd::StringView column) {
+static dstd::Result<DataFrame> explode_raw(const DataFrame& b,
+                                           dstd::StringView column) {
     return explode_impl(b, column, true, false, "explode");
 }
 
-dstd::Result<DataFrame> unnest(const DataFrame& b, dstd::StringView column,
-                               bool keep_empty) {
+static dstd::Result<DataFrame> unnest_raw(const DataFrame& b,
+                                          dstd::StringView column,
+                                          bool keep_empty) {
     return explode_impl(b, column, keep_empty, true, "unnest");
 }
 
-dstd::Result<DataFrame> to_dummies(const DataFrame& b,
-                                   dstd::StringView column) {
+static dstd::Result<DataFrame> to_dummies_raw(const DataFrame& b,
+                                              dstd::StringView column) {
     const dstd::Result<std::int64_t> col =
         require_index(b, column, "to_dummies");
     if (!col) return col.error();
@@ -2191,10 +2199,11 @@ dstd::Result<PivotMode> pivot_mode_of(dstd::StringView agg, AggOp& op) {
 
 }  // namespace
 
-dstd::Result<DataFrame> pivot(const DataFrame& b, dstd::StringView index_name,
-                              dstd::StringView columns_name,
-                              dstd::StringView values_name,
-                              dstd::StringView agg) {
+static dstd::Result<DataFrame> pivot_raw(const DataFrame& b,
+                                         dstd::StringView index_name,
+                                         dstd::StringView columns_name,
+                                         dstd::StringView values_name,
+                                         dstd::StringView agg) {
     const dstd::Result<std::int64_t> index_col =
         require_index(b, index_name, "pivot");
     if (!index_col) return index_col.error();
@@ -2322,12 +2331,10 @@ dstd::Result<DataFrame> pivot(const DataFrame& b, dstd::StringView index_name,
     return out;
 }
 
-dstd::Result<DataFrame> group_by_dynamic(const DataFrame& b,
-                                         dstd::StringView time_col,
-                                         std::int64_t every,
-                                         std::int64_t period,
-                                         dstd::Span<const GroupAgg> aggs,
-                                         std::int64_t origin, bool origin_min) {
+static dstd::Result<DataFrame> group_by_dynamic_raw(
+    const DataFrame& b, dstd::StringView time_col, std::int64_t every,
+    std::int64_t period, dstd::Span<const GroupAgg> aggs, std::int64_t origin,
+    bool origin_min) {
     if (every <= 0)
         return invalid_argument<"group_by_dynamic: every must be > 0">();
     if (period <= 0) period = every;
@@ -2477,6 +2484,206 @@ dstd::Result<DataFrame> group_by_dynamic(const DataFrame& b,
         group_agg(keyc, values, std::move(specs), time_col);
     if (!res) return res.error();
     return sort_by(*res, time_col, false);
+}
+
+// The row-index rules (frame_op_index_rules.def) apply in these wrappers: each
+// public frame op runs its `_raw` body, then sets the result's index.
+
+DataFrame take(const DataFrame& b, dstd::Span<const std::int64_t> indices) {
+    DataFrame out = take_raw(b, indices);
+    index_keep<"take">(b, out);
+    return out;
+}
+
+DataFrame take(const DataFrame& b, const Series& indices) {
+    DataFrame out = take_raw(b, indices);
+    index_keep<"take">(b, out);
+    return out;
+}
+
+DataFrame slice(const DataFrame& b, std::int64_t offset, std::int64_t len) {
+    DataFrame out = slice_raw(b, offset, len);
+    index_keep<"slice">(b, out);
+    return out;
+}
+
+dstd::Result<DataFrame> select(const DataFrame& b,
+                               dstd::Span<const dstd::String> names) {
+    dstd::Result<DataFrame> out = select_raw(b, names);
+    if (out) index_keep<"select">(b, *out);
+    return out;
+}
+
+dstd::Result<DataFrame> rename(const DataFrame& b,
+                               dstd::Span<const dstd::String> new_names) {
+    dstd::Result<DataFrame> out = rename_raw(b, new_names);
+    if (out) index_renamed<"rename">(b, *out);
+    return out;
+}
+
+DataFrame with_column(const DataFrame& b, dstd::StringView name,
+                      const Series& col) {
+    DataFrame out = with_column_raw(b, name, col);
+    index_keep<"with_column">(b, out);
+    return out;
+}
+
+dstd::Result<DataFrame> sort_by(const DataFrame& b, dstd::StringView name,
+                                bool descending, bool nulls_last) {
+    dstd::Result<DataFrame> out = sort_by_raw(b, name, descending, nulls_last);
+    if (out) index_keep<"sort_by">(b, *out);
+    return out;
+}
+
+dstd::Result<DataFrame> topk(const DataFrame& b, dstd::StringView name,
+                             std::int64_t k, bool largest) {
+    dstd::Result<DataFrame> out = topk_raw(b, name, k, largest);
+    if (out) index_keep<"topk">(b, *out);
+    return out;
+}
+
+dstd::Result<DataFrame> group_by(const DataFrame& b,
+                                 dstd::Span<const dstd::String> keys,
+                                 dstd::Span<const GroupAgg> aggs) {
+    dstd::Result<DataFrame> out = group_by_raw(b, keys, aggs);
+    if (out) index_keys<"group_by">(b, keys, *out);
+    return out;
+}
+
+dstd::Result<DataFrame> concat(dstd::Span<const DataFrame* const> parts,
+                               ConcatHow how) {
+    dstd::Result<DataFrame> out = concat_raw(parts, how);
+    if (out) index_concat<"concat">(parts, *out);
+    return out;
+}
+
+DataFrame drop_nulls(const DataFrame& b) {
+    DataFrame out = drop_nulls_raw(b);
+    index_keep<"drop_nulls">(b, out);
+    return out;
+}
+
+DataFrame fill_null(const DataFrame& b, dftu_scalar value) {
+    DataFrame out = fill_null_raw(b, value);
+    index_keep<"fill_null">(b, out);
+    return out;
+}
+
+dstd::Result<DataFrame> unique(const DataFrame& b,
+                               dstd::Span<const dstd::String> subset) {
+    dstd::Result<DataFrame> out = unique_raw(b, subset);
+    if (out) index_keep<"unique">(b, *out);
+    return out;
+}
+
+dstd::Result<DataFrame> sort_by_multi(
+    const DataFrame& b, dstd::Span<const dstd::String> names,
+    dstd::Span<const std::uint8_t> descending,
+    dstd::Span<const std::uint8_t> nulls_last) {
+    dstd::Result<DataFrame> out =
+        sort_by_multi_raw(b, names, descending, nulls_last);
+    if (out) index_keep<"sort_by_multi">(b, *out);
+    return out;
+}
+
+DataFrame tail(const DataFrame& b, std::int64_t n) {
+    DataFrame out = tail_raw(b, n);
+    index_keep<"tail">(b, out);
+    return out;
+}
+
+DataFrame reverse(const DataFrame& b) {
+    DataFrame out = reverse_raw(b);
+    index_keep<"reverse">(b, out);
+    return out;
+}
+
+DataFrame sample(const DataFrame& b, std::int64_t n, std::uint64_t seed) {
+    DataFrame out = sample_raw(b, n, seed);
+    index_keep<"sample">(b, out);
+    return out;
+}
+
+DataFrame with_row_index(const DataFrame& b, dstd::StringView name) {
+    DataFrame out = with_row_index_raw(b, name);
+    index_drop<"with_row_index">(out);
+    return out;
+}
+
+DataFrame describe(const DataFrame& b) {
+    DataFrame out = describe_raw(b);
+    index_drop<"describe">(out);
+    return out;
+}
+
+DataFrame null_count(const DataFrame& b) {
+    DataFrame out = null_count_raw(b);
+    index_drop<"null_count">(out);
+    return out;
+}
+
+dstd::Result<DataFrame> reduce(const DataFrame& b,
+                               dstd::Span<const GroupAgg> aggs) {
+    dstd::Result<DataFrame> out = reduce_raw(b, aggs);
+    if (out) index_drop<"reduce">(*out);
+    return out;
+}
+
+dstd::Result<DataFrame> unpivot(const DataFrame& b,
+                                dstd::Span<const dstd::String> id_vars,
+                                dstd::Span<const dstd::String> value_vars) {
+    dstd::Result<DataFrame> out = unpivot_raw(b, id_vars, value_vars);
+    if (out) index_drop<"unpivot">(*out);
+    return out;
+}
+
+dstd::Result<DataFrame> explode(const DataFrame& b, dstd::StringView column) {
+    dstd::Result<DataFrame> out = explode_raw(b, column);
+    if (out) index_keep<"explode">(b, *out);
+    return out;
+}
+
+dstd::Result<DataFrame> unnest(const DataFrame& b, dstd::StringView column,
+                               bool keep_empty) {
+    dstd::Result<DataFrame> out = unnest_raw(b, column, keep_empty);
+    if (out) index_keep<"unnest">(b, *out);
+    return out;
+}
+
+dstd::Result<DataFrame> to_dummies(const DataFrame& b,
+                                   dstd::StringView column) {
+    dstd::Result<DataFrame> out = to_dummies_raw(b, column);
+    if (out) index_keep<"to_dummies">(b, *out);
+    return out;
+}
+
+dstd::Result<DataFrame> pivot(const DataFrame& b, dstd::StringView index_name,
+                              dstd::StringView columns_name,
+                              dstd::StringView values_name,
+                              dstd::StringView agg) {
+    dstd::Result<DataFrame> out =
+        pivot_raw(b, index_name, columns_name, values_name, agg);
+    if (out) {
+        const dstd::String key(index_name);
+        index_keys<"pivot">(b, dstd::Span<const dstd::String>(&key, 1), *out);
+    }
+    return out;
+}
+
+dstd::Result<DataFrame> group_by_dynamic(const DataFrame& b,
+                                         dstd::StringView time_col,
+                                         std::int64_t every,
+                                         std::int64_t period,
+                                         dstd::Span<const GroupAgg> aggs,
+                                         std::int64_t origin, bool origin_min) {
+    dstd::Result<DataFrame> out = group_by_dynamic_raw(
+        b, time_col, every, period, aggs, origin, origin_min);
+    if (out) {
+        const dstd::String key(time_col);
+        index_keys<"group_by_dynamic">(
+            b, dstd::Span<const dstd::String>(&key, 1), *out);
+    }
+    return out;
 }
 
 }  // namespace dftracer::utils::dataframe

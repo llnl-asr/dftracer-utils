@@ -77,6 +77,9 @@ struct DataFrameObject {
     PyObject_HEAD PyObject* weaklist;
     Series st;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::SharedString> names;
+    // The row index names, empty for none (DataFrame::index_names).
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::SharedString>
+        index_names;
 };
 
 PyTypeObject DataFrameType;
@@ -106,12 +109,16 @@ PyObject* make_dataframe(DataFrame&& b) {
     new (&self->names)
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::SharedString>(
             std::move(b.names));
+    new (&self->index_names)
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::SharedString>();
+    if (b.row_index) self->index_names = std::move(*b.row_index);
     return reinterpret_cast<PyObject*>(self);
 }
 
 void DataFrame_dealloc(DataFrameObject* self) {
     if (self->weaklist)
         PyObject_ClearWeakRefs(reinterpret_cast<PyObject*>(self));
+    self->index_names.~vector();
     self->names.~vector();
     self->st.~Series();
     Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
@@ -132,6 +139,10 @@ DataFrame to_dataframe(const DataFrameObject* self) {
     b.columns.reserve(self->names.size());
     for (std::size_t i = 0; i < self->names.size(); ++i)
         b.columns.push_back(self->st.child(static_cast<std::int64_t>(i)));
+    if (!self->index_names.empty())
+        b.row_index = dftracer::utils::dstd::make_unique<
+            dftracer::utils::dstd::Vector<dftracer::utils::dstd::SharedString>>(
+            self->index_names);
     return b;
 }
 
@@ -166,47 +177,15 @@ PyObject* run_batch_op(const DataFrameObject* b, Fn&& fn) {
 PyObject* DataFrame_filter(PyObject* self, PyObject* mask);
 PyObject* DataFrame_select(PyObject* self, PyObject* args);
 
-// `result` (a new reference, or null) carrying the index names of `self`, a
-// Python-level property of the subclass, when the result still holds every one
-// of them.
-PyObject* carry_index(PyObject* self, PyObject* result) {
-    if (!result) return nullptr;
-    PyObject* index = PyObject_GetAttrString(self, "_index");
-    if (!index) {
-        PyErr_Clear();
-        return result;
-    }
-    if (index != Py_None) {
-        bool holds_all = true;
-        const Py_ssize_t n = PyList_Check(index) ? PyList_GET_SIZE(index) : 0;
-        for (Py_ssize_t k = 0; k < n && holds_all; ++k) {
-            const int has =
-                PySequence_Contains(result, PyList_GET_ITEM(index, k));
-            if (has < 0) {
-                Py_DECREF(index);
-                Py_DECREF(result);
-                return nullptr;
-            }
-            holds_all = has == 1;
-        }
-        if (holds_all && PyObject_SetAttrString(result, "_index", index) < 0) {
-            Py_DECREF(index);
-            Py_DECREF(result);
-            return nullptr;
-        }
-    }
-    Py_DECREF(index);
-    return result;
-}
-
 // df["a"] is a column; df[["a", "b"]] a projection and df[mask] the rows where
-// a Bool Series holds (the pandas spellings), both carrying the index names.
+// a Bool Series holds (the pandas spellings), both under the frame op index
+// rules.
 PyObject* DataFrame_subscript(PyObject* self, PyObject* key) {
     DataFrameObject* b = as_native<DataFrameObject>(self);
     if (!b) return nullptr;
     if (!PyUnicode_Check(key)) {
         if (dftracer::utils::python::frame::unwrap_vec_column(key))
-            return carry_index(self, DataFrame_filter(self, key));
+            return DataFrame_filter(self, key);
         PyObject* names = PySequence_Tuple(key);
         if (!names) {
             PyErr_SetString(PyExc_TypeError,
@@ -224,7 +203,7 @@ PyObject* DataFrame_subscript(PyObject* self, PyObject* key) {
         }
         PyObject* out = DataFrame_select(self, names);
         Py_DECREF(names);
-        return carry_index(self, out);
+        return out;
     }
     const char* name = PyUnicode_AsUTF8(key);
     if (!name) return nullptr;
@@ -248,8 +227,8 @@ int DataFrame_contains(PyObject* self, PyObject* key) {
     return index_of(b, name) >= 0 ? 1 : 0;
 }
 
-// _replace(other): this frame takes the columns of `other`, in place. The
-// frame's own Python state (the index names) is left alone. Kernels read a
+// _replace(other): this frame takes the columns and the index names of
+// `other`, in place. Kernels read a
 // view taken under the GIL, so one running on another thread keeps the old
 // columns.
 PyObject* DataFrame_replace(PyObject* self, PyObject* other) {
@@ -261,13 +240,13 @@ PyObject* DataFrame_replace(PyObject* self, PyObject* other) {
         DataFrame f = to_dataframe(o);
         Series st = Series::structs(f.names, std::move(f.columns));
         b->names = o->names;
+        b->index_names = o->index_names;
         b->st = std::move(st);
         Py_RETURN_NONE;
     });
 }
 
-// share() -> DataFrame: a new object over the same columns, with no state of
-// its own.
+// share() -> DataFrame: a new object over the same columns and index names.
 PyObject* DataFrame_share(PyObject* self, PyObject*) {
     DataFrameObject* b = as_native<DataFrameObject>(self);
     if (!b) return nullptr;
@@ -275,13 +254,14 @@ PyObject* DataFrame_share(PyObject* self, PyObject*) {
         [&]() -> PyObject* { return make_dataframe(to_dataframe(b)); });
 }
 
-PyObject* DataFrame_keys(PyObject* self, PyObject*) {
+// index_names() -> list[str]: the row index columns, in order; [] for none.
+PyObject* DataFrame_index_names(PyObject* self, PyObject*) {
     DataFrameObject* b = as_native<DataFrameObject>(self);
     if (!b) return nullptr;
-    PyObject* list = PyList_New(static_cast<Py_ssize_t>(b->names.size()));
+    PyObject* list = PyList_New(static_cast<Py_ssize_t>(b->index_names.size()));
     if (!list) return nullptr;
-    for (std::size_t i = 0; i < b->names.size(); ++i) {
-        PyObject* s = PyUnicode_FromString(b->names[i].c_str());
+    for (std::size_t i = 0; i < b->index_names.size(); ++i) {
+        PyObject* s = PyUnicode_FromString(b->index_names[i].c_str());
         if (!s) {
             Py_DECREF(list);
             return nullptr;
@@ -289,6 +269,72 @@ PyObject* DataFrame_keys(PyObject* self, PyObject*) {
         PyList_SET_ITEM(list, static_cast<Py_ssize_t>(i), s);
     }
     return list;
+}
+
+// with_index(names) -> DataFrame: this frame's columns under the row index
+// `names` (a list of str; [] drops it). KeyError for a name that is no column,
+// ValueError for a repeated name or a column of a nested type.
+PyObject* DataFrame_with_index(PyObject* self, PyObject* names) {
+    DataFrameObject* b = as_native<DataFrameObject>(self);
+    if (!b) return nullptr;
+    PyObject* seq =
+        PySequence_Fast(names, "with_index() expects a list of names");
+    if (!seq) return nullptr;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
+    const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+    for (Py_ssize_t k = 0; k < n; ++k) {
+        PyObject* item = PySequence_Fast_GET_ITEM(seq, k);
+        const char* text =
+            PyUnicode_Check(item) ? PyUnicode_AsUTF8(item) : nullptr;
+        if (!text) {
+            if (!PyErr_Occurred())
+                PyErr_SetString(PyExc_TypeError,
+                                "with_index() names must be str");
+            Py_DECREF(seq);
+            return nullptr;
+        }
+        keys.emplace_back(text);
+    }
+    Py_DECREF(seq);
+    return guard([&]() -> PyObject* {
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> views;
+        views.reserve(keys.size());
+        for (const auto& key : keys) views.emplace_back(key);
+        auto out = to_dataframe(b).with_index(views);
+        if (!out) {
+            dftracer::utils::python::core::set_py_error(out.error());
+            return nullptr;
+        }
+        return make_dataframe(std::move(*out));
+    });
+}
+
+PyObject* column_name_list(PyObject* self, bool hide_index) {
+    DataFrameObject* b = as_native<DataFrameObject>(self);
+    if (!b) return nullptr;
+    PyObject* list = PyList_New(0);
+    if (!list) return nullptr;
+    for (std::size_t i = 0; i < b->names.size(); ++i) {
+        bool is_index = false;
+        if (hide_index)
+            for (const auto& index_name : b->index_names)
+                if (dftracer::utils::dstd::StringView(index_name) ==
+                    dftracer::utils::dstd::StringView(b->names[i]))
+                    is_index = true;
+        if (is_index) continue;
+        PyObject* s = PyUnicode_FromString(b->names[i].c_str());
+        if (!s || PyList_Append(list, s) < 0) {
+            Py_XDECREF(s);
+            Py_DECREF(list);
+            return nullptr;
+        }
+        Py_DECREF(s);
+    }
+    return list;
+}
+
+PyObject* DataFrame_keys(PyObject* self, PyObject*) {
+    return column_name_list(self, true);
 }
 
 PyObject* DataFrame_filter(PyObject* self, PyObject* mask) {
@@ -1379,7 +1425,7 @@ PyObject* DataFrame_arrow_c_array(PyObject* self, PyObject*) {
     dftracer::utils::dstd::UniquePtr<ArrowArray> array;
     schema = dftracer::utils::dstd::make_unique<ArrowSchema>();
     array = dftracer::utils::dstd::make_unique<ArrowArray>();
-    auto batch = arrow::to_arrow(b->st);
+    auto batch = arrow::to_arrow(to_dataframe(b));
     if (!batch) {
         dftracer::utils::python::core::set_py_error(batch.error());
         return nullptr;
@@ -1420,11 +1466,7 @@ PyObject* DataFrame_arrow_c_stream(PyObject* self, PyObject* args,
         return nullptr;
     DataFrameObject* b = as_native<DataFrameObject>(self);
     if (!b) return nullptr;
-    dataframe::DataFrame frame;
-    frame.names = b->names;
-    for (std::size_t i = 0; i < b->names.size(); ++i)
-        frame.columns.push_back(Series(
-            dftu_series_child(b->st.handle(), static_cast<std::int32_t>(i))));
+    const dataframe::DataFrame frame = to_dataframe(b);
     auto stream = dftracer::utils::dstd::make_unique<ArrowArrayStream>();
     auto status = arrow::to_arrow_stream(frame, stream.get());
     if (!status) {
@@ -1501,7 +1543,7 @@ PyObject* DataFrame_get_num_columns(PyObject* self, void*) {
     return PyLong_FromSsize_t(static_cast<Py_ssize_t>(b->names.size()));
 }
 PyObject* DataFrame_get_column_names(PyObject* self, void*) {
-    return DataFrame_keys(self, nullptr);
+    return column_name_list(self, false);
 }
 
 // lazy() -> LazyFrame: start a deferred query over a copy of this batch.
@@ -1517,11 +1559,19 @@ PyObject* DataFrame_lazy(PyObject* self, PyObject*) {
 PyMethodDef DataFrame_methods[] = {
     {"lazy", DataFrame_lazy, METH_NOARGS,
      "lazy() -> LazyFrame, a deferred query over this batch."},
-    {"keys", DataFrame_keys, METH_NOARGS, "Series names, in order."},
+    {"keys", DataFrame_keys, METH_NOARGS,
+     "Series names, in order; the row index columns are not listed."},
     {"_replace", DataFrame_replace, METH_O,
      "_replace(other) -> None\n\nTake the columns of `other`, in place."},
     {"share", DataFrame_share, METH_NOARGS,
-     "share() -> DataFrame\n\nA new DataFrame over the same columns."},
+     "share() -> DataFrame\n\nA new DataFrame over the same columns and "
+     "index names."},
+    {"index_names", DataFrame_index_names, METH_NOARGS,
+     "index_names() -> list[str]\n\nThe row index columns, in order; [] "
+     "when the frame has no index."},
+    {"with_index", DataFrame_with_index, METH_O,
+     "with_index(names) -> DataFrame\n\nThe same columns under the row index "
+     "`names` ([] drops the index)."},
     {"filter", DataFrame_filter, METH_O,
      "filter(mask) -> DataFrame keeping rows where the Bool mask is true."},
     {"select", DataFrame_select, METH_VARARGS,

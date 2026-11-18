@@ -69,7 +69,9 @@ def test_loc_reads_default_index_and_set_index():
 
     d = df.set_index("k")
     pk = pdf.set_index("k")
-    assert d.columns == ["k", "a", "s"]  # the column stays; only the name is stored
+    assert d.columns == list(pk.columns) == ["a", "s"]  # as pandas: the index column leaves columns
+    assert d["k"].to_list() == [10, 20, 30, 40]  # and stays a column
+    assert sorted(d.schema) == ["a", "k", "s"]
     assert d.index.to_list() == [10, 20, 30, 40]
     assert d.loc[20]["a"].to_list() == [2]
     assert d.loc[20:30, "a"].to_list() == pk.loc[20:30, "a"].tolist()
@@ -99,10 +101,10 @@ def test_loc_reads_default_index_and_set_index():
     # The index name follows the frame through ops that keep the column, and
     # is dropped when the column goes.
     assert d.sort_values("a", ascending=False).loc[10, "s"].to_list() == ["x"]
-    assert d.filter(d["a"] > 1)._index == ["k"]
+    assert d.filter(d["a"] > 1).index_names() == ["k"]
     assert d.head(2).loc[20]["a"].to_list() == [2]
-    assert d.select("a")._index is None
-    assert d.lazy()._index == ["k"]
+    assert d.select("a").index_names() == []
+    assert d.lazy().index_names() == ["k"]
 
 
 def test_reset_index():
@@ -112,7 +114,7 @@ def test_reset_index():
     assert df.reset_index(drop=True).columns == ["k", "a", "s"]
     d = df.set_index("k")
     back = d.reset_index()
-    assert back.columns == ["k", "a", "s"] and back._index is None
+    assert back.columns == ["k", "a", "s"] and back.index_names() == []
     assert d.reset_index(drop=True).columns == ["a", "s"]
 
 
@@ -131,9 +133,8 @@ def test_assignment_matches_pandas_copy_on_write():
 
     d.loc[20, "s"] = "Y"
     pk.loc[20, "s"] = "Y"
-    # The index column stays a column here, so positions count it (pandas
-    # moves it out of the columns: its column 0 is our column 1).
-    d.iloc[0, 1] = 99
+    # Positions skip the index column, as in pandas.
+    d.iloc[0, 0] = 99
     pk.iloc[0, 0] = 99
     d.at[40, "a"] = -1
     pk.at[40, "a"] = -1
@@ -147,7 +148,7 @@ def test_assignment_matches_pandas_copy_on_write():
     pk["c"] = 1
     d.loc[:, ["a", "c"]] = 5
     pk.loc[:, ["a", "c"]] = 5
-    d.iat[3, 1] = 8
+    d.iat[3, 0] = 8
     pk.iat[3, 0] = 8
     d.loc[d["b"] > 3, ["a", "c"]] = {"a": 0, "c": 9}  # a dict value, one per column
     got = _d(d)
@@ -158,13 +159,18 @@ def test_assignment_matches_pandas_copy_on_write():
         assert got[c] == [None if pd.isna(v) else v for v in exp[c].tolist()], c
     assert got["a"] == [5, 5, 0, 0]
     assert got["c"] == [5, 5, 9, 9]
-    assert d.columns == ["k", "a", "s", "new", "b", "c"]
-    assert d._index == ["k"]
+    assert d.columns == ["a", "s", "new", "b", "c"]
+    assert d.index_names() == ["k"]
 
     # Every column where a mask holds (pandas df[mask] = value).
-    num = d.select("k", "a", "b")
+    num = d.select("k", "a", "b").reset_index()
     num[num["a"] > 4] = 0
     assert _d(num) == {"k": [0, 0, 30, 40], "a": [0, 0, 0, 0], "b": [0.0, 0.0, 3.5, 4.5]}
+    # With "k" an index column, the mask leaves it alone, as pandas does.
+    kept = d.select("k", "a", "b")
+    kept[kept["a"] > 4] = 0
+    assert kept.index_names() == ["k"]
+    assert _d(kept) == {"k": [10, 20, 30, 40], "a": [0, 0, 0, 0], "b": [0.0, 0.0, 3.5, 4.5]}
     # A Series value, full length, and a mismatched length.
     num["a"] = Series([7, 8, 9, 10])
     assert num["a"].to_list() == [7, 8, 9, 10]
@@ -198,14 +204,14 @@ def test_lazy_iloc_loc_and_assignment():
     assert _d(lf.loc[col("a") > 2, ["s"]].collect()) == {"s": ["z", "w"]}
 
     k = lf.set_index("k")
-    assert k.filter(col("a") > 1)._index == ["k"]
+    assert k.filter(col("a") > 1).index_names() == ["k"]
     assert _d(k.loc[20:30, "a"].collect()) == {"a": [2, 3]}
     assert _d(k.loc[20].collect())["s"] == ["y"]
-    assert k.loc[[10, 40]].collect().columns == ["k", "a", "s"]
+    assert k.loc[[10, 40]].collect().columns == ["a", "s"]
     assert _d(k.loc[Series([False, True, True, False]), "a"].collect()) == {"a": [2, 3]}
     with pytest.raises(TypeError):
         k.loc[Series([10, 20])]
-    assert k.reset_index()._index is None
+    assert k.reset_index().index_names() == []
     assert k.reset_index(drop=True).columns == ["a", "s"]
     assert lf.reset_index().columns == ["index", "k", "a", "s"]
 
@@ -294,7 +300,7 @@ def test_several_index_columns_match_pandas_multiindex():
     )
     d = df.set_index(["pid", "tid"])
     pm = df.to_pandas().set_index(["pid", "tid"])
-    assert d._index == ["pid", "tid"]
+    assert d.index_names() == ["pid", "tid"]
     assert d.index.columns == ["pid", "tid"]
     assert len(d.index_levels()) == 2
 
@@ -323,12 +329,13 @@ def test_several_index_columns_match_pandas_multiindex():
     d.loc[[(1, 10), (2, 12)], "v"] = -1
     pm.loc[[(1, 10), (2, 12)], "v"] = -1
     assert d["v"].to_list() == pm["v"].tolist()
-    assert d._index == ["pid", "tid"]
-    # The names follow the frame while both columns stay, and go together.
-    assert d.sort_values("v")._index == ["pid", "tid"]
-    assert d.select("pid", "v")._index is None
+    assert d.index_names() == ["pid", "tid"]
+    # The names follow the frame while their columns stay; a dropped column
+    # leaves the index.
+    assert d.sort_values("v").index_names() == ["pid", "tid"]
+    assert d.select("pid", "v").index_names() == ["pid"]
     assert d.reset_index(drop=True).columns == ["v"]
-    assert df.set_index(["pid"])._index == ["pid"]
+    assert df.set_index(["pid"]).index_names() == ["pid"]
     with pytest.raises(ValueError):
         df.set_index([])
 
@@ -343,4 +350,4 @@ def test_several_index_columns_match_pandas_multiindex():
     k.loc[(2, 11), "v"] = 0
     k.loc[[(1, 10), (2, 12)], "v"] = -1
     assert _d(k.collect())["v"] == d["v"].to_list()
-    assert k.collect()._index == ["pid", "tid"]
+    assert k.collect().index_names() == ["pid", "tid"]

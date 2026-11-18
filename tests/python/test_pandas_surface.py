@@ -166,7 +166,7 @@ def test_frame_conveniences():
     with pytest.raises(ValueError):
         df.set_axis(["x"])
     assert df.equals(df.copy()) and not df.equals(df.head(2))
-    assert df.copy().set_index("a")._index == ["a"]
+    assert df.copy().set_index("a").index_names() == ["a"]
     assert df.select("a").squeeze().to_list() == [1, 2, None, 4]
     assert DataFrame({"a": [7]}).squeeze() == 7
     assert df.select_dtypes("number").columns == ["a", "b"]
@@ -765,7 +765,7 @@ def test_datetime_index_methods_match_pandas():
         _d(small.asfreq("1s", method="bfill"))["v"] == ps.asfreq("1s", method="bfill")["v"].tolist()
     )
     assert _d(small.asfreq("1s", fill_value=0))["v"] == ps.asfreq("1s", fill_value=0)["v"].tolist()
-    assert small.asfreq("1s")._index == ["ts"]
+    assert small.asfreq("1s").index_names() == ["ts"]
     with pytest.raises(ValueError, match="more than once"):
         DataFrame({"ts": [0, 0], "v": [1, 2]}).set_index("ts").asfreq("1s")
     # A typed Timestamp column brings its own unit and type.
@@ -850,7 +850,7 @@ def test_groupby_fills_rolling_take_sample_resample_match_pandas():
     assert _d(got) == {"k": ["a", "a", "b", "b"], "ts": [0, 2 * us, 0, 8 * us], "v": [1, 7, 2, 5]}
     assert _d(got)["v"] == ref.tolist()
     assert [int(ts.timestamp() * us) for _, ts in ref.index] == _d(got)["ts"]
-    assert got._index == ["k", "ts"]
+    assert got.index_names() == ["k", "ts"]
     assert _d(t.group_by("k").resample("2s").size())["size"] == [1, 2, 1, 1]
     assert _d(t.group_by("k").resample("2s").agg(vmax=("v", "max")))["vmax"] == [1, 4, 2, 5]
     assert _d(t.group_by("k").resample(2 * us).sum()) == _d(got)
@@ -897,11 +897,11 @@ def test_tz_localize_and_tz_convert_match_pandas():
     df = DataFrame({"ts": s, "v": [1, 2, 3]}).set_index("ts")
     paris = df.tz_localize("UTC").tz_convert("Europe/Paris")
     assert paris["ts"].dt.tz == "Europe/Paris"
-    assert paris._index == ["ts"]
+    assert paris.index_names() == ["ts"]
     assert _d(paris)["v"] == [1, 2, 3]
     pdf = pd.DataFrame({"v": [1, 2, 3]}, index=pd.to_datetime(ticks, unit="us"))
     assert (
-        paris.to_pandas()["ts"].tolist()
+        paris.to_pandas().index.tolist()
         == pdf.tz_localize("UTC").tz_convert("Europe/Paris").index.tolist()
     )
     assert df.reset_index().tz_localize("UTC", on="ts")["ts"].dt.tz == "UTC"
@@ -997,8 +997,9 @@ def test_last_pandas_names_match_pandas():
     _same(q.corrwith(o), pq.corrwith(po, numeric_only=True).to_frame().T)
     text = q.info()
     assert text.startswith("DataFrame: 3 rows, 3 columns") and "a: int64, 2 present" in text
-    assert q.set_index("a").rename_axis("idx").columns[0] == "idx"
-    assert q.set_index("a").rename_axis("idx")._index == ["idx"]
+    assert list(q.set_index("a").rename_axis("idx").schema)[0] == "idx"
+    assert q.set_index("a").rename_axis("idx").columns == ["b", "s"]
+    assert q.set_index("a").rename_axis("idx").index_names() == ["idx"]
     with pytest.raises(ValueError):
         q.rename_axis("idx")
     _same(q.kurt(), pq.kurtosis(numeric_only=True).to_frame().T)
@@ -1121,7 +1122,8 @@ def test_groupby_column_selection_and_series_key_match_pandas():
     ref = pdf.groupby("k")["b"].agg(["sum", "mean"])
     assert ours == {"k": ["x", "y"], "sum": ref["sum"].tolist(), "mean": ref["mean"].tolist()}
     assert _d(df.groupby("k")["b"].sum())["b"] == pdf.groupby("k")["b"].sum().tolist()
-    assert list(df.groupby("k")[["a"]].agg("max").columns) == ["k", "a"]
+    kept = df.groupby("k")[["a"]].agg("max")
+    assert list(kept.columns) == ["a"] and kept.index_names() == ["k"]
     # A Series key: the group column is named `key`, groups sorted as pandas.
     ours = _d(df.groupby(df["a"] // 2)["b"].agg(["count", "sum"]))
     ref = pdf.groupby(pdf["a"] // 2)["b"].agg(["count", "sum"])
@@ -1595,7 +1597,7 @@ def test_sketch_quantile_matches_duql_merge(tmp_path):
         " | sort name"
     ).collect()
     aggs = {"q50": col("s").sketch_quantile(0.5), "q99": col("s").sketch_quantile(0.99)}
-    eager = parts.groupby("name").agg(**aggs)
+    eager = parts.groupby("name", as_index=False).agg(**aggs)
     lazy = parts.lazy().group_by("name").agg(**aggs).sort("name").collect()
     assert eager.to_dict() == want.to_dict()
     assert lazy.to_dict() == want.to_dict()

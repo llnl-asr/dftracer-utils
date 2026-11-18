@@ -266,12 +266,9 @@ class PluginJoin {
             any |= c.encoding() == Encoding::Chunked;
         if (!any) return f;
         changed_ = true;
-        DataFrame j;
-        j.names = d.names;
-        for (const auto& c : d.columns)
-            j.columns.push_back(c.encoding() == Encoding::Chunked
-                                    ? c.materialize()
-                                    : c.share());
+        DataFrame j = d.share();
+        for (auto& c : j.columns)
+            if (c.encoding() == Encoding::Chunked) c = c.materialize();
         frames_.push_back(
             dftracer::utils::dataframe::dataframe_handle_wrap(std::move(j)));
         return frames_.back();

@@ -49,7 +49,7 @@ from ._convert import (
     pandas_to_native,
     polars_to_native,
 )
-from ._pandas_series import SeriesPandasMixin
+from ._pandas_series import SeriesPandasMixin, differs
 from .enums import (
     DT_UNIT_CODES,
     DTYPE_BY_NAME,
@@ -647,34 +647,14 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             raise TypeError("compare() expects a Series; the scalar kernel is s.ops.series.compare")
         if len(self) != len(other):
             raise ValueError("compare() needs two Series of the same length")
-        a = self.to_list()
-        b = other.to_list()
-        idx: List[int] = []
-        keep_left: List[bool] = []
-        keep_right: List[bool] = []
-        for i, (x, y) in enumerate(zip(a, b)):
-            same = x == y or (x is None and y is None)
-            if same and not keep_shape:
-                continue
-            idx.append(i)
-            keep_left.append(not same or keep_equal)
-            keep_right.append(not same or keep_equal)
-        # Typed columns, so no difference at all is still a well-typed frame.
-        dtype = DType(self.type)
-
-        def picked(column: "Series", keep: List[bool]) -> "Series":
-            rows = column.take(idx)
-            if all(keep):
-                return rows
-            return rows.where(Series.from_list(keep), Series.from_list([None] * len(idx), dtype))
-
-        return DataFrame(
-            {
-                "index": Series.from_list(idx, DType.INT64),
-                "self": picked(self, keep_left),
-                "other": picked(other, keep_right),
-            }
-        )
+        frame = DataFrame({"self": self, "other": other}).with_row_index("index")
+        mask = differs(self, other)
+        if not keep_shape:
+            frame = frame.filter(mask)
+        left, right = frame["self"], frame["other"]
+        if keep_shape and not keep_equal:
+            left, right = left.where(mask), right.where(mask)
+        return DataFrame({"index": frame["index"], "self": left, "other": right})
 
     def __and__(self, other: "Series") -> "Series[bool]":
         return self.logical(_LOGICAL_AND, other)

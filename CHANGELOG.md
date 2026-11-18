@@ -179,6 +179,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   A query on `args.size == 42` now finds a column of `42.0`, and `42.5` never matches `42`; a number literal also probes the text of the number only on a path the catalog says may hold strings, or when the file has no catalog.
   Each stored bloom filter carries a hash version byte after its three header words, and the marker of each postings path stores it; a reader that finds another version does not prune and reads the chunk.
   The `index` version in `VERSION` is 1, so an index built before this change is built again; a sharded view root made before it is refused with its format version and must be indexed again.
+- Speed up the Python layer.
+  `Series.compare`, `Series.equals`, `DataFrame.equals`, `first_valid_index`, `last_valid_index`, `GroupBy.groups`, `Series.repeat` and `Series.drop` run on the engine kernels in place of a Python loop over the rows.
+  On 1M rows (median of 5 rounds): `Series.compare` 57 to 2 ms, `equals` 65 to 2 ms, the four valid-index calls 99 to 36 ms, `GroupBy.groups` 63 to 36 ms.
+  `compare` and `equals` use the row compare kernel for numbers, bool, strings, binary, dates and times; a number against text differs on every present row (as pandas); nested, decimal and mixed time columns compare by value in Python.
+  `import dftracer.utils` takes 31 ms in place of 47: the version comes from the generated `_version.py` (the build already writes it) and not from `importlib.metadata`, and `asyncio`, `concurrent.futures`, `inspect` and `logging` load on first use.
+  Probes for Arrow and pyarrow in the pandas and polars converters run once.
+  `benchmarks/python/micro_bench.py` times these calls.
 - Move the Python modules to one table per fact. The deep import paths change; the names in `dftracer.utils.__all__` and their imports from `dftracer.utils` stay.
   - `dftracer.utils.columnar` is gone: the expression nodes, `Expr`, `Agg`, `Udf`, `when`, `F` and `ColumnOp` are in `dftracer.utils.expr`; `udaf`, `Udaf`, `count` and the aggregate helpers in `dftracer.utils.agg`; `GroupBy` in `dftracer.utils.groupby`; `Columnar`, `columnar`, `where` and `eval_many` in `dftracer.utils._eval`.
   - Helpers that other modules import lost their leading underscore (`Col`, `Lit`, `Bin`, `emit_ast`, `collect_columns`, `AGG_CODE`, `single_index`, `as_names` and the like).

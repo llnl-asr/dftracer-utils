@@ -30,7 +30,6 @@ from __future__ import annotations
 import atexit
 import contextlib
 import copy
-import inspect
 import math
 import typing
 from typing import (
@@ -2602,6 +2601,8 @@ class _UdfRegistry(Mapping[str, Udf]):
                 f"already registered ({where}); close it first or choose another name"
             )
         if batch:
+            import inspect
+
             params = list(inspect.signature(fn).parameters.values())
             if not params or any(
                 p.kind not in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)

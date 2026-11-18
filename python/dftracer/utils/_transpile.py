@@ -18,7 +18,6 @@ construct, so the caller can fall back and say why.
 from __future__ import annotations
 
 import ast
-import inspect
 import io
 import math
 import textwrap
@@ -66,6 +65,8 @@ _STR_MAP = {
 def source_node(func: Callable[..., object]) -> ast.AST:
     """The ``FunctionDef`` or ``Lambda`` node of ``func``'s own source."""
     try:
+        import inspect
+
         src = textwrap.dedent(inspect.getsource(func))
     except (OSError, TypeError) as e:
         raise TranspileError(f"no source available ({e})") from None
@@ -150,6 +151,8 @@ class _Lowering:
         if func is None:  # a source string (transpile_expr): only the names it is given
             self.consts: Dict[str, Any] = dict(consts or {})
         else:
+            import inspect
+
             cv = inspect.getclosurevars(func)
             self.consts = {**cv.globals, **cv.nonlocals}
 

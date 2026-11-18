@@ -381,7 +381,7 @@ def _check_per_column(
         raise ValueError(
             f"assign: {len(columns)} target columns but the value has {len(series)} columns"
         )
-    selected = n if mask is None else sum(1 for h in mask.to_list() if h)
+    selected = n if mask is None else int(mask.fillna(False).astype("int64").sum())
     for name, s in zip(columns, series):
         if len(s) != n and len(s) != selected:
             what = "the frame has" if mask is None else "the selection has"

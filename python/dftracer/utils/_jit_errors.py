@@ -8,7 +8,6 @@ import cycle; the public name is ``dftracer.utils.jit.JitError``.
 from __future__ import annotations
 
 import ast
-import inspect
 import linecache
 import os
 import re
@@ -114,6 +113,8 @@ def _class_node(cls: type) -> "Tuple[str, List[str], ast.ClassDef]":
     """The file, its lines and the ClassDef of ``cls``. ``inspect`` finds the
     first class of that name in the file, so the match is by qualified name, and
     by a method's line when two classes share one."""
+    import inspect
+
     file = inspect.getsourcefile(cls) or "<unknown>"
     lines = linecache.getlines(file) or open(file, encoding="utf-8").read().splitlines(True)
     tree = ast.parse("".join(lines))
@@ -159,6 +160,8 @@ class Source:
     ``text``; for a class they are already file positions."""
 
     def __init__(self, obj: Any) -> None:
+        import inspect
+
         self.file = inspect.getsourcefile(obj) or "<unknown>"
         self.lines, self.first = inspect.getsourcelines(obj)
         text = "".join(self.lines)

@@ -12,10 +12,25 @@ so callers may fall back to it when it is installed.
 
 from __future__ import annotations
 
+import functools
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple, Union, cast
 
 from . import dftracer_utils_ext as _ext
 from .enums import UNIT_CODES, DType
+
+_ARROW_ARRAY = hasattr(_ext.Series, "__arrow_c_array__")
+_ARROW_IMPORT = hasattr(_ext, "_series_from_arrow")
+
+
+@functools.lru_cache(maxsize=None)
+def _pyarrow() -> "Optional[Any]":
+    """pyarrow, or None when it is not installed; looked up once."""
+    try:
+        import pyarrow as pa  # ty: ignore[import-not-found]
+    except ImportError:
+        return None
+    return pa
+
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -172,7 +187,7 @@ _POLARS_NATIVE_ONLY = (DType.FLOAT16, DType.DECIMAL128, DType.DECIMAL256)
 def _polars_via_arrow(native: "Series") -> bool:
     """Whether the Arrow capsule gives polars the dtype the native path does: not
     for Float16 and decimals."""
-    return hasattr(native, "__arrow_c_array__") and DType(native.type) not in _POLARS_NATIVE_ONLY
+    return _ARROW_ARRAY and DType(native.type) not in _POLARS_NATIVE_ONLY
 
 
 def _polars_native(native: "Series", pl: Any) -> "pl.Series":
@@ -206,9 +221,7 @@ def _pandas_values(native: "Series") -> "Union[pd.Series, np.ndarray]":
     zoned timestamp gets its zone, everything else its NumPy array."""
     import pandas as pd  # ty: ignore[import-not-found]
 
-    if DType(native.type) in (DType.STRING, DType.LARGE_STRING) and hasattr(
-        native, "__arrow_c_array__"
-    ):
+    if DType(native.type) in (DType.STRING, DType.LARGE_STRING) and _ARROW_ARRAY:
         import numpy as np  # ty: ignore[import-not-found]
 
         string = pd.Series(np.array(["x"], dtype=object)).dtype
@@ -240,21 +253,17 @@ def _pandas_categorical(native: "Series") -> "pd.Categorical":
     import numpy as np  # ty: ignore[import-not-found]
     import pandas as pd  # ty: ignore[import-not-found]
 
-    if hasattr(native, "__arrow_c_array__"):
-        try:
-            import pyarrow as pa  # ty: ignore[import-not-found]
-        except ImportError:
-            pass
-        else:
-            arr = pa.array(native)
-            if pa.types.is_dictionary(arr.type):
-                # pandas refuses repeated or null categories, which Arrow allows.
-                if arr.dictionary.null_count or len(arr.dictionary.unique()) != len(arr.dictionary):
-                    arr = arr.dictionary_decode().dictionary_encode()
-                codes = arr.indices.fill_null(-1).to_numpy(zero_copy_only=False)
-                categories = arr.dictionary.to_pandas()
-                out = pd.Categorical.from_codes(codes, categories=pd.Index(categories))
-                return out.remove_unused_categories()
+    pa = _pyarrow() if _ARROW_ARRAY else None
+    if pa is not None:
+        arr = pa.array(native)
+        if pa.types.is_dictionary(arr.type):
+            # pandas refuses repeated or null categories, which Arrow allows.
+            if arr.dictionary.null_count or len(arr.dictionary.unique()) != len(arr.dictionary):
+                arr = arr.dictionary_decode().dictionary_encode()
+            codes = arr.indices.fill_null(-1).to_numpy(zero_copy_only=False)
+            categories = arr.dictionary.to_pandas()
+            out = pd.Categorical.from_codes(codes, categories=pd.Index(categories))
+            return out.remove_unused_categories()
     values = np.empty(native.length, dtype=object)
     native._str_into(values, None)
     return pd.Categorical(values)
@@ -442,11 +451,8 @@ def _dictionary(codes: "np.ndarray", categories: "List[str]") -> "Optional[Serie
     """A dictionary column from integer codes (negative for null) and their
     strings, built through pyarrow so no string is made per row; None without
     pyarrow or an Arrow-enabled extension."""
-    if not hasattr(_ext, "_series_from_arrow"):
-        return None
-    try:
-        import pyarrow as pa  # ty: ignore[import-not-found]
-    except ImportError:
+    pa = _pyarrow()
+    if not _ARROW_IMPORT or pa is None:
         return None
     indices = pa.array(codes, mask=codes < 0)
     return _ext._series_from_arrow(
@@ -458,11 +464,7 @@ def _arrow_dictionary(s: Any) -> "Optional[Series]":
     """A polars ``Categorical`` or ``Enum`` as a dictionary column from its
     Arrow export, which carries the codes and the values together; None
     without pyarrow or an Arrow-enabled extension."""
-    if not hasattr(_ext, "_series_from_arrow"):
-        return None
-    try:
-        import pyarrow  # noqa: F401  # ty: ignore[import-not-found]
-    except ImportError:
+    if not _ARROW_IMPORT or _pyarrow() is None:
         return None
     return _ext._series_from_arrow(s.to_arrow())
 

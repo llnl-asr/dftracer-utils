@@ -401,12 +401,21 @@ class GroupBy:
         frame = self._frame()
         if not self._keys:
             return {(): list(range(len(frame)))}
-        cols = [self._col(frame, k).to_list() for k in self._keys]
+        if len(frame) == 0:
+            return {}
+        order = cast(
+            "List[int]", frame.with_row_index("_row").sort_values(self._keys)["_row"].to_list()
+        )
+        sizes = self.size().sort_by_multi(self._keys)
+        labels = [sizes[k].to_list() for k in self._keys]
+        counts = cast("List[int]", sizes["size"].to_list())
         out: Dict[object, List[int]] = {}
-        for i in range(len(frame)):
-            label = cols[0][i] if len(cols) == 1 else tuple(c[i] for c in cols)
-            out.setdefault(label, []).append(i)
-        return out
+        start = 0
+        for g, n in enumerate(counts):
+            label = labels[0][g] if len(labels) == 1 else tuple(c[g] for c in labels)
+            out[label] = order[start : start + n]
+            start += n
+        return dict(sorted(out.items(), key=lambda kv: kv[1][0]))
 
     indices = groups
 

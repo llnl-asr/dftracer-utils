@@ -43,6 +43,87 @@ if TYPE_CHECKING:
 
 _Scalar = Union[int, float]
 
+_CMP_NE = 5  # DFTU_CMP_NE, dataframe/c_api.h
+
+# Dtypes the row-by-row compare kernel takes; the others (nested, decimal)
+# compare by value in Python.
+_NATIVE_COMPARE = frozenset(
+    [
+        DType.BOOL,
+        DType.INT8,
+        DType.INT16,
+        DType.INT32,
+        DType.INT64,
+        DType.UINT8,
+        DType.UINT16,
+        DType.UINT32,
+        DType.UINT64,
+        DType.FLOAT32,
+        DType.FLOAT64,
+        DType.STRING,
+        DType.LARGE_STRING,
+        DType.BINARY,
+        DType.LARGE_BINARY,
+        DType.DATE32,
+        DType.DATE64,
+        DType.TIME32,
+        DType.TIME64,
+        DType.TIMESTAMP,
+        DType.DURATION,
+    ]
+)
+
+
+def _kernel_operand(s: "Series") -> "Series":
+    return s.astype("int8") if s.dtype == DType.BOOL else s
+
+
+_BYTES = frozenset([DType.STRING, DType.LARGE_STRING, DType.BINARY, DType.LARGE_BINARY])
+
+
+def _is_number(d: DType) -> bool:
+    return d.is_numeric or d == DType.BOOL
+
+
+def differs(a: "Series", b: "Series") -> "Series[bool]":
+    """Bool, never null: true where the two Series (one length) hold different
+    values; a null equals a null, a null differs from a value and a NaN differs
+    from everything. A number against text differs on every present row; a
+    pair of dtypes the row compare kernel does not take (nested, decimal,
+    mixed time kinds) compares by value in Python."""
+    da, db = a.dtype, b.dtype
+    if (_is_number(da) and db in _BYTES) or (da in _BYTES and _is_number(db)):
+        return ~(a.is_null() & b.is_null())
+    if not ((da == db and da in _NATIVE_COMPARE) or (_is_number(da) and _is_number(db))):
+        from .series import Series
+
+        return cast(
+            "Series[bool]",
+            Series.from_list(
+                [
+                    not (x == y or (x is None and y is None))
+                    for x, y in zip(a.to_list(), b.to_list())
+                ],
+                DType.BOOL,
+            ),
+        )
+    ne = _kernel_operand(a).compare_series(_kernel_operand(b), _CMP_NE).fillna(False)
+    if a.null_count == 0 and b.null_count == 0:
+        return ne
+    nulls = _kernel_operand(a.is_null()).compare_series(_kernel_operand(b.is_null()), _CMP_NE)
+    return ne | nulls
+
+
+def valid_edge(mask: "Series", first: bool) -> Optional[int]:
+    """The position of the first (or last) true row of a Bool mask, ``None``
+    when none is true."""
+    if not mask.any():
+        return None
+    flags = mask.astype("int8")
+    if first:
+        return flags.arg_max()
+    return len(flags) - 1 - flags.reverse().arg_max()
+
 
 class Omitted:
     """The type of ``OMITTED``: ``replace``'s ``value`` when the caller gave none."""
@@ -295,7 +376,13 @@ class SeriesPandasMixin:
         n = int(repeats)
         if n < 0:
             raise ValueError("repeat: repeats must be non-negative")
-        return s.take([i for i in range(len(s)) for _ in range(n)])
+        if n == 0:
+            return s.head(0)
+        from .dataframe import DataFrame
+
+        frame = DataFrame({"v": s}).with_row_index("_i")
+        out = frame.concat(*[frame] * (n - 1)).sort_values("_i")["v"]
+        return out.rename(s.name)
 
     def replace(
         self, to_replace: "ReplaceKey", value: "Union[ReplaceValue, Omitted]" = OMITTED
@@ -341,12 +428,10 @@ class SeriesPandasMixin:
         return s.slice(lo, max(hi - lo + 1, 0))
 
     def first_valid_index(self) -> Optional[int]:
-        hits = [i for i, v in enumerate(self._s().notna().to_list()) if v]
-        return hits[0] if hits else None
+        return valid_edge(self._s().notna(), first=True)
 
     def last_valid_index(self) -> Optional[int]:
-        hits = [i for i, v in enumerate(self._s().notna().to_list()) if v]
-        return hits[-1] if hits else None
+        return valid_edge(self._s().notna(), first=False)
 
     def asof(self, where: int) -> object:
         """The last present value at or before position ``where`` (pandas
@@ -383,7 +468,10 @@ class SeriesPandasMixin:
         for p in gone:
             if p < 0 or p >= len(s):
                 raise KeyError(p)
-        return s.take([i for i in range(len(s)) if i not in gone])
+        from .dataframe import DataFrame
+
+        index = DataFrame({"v": s}).with_row_index("_i")["_i"]
+        return s.filter(~index.is_in(sorted(gone)))
 
     def equals(self, other: object) -> bool:
         """Same type, length and values, null for null (pandas ``equals``)."""
@@ -392,7 +480,9 @@ class SeriesPandasMixin:
         s = self._s()
         if not isinstance(other, Series) or s.dtype != other.dtype or len(s) != len(other):
             return False
-        return s.to_list() == other.to_list()
+        if s.dtype not in _NATIVE_COMPARE:
+            return s.to_list() == other.to_list()
+        return not differs(s, other).any()
 
     def pop(self, item: object = None) -> object:
         raise TypeError("pop: a Series is immutable; use drop(position) for the rest")

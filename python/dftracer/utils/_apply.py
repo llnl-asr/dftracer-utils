@@ -24,7 +24,6 @@ arm) on the engine tiers and ``None`` values on the Python tier.
 from __future__ import annotations
 
 import ast
-import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Sequence, cast
 
 from . import dftracer_utils_ext as _ext
@@ -34,8 +33,6 @@ from .series import Series
 
 if TYPE_CHECKING:
     from .dataframe import DataFrame
-
-_log = logging.getLogger("dftracer.utils")
 
 _TRACE_INPUT = "__x0__"
 
@@ -57,8 +54,10 @@ def _is_jit_op(func: object) -> bool:
 
 
 def warn_fallback(what: str, func: object, reason: str) -> None:
+    import logging
+
     name = getattr(func, "__name__", repr(func))
-    _log.warning(
+    logging.getLogger("dftracer.utils").warning(
         "%s: '%s' could not be traced into the engine (%s); running it in Python "
         "per %s, which is orders of magnitude slower. Write it over column "
         "expressions, or decorate it with @jit.series / @jit.op.",
@@ -115,8 +114,7 @@ def _null_where_input_is(out: "Series", series: "Series") -> "Series":
     missing value into a present one."""
     if series.null_count == 0:
         return out
-    nulls = series.isna().to_list()
-    return out.take([-1 if nulls[i] else i for i in range(len(nulls))])
+    return out.where(series.notna())
 
 
 def _trace(

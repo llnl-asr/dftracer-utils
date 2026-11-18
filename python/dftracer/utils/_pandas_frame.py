@@ -27,7 +27,7 @@ from typing import (
 
 from . import dftracer_utils_ext as _ext
 from ._convert import _like
-from ._pandas_series import OMITTED, replace_in, replace_pairs
+from ._pandas_series import OMITTED, replace_in, replace_pairs, valid_edge
 from .enums import DType, rule_to_units
 from .series import Series
 
@@ -695,7 +695,9 @@ class FramePandasMixin(_ext.DataFrame):
 
         if not isinstance(other, DataFrame) or self.columns != other.columns:
             return False
-        return self._frame().to_dict() == other.to_dict()
+        return len(self._frame()) == len(other) and all(
+            self._col(c).equals(column_series(other, c)) for c in self.columns
+        )
 
     def squeeze(self) -> object:
         """A one-column frame as its Series, a one-cell frame as the value."""
@@ -752,10 +754,9 @@ class FramePandasMixin(_ext.DataFrame):
             any_valid = m if any_valid is None else any_valid.logical(1, m)
         if any_valid is None:
             return None
-        hits = [i for i, v in enumerate(any_valid.to_list()) if v]
-        if not hits:
+        pos = valid_edge(any_valid, first)
+        if pos is None:
             return None
-        pos = hits[0] if first else hits[-1]
         labels = self._frame().index
         return labels[pos] if isinstance(labels, Series) else pos
 

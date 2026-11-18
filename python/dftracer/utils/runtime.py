@@ -3,11 +3,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import atexit
 import os
 import threading
-from concurrent.futures import Future, ThreadPoolExecutor
 from typing import (
     TYPE_CHECKING,
     Callable,
@@ -31,6 +29,8 @@ from .dftracer_utils_ext import peek_default_runtime as _peek_default_native_run
 from .enums import coerce_duration
 
 if TYPE_CHECKING:
+    import asyncio
+    from concurrent.futures import Future, ThreadPoolExecutor
     from types import TracebackType
 
     from typing_extensions import ParamSpec
@@ -218,6 +218,8 @@ class TaskHandle(Generic[T_co]):
         Cancelling the awaiting task asks a native task to stop. A loop that
         closes before the task ends drops the result.
         """
+        import asyncio  # imported here: asyncio costs 9 ms of the package import
+
         if self._native is None:
             if self._future is None:
                 return None  # type: ignore[return-value]  # ty: ignore[invalid-explicit-return]  # no backing task
@@ -340,6 +342,8 @@ class Runtime:
             with self._lock:
                 if self._py_pool is None:
                     size = self._py_pool_size or min(32, self._native.threads or 4)
+                    from concurrent.futures import ThreadPoolExecutor
+
                     self._py_pool = ThreadPoolExecutor(max_workers=size)
         return self._py_pool
 

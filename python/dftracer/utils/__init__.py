@@ -1,7 +1,4 @@
 # SPDX-License-Identifier: MIT
-from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
-from importlib.metadata import version as _version
-
 from . import schemas  # noqa: F401
 from ._eval import columnar, eval_many, where  # noqa: F401
 from .agg import Udaf, count, udaf  # noqa: F401
@@ -61,9 +58,14 @@ from .store import Store  # noqa: F401
 from .trace import Containment, LiveFileStatus, LiveTraceViewer, TraceViewer  # noqa: F401
 
 try:
-    __version__ = _version("dftracer-utils")
-except _PackageNotFoundError:
-    __version__ = "0.0.0"
+    from ._version import __version__
+except ImportError:  # a wheel built without the generated file
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        __version__ = version("dftracer-utils")
+    except PackageNotFoundError:
+        __version__ = "0.0.0"
 
 
 __all__ = [

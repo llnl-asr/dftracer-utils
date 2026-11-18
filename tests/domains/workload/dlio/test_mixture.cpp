@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/domains/workload/dlio/distributions.h>
 #include <dftracer/utils/domains/workload/dlio/mixture.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
@@ -18,10 +19,9 @@ namespace {
 
 // Sample n points from a K-component Normal mixture with given
 // weights/means/stddevs.
-dstd::Vector<double> sample_mixture(std::size_t n,
-                                    const dstd::Vector<double>& weights,
-                                    const dstd::Vector<double>& means,
-                                    const dstd::Vector<double>& stddevs,
+dstd::Vector<double> sample_mixture(std::size_t n, dstd::Vector<double> weights,
+                                    dstd::Vector<double> means,
+                                    dstd::Vector<double> stddevs,
                                     std::uint64_t seed = 4242) {
     std::mt19937_64 rng(seed);
     std::discrete_distribution<int> cat(weights.begin(), weights.end());

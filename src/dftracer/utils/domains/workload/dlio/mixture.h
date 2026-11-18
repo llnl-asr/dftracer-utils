@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/domains/workload/dlio/distributions.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -36,7 +37,7 @@ struct MixtureFitOptions {
 
 /// Fits a K-component Gaussian Mixture via EM. K-means-style initialization on
 /// quantile-spread means and total-variance / K for each component.
-FittedMixture fit_gaussian_mixture(const dstd::Vector<double>& data, int K,
+FittedMixture fit_gaussian_mixture(dstd::Span<const double> data, int K,
                                    const MixtureFitOptions& options = {});
 
 /// A NaN `x` returns NaN.
@@ -65,8 +66,8 @@ struct ModelSelection {
 /// typically the output of fit_all_single_distributions(); `mixtures` is
 /// typically two entries (GMM-2 and GMM-3). Invalid fits are ignored.
 dstd::Optional<ModelSelection> select_best_model(
-    const dstd::Vector<FittedDistribution>& single_fits,
-    const dstd::Vector<FittedMixture>& mixtures);
+    dstd::Span<const FittedDistribution> single_fits,
+    dstd::Span<const FittedMixture> mixtures);
 
 double pdf(const BestModel& m, double x);
 double cdf(const BestModel& m, double x);

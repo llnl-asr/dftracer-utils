@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_MEMORY_H
 
 #include <dftracer/utils/dataframe/plugin_error.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugin/map.h>
@@ -95,14 +96,15 @@ class Memory {
         if (e_) e_->free(h_->h, p, size, align);
     }
 
-    /// An empty reservation; `label` names it in the host's messages.
-    dstd::Result<Reservation> reserve(const char* label = nullptr) const {
+    /// An empty reservation; `label` names it in the host's messages. An empty
+    /// `label` names none; the view must not be null (@ref dstd::CStringView).
+    dstd::Result<Reservation> reserve(dstd::CStringView label = {}) const {
         if (!e_)
             return make_error(dstd::Condition::Unsupported,
                               "host lacks the memory service");
         dftu_reservation* r = nullptr;
-        DFTRACER_UTILS_TRY_VOID(
-            detail::reported(e_->reserve(ctx_, h_->h, &r, label)));
+        DFTRACER_UTILS_TRY_VOID(detail::reported(e_->reserve(
+            ctx_, h_->h, &r, label.empty() ? nullptr : label.c_str())));
         return Reservation(e_, r);
     }
 

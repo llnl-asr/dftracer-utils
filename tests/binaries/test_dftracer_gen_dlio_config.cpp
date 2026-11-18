@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -107,12 +109,11 @@ dstd::String find_binary() {
         "DFTRACER_UTILS_GEN_DLIO_CONFIG_PATH", "dftracer_gen_dlio_config");
 }
 
-int run_binary(const dstd::String& binary,
-               const dstd::Vector<dstd::String>& args) {
+int run_binary(dstd::String binary, dstd::Vector<dstd::String> args) {
     return dftu_utils_test::run_process(binary, args);
 }
 
-dstd::String read_file(const dstd::String& path) {
+dstd::String read_file(dstd::StringView path) {
     return dftu_utils_test::read_text(path);
 }
 

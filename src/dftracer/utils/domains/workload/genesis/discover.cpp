@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -53,9 +54,8 @@ struct DirFiles {
     dstd::HashMap<dstd::String, dstd::Vector<dstd::String>> gpu_csvs;
 };
 
-void set_files(
-    RunGroup& g,
-    const dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>>& fs) {
+void set_files(RunGroup& g,
+               dstd::Span<const dstd::Pair<dstd::String, std::uint64_t>> fs) {
     g.files.clear();
     g.compressed_bytes = 0;
     for (const auto& [f, size] : fs) {
@@ -165,7 +165,9 @@ void discover_v1(dstd::PathView dir, const DirFiles& files,
         }
         RunGroup g = base;
         if (it != files.traces.end())
-            set_files(g, {*it});
+            set_files(g,
+                      dstd::Span<const dstd::Pair<dstd::String, std::uint64_t>>(
+                          &*it, 1));
         else
             set_files(g, raw->second);
         SetSpec spec;

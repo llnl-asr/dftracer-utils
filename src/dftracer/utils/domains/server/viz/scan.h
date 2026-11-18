@@ -56,7 +56,7 @@ inline bool rewrite_uint_field(dstd::String& json, dstd::StringView key,
 /// from "ts" and scale ts/dur from the trace's native unit `metric` into
 /// microseconds. Falls back to the original string on parse failure. For a US
 /// trace this only subtracts the offset (scaling is identity).
-inline dstd::String normalize_event_ts(const dstd::String& event_json,
+inline dstd::String normalize_event_ts(dstd::String event_json,
                                        std::uint64_t offset,
                                        TraceIndex::TimeMetric metric) {
     thread_local dftracer::utils::json::RecordParser tl_parser;
@@ -84,19 +84,17 @@ inline dstd::String normalize_event_ts(const dstd::String& event_json,
     std::uint64_t new_ts =
         scale_between(metric, TM::Us, old_ts >= offset ? old_ts - offset : 0);
 
-    dstd::String modified = event_json;
-    if (!rewrite_uint_field(modified, "\"ts\":", new_ts)) return event_json;
-
+    dstd::Optional<std::uint64_t> new_dur;
     if (metric != TM::Us) {
         auto dur_result = root["dur"];
         if (!dur_result.error() && dur_result.is_uint64()) {
-            rewrite_uint_field(
-                modified, "\"dur\":",
-                scale_between(metric, TM::Us,
-                              dur_result.get_uint64().value_unsafe()));
+            new_dur = scale_between(metric, TM::Us,
+                                    dur_result.get_uint64().value_unsafe());
         }
     }
-    return modified;
+    if (!rewrite_uint_field(event_json, "\"ts\":", new_ts)) return event_json;
+    if (new_dur) rewrite_uint_field(event_json, "\"dur\":", *new_dur);
+    return event_json;
 }
 
 /// Compute the minimum event duration threshold for a given summary level.
@@ -192,8 +190,8 @@ inline dstd::String extract_json_value(simdjson::dom::element val) {
     return {};
 }
 
-inline void append_lane_clause(dstd::String& dsl, const char* field,
-                               const dstd::String& val) {
+inline void append_lane_clause(dstd::String& dsl, dstd::StringView field,
+                               dstd::StringView val) {
     if (!dsl.empty()) dsl += " and ";
     const std::size_t digits = !val.empty() && val[0] == '-' ? 1 : 0;
     bool numeric =

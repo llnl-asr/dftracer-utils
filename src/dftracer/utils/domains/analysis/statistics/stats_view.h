@@ -245,7 +245,8 @@ class StatsView {
     dstd::Vector<trace::views::ViewFile> files_;
     bool multi_ = false;
 
-    static std::size_t col(const dataframe::DataFrame& b, const char* name) {
+    static std::size_t col(const dataframe::DataFrame& b,
+                           dstd::StringView name) {
         for (std::size_t i = 0; i < b.names.size(); ++i)
             if (b.names[i] == name) return i;
         return 0;

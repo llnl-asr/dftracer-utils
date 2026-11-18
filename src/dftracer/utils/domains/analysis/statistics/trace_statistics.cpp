@@ -43,7 +43,7 @@ std::size_t TraceStatistics::pid_tid_count() const {
 
 namespace {
 template <typename Map>
-void add_counts_object(dstd::String& ss, const char* key, const Map& m,
+void add_counts_object(dstd::String& ss, dstd::StringView key, const Map& m,
                        bool& first_field) {
     if (!first_field) ss += ',';
     first_field = false;

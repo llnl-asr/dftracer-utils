@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/try_reserve.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -59,10 +60,10 @@ const PathList* list_of(const ::dftu_path_list* list) {
     return reinterpret_cast<const PathList*>(list);
 }
 
-void fail_with(plugins::AbiTask* task, const char* op,
+void fail_with(plugins::AbiTask* task, dstd::StringView op,
                const dstd::Error& error) {
     task->fail(common::to_status(error.condition()),
-               dstd::fmt<"{}: {}">(dstd::StringView(op), error.message()));
+               dstd::fmt<"{}: {}">(op, error.message()));
 }
 
 template <class Make>
@@ -73,10 +74,9 @@ dftu_status start_task(::dftu_ctx* ctx, ::dftu_task** out, Make&& make) {
     return DFTU_OK;
 }
 
-dftu_status check_path(::dftu_ctx* ctx, const char* op, const char* path) {
-    if (path != nullptr) return DFTU_OK;
-    return host_fail(ctx, DFTU_E_INVALID,
-                     dstd::fmt<"{}: path is NULL">(dstd::StringView(op)));
+dftu_status check_path(::dftu_ctx* ctx, dstd::StringView op, bool has_path) {
+    if (has_path) return DFTU_OK;
+    return host_fail(ctx, DFTU_E_INVALID, dstd::fmt<"{}: path is NULL">(op));
 }
 
 void free_owned_string(void*, void* ud) {
@@ -101,7 +101,8 @@ coro::CoroTask<void> read_file_body(plugins::AbiTask* task, dstd::String path,
 
 dftu_status fs_read_file(::dftu_ctx* ctx, void*, const char* path,
                          dftu_bytes* out, ::dftu_task** task) {
-    if (dftu_status st = check_path(ctx, "read_file", path); st < 0) return st;
+    if (dftu_status st = check_path(ctx, "read_file", path != nullptr); st < 0)
+        return st;
     if (out != nullptr) *out = dftu_bytes{nullptr, 0, nullptr, nullptr};
     const dstd::String copy(path);
     return start_task(ctx, task, [=](plugins::AbiTask* t) {
@@ -121,7 +122,8 @@ coro::CoroTask<void> write_file_body(plugins::AbiTask* task, dstd::String path,
 dftu_status fs_write_file(::dftu_ctx* ctx, void*, const char* path,
                           const void* data, std::uint64_t len,
                           ::dftu_task** task) {
-    if (dftu_status st = check_path(ctx, "write_file", path); st < 0) return st;
+    if (dftu_status st = check_path(ctx, "write_file", path != nullptr); st < 0)
+        return st;
     if (data == nullptr && len != 0)
         return host_fail(ctx, DFTU_E_INVALID, "write_file: data is NULL");
     const dstd::String copy(path);
@@ -164,7 +166,8 @@ coro::CoroTask<void> read_at_body(plugins::AbiTask* task, dstd::String path,
 dftu_status fs_read_at(::dftu_ctx* ctx, void*, const char* path,
                        std::uint64_t off, void* buf, std::uint64_t len,
                        std::int64_t* out_n, ::dftu_task** task) {
-    if (dftu_status st = check_path(ctx, "read_at", path); st < 0) return st;
+    if (dftu_status st = check_path(ctx, "read_at", path != nullptr); st < 0)
+        return st;
     if (buf == nullptr && len != 0)
         return host_fail(ctx, DFTU_E_INVALID, "read_at: buf is NULL");
     const dstd::String copy(path);
@@ -209,7 +212,8 @@ coro::CoroTask<void> write_at_body(plugins::AbiTask* task, dstd::String path,
 dftu_status fs_write_at(::dftu_ctx* ctx, void*, const char* path,
                         std::uint64_t off, const void* buf, std::uint64_t len,
                         std::int64_t* out_n, ::dftu_task** task) {
-    if (dftu_status st = check_path(ctx, "write_at", path); st < 0) return st;
+    if (dftu_status st = check_path(ctx, "write_at", path != nullptr); st < 0)
+        return st;
     if (buf == nullptr && len != 0)
         return host_fail(ctx, DFTU_E_INVALID, "write_at: buf is NULL");
     const dstd::String copy(path);
@@ -245,7 +249,8 @@ coro::CoroTask<void> list_dir_body(plugins::AbiTask* task, dstd::String path,
 
 dftu_status fs_list_dir(::dftu_ctx* ctx, void*, const char* path,
                         ::dftu_path_list** out, ::dftu_task** task) {
-    if (dftu_status st = check_path(ctx, "list_dir", path); st < 0) return st;
+    if (dftu_status st = check_path(ctx, "list_dir", path != nullptr); st < 0)
+        return st;
     if (out != nullptr) *out = nullptr;
     const dstd::String copy(path);
     return start_task(ctx, task, [=](plugins::AbiTask* t) {
@@ -285,11 +290,10 @@ coro::CoroTask<void> find_all_body(plugins::AbiTask* task, dstd::String root,
     }
 }
 
-dstd::Vector<dstd::String> copy_names(const char* const* names,
-                                      std::uint32_t count) {
+dstd::Vector<dstd::String> copy_names(dstd::Span<const char* const> names) {
     dstd::Vector<dstd::String> out;
-    for (std::uint32_t i = 0; names != nullptr && i < count; ++i) {
-        if (names[i] != nullptr) out.push_back(dstd::String(names[i]));
+    for (const char* name : names) {
+        if (name != nullptr) out.push_back(dstd::String(name));
     }
     return out;
 }
@@ -297,7 +301,8 @@ dstd::Vector<dstd::String> copy_names(const char* const* names,
 dftu_status fs_find_all(::dftu_ctx* ctx, void*, const char* root,
                         const dftu_find_options* options,
                         ::dftu_path_list** out, ::dftu_task** task) {
-    if (dftu_status st = check_path(ctx, "find_all", root); st < 0) return st;
+    if (dftu_status st = check_path(ctx, "find_all", root != nullptr); st < 0)
+        return st;
     dftu_find_options given{};
     given.recursive = 1;
     given.with_stat = 1;
@@ -309,8 +314,12 @@ dftu_status fs_find_all(::dftu_ctx* ctx, void*, const char* root,
                          "find_all: the options struct is too small");
     }
     runtime::fs::FindOptions find;
-    find.patterns = copy_names(given.patterns, given.pattern_count);
-    find.skip_dirs = copy_names(given.skip_dirs, given.skip_dir_count);
+    find.patterns = given.patterns
+                        ? copy_names({given.patterns, given.pattern_count})
+                        : dstd::Vector<dstd::String>{};
+    find.skip_dirs = given.skip_dirs
+                         ? copy_names({given.skip_dirs, given.skip_dir_count})
+                         : dstd::Vector<dstd::String>{};
     find.recursive = given.recursive != 0;
     find.with_stat = given.with_stat != 0;
     find.limit = static_cast<std::size_t>(given.limit);
@@ -347,7 +356,7 @@ void fs_list_free(::dftu_path_list* list) {
 }
 
 template <class Call>
-coro::CoroTask<void> flag_body(plugins::AbiTask* task, const char* op,
+coro::CoroTask<void> flag_body(plugins::AbiTask* task, dstd::String op,
                                dstd::String path, std::int32_t* out,
                                Call call) {
     auto running = call(dstd::PathView(path));
@@ -360,9 +369,8 @@ coro::CoroTask<void> flag_body(plugins::AbiTask* task, const char* op,
 }
 
 template <class Call>
-dftu_status flag_start(::dftu_ctx* ctx, const char* op, const char* path,
+dftu_status flag_start(::dftu_ctx* ctx, dstd::String op, dstd::StringView path,
                        std::int32_t* out, ::dftu_task** task, Call call) {
-    if (dftu_status st = check_path(ctx, op, path); st < 0) return st;
     const dstd::String copy(path);
     return start_task(ctx, task, [=](plugins::AbiTask* t) {
         return flag_body(t, op, copy, out, call);
@@ -371,6 +379,8 @@ dftu_status flag_start(::dftu_ctx* ctx, const char* op, const char* path,
 
 dftu_status fs_exists(::dftu_ctx* ctx, void*, const char* path,
                       std::int32_t* out, ::dftu_task** task) {
+    if (dftu_status st = check_path(ctx, "exists", path != nullptr); st < 0)
+        return st;
     return flag_start(ctx, "exists", path, out, task,
                       [](dstd::PathView p) { return runtime::fs::exists(p); });
 }
@@ -378,6 +388,9 @@ dftu_status fs_exists(::dftu_ctx* ctx, void*, const char* path,
 dftu_status fs_create_directories(::dftu_ctx* ctx, void*, const char* path,
                                   std::int32_t* out_created,
                                   ::dftu_task** task) {
+    if (dftu_status st = check_path(ctx, "create_directories", path != nullptr);
+        st < 0)
+        return st;
     return flag_start(
         ctx, "create_directories", path, out_created, task,
         [](dstd::PathView p) { return runtime::fs::create_directories(p); });
@@ -385,6 +398,8 @@ dftu_status fs_create_directories(::dftu_ctx* ctx, void*, const char* path,
 
 dftu_status fs_remove(::dftu_ctx* ctx, void*, const char* path,
                       std::int32_t* out_removed, ::dftu_task** task) {
+    if (dftu_status st = check_path(ctx, "remove", path != nullptr); st < 0)
+        return st;
     return flag_start(ctx, "remove", path, out_removed, task,
                       [](dstd::PathView p) { return runtime::fs::remove(p); });
 }

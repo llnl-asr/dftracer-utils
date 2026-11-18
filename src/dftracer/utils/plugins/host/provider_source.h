@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi/providers.h>
@@ -43,7 +44,7 @@ dataframe::Pushed plugin_pushed(std::int32_t value);
 /// reads as Unknown, so the frame check skips it.
 dstd::Vector<dataframe::TypeId> declared_types(
     const dataframe::Schema& declared,
-    const dstd::Vector<dstd::String>& projection);
+    dstd::Span<const dstd::String> projection);
 
 /// Adapts a dftu_source_vt/self pair as a dataframe Source, for a test that
 /// drives the scan() C-ABI marshaling (dftu_scan_request, the out_pushed array,

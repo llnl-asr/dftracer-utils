@@ -2,6 +2,7 @@
 #include <dftracer/utils/domains/workload/dlio/mixture.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
@@ -24,7 +25,7 @@ inline double normal_pdf(double x, double mean, double stddev) {
 
 // log(sum_k exp(log_x[k])) computed with the standard log-sum-exp trick to
 // avoid underflow when component log-likelihoods diverge.
-double log_sum_exp(const dstd::Vector<double>& log_x) {
+double log_sum_exp(dstd::Span<const double> log_x) {
     double m = -std::numeric_limits<double>::infinity();
     for (double v : log_x) {
         if (v > m) m = v;
@@ -38,7 +39,7 @@ double log_sum_exp(const dstd::Vector<double>& log_x) {
 // Pick K initial means by sampling sorted-data quantiles uniformly across (0,
 // 1). Avoids the degenerate case where random init collapses all components
 // together.
-dstd::Vector<double> initial_means(const dstd::Vector<double>& sorted, int K) {
+dstd::Vector<double> initial_means(dstd::Span<const double> sorted, int K) {
     dstd::Vector<double> means;
     means.reserve(K);
     for (int k = 0; k < K; ++k) {
@@ -52,7 +53,7 @@ dstd::Vector<double> initial_means(const dstd::Vector<double>& sorted, int K) {
     return means;
 }
 
-double sample_variance(const dstd::Vector<double>& data, double mean) {
+double sample_variance(dstd::Span<const double> data, double mean) {
     double sq = 0.0;
     for (double x : data) {
         const double d = x - mean;
@@ -63,14 +64,14 @@ double sample_variance(const dstd::Vector<double>& data, double mean) {
 
 }  // namespace
 
-FittedMixture fit_gaussian_mixture(const dstd::Vector<double>& data, int K,
+FittedMixture fit_gaussian_mixture(dstd::Span<const double> data, int K,
                                    const MixtureFitOptions& options) {
     FittedMixture m;
     if (K <= 0 || data.size() < static_cast<std::size_t>(K) * 2) return m;
     for (const double x : data)
         if (!std::isfinite(x)) return m;
 
-    auto sorted = data;
+    dstd::Vector<double> sorted(data.begin(), data.end());
     std::sort(sorted.begin(), sorted.end());
 
     const double total_mean = std::accumulate(data.begin(), data.end(), 0.0) /
@@ -225,8 +226,8 @@ Sampler make_sampler(const FittedMixture& mix, dstd::Optional<double> min_bound,
 }
 
 dstd::Optional<ModelSelection> select_best_model(
-    const dstd::Vector<FittedDistribution>& single_fits,
-    const dstd::Vector<FittedMixture>& mixtures) {
+    dstd::Span<const FittedDistribution> single_fits,
+    dstd::Span<const FittedMixture> mixtures) {
     dstd::Optional<ModelSelection> best;
     for (const auto& f : single_fits) {
         if (!f.valid) continue;

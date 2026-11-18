@@ -149,4 +149,25 @@ TEST_SUITE("PluginResults") {
 
         named.clear();  // frees the owned lazyframe handle (asan-clean).
     }
+
+    TEST_CASE("an emit with an empty name is refused and keeps no result") {
+        dstd::StringIntern intern;
+        plugins::host::SharedResultRegistry reg;
+        plugins::NamedResultRegistry named;
+        FoldHolder master(
+            dftracer::utils::plugins::make_plugin<CountBlobSlice>(nullptr),
+            intern, &reg, &named);
+
+        const char payload[] = "x";
+        dftu_result_value v{};
+        v.kind = DFTU_RESULT_KIND_BYTES;
+        v.u.bytes.data = payload;
+        v.u.bytes.len = 1;
+
+        auto emitted = master.fold->emit_result(dstd::StringView(), &v);
+        REQUIRE_FALSE(emitted.has_value());
+        CHECK(emitted.error().message().find("name and value must be set") !=
+              dstd::StringView::npos);
+        CHECK(named.results().empty());
+    }
 }

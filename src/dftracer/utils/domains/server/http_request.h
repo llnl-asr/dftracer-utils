@@ -25,7 +25,7 @@ struct HttpRequest {
     /// Parse from receive buffer.
     /// Returns bytes consumed on success, -1 on error,
     /// -2 if incomplete.
-    int parse(const char *buf, std::size_t len);
+    int parse(dstd::StringView buf);
 
     /// Find a header value by name (case-insensitive).
     dstd::StringView header(dstd::StringView name) const;

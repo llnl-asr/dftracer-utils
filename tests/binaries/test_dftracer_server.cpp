@@ -4,6 +4,7 @@
 #include <dftracer/utils/domains/server/trace_index.h>
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -58,7 +59,7 @@ dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
 /// Write a gzipped .pfw trace declaring time_metric=NS into `dir`. Events span
 /// ts 5000100000..5020000000 ns (=> 5000100..5020000 us) with durations
 /// 50000..250000 ns (=> 50..250 us), so scaling is observable in the response.
-dstd::String create_ns_pfw_gz(const dstd::String& dir) {
+dstd::String create_ns_pfw_gz(dstd::String dir) {
     dstd::String path = dir + "/ns_trace.pfw.gz";
     gzFile f = gzopen(path.c_str(), "wb");
     if (f == nullptr) return "";
@@ -150,7 +151,7 @@ bool wait_for_port(int port, int timeout_s = 10) {
 /// latency assertion. Failures say which way they failed, since an empty
 /// response otherwise cannot distinguish a server that never came up from
 /// one that was too slow.
-dstd::String http_request(int port, const dstd::String& request,
+dstd::String http_request(int port, dstd::StringView request,
                           int recv_timeout_s = 60) {
     int sock = ::socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
@@ -213,14 +214,14 @@ dstd::String http_request(int port, const dstd::String& request,
 }
 
 /// Extract HTTP status code from response.
-int extract_status_code(const dstd::String& response) {
+int extract_status_code(dstd::String response) {
     auto space = response.find(' ');
     if (space == dstd::String::npos) return -1;
     return std::atoi(response.c_str() + space + 1);
 }
 
 /// Extract body from HTTP response.
-dstd::String extract_body(const dstd::String& response) {
+dstd::String extract_body(dstd::String response) {
     auto pos = response.find("\r\n\r\n");
     if (pos == dstd::String::npos) return "";
     dstd::String raw = response.substr(pos + 4);
@@ -316,7 +317,7 @@ struct ServerProcess {
     // load another process can claim it in the long gap before the child (which
     // indexes first) binds. Retry on a fresh port rather than fail; `port` is
     // updated to the port the server actually came up on.
-    bool start(const dstd::String& binary, const dstd::String& data_dir,
+    bool start(dstd::CStringView binary, dstd::CStringView data_dir,
                int& port_io) {
         for (int attempt = 0; attempt < 5; ++attempt) {
             if (attempt > 0) port_io = pick_port();
@@ -326,7 +327,7 @@ struct ServerProcess {
         return false;
     }
 
-    bool start_once(const dstd::String& binary, const dstd::String& data_dir,
+    bool start_once(dstd::CStringView binary, dstd::CStringView data_dir,
                     int p) {
         port = p;
         // Build before fork: the child may only call async-signal-safe
@@ -1055,7 +1056,7 @@ TEST_CASE(
     REQUIRE(server.start(binary, env.dir(), port));
     REQUIRE(wait_for_http(port));
 
-    auto get = [&](const dstd::String& target) {
+    auto get = [&](dstd::String target) {
         auto resp = http_request(port, "GET " + target +
                                            " HTTP/1.1\r\nHost: localhost\r\n"
                                            "Connection: close\r\n\r\n");
@@ -1131,7 +1132,7 @@ TEST_CASE("DFTracer Server - untimed pages of many records") {
         REQUIRE(server.start(binary, env.dir(), port));
         REQUIRE(wait_for_http(port));
 
-        auto get = [&](const dstd::String& target) {
+        auto get = [&](dstd::String target) {
             auto resp =
                 http_request(port, "GET " + target +
                                        " HTTP/1.1\r\nHost: localhost\r\n"
@@ -1269,12 +1270,13 @@ TEST_CASE("DFTracer Server - calltree endpoint") {
     REQUIRE(wait_for_http(port));
 
     // Root fields come right after `"tree":{` in serialization order.
-    auto root_field = [](const dstd::String& body, const char* key) -> double {
+    auto root_field = [](dstd::String body, dstd::String key) -> double {
         auto tpos = body.find("\"tree\":{");
         REQUIRE(tpos != dstd::String::npos);
         auto kpos = body.find("\"" + dstd::String(key) + "\":", tpos);
         REQUIRE(kpos != dstd::String::npos);
-        return std::strtod(body.c_str() + kpos + std::strlen(key) + 3, nullptr);
+        return std::strtod(body.c_str() + kpos + std::strlen(key.c_str()) + 3,
+                           nullptr);
     };
 
     auto flat = http_request(port,

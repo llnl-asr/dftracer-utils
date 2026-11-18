@@ -38,11 +38,11 @@ struct HttpResponse {
     dstd::String serialize() const;
 
     static HttpResponse ok();
-    static HttpResponse ok(dstd::String body, const dstd::String &content_type =
-                                                  "application/json");
+    static HttpResponse ok(dstd::String body,
+                           dstd::String content_type = "application/json");
     static HttpResponse not_found();
-    static HttpResponse bad_request(const dstd::String &msg);
-    static HttpResponse internal_error(const dstd::String &msg);
+    static HttpResponse bad_request(dstd::String msg);
+    static HttpResponse internal_error(dstd::String msg);
 
     /// The response an error stands for, with its message as the body: 400
     /// for a bad argument (the InvalidArgument code of @ref common::ErrorCode,
@@ -51,7 +51,7 @@ struct HttpResponse {
 
     static HttpResponse streaming(
         dstd::UniquePtr<StreamGenerator> gen,
-        const dstd::String &content_type = "application/x-ndjson");
+        dstd::String content_type = "application/x-ndjson");
 };
 
 }  // namespace dftracer::utils::domains::server

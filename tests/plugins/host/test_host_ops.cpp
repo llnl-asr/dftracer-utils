@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -18,23 +19,23 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-dftu_op_val str_val(const dstd::String& s) {
+dftu_op_val str_val(dstd::CStringView s) {
     dftu_op_val v{};
     v.str.ptr = s.c_str();
     v.str.len = static_cast<std::int32_t>(s.size());
     return v;
 }
 
-Series run_series(const char* name, const dftu_series* in,
+Series run_series(dstd::CStringView name, const dftu_series* in,
                   const dftu_op_arg& arg) {
-    const dftu_op_desc* op = dftu_op_find(name);
+    const dftu_op_desc* op = dftu_op_find(name.c_str());
     REQUIRE(op != nullptr);
     const dftu_series* cols[1] = {in};
     return Series{dftu_op_run(op, in ? cols : nullptr, in ? 1u : 0u, &arg)};
 }
 
-bool run_bool(const char* name, const dftu_op_arg& arg) {
-    const dftu_op_desc* op = dftu_op_find(name);
+bool run_bool(dstd::CStringView name, const dftu_op_arg& arg) {
+    const dftu_op_desc* op = dftu_op_find(name.c_str());
     REQUIRE(op != nullptr);
     int ok = 0;
     dftu_scalar r = dftu_op_run_aggregate(op, nullptr, &arg, &ok);
@@ -50,7 +51,7 @@ dstd::Vector<dstd::String> rows(const Series& s) {
     return out;
 }
 
-void write_file(dstd::PathView p, const dstd::String& text) {
+void write_file(dstd::PathView p, dstd::StringView text) {
     const dstd::Path owned(p.str());
     dstd::fs::write_file(dstd::PathView(owned), text).discard();
 }

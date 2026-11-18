@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -45,14 +47,13 @@ dstd::String find_index_binary() {
                                                 "dftracer_index");
 }
 
-void write_plain_pfw(const dstd::String& path) {
+void write_plain_pfw(dstd::StringView path) {
     dftu_utils_test::FileOut plain(path);
     plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\","
              "\"pid\":1,\"tid\":1,\"ts\":1,\"dur\":1}\n";
 }
 
-int run_index(const dstd::String& binary,
-              const dstd::Vector<dstd::String>& args) {
+int run_index(dstd::String binary, dstd::Vector<dstd::String> args) {
     dftu_utils_test::set_test_library_path(binary);
     return dftu_utils_test::run_process(binary, args);
 }

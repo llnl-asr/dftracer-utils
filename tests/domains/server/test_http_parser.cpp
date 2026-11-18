@@ -21,7 +21,7 @@ TEST_CASE("HttpParser - simple GET request") {
         "\r\n";
 
     ParsedRequest req;
-    int consumed = parse_request(raw.data(), raw.size(), req);
+    int consumed = parse_request(raw, req);
 
     REQUIRE(consumed > 0);
     CHECK(consumed == static_cast<int>(raw.size()));
@@ -41,7 +41,7 @@ TEST_CASE("HttpParser - GET with query string") {
         "\r\n";
 
     ParsedRequest req;
-    int consumed = parse_request(raw.data(), raw.size(), req);
+    int consumed = parse_request(raw, req);
 
     REQUIRE(consumed > 0);
     CHECK(req.method == "GET");
@@ -64,7 +64,7 @@ TEST_CASE("HttpParser - multiple headers") {
         "\r\n";
 
     ParsedRequest req;
-    int consumed = parse_request(raw.data(), raw.size(), req);
+    int consumed = parse_request(raw, req);
 
     REQUIRE(consumed > 0);
     CHECK(req.method == "GET");
@@ -84,7 +84,7 @@ TEST_CASE("HttpParser - HTTP/1.0") {
         "\r\n";
 
     ParsedRequest req;
-    int consumed = parse_request(raw.data(), raw.size(), req);
+    int consumed = parse_request(raw, req);
 
     REQUIRE(consumed > 0);
     CHECK(req.method == "GET");
@@ -98,7 +98,7 @@ TEST_CASE("HttpParser - no headers") {
         "\r\n";
 
     ParsedRequest req;
-    int consumed = parse_request(raw.data(), raw.size(), req);
+    int consumed = parse_request(raw, req);
 
     REQUIRE(consumed > 0);
     CHECK(req.method == "GET");
@@ -120,7 +120,7 @@ TEST_CASE("HttpParser - POST request with body indication") {
         "Hello, World!";
 
     ParsedRequest req;
-    int consumed = parse_request(raw.data(), raw.size(), req);
+    int consumed = parse_request(raw, req);
 
     // Parser only parses headers, not body.
     // consumed should point to end of headers.
@@ -143,7 +143,7 @@ TEST_CASE("HttpParser - bare LF line endings") {
         "\n";
 
     ParsedRequest req;
-    int consumed = parse_request(raw.data(), raw.size(), req);
+    int consumed = parse_request(raw, req);
 
     REQUIRE(consumed > 0);
     CHECK(req.method == "GET");
@@ -163,7 +163,7 @@ TEST_CASE("HttpParser - header value with leading/trailing whitespace") {
         "\r\n";
 
     ParsedRequest req;
-    int consumed = parse_request(raw.data(), raw.size(), req);
+    int consumed = parse_request(raw, req);
 
     REQUIRE(consumed > 0);
     REQUIRE(req.headers.size() == 1);
@@ -182,13 +182,13 @@ TEST_CASE("HttpParser - incomplete request (no terminating CRLF)") {
         "Host: localhost\r\n";
 
     ParsedRequest req;
-    int result = parse_request(raw.data(), raw.size(), req);
+    int result = parse_request(raw, req);
     CHECK(result == -2);
 }
 
 TEST_CASE("HttpParser - empty buffer") {
     ParsedRequest req;
-    int result = parse_request("", 0, req);
+    int result = parse_request(dstd::StringView(), req);
     CHECK(result == -2);
 }
 
@@ -196,7 +196,7 @@ TEST_CASE("HttpParser - partial request line") {
     dstd::String raw = "GET /path";
 
     ParsedRequest req;
-    int result = parse_request(raw.data(), raw.size(), req);
+    int result = parse_request(raw, req);
     CHECK(result == -2);
 }
 
@@ -210,7 +210,7 @@ TEST_CASE("HttpParser - missing HTTP version") {
         "\r\n";
 
     ParsedRequest req;
-    int result = parse_request(raw.data(), raw.size(), req);
+    int result = parse_request(raw, req);
     CHECK(result == -1);
 }
 
@@ -220,7 +220,7 @@ TEST_CASE("HttpParser - bad HTTP version string") {
         "\r\n";
 
     ParsedRequest req;
-    int result = parse_request(raw.data(), raw.size(), req);
+    int result = parse_request(raw, req);
     CHECK(result == -1);
 }
 
@@ -230,7 +230,7 @@ TEST_CASE("HttpParser - control character in path") {
         "\r\n";
 
     ParsedRequest req;
-    int result = parse_request(raw.data(), raw.size(), req);
+    int result = parse_request(raw, req);
     CHECK(result == -1);
 }
 
@@ -248,7 +248,7 @@ TEST_CASE("HttpParser - leading CRLF before request") {
         "\r\n";
 
     ParsedRequest req;
-    int consumed = parse_request(raw.data(), raw.size(), req);
+    int consumed = parse_request(raw, req);
 
     REQUIRE(consumed > 0);
     CHECK(req.method == "GET");
@@ -262,7 +262,7 @@ TEST_CASE("HttpParser - path with encoded characters") {
         "\r\n";
 
     ParsedRequest req;
-    int consumed = parse_request(raw.data(), raw.size(), req);
+    int consumed = parse_request(raw, req);
 
     REQUIRE(consumed > 0);
     CHECK(req.method == "GET");
@@ -278,7 +278,7 @@ TEST_CASE("HttpParser - extra data after headers is not consumed") {
         "extra data here";
 
     ParsedRequest req;
-    int consumed = parse_request(raw.data(), raw.size(), req);
+    int consumed = parse_request(raw, req);
 
     REQUIRE(consumed > 0);
     // consumed should NOT include the extra data

@@ -24,7 +24,7 @@ using namespace dftracer::utils;
 namespace {
 
 // The fixture declares `label` required and `stride` optional.
-plugins::host::ConfigTree config_of(const dstd::String& json) {
+plugins::host::ConfigTree config_of(dstd::StringView json) {
     auto tree = plugins::host::ConfigTree::from_json_string(json);
     REQUIRE(tree.has_value());
     return std::move(*tree);
@@ -51,15 +51,15 @@ TEST_CASE("a declared config is accepted and reported by describe()") {
     auto info = set->describe();
     REQUIRE(info.size() == 1);
     const auto& keys = info[0].config_keys;
-    CHECK(std::any_of(keys.begin(), keys.end(), [](const dstd::String& k) {
+    CHECK(std::any_of(keys.begin(), keys.end(), [](dstd::StringView k) {
         return has_substr(k, "stride (int) - rows counted per row");
     }));
-    CHECK(std::any_of(keys.begin(), keys.end(), [](const dstd::String& k) {
+    CHECK(std::any_of(keys.begin(), keys.end(), [](dstd::StringView k) {
         return has_substr(k, "label (string, required)");
     }));
     // The C++ SDK reads `query` off every config, so it is declared too and a
     // caller passing one is not told it is unknown.
-    CHECK(std::any_of(keys.begin(), keys.end(), [](const dstd::String& k) {
+    CHECK(std::any_of(keys.begin(), keys.end(), [](dstd::StringView k) {
         return has_substr(k, "duql (string)");
     }));
 }

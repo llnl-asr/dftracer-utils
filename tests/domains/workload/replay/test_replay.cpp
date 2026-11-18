@@ -19,7 +19,7 @@ namespace {
 /// same `<<` and close(), but the bytes land compressed.
 class GzTraceWriter {
    public:
-    explicit GzTraceWriter(const dstd::String& path) : path_(path) {}
+    explicit GzTraceWriter(dstd::StringView path) : path_(path) {}
     ~GzTraceWriter() { close(); }
 
     template <typename T>

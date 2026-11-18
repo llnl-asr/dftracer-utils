@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -70,7 +71,7 @@ struct IndexedCounts {
 };
 
 dstd::Result<IndexedCounts> read_index_counts(
-    dstd::StringView index_path, const dstd::Vector<ResolvedFile>& entries) {
+    dstd::StringView index_path, dstd::Span<const ResolvedFile> entries) {
     IndexedCounts counts;
     auto snapshot =
         dftracer::utils::trace::index::plan::open_snapshot(index_path);
@@ -96,7 +97,7 @@ dstd::Result<IndexedCounts> read_index_counts(
 }
 
 IndexedCounts count_from_index(dstd::StringView index_path,
-                               const dstd::Vector<ResolvedFile>& entries) {
+                               dstd::Span<const ResolvedFile> entries) {
     auto counts = read_index_counts(index_path, entries);
     if (counts) return std::move(*counts);
     DFTRACER_UTILS_LOG_WARN("Cannot read index {} ({}); streaming its files",
@@ -310,7 +311,7 @@ static int run_event_count(const EventCountArgParse* cli) {
                         [total_events_ptr = &total_events,
                          files_processed_ptr = &files_processed,
                          failed_ptr = &failed](
-                            const dstd::String& path) -> coro::CoroTask<void> {
+                            dstd::String path) -> coro::CoroTask<void> {
                             auto counting = stream_count(path);
                             auto counted = co_await std::move(counting);
                             if (counted) {

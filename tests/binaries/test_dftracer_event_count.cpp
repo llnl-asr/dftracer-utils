@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -40,8 +42,8 @@ dstd::String find_event_count_binary() {
 }
 
 // Run binary, capture stdout, return it as a string.
-dstd::String run_event_count_capture(const dstd::String& binary,
-                                     const dstd::Vector<dstd::String>& args) {
+dstd::String run_event_count_capture(dstd::String binary,
+                                     dstd::Vector<dstd::String> args) {
     return dftu_utils_test::run_process_capture(binary, args);
 }
 
@@ -50,9 +52,9 @@ dstd::String find_index_binary() {
                                                 "dftracer_index");
 }
 
-dstd::String event_line(int id, const char* ph) {
+dstd::String event_line(int id, dstd::CStringView ph) {
     return R"({"id":)" + dstd::to_string(id) + R"(,"pid":1,"tid":1,)" +
-           R"("name":"read","cat":"POSIX","ph":")" + ph + R"(","ts":)" +
+           R"("name":"read","cat":"POSIX","ph":")" + ph.c_str() + R"(","ts":)" +
            dstd::to_string(1000 + id) + R"(,"dur":5,"args":{"ret":1}})";
 }
 
@@ -92,7 +94,7 @@ dstd::String mixed_fixture(bool no_phase_line) {
 constexpr int DFTRACER_UTILS_FIXTURE_EVENTS = 6;
 constexpr int PATH_FIXTURE_EVENTS = 9;
 
-bool dir_has_dftindex(const dstd::String& dir) {
+bool dir_has_dftindex(dstd::StringView dir) {
     for (const auto& entry : dftu_utils_test::walk_dir(dir)) {
         if (entry.path.view().filename() == ".dftindex") return true;
     }
@@ -101,7 +103,7 @@ bool dir_has_dftindex(const dstd::String& dir) {
 
 // Extract the last non-empty line from a string and parse it as int.
 // Returns -1 on parse failure.
-int parse_event_count(const dstd::String& output) {
+int parse_event_count(dstd::StringView output) {
     dstd::String last;
     dftu_utils_test::LineStream iss(output);
     dstd::String line;

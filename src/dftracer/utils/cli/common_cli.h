@@ -172,7 +172,7 @@ dstd::Optional<int> setup_and_parse(Cli& cli, int argc, char** argv) {
 // erasure; it receives the parsed CliT and returns the process exit code, or a
 // dstd::Result<int> whose error is logged and exits with 1.
 template <class CliT, class RunFn>
-int cli_main(int argc, char** argv, const char* name, const char* description,
+int cli_main(int argc, char** argv, dstd::String name, dstd::String description,
              RunFn&& run) {
     // Run the shutdown hooks at cli_main scope, while the runtime the store
     // writers wait on still runs.
@@ -186,7 +186,8 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
     }
     // Before the parse, so the input paths it checks are stat'ed once.
     dftracer::utils::common::InputStatScope input_stats;
-    ArgParser program(name, DFTRACER_UTILS_PACKAGE_VERSION, description);
+    ArgParser program(std::move(name), DFTRACER_UTILS_PACKAGE_VERSION,
+                      std::move(description));
     CliT cli(program);
     if (auto code = setup_and_parse(cli, argc, argv)) return *code;
     auto outcome = run(cli);
@@ -467,7 +468,8 @@ struct WatchdogArgs : CliSchema {
 // coro::Scope& and returns a coro::CoroTask. The result holds the error of a
 // task that ended with one.
 template <class Body>
-auto run_on_pool(const char* name, const RuntimeArgs& runtime, Body&& body) {
+auto run_on_pool(dstd::StringView name, const RuntimeArgs& runtime,
+                 Body&& body) {
     RuntimeSettings settings;
     runtime.apply(settings);
     return configure_default_runtime(settings).block_on(
@@ -477,7 +479,7 @@ auto run_on_pool(const char* name, const RuntimeArgs& runtime, Body&& body) {
 // As above, with a watchdog that stops the task and gives a
 // dstd::Condition::Timeout error when a timeout passes.
 template <class Body>
-auto run_on_pool(const char* name, const RuntimeArgs& runtime,
+auto run_on_pool(dstd::StringView name, const RuntimeArgs& runtime,
                  const WatchdogArgs& watchdog, Body&& body) {
     RuntimeSettings settings;
     runtime.apply(settings);
@@ -628,8 +630,8 @@ scan_directory_trace_files(coro::Scope& ctx, dstd::StringView directory,
 template <class OnMissing>
 coro::CoroTask<dstd::Result<dstd::Vector<dstd::String>>>
 collect_input_trace_files(coro::Scope& ctx,
-                          const dstd::Vector<dstd::StringView>& inputs,
-                          bool recursive, OnMissing&& on_missing) {
+                          dstd::Vector<dstd::StringView> inputs, bool recursive,
+                          OnMissing&& on_missing) {
     dstd::Vector<dstd::String> out;
     for (const auto in : inputs) {
         if (dftracer::utils::common::input_is_directory(
@@ -653,7 +655,7 @@ collect_input_trace_files(coro::Scope& ctx,
 
 inline coro::CoroTask<dstd::Result<dstd::Vector<dstd::String>>>
 collect_input_trace_files(coro::Scope& ctx,
-                          const dstd::Vector<dstd::StringView>& inputs,
+                          dstd::Vector<dstd::StringView> inputs,
                           bool recursive) {
     co_return co_await collect_input_trace_files(ctx, inputs, recursive,
                                                  [](dstd::StringView) {});
@@ -715,9 +717,9 @@ inline coro::CoroTask<dstd::Result<int>> ensure_indexes_fresh_task(
 
 inline dstd::Result<dstd::Vector<runtime::fs::FoundFile>>
 ensure_indexes_fresh_blocking(
-    const char* name, const RuntimeArgs& runtime, dstd::StringView directory,
-    dstd::Vector<dstd::StringView> files, dstd::StringView index_dir,
-    bool force_rebuild = false,
+    dstd::StringView name, const RuntimeArgs& runtime,
+    dstd::StringView directory, dstd::Vector<dstd::StringView> files,
+    dstd::StringView index_dir, bool force_rebuild = false,
     dftracer::utils::trace::index::schemas::dft::agg::AggregationConfig
         aggregation = dftracer::utils::trace::index::schemas::dft::agg::
             standard_aggregation_config(),

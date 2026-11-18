@@ -97,8 +97,7 @@ dftu_plugin make_plugin(dftu_status (*on_columns)(dftu_ctx*, void*,
 }
 
 trace::views::detail::FoldEvent evt(dstd::StringIntern& intern,
-                                    const dstd::String& cat,
-                                    const dstd::String& name,
+                                    dstd::StringView cat, dstd::StringView name,
                                     std::uint64_t dur) {
     trace::views::detail::FoldEvent fe;
     fe.cat_id = intern.get_or_insert(cat);

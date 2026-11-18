@@ -31,8 +31,9 @@ using namespace dftracer::utils;
 
 namespace {
 
-trace::views::detail::FoldEvent evt(dstd::StringIntern& intern, const char* cat,
-                                    const char* name, std::uint64_t dur) {
+trace::views::detail::FoldEvent evt(dstd::StringIntern& intern,
+                                    dstd::StringView cat, dstd::StringView name,
+                                    std::uint64_t dur) {
     trace::views::detail::FoldEvent fe;
     fe.cat_id = intern.get_or_insert(cat);
     fe.name_id = intern.get_or_insert(name);
@@ -207,7 +208,7 @@ dstd::Vector<dstd::Pair<dstd::String, double>> heavy_at(const dftu_series* col,
 
 // The finalized frame a plugin's accumulator was emitted under, or null.
 dftu_dataframe* result_frame(plugins::NamedResultRegistry& named,
-                             const char* name) {
+                             dstd::StringView name) {
     auto it = named.results().find(name);
     if (it == named.results().end()) return nullptr;
     if (!std::holds_alternative<plugins::OwnedDataFrame>(it->second))
@@ -217,7 +218,7 @@ dftu_dataframe* result_frame(plugins::NamedResultRegistry& named,
 
 // Group rows come back in accumulate order, not key order, so every assertion
 // looks its group up by key.
-std::int64_t row_of(const dftu_series* keycol, const dstd::String& key) {
+std::int64_t row_of(const dftu_series* keycol, dstd::StringView key) {
     for (std::int64_t r = 0; r < dftu_series_length(keycol); ++r)
         if (str_at(keycol, r) == key) return r;
     return -1;
@@ -226,7 +227,8 @@ std::int64_t row_of(const dftu_series* keycol, const dstd::String& key) {
 // The columnar seam materializes cat/name/pid/tid/ts/dur, so every op's value
 // and `by` column comes straight off the batch frame.
 trace::views::detail::FoldEvent evt_full(dstd::StringIntern& intern,
-                                         const char* cat, const char* name,
+                                         dstd::StringView cat,
+                                         dstd::StringView name,
                                          std::uint64_t pid, std::uint64_t tid,
                                          std::uint64_t ts, std::uint64_t dur) {
     trace::views::detail::FoldEvent fe;
@@ -287,7 +289,7 @@ dftu_plugin make_columns_plugin(
 
 void run_slices(
     plugins::host::PluginFold& master,
-    const dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>>& slices) {
+    dstd::Span<const dstd::Vector<trace::views::detail::FoldEvent>> slices) {
     for (const auto& evs : slices) {
         auto slice = master.slice();
         auto* pf = static_cast<plugins::host::PluginFold*>(slice.get());

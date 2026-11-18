@@ -5,6 +5,7 @@
 // uses, not from a hand-filled struct.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/host/plugins.h>
@@ -49,9 +50,10 @@ struct Described {
     dstd::Vector<Info> info;
 };
 
-Described describe_one(const char* path) {
+Described describe_one(dstd::StringView path) {
     Described d;
-    auto built = plugins::host::Plugins::Builder().add(path).build();
+    auto built =
+        plugins::host::Plugins::Builder().add(dstd::String(path)).build();
     if (!built) {
         d.error = built.error().message();
         return d;
@@ -61,13 +63,13 @@ Described describe_one(const char* path) {
     return d;
 }
 
-bool has(const dstd::Vector<dstd::String>& list, const char* name) {
+bool has(dstd::Span<const dstd::String> list, dstd::StringView name) {
     for (const dstd::String& s : list)
         if (s == name) return true;
     return false;
 }
 
-dstd::String joined(const dstd::Vector<dstd::String>& list) {
+dstd::String joined(dstd::Span<const dstd::String> list) {
     dstd::String out;
     for (const dstd::String& s : list) {
         if (!out.empty()) out += ", ";

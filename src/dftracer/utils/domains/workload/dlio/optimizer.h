@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/domains/workload/dlio/barrier_simulator.h>
 #include <dftracer/utils/domains/workload/dlio/mixture.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
@@ -48,7 +49,7 @@ OptimizerResult optimize_max_bound_percentile(
 
 /// Helper: percentile by sorted index (linear interpolation between adjacent
 /// samples). Returns 0 if data is empty.
-double percentile(const dstd::Vector<double>& sorted_data, double pct);
+double percentile(dstd::Span<const double> sorted_data, double pct);
 
 }  // namespace dftracer::utils::domains::workload::dlio
 

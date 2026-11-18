@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -27,8 +29,8 @@ dstd::String binary() {
     return path;
 }
 
-dstd::String call(int pid, const dstd::String& name, int ts, int dur,
-                  const dstd::String& cat = "CPP_APP") {
+dstd::String call(int pid, dstd::StringView name, int ts, int dur,
+                  dstd::StringView cat = "CPP_APP") {
     dftu_utils_test::TextOut o;
     o << R"({"name":")" << name << R"(","cat":")" << cat << R"(","pid":)" << pid
       << R"(,"tid":)" << pid << R"(,"ts":)" << ts << R"(,"dur":)" << dur
@@ -38,7 +40,7 @@ dstd::String call(int pid, const dstd::String& name, int ts, int dur,
 }
 
 // One complete matrix-layout run under `root` with a single set.
-dstd::Path write_run(const dstd::Path& root, const dstd::String& input) {
+dstd::Path write_run(const dstd::Path& root, dstd::StringView input) {
     const dstd::Path dir = root / "app" / "sys" / input / "nodes_1" / "ppn_1";
     REQUIRE(dstd::fs::create_directories(dir / "compacted").has_value());
     dftu_utils_test::FileOut(dir / "summary.json")
@@ -53,8 +55,7 @@ dstd::Path write_run(const dstd::Path& root, const dstd::String& input) {
 }
 
 // A run with `paths` distinct call names, so records outnumber its run record.
-void write_wide_run(const dstd::Path& root, const dstd::String& input,
-                    int paths) {
+void write_wide_run(const dstd::Path& root, dstd::StringView input, int paths) {
     const dstd::Path dir = root / "app" / "sys" / input / "nodes_1" / "ppn_1";
     REQUIRE(dstd::fs::create_directories(dir / "compacted").has_value());
     dftu_utils_test::FileOut(dir / "summary.json")
@@ -70,8 +71,7 @@ void write_wide_run(const dstd::Path& root, const dstd::String& input,
 
 // A run of `depth` nested calls with long names: its path records hold about
 // depth * depth * 13 bytes of path text, from a small trace file.
-void write_deep_run(const dstd::Path& root, const dstd::String& input,
-                    int depth) {
+void write_deep_run(const dstd::Path& root, dstd::StringView input, int depth) {
     const dstd::Path dir = root / "app" / "sys" / input / "nodes_1" / "ppn_1";
     REQUIRE(dstd::fs::create_directories(dir / "compacted").has_value());
     dftu_utils_test::FileOut(dir / "summary.json")
@@ -88,7 +88,7 @@ void write_deep_run(const dstd::Path& root, const dstd::String& input,
         dstd::String((dir / "compacted" / "set1.pfw.gz").str()), t);
 }
 
-dstd::Vector<dstd::String> gz_lines(const dstd::String& path) {
+dstd::Vector<dstd::String> gz_lines(dstd::CStringView path) {
     dstd::Vector<dstd::String> out;
     gzFile f = gzopen(path.c_str(), "rb");
     REQUIRE(f != nullptr);
@@ -104,7 +104,7 @@ dstd::Vector<dstd::String> gz_lines(const dstd::String& path) {
     return out;
 }
 
-dstd::Vector<std::size_t> member_sizes(const dstd::String& path) {
+dstd::Vector<std::size_t> member_sizes(dstd::CStringView path) {
     const dstd::String gz = dftu_utils_test::read_text(path);
     dstd::Vector<std::size_t> sizes;
     z_stream zs{};
@@ -126,11 +126,11 @@ dstd::Vector<std::size_t> member_sizes(const dstd::String& path) {
     return sizes;
 }
 
-dstd::String slurp(const dstd::String& path) {
+dstd::String slurp(dstd::CStringView path) {
     return dftu_utils_test::read_text(path);
 }
 
-int run(const dstd::Vector<dstd::String>& args, dstd::String* out = nullptr) {
+int run(dstd::Vector<dstd::String> args, dstd::String* out = nullptr) {
     int code = -1;
     const dstd::String text =
         dftu_utils_test::run_process_capture(binary(), args, true, &code);
@@ -250,7 +250,7 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
     CHECK(dftu_utils_test::ok(indexer.files())[0].schema == "genesis");
 
     const dstd::String index_path = d.file(".dftindex");
-    auto rows = [&](const dstd::String& q) {
+    auto rows = [&](dstd::StringView q) {
         return dftu_utils_test::ok(
                    trace::views::View::from_file(dstd::String(out),
                                                  dstd::String(index_path))
@@ -374,7 +374,7 @@ TEST_CASE("the run and func records follow every counter record") {
     REQUIRE(run({d.file("root"), "-o", out, "--member-size", "4096"}) == 0);
     const auto lines = gz_lines(out);
     const auto first_head =
-        std::find_if(lines.begin(), lines.end(), [](const dstd::String& l) {
+        std::find_if(lines.begin(), lines.end(), [](dstd::StringView l) {
             return l.find(R"("gtype":"counter")") == dstd::String::npos;
         });
     REQUIRE(first_head != lines.begin());

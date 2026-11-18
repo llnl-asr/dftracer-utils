@@ -98,7 +98,7 @@ std::uint64_t expected_dur_sum() {
     return total;
 }
 
-plugins::host::ConfigTree config_of(const dstd::String& json) {
+plugins::host::ConfigTree config_of(dstd::StringView json) {
     auto tree = plugins::host::ConfigTree::from_json_string(json);
     REQUIRE(tree.has_value());
     return std::move(*tree);

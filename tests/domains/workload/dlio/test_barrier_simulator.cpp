@@ -83,12 +83,14 @@ TEST_SUITE("variance") {
     TEST_CASE("empty") { CHECK(variance({}) == doctest::Approx(0.0)); }
 
     TEST_CASE("constant values - zero variance") {
-        CHECK(variance({3.0, 3.0, 3.0}) == doctest::Approx(0.0));
+        CHECK(variance(dstd::Vector<double>{3.0, 3.0, 3.0}) ==
+              doctest::Approx(0.0));
     }
 
     TEST_CASE("known sample") {
         // Population variance of {1, 2, 3, 4, 5} = 2.0.
-        CHECK(variance({1.0, 2.0, 3.0, 4.0, 5.0}) == doctest::Approx(2.0));
+        CHECK(variance(dstd::Vector<double>{1.0, 2.0, 3.0, 4.0, 5.0}) ==
+              doctest::Approx(2.0));
     }
 }
 

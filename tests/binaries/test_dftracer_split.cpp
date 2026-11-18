@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -45,14 +47,13 @@ dstd::String find_split_binary() {
                                                 "dftracer_split");
 }
 
-int run_split(const dstd::String& binary,
-              const dstd::Vector<dstd::String>& args) {
+int run_split(dstd::String binary, dstd::Vector<dstd::String> args) {
     return dftu_utils_test::run_process(binary, args);
 }
 
 // Count non-empty lines across all .pfw.gz files in a directory by
 // decompressing each with zlib.
-int count_gz_lines_in_dir(const dstd::String& dir) {
+int count_gz_lines_in_dir(dstd::StringView dir) {
     int total = 0;
     for (const auto& entry : dftu_utils_test::list_dir(dir)) {
         if (!(entry.kind == dstd::fs::FileKind::File)) continue;
@@ -78,7 +79,7 @@ int count_gz_lines_in_dir(const dstd::String& dir) {
 }
 
 // Count .pfw.gz files in a directory.
-int count_gz_files(const dstd::String& dir) {
+int count_gz_files(dstd::StringView dir) {
     int n = 0;
     for (const auto& entry : dftu_utils_test::list_dir(dir)) {
         if (!(entry.kind == dstd::fs::FileKind::File)) continue;
@@ -90,7 +91,7 @@ int count_gz_files(const dstd::String& dir) {
 
 // Count gzip members across all .pfw.gz output files (each member starts with
 // the RFC 1952 magic 1F 8B 08).
-int count_gzip_members(const dstd::String& dir) {
+int count_gzip_members(dstd::StringView dir) {
     int members = 0;
     for (const auto& entry : dftu_utils_test::list_dir(dir)) {
         if (!(entry.kind == dstd::fs::FileKind::File)) continue;
@@ -107,7 +108,7 @@ int count_gzip_members(const dstd::String& dir) {
 }
 
 // True when the first line of every .pfw.gz file in the directory is an event.
-bool all_files_start_with_event(const dstd::String& dir) {
+bool all_files_start_with_event(dstd::StringView dir) {
     for (const auto& entry : dftu_utils_test::list_dir(dir)) {
         if (!(entry.kind == dstd::fs::FileKind::File)) continue;
         const dstd::String p(entry.path.str());

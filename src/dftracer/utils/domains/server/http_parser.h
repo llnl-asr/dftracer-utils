@@ -32,7 +32,7 @@ struct ParsedRequest {
 ///
 /// Returns bytes consumed on success (> 0), -2 if the request is
 /// incomplete (need more data), -1 on parse error.
-int parse_request(const char* buf, std::size_t len, ParsedRequest& out);
+int parse_request(dstd::StringView buf, ParsedRequest& out);
 
 }  // namespace dftracer::utils::domains::server::parser
 

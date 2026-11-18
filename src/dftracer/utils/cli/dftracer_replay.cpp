@@ -324,17 +324,17 @@ void print_filters(const RunCtx& ctx) {
     if (!any) return;
 
     std::printf("\nActive Filters:\n");
-    auto print_uint_set = [](const char* label,
+    auto print_uint_set = [](dstd::StringView label,
                              const dstd::HashSet<std::uint32_t>& s) {
         if (s.empty()) return;
-        std::printf("  %s:", label);
+        std::printf("  %.*s:", static_cast<int>(label.size()), label.data());
         for (auto v : s) std::printf(" %u", v);
         std::printf("\n");
     };
-    auto print_str_set = [](const char* label,
+    auto print_str_set = [](dstd::StringView label,
                             const dstd::HashSet<dstd::String>& s) {
         if (s.empty()) return;
-        std::printf("  %s:", label);
+        std::printf("  %.*s:", static_cast<int>(label.size()), label.data());
         for (const auto& v : s) std::printf(" %s", v.c_str());
         std::printf("\n");
     };

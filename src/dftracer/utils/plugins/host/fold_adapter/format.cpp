@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -51,8 +52,8 @@ class TreeBuilder {
    public:
     explicit TreeBuilder(Doc& doc) : doc_(doc) {}
 
-    // Why the build stopped, or null.
-    const char* failure() const { return failure_; }
+    // Why the build stopped, or empty.
+    dstd::StringView failure() const { return failure_; }
 
     bool build_json(const json::DomValue& v, dftu_value& out, int depth) {
         if (depth > MAX_DEPTH) return fail("nested too deep");
@@ -61,23 +62,23 @@ class TreeBuilder {
                 dstd::Vector<dftu_member> members;
                 v.for_each_member(
                     [&](dstd::StringView key, json::DomValue child) {
-                        if (failure_ != nullptr) return;
+                        if (!failure_.empty()) return;
                         dftu_value& slot = doc_.values.emplace_back();
                         if (build_json(child, slot, depth + 1))
                             add_member(members, key, slot);
                     });
-                if (failure_ != nullptr) return false;
+                if (!failure_.empty()) return false;
                 return finish_members(members, out);
             }
             case json::DomValue::Type::Array: {
                 dstd::Vector<dftu_value> items;
                 v.for_each_element([&](json::DomValue child) {
-                    if (failure_ != nullptr) return;
+                    if (!failure_.empty()) return;
                     dftu_value item{};
                     if (build_json(child, item, depth + 1))
                         items.push_back(item);
                 });
-                if (failure_ != nullptr) return false;
+                if (!failure_.empty()) return false;
                 return finish_items(items, out);
             }
             case json::DomValue::Type::String:
@@ -110,22 +111,22 @@ class TreeBuilder {
         if (v.is_object()) {
             dstd::Vector<dftu_member> members;
             v.for_each_member([&](dstd::StringView key, yaml::Value child) {
-                if (failure_ != nullptr) return;
+                if (!failure_.empty()) return;
                 dftu_value& slot = doc_.values.emplace_back();
                 if (build_yaml(child, slot, depth + 1))
                     add_member(members, key, slot);
             });
-            if (failure_ != nullptr) return false;
+            if (!failure_.empty()) return false;
             return finish_members(members, out);
         }
         if (v.is_array()) {
             dstd::Vector<dftu_value> items;
             v.for_each_element([&](yaml::Value child) {
-                if (failure_ != nullptr) return;
+                if (!failure_.empty()) return;
                 dftu_value item{};
                 if (build_yaml(child, item, depth + 1)) items.push_back(item);
             });
-            if (failure_ != nullptr) return false;
+            if (!failure_.empty()) return false;
             return finish_items(items, out);
         }
         if (v.is_null()) {
@@ -136,34 +137,34 @@ class TreeBuilder {
     }
 
    private:
-    bool fail(const char* reason) {
-        if (failure_ == nullptr) failure_ = reason;
+    bool fail(dstd::StringView reason) {
+        if (failure_.empty()) failure_ = reason;
         return false;
     }
 
     // The NUL terminated copy of `text` in the document, or empty on failure.
-    bool copy_text(dstd::StringView text, const char*& out) {
+    bool copy_text(dstd::StringView text, dstd::StringView& out) {
         if (text.size() > std::numeric_limits<std::uint32_t>::max())
             return fail("a string is longer than 4 GiB");
-        out = doc_.strings.push(text, dstd::StringView("\0", 1)).data();
+        out = doc_.strings.push(text, dstd::StringView("\0", 1));
         return true;
     }
 
     bool set_string(dstd::StringView text, dftu_value& out) {
-        const char* copy = nullptr;
+        dstd::StringView copy;
         if (!copy_text(text, copy)) return false;
         out.kind = DFTU_VAL_STR;
         out.count = static_cast<std::uint32_t>(text.size());
-        out.as.str = copy;
+        out.as.str = copy.data();
         return true;
     }
 
     void add_member(dstd::Vector<dftu_member>& members, dstd::StringView key,
                     const dftu_value& slot) {
-        const char* copy = nullptr;
+        dstd::StringView copy;
         if (!copy_text(key, copy)) return;
         members.push_back(
-            {copy, static_cast<std::uint32_t>(key.size()), &slot});
+            {copy.data(), static_cast<std::uint32_t>(key.size()), &slot});
     }
 
     bool finish_members(dstd::Vector<dftu_member>& members, dftu_value& out) {
@@ -187,22 +188,23 @@ class TreeBuilder {
     }
 
     Doc& doc_;
-    const char* failure_ = nullptr;
+    dstd::StringView failure_;
 };
 
-dftu_status check_text(::dftu_ctx* ctx, const char* text, std::uint64_t len,
-                       ::dftu_doc** out) {
+dftu_status check_text(::dftu_ctx* ctx, bool text_missing, ::dftu_doc** out) {
     if (out == nullptr)
         return host_fail(ctx, DFTU_E_INVALID, "parse: out is NULL");
     *out = nullptr;
-    if (text == nullptr && len != 0)
+    if (text_missing)
         return host_fail(ctx, DFTU_E_INVALID, "parse: text is NULL");
     return DFTU_OK;
 }
 
 dftu_status json_parse(::dftu_ctx* ctx, void*, const char* text,
                        std::uint64_t len, ::dftu_doc** out) {
-    if (dftu_status st = check_text(ctx, text, len, out); st < 0) return st;
+    if (dftu_status st = check_text(ctx, text == nullptr && len != 0, out);
+        st < 0)
+        return st;
     const dstd::StringView view(text == nullptr ? "" : text,
                                 static_cast<std::size_t>(len));
     auto parsed = json::DomDocument::parse(view);
@@ -217,7 +219,9 @@ dftu_status json_parse(::dftu_ctx* ctx, void*, const char* text,
 
 dftu_status yaml_parse(::dftu_ctx* ctx, void*, const char* text,
                        std::uint64_t len, ::dftu_doc** out) {
-    if (dftu_status st = check_text(ctx, text, len, out); st < 0) return st;
+    if (dftu_status st = check_text(ctx, text == nullptr && len != 0, out);
+        st < 0)
+        return st;
     auto parsed =
         yaml::Document::parse(dstd::String(text == nullptr ? "" : text,
                                            static_cast<std::size_t>(len)),
@@ -297,10 +301,9 @@ FormatWriter* writer_of(::dftu_format_writer* w) {
     return reinterpret_cast<FormatWriter*>(w);
 }
 
-dftu_status invalid(::dftu_ctx* ctx, const char* op, const char* why) {
-    return host_fail(
-        ctx, DFTU_E_INVALID,
-        dstd::fmt<"{}: {}">(dstd::StringView(op), dstd::StringView(why)));
+dftu_status invalid(::dftu_ctx* ctx, dstd::StringView op,
+                    dstd::StringView why) {
+    return host_fail(ctx, DFTU_E_INVALID, dstd::fmt<"{}: {}">(op, why));
 }
 
 dftu_status writer_new(::dftu_ctx* ctx, bool is_yaml,
@@ -322,7 +325,7 @@ dftu_status yaml_writer_new(::dftu_ctx* ctx, void*,
 }
 
 // Checks that a value may start here.
-dftu_status begin_value(::dftu_ctx* ctx, const char* op, FormatWriter* w) {
+dftu_status begin_value(::dftu_ctx* ctx, dstd::StringView op, FormatWriter* w) {
     if (w == nullptr) return invalid(ctx, op, "the writer is NULL");
     if (w->finished) return invalid(ctx, op, "the writer is finished");
     if (w->frames.empty()) {
@@ -389,10 +392,9 @@ dftu_status format_end_array(::dftu_ctx* ctx, ::dftu_format_writer* w) {
     return end_container(ctx, w, true);
 }
 
-dftu_status check_text_arg(::dftu_ctx* ctx, const char* op, const char* text,
-                           std::uint64_t len) {
-    if (text == nullptr && len != 0)
-        return invalid(ctx, op, "the text is NULL");
+dftu_status check_text_arg(::dftu_ctx* ctx, dstd::StringView op,
+                           bool text_missing) {
+    if (text_missing) return invalid(ctx, op, "the text is NULL");
     return DFTU_OK;
 }
 
@@ -401,7 +403,9 @@ dftu_status format_key(::dftu_ctx* ctx, ::dftu_format_writer* handle,
     FormatWriter* w = writer_of(handle);
     if (w == nullptr) return invalid(ctx, "key", "the writer is NULL");
     if (w->finished) return invalid(ctx, "key", "the writer is finished");
-    if (dftu_status st = check_text_arg(ctx, "key", k, len); st < 0) return st;
+    if (dftu_status st = check_text_arg(ctx, "key", k == nullptr && len != 0);
+        st < 0)
+        return st;
     if (w->frames.empty() || w->frames.back().is_array)
         return invalid(ctx, "key", "a key outside an object");
     if (w->frames.back().key_pending)
@@ -420,7 +424,7 @@ dftu_status format_key(::dftu_ctx* ctx, ::dftu_format_writer* handle,
 }
 
 template <class Write>
-dftu_status write_scalar(::dftu_ctx* ctx, const char* op,
+dftu_status write_scalar(::dftu_ctx* ctx, dstd::StringView op,
                          ::dftu_format_writer* handle, Write&& write) {
     FormatWriter* w = writer_of(handle);
     if (dftu_status st = begin_value(ctx, op, w); st < 0) return st;
@@ -448,7 +452,9 @@ dftu_status format_f64(::dftu_ctx* ctx, ::dftu_format_writer* w, double v) {
 
 dftu_status format_str(::dftu_ctx* ctx, ::dftu_format_writer* w, const char* s,
                        std::uint64_t len) {
-    if (dftu_status st = check_text_arg(ctx, "str", s, len); st < 0) return st;
+    if (dftu_status st = check_text_arg(ctx, "str", s == nullptr && len != 0);
+        st < 0)
+        return st;
     const dstd::StringView text(s == nullptr ? "" : s,
                                 static_cast<std::size_t>(len));
     return write_scalar(ctx, "str", w,
@@ -467,7 +473,9 @@ dftu_status format_null(::dftu_ctx* ctx, ::dftu_format_writer* w) {
 
 dftu_status format_raw(::dftu_ctx* ctx, ::dftu_format_writer* w,
                        const char* token, std::uint64_t len) {
-    if (dftu_status st = check_text_arg(ctx, "raw", token, len); st < 0)
+    if (dftu_status st =
+            check_text_arg(ctx, "raw", token == nullptr && len != 0);
+        st < 0)
         return st;
     if (len == 0) return invalid(ctx, "raw", "the token is empty");
     const dstd::StringView text(token, static_cast<std::size_t>(len));

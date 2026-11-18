@@ -9,10 +9,12 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -43,7 +45,7 @@ using namespace dftracer::utils::trace::views;
 // The files owned by `rank` of `size`: a deterministic round-robin split, so
 // every rank derives the same assignment from the same sorted file list.
 static dstd::Vector<dstd::String> shard_files(
-    const dstd::Vector<dstd::String>& all_files, std::uint32_t rank,
+    dstd::Span<const dstd::String> all_files, std::uint32_t rank,
     std::uint32_t size) {
     dstd::Vector<dstd::String> shard;
     for (std::size_t i = 0; i < all_files.size(); ++i)
@@ -323,8 +325,7 @@ class NullSink : public ExportSink {
     void write(dstd::StringView) override {}
 };
 
-static ViewFile make_view_file(const dstd::String& file,
-                               dstd::String index_path,
+static ViewFile make_view_file(dstd::StringView file, dstd::String index_path,
                                std::size_t checkpoint_size) {
     ViewFile vf;
     vf.file_path = file;
@@ -342,7 +343,7 @@ static bool fatal(const dstd::Error& error) {
 // Re-scan a freshly written trace and confirm the event count round-trips.
 template <class Configure>
 static coro::CoroTask<dstd::Result<void>> verify_output(
-    const dstd::String& final_output, const dstd::String& index_dir,
+    dstd::String final_output, dstd::String index_dir,
     std::size_t checkpoint_size, Configure&& configure,
     std::uint64_t expected_events, bool& verify_failed) {
     dstd::String output_arg{dstd::StringView(final_output)};
@@ -376,7 +377,7 @@ static coro::CoroTask<dstd::Result<void>> verify_output(
 static dstd::String text(dstd::StringView v) { return dstd::String(v); }
 
 static dstd::Vector<dstd::String> texts(
-    const dstd::Vector<dstd::StringView>& views) {
+    dstd::Span<const dstd::StringView> views) {
     dstd::Vector<dstd::String> out;
     out.reserve(views.size());
     for (const auto v : views) out.emplace_back(v);
@@ -534,12 +535,10 @@ namespace {
 
 // Rebuilds the stale indexes of `files` under `index_dir`.
 static coro::CoroTask<dstd::Result<void>> refresh_indexes(
-    const dstd::Vector<dstd::String>& files, const dstd::String& index_dir) {
-    auto to_check = files;
-    dstd::String dir_arg{dstd::StringView(index_dir)};
+    dstd::Vector<dstd::String> files, dstd::String index_dir) {
     auto fresh =
         co_await dftracer::utils::trace::index::build::ensure_indexes_fresh(
-            "", std::move(to_check), std::move(dir_arg));
+            "", std::move(files), std::move(index_dir));
     if (!fresh) co_return fresh.error();
     co_return dstd::Result<void>{};
 }
@@ -672,7 +671,7 @@ static bool parse_phase(dstd::StringView phase, Phase& out) {
 }
 
 static bool collect_input_files(const ViewArgParse& cli,
-                                const dstd::String& shard_set_root,
+                                dstd::StringView shard_set_root,
                                 dstd::Vector<dstd::String>& files) {
     const dstd::StringView directory = cli.inputs.directory;
     if (!shard_set_root.empty()) {
@@ -713,7 +712,7 @@ static bool collect_input_files(const ViewArgParse& cli,
 }
 
 // False when a file lacks its index and --no-auto-index forbids building it.
-static bool check_missing_indexes(const dstd::Vector<dstd::String>& files,
+static bool check_missing_indexes(dstd::Span<const dstd::String> files,
                                   dstd::StringView index_dir,
                                   bool no_auto_index) {
     dstd::Vector<dstd::String> files_needing_index;

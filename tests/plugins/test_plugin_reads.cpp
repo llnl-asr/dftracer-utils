@@ -58,7 +58,7 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
     return test_plugin_common::index_trace(gz);
 }
 
-plugins::host::ConfigTree config_of(const dstd::String& json) {
+plugins::host::ConfigTree config_of(dstd::StringView json) {
     auto tree = plugins::host::ConfigTree::from_json_string(json);
     REQUIRE(tree.has_value());
     return std::move(*tree);

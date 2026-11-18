@@ -17,6 +17,7 @@
 #include <dftracer/utils/domains/server/viz/summary_build.h>
 #include <dftracer/utils/domains/server/viz_api.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -44,9 +45,9 @@ using namespace dftracer::utils::trace;
 using namespace dftracer::utils::trace::views;
 using dftracer::utils::json::json_number;
 
-static dstd::String serialize_counters_body(const dstd::Vector<double>& read,
-                                            const dstd::Vector<double>& write,
-                                            const dstd::Vector<double>& ops,
+static dstd::String serialize_counters_body(dstd::Span<const double> read,
+                                            dstd::Span<const double> write,
+                                            dstd::Span<const double> ops,
                                             double original_begin,
                                             double original_end, int buckets,
                                             double bucket_us, bool truncated) {
@@ -166,7 +167,7 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
 
     auto fold_events = [begin, bucket_us, nb, &fields](
                            CounterAcc& acc,
-                           const dstd::Vector<dstd::StringView>& events) {
+                           dstd::Span<const dstd::StringView> events) {
         if (acc.ops.empty()) acc.init(nb);
         fields.for_each_event(events, [&](dstd::StringView ev) {
             fold_counter(ev, begin, bucket_us, nb, acc);

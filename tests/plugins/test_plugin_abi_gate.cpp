@@ -6,6 +6,7 @@
 // callback as NULL.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
@@ -55,7 +56,7 @@ namespace {
 
 constexpr int EVENTS = 64;
 
-bool contains(const dstd::String& text, const char* part) {
+bool contains(dstd::StringView text, dstd::StringView part) {
     return text.find(part) != dstd::String::npos;
 }
 
@@ -65,8 +66,8 @@ std::uint32_t pack(std::uint32_t major, std::uint32_t minor,
 }
 
 ViewFile make_trace(dftu_utils_test::TestEnvironment& env,
-                    const dstd::String& tag) {
-    const dstd::String dir = env.dir() + "/" + tag;
+                    dstd::CStringView tag) {
+    const dstd::String dir = env.dir() + "/" + tag.c_str();
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     const dstd::String pfw = dir + "/trace.pfw";
     dstd::String ofs;

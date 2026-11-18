@@ -8,6 +8,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -65,14 +66,14 @@ dstd::String encode(const Totals& t) {
     return out;
 }
 
-Totals decode(const char* p, std::size_t n) {
+Totals decode(dstd::StringView text, std::size_t n) {
     Totals out;
     std::size_t at = 0;
     while (at < n) {
-        const dstd::String name(p + at);
+        const dstd::String name(text.data() + at);
         at += name.size() + 1;
         if (at > n) break;
-        const dstd::String dur(p + at);
+        const dstd::String dur(text.data() + at);
         at += dur.size() + 1;
         out[name] += std::strtoull(dur.c_str(), nullptr, 10);
     }
@@ -195,8 +196,7 @@ dftu_plugin state_only_plugin() {
 }
 
 trace::views::detail::FoldEvent evt(dstd::StringIntern& intern,
-                                    const dstd::String& name,
-                                    std::uint64_t dur) {
+                                    dstd::String name, std::uint64_t dur) {
     trace::views::detail::FoldEvent fe;
     fe.cat_id = intern.get_or_insert("POSIX");
     fe.name_id = intern.get_or_insert(name);

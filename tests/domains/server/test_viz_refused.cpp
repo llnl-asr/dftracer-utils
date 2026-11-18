@@ -10,6 +10,7 @@
 #include <dftracer/utils/domains/server/router.h>
 #include <dftracer/utils/domains/server/trace_index.h>
 #include <dftracer/utils/domains/server/viz_api.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -32,7 +33,7 @@ using namespace dftracer::utils::domains::server;
 
 namespace {
 
-void write_gz(const dstd::Path& path, const dstd::String& content) {
+void write_gz(const dstd::Path& path, dstd::StringView content) {
     fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
@@ -42,14 +43,13 @@ void write_gz(const dstd::Path& path, const dstd::String& content) {
 }
 
 struct Served {
-    explicit Served(const dstd::String& name) : dir(name) {}
+    explicit Served(dstd::StringView name) : dir(dstd::String(name)) {}
     dftu_utils_test::ScopedTestDir dir;
     dstd::UniquePtr<TraceIndex> index;
     Router router;
 };
 
-dstd::UniquePtr<Served> serve(const dstd::String& name,
-                              const dstd::String& content) {
+dstd::UniquePtr<Served> serve(dstd::StringView name, dstd::String content) {
     auto s = dstd::make_unique<Served>(name);
     write_gz(s->dir.path() / "trace.pfw.gz", content);
     s->index = dstd::make_unique<TraceIndex>(dstd::String(s->dir.str()),
@@ -66,7 +66,7 @@ dstd::UniquePtr<Served> serve(const dstd::String& name,
     return s;
 }
 
-dstd::String get(Served& s, const dstd::String& target) {
+dstd::String get(Served& s, dstd::StringView target) {
     HttpRequest req;
     req.method = "GET";
     req.path = target;
@@ -86,7 +86,7 @@ dstd::String get(Served& s, const dstd::String& target) {
 struct Parsed {
     simdjson::dom::parser parser;
     simdjson::dom::element root;
-    explicit Parsed(const dstd::String& body) {
+    explicit Parsed(dstd::StringView body) {
         REQUIRE(parser.parse(simdjson::padded_string(body)).get(root) ==
                 simdjson::SUCCESS);
     }
@@ -94,10 +94,10 @@ struct Parsed {
 
 // One complete event of the viz trace: name "read", category POSIX, tid 1.
 void event(dstd::String& out, int pid, int ts, int dur,
-           const dstd::String& args) {
+           dstd::CStringView args) {
     out += R"({"name":"read","cat":"POSIX","pid":)" + dstd::to_string(pid) +
            R"(,"tid":1,"ts":)" + dstd::to_string(ts) + R"(,"dur":)" +
-           dstd::to_string(dur) + R"(,"ph":"X","args":)" + args + "}\n";
+           dstd::to_string(dur) + R"(,"ph":"X","args":)" + args.c_str() + "}\n";
 }
 
 constexpr int ODD_FIRST_PID = 21;
@@ -130,7 +130,7 @@ dstd::String refused_trace() {
     return t + "]\n";
 }
 
-std::size_t count_of(const dstd::String& body, dstd::StringView needle) {
+std::size_t count_of(dstd::StringView body, dstd::StringView needle) {
     std::size_t n = 0;
     for (auto at = body.find(needle); at != dstd::String::npos;
          at = body.find(needle, at + needle.size()))
@@ -145,7 +145,7 @@ struct Row {
     double total = 0;
 };
 
-dstd::Map<dstd::String, Row> stat_rows(const dstd::String& body) {
+dstd::Map<dstd::String, Row> stat_rows(dstd::StringView body) {
     Parsed p(body);
     dstd::Map<dstd::String, Row> out;
     for (auto r : p.root["names"].get_array())
@@ -280,8 +280,8 @@ fields:
     TEST_CASE(
         "an aggregate with a number too large for a double extrapolates") {
         dstd::String trace = "[\n";
-        const auto aggregate = [&](long ts, const char* count,
-                                   const char* dur_sum) {
+        const auto aggregate = [&](long ts, dstd::StringView count,
+                                   dstd::StringView dur_sum) {
             trace += R"({"name":"MPI_Irecv","cat":"p2p","type":10,"ts":)" +
                      dstd::to_string(ts) +
                      R"(,"ph":3,"pid":1,"tid":1,"args":{"dftu_cnt":)" +

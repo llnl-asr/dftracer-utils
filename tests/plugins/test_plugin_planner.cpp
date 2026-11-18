@@ -7,6 +7,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
@@ -95,11 +96,11 @@ dftu_plugin make_count_plugin(CountState* st) {
 
 // A single-category, single-name trace so a cat filter prunes the whole file.
 dstd::String make_homog_trace(dftu_utils_test::TestEnvironment& env,
-                              const dstd::String& tag, const char* name,
-                              const char* cat, int n) {
+                              dstd::CStringView tag, dstd::StringView name,
+                              dstd::StringView cat, int n) {
     // Own subdir per trace: the index root is keyed off the parent directory,
     // so same-dir traces would share (and clobber) one index.
-    dstd::String dir = env.dir() + "/" + tag;
+    dstd::String dir = env.dir() + "/" + tag.c_str();
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     dstd::String pfw = dir + "/trace.pfw";
     dstd::String ofs;

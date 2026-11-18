@@ -117,21 +117,22 @@ double QueryParams::get_double(dstd::StringView key,
 // Router
 // ============================================================================
 
-void Router::get(const dstd::String& path, RouteHandler handler) {
-    routes_.push_back(Route{"GET", path, std::move(handler), {}});
+void Router::get(dstd::String path, RouteHandler handler) {
+    routes_.push_back(Route{"GET", std::move(path), std::move(handler), {}});
 }
 
-void Router::get(const dstd::String& path, RouteHandler handler, RouteDoc doc) {
-    routes_.push_back(Route{"GET", path, std::move(handler), std::move(doc)});
+void Router::get(dstd::String path, RouteHandler handler, RouteDoc doc) {
+    routes_.push_back(
+        Route{"GET", std::move(path), std::move(handler), std::move(doc)});
 }
 
-void Router::post(const dstd::String& path, RouteHandler handler) {
-    routes_.push_back(Route{"POST", path, std::move(handler), {}});
+void Router::post(dstd::String path, RouteHandler handler) {
+    routes_.push_back(Route{"POST", std::move(path), std::move(handler), {}});
 }
 
-void Router::post(const dstd::String& path, RouteHandler handler,
-                  RouteDoc doc) {
-    routes_.push_back(Route{"POST", path, std::move(handler), std::move(doc)});
+void Router::post(dstd::String path, RouteHandler handler, RouteDoc doc) {
+    routes_.push_back(
+        Route{"POST", std::move(path), std::move(handler), std::move(doc)});
 }
 
 namespace {

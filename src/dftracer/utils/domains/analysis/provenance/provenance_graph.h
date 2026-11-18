@@ -25,6 +25,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -167,13 +168,13 @@ coro::CoroTask<dstd::Result<ProvenanceGraph>> extract_provenance_graph(
 
 /// Parses a query text that is part of the code. A text that does not parse
 /// is a bug of the caller and ends the process. Exposed for tests.
-duql::Query constant_query(const char* text);
+duql::Query constant_query(dstd::StringView text);
 
 /// Split `path` into (mount point, path relative to it) using `table`
 /// (longest prefix wins), then the Rabbit rule (/mnt/nnf/\<id\>), then the
 /// first two path components. Exposed for tests.
 dstd::Pair<dstd::String, dstd::String> split_mount(
-    const dstd::String& path, const dstd::Vector<ProvenanceMount>& table);
+    dstd::StringView path, dstd::Span<const ProvenanceMount> table);
 
 }  // namespace dftracer::utils::domains::analysis::provenance
 

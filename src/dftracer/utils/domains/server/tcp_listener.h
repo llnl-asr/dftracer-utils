@@ -23,7 +23,7 @@ namespace dftracer::utils::domains::server {
 /// coroutine handlers using structured concurrency.
 class TcpListener {
    public:
-    TcpListener(const dstd::String& addr, std::uint16_t port);
+    TcpListener(dstd::String addr, std::uint16_t port);
     ~TcpListener();
 
     TcpListener(const TcpListener&) = delete;

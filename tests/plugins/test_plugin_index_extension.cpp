@@ -4,6 +4,7 @@
 // min and max of "v" per chunk as "index_minmax.range".
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -33,8 +34,8 @@ constexpr dstd::StringView EXT = "index_minmax.range";
 // Records {"op":"read","v":i} in gzip members of about 8 KB, so the chunks
 // hold rising ranges of v.
 dstd::String write_records(dftu_utils_test::TestEnvironment& env,
-                           const dstd::String& name) {
-    const dstd::String plain = env.dir() + "/" + name + ".ndjson";
+                           dstd::CStringView name) {
+    const dstd::String plain = env.dir() + "/" + name.c_str() + ".ndjson";
     {
         dstd::String out;
         for (int i = 0; i < RECORDS; ++i)
@@ -48,18 +49,18 @@ dstd::String write_records(dftu_utils_test::TestEnvironment& env,
     return gz;
 }
 
-plugins::host::Plugins load(const dstd::String& config = "") {
+plugins::host::Plugins load(dstd::StringView config = "") {
     auto builder = plugins::host::Plugins::builder();
     if (config.empty())
         builder.add(INDEX_MINMAX_PLUGIN_PATH);
     else
-        builder.add(INDEX_MINMAX_PLUGIN_PATH, config);
+        builder.add(INDEX_MINMAX_PLUGIN_PATH, dstd::String(config));
     auto set = builder.build();
     REQUIRE(set.has_value());
     return std::move(*set);
 }
 
-trace::index::Indexer open(const dstd::String& gz) {
+trace::index::Indexer open(dstd::CStringView gz) {
     trace::index::IndexerOptions o;
     o.extensions = {};
     return dftu_utils_test::ok(
@@ -85,7 +86,7 @@ struct NullSink : trace::views::ExportSink {
     void write(dstd::StringView) override {}
 };
 
-trace::views::View view_of(const dstd::String& gz) {
+trace::views::View view_of(dstd::CStringView gz) {
     return trace::views::View::from_file(
         dstd::String(gz),
         dstd::String(dstd::String(

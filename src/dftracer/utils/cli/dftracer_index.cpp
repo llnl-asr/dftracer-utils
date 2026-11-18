@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/file_helpers.h>
@@ -129,7 +130,7 @@ static coro::CoroTask<dstd::Result<int>> select_stale_task(ResolverInput input,
 static void print_summary(double seconds, std::size_t indexed,
                           std::size_t skipped, std::size_t failed,
                           std::size_t events,
-                          const dstd::Vector<dstd::String>& dimensions) {
+                          dstd::Span<const dstd::String> dimensions) {
     std::printf("\n");
     std::printf("==========================================\n");
     std::printf("Bloom Index Results\n");
@@ -226,7 +227,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     std::printf("==========================================\n\n");
 
     auto stage_start = dstd::steady_now();
-    auto log_stage = [&stage_start](const char* name) {
+    auto log_stage = [&stage_start](dstd::StringView name) {
         const auto now = dstd::steady_now();
         DFTRACER_UTILS_LOG_DEBUG(
             "dftracer_index: stage={} ms={:.2f}", name,

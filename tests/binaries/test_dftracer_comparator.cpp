@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -56,9 +58,8 @@ dstd::String find_comparator_binary() {
         "DFTRACER_UTILS_COMPARATOR_PATH", "dftracer_comparator");
 }
 
-int run_comparator(const dstd::String& binary,
-                   const dstd::Vector<dstd::String>& args,
-                   const dstd::String& stdout_file = "") {
+int run_comparator(dstd::CStringView binary, dstd::Vector<dstd::String> args,
+                   dstd::CStringView stdout_file = "") {
     dstd::Vector<const char*> argv;
     argv.push_back(binary.c_str());
     for (const auto& arg : args) argv.push_back(arg.c_str());
@@ -83,18 +84,18 @@ int run_comparator(const dstd::String& binary,
     return -1;
 }
 
-dstd::String read_file(const dstd::String& path) {
+dstd::String read_file(dstd::String path) {
     return dftu_utils_test::read_text(path);
 }
 
-bool contains(const dstd::String& haystack, const dstd::String& needle) {
+bool contains(dstd::StringView haystack, dstd::StringView needle) {
     return haystack.find(needle) != dstd::String::npos;
 }
 
 // Peak resident set of the child, from wait4. Returns 0 on a failed run.
-std::uint64_t run_comparator_peak_rss(const dstd::String& binary,
-                                      const dstd::Vector<dstd::String>& args,
-                                      const dstd::String& stdout_file) {
+std::uint64_t run_comparator_peak_rss(dstd::String binary,
+                                      dstd::Span<const dstd::String> args,
+                                      dstd::CStringView stdout_file) {
     dstd::Vector<const char*> argv;
     argv.push_back(binary.c_str());
     for (const auto& arg : args) argv.push_back(arg.c_str());
@@ -124,7 +125,7 @@ std::uint64_t run_comparator_peak_rss(const dstd::String& binary,
 
 // `files` small traces, one pid per file, so the number of (pid, tid, file,
 // window) groups grows with the file count the way a real run's does.
-void write_scale_set(const dstd::String& dir, int files, bool variant) {
+void write_scale_set(dstd::String dir, int files, bool variant) {
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     const char* names[] = {"read", "write", "open"};
     for (int f = 0; f < files; ++f) {
@@ -181,8 +182,7 @@ struct ScaleRss {
 };
 
 // Peak RSS in bytes of comparing two `files`-file sets.
-ScaleRss scale_run_rss(const dstd::String& binary, const dstd::String& work_dir,
-                       int files) {
+ScaleRss scale_run_rss(dstd::String binary, dstd::String work_dir, int files) {
     const dstd::String base = work_dir + "/base_" + dstd::to_string(files);
     const dstd::String var = work_dir + "/var_" + dstd::to_string(files);
     write_scale_set(base, files, false);
@@ -202,7 +202,7 @@ ScaleRss scale_run_rss(const dstd::String& binary, const dstd::String& work_dir,
 // One trace with a known number of events per kind: 6 POSIX reads, 4 POSIX
 // writes, 3 STDIO fwrites, 2 COMPUTE steps and 5 dataloader fetches whose
 // level arg is 1 to 5. 20 events in all.
-dstd::String write_filter_trace(const dstd::String& dir) {
+dstd::String write_filter_trace(dstd::String dir) {
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     struct Kind {
         const char* cat;
@@ -236,14 +236,13 @@ dstd::String write_filter_trace(const dstd::String& dir) {
 }
 
 // The events the root node counted for `query`.
-std::uint64_t counted_events(const dstd::String& binary,
-                             const dstd::String& trace,
-                             const dstd::String& out_dir,
-                             const dstd::String& query) {
+std::uint64_t counted_events(dstd::String binary, dstd::StringView trace,
+                             dstd::String out_dir, dstd::StringView query) {
     const dstd::String out = out_dir + "/count.json";
     REQUIRE(run_comparator(binary,
-                           {"--baseline", trace, "--variant", trace, "--format",
-                            "json", "-q", query},
+                           {"--baseline", dstd::String(trace), "--variant",
+                            dstd::String(trace), "--format", "json", "-q",
+                            dstd::String(query)},
                            out) == 0);
     const dstd::String content = read_file(out);
     simdjson::dom::parser parser;

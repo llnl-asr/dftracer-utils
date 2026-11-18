@@ -2,6 +2,7 @@
 #include <dftracer/utils/domains/workload/dlio/distributions.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
@@ -39,7 +40,7 @@ struct SampleSummary {
     bool any_non_finite = false;
 };
 
-SampleSummary summarize(const dstd::Vector<double>& data) {
+SampleSummary summarize(dstd::Span<const double> data) {
     SampleSummary s;
     double m2 = 0.0;
     for (double x : data) {
@@ -57,8 +58,7 @@ SampleSummary summarize(const dstd::Vector<double>& data) {
 }
 
 template <typename DistCdf>
-double ks_statistic(const dstd::Vector<double>& sorted_data,
-                    DistCdf&& dist_cdf) {
+double ks_statistic(dstd::Span<const double> sorted_data, DistCdf&& dist_cdf) {
     const auto n = static_cast<double>(sorted_data.size());
     double max_diff = 0.0;
     // Two-sided KS: at each xi the empirical CDF jumps from (i-1)/n to i/n.
@@ -76,7 +76,7 @@ double ks_statistic(const dstd::Vector<double>& sorted_data,
 }
 
 template <typename DistPdf>
-double log_likelihood(const dstd::Vector<double>& data, DistPdf&& dist_pdf) {
+double log_likelihood(dstd::Span<const double> data, DistPdf&& dist_pdf) {
     double ll = 0.0;
     for (double x : data) {
         const double p = dist_pdf(x);
@@ -96,8 +96,8 @@ double compute_bic(double log_l, std::size_t n, int k) {
 // and BIC. Only the Boost distribution type varies across the fit_* functions.
 template <class Dist>
 void finalize_fit(FittedDistribution& f, const Dist& dist,
-                  const dstd::Vector<double>& data, const SampleSummary& s) {
-    auto sorted = data;
+                  dstd::Span<const double> data, const SampleSummary& s) {
+    dstd::Vector<double> sorted(data.begin(), data.end());
     std::sort(sorted.begin(), sorted.end());
     f.ks_stat = ks_statistic(
         sorted, [&](double x) { return boost::math::cdf(dist, x); });
@@ -113,7 +113,7 @@ void finalize_fit(FittedDistribution& f, const Dist& dist,
 
 // ---- Per-distribution MLE -------------------------------------------------
 
-FittedDistribution fit_normal(const dstd::Vector<double>& data,
+FittedDistribution fit_normal(dstd::Span<const double> data,
                               const SampleSummary& s) {
     FittedDistribution f;
     f.kind = DistributionKind::Normal;
@@ -127,7 +127,7 @@ FittedDistribution fit_normal(const dstd::Vector<double>& data,
     return f;
 }
 
-FittedDistribution fit_lognormal(const dstd::Vector<double>& data,
+FittedDistribution fit_lognormal(dstd::Span<const double> data,
                                  const SampleSummary& s) {
     FittedDistribution f;
     f.kind = DistributionKind::Lognormal;
@@ -154,7 +154,7 @@ FittedDistribution fit_lognormal(const dstd::Vector<double>& data,
     return f;
 }
 
-FittedDistribution fit_exponential(const dstd::Vector<double>& data,
+FittedDistribution fit_exponential(dstd::Span<const double> data,
                                    const SampleSummary& s) {
     FittedDistribution f;
     f.kind = DistributionKind::Exponential;
@@ -177,7 +177,7 @@ FittedDistribution fit_exponential(const dstd::Vector<double>& data,
 //
 // digamma(k) is the polygamma_0; both digamma and its derivative (trigamma)
 // are provided by Boost.Math.
-FittedDistribution fit_gamma(const dstd::Vector<double>& data,
+FittedDistribution fit_gamma(dstd::Span<const double> data,
                              const SampleSummary& s) {
     FittedDistribution f;
     f.kind = DistributionKind::Gamma;
@@ -224,7 +224,7 @@ FittedDistribution fit_gamma(const dstd::Vector<double>& data,
 // Weibull MLE: shape `k` is the root of
 //   f(k) = sum(x^k ln x) / sum(x^k) - 1/k - mean(ln x) = 0
 // Newton-Raphson with MoM-style initial estimate.
-FittedDistribution fit_weibull(const dstd::Vector<double>& data,
+FittedDistribution fit_weibull(dstd::Span<const double> data,
                                const SampleSummary& s) {
     FittedDistribution f;
     f.kind = DistributionKind::Weibull;
@@ -291,7 +291,7 @@ int free_parameter_count(DistributionKind kind) {
 }
 
 FittedDistribution fit_single_distribution(DistributionKind kind,
-                                           const dstd::Vector<double>& data) {
+                                           dstd::Span<const double> data) {
     const auto s = summarize(data);
     switch (kind) {
         case DistributionKind::Normal:
@@ -309,7 +309,7 @@ FittedDistribution fit_single_distribution(DistributionKind kind,
 }
 
 dstd::Vector<FittedDistribution> fit_all_single_distributions(
-    const dstd::Vector<double>& data) {
+    dstd::Span<const double> data) {
     const auto s = summarize(data);
     dstd::Vector<FittedDistribution> fits;
     fits.reserve(5);
@@ -328,7 +328,7 @@ dstd::Vector<FittedDistribution> fit_all_single_distributions(
 }
 
 dstd::Optional<FittedDistribution> best_fit_by_ks(
-    const dstd::Vector<FittedDistribution>& fits) {
+    dstd::Span<const FittedDistribution> fits) {
     for (const auto& f : fits) {
         if (f.valid) return f;
     }

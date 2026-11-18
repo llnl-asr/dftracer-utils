@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -301,7 +302,7 @@ dstd::Expected<GoldenFile, dstd::Error> parse_golden_file(
 }
 
 dstd::String render_golden_file(const GoldenFile& file,
-                                const dstd::Vector<dstd::String>& actuals) {
+                                dstd::Span<const dstd::String> actuals) {
     dstd::String out;
     for (std::size_t i = 0; i < file.blocks.size(); ++i) {
         const GoldenBlock& block = file.blocks[i];

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -18,8 +19,8 @@ using namespace dftracer::utils;
 namespace {
 
 // Write cpu counter events (one per value) to a gzip trace.
-void write_counter_file(const dstd::String& path, const char* name,
-                        const dstd::Vector<int>& utils) {
+void write_counter_file(dstd::StringView path, dstd::StringView name,
+                        dstd::Span<const int> utils) {
     gzFile gz = gzopen(path.c_str(), "wb");
     REQUIRE(gz != nullptr);
     gzputs(gz, "[\n");
@@ -38,7 +39,7 @@ void write_counter_file(const dstd::String& path, const char* name,
 }
 
 // Write one complete (ph="X") event with an explicit [ts, ts+dur) interval.
-void write_event_file(const dstd::String& path, const char* name,
+void write_event_file(dstd::StringView path, dstd::StringView name,
                       std::uint64_t ts, std::uint64_t dur) {
     gzFile gz = gzopen(path.c_str(), "wb");
     REQUIRE(gz != nullptr);
@@ -52,7 +53,7 @@ void write_event_file(const dstd::String& path, const char* name,
     gzclose(gz);
 }
 
-dstd::String read_sorted(const dstd::String& path) {
+dstd::String read_sorted(dstd::StringView path) {
     dftu_utils_test::LineStream ifs(dftu_utils_test::read_text(path));
     dstd::Vector<dstd::String> lines;
     dstd::String line;
@@ -67,7 +68,7 @@ dstd::String read_sorted(const dstd::String& path) {
     return out;
 }
 
-dstd::String read_sorted_gz(const dstd::String& path) {
+dstd::String read_sorted_gz(dstd::StringView path) {
     gzFile gz = gzopen(path.c_str(), "rb");
     if (!gz) return {};
     dstd::String all;

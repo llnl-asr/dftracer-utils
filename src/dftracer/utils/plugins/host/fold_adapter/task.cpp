@@ -7,6 +7,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/time.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -50,15 +51,16 @@ Job* job_of(::dftu_job* j) { return reinterpret_cast<Job*>(j); }
 
 ::dftu_job* as_abi(Job& j) { return reinterpret_cast<::dftu_job*>(&j); }
 
-dftu_status fail(::dftu_ctx* ctx, dftu_status status, const char* message) {
-    return ctx != nullptr ? dftu_fail(ctx, status, message) : status;
+dftu_status fail(::dftu_ctx* ctx, dftu_status status,
+                 dstd::CStringView message) {
+    return ctx != nullptr ? dftu_fail(ctx, status, message.c_str()) : status;
 }
 
-void take_message(const plugins::AbiContext& ctx, const char* what,
+void take_message(const plugins::AbiContext& ctx, dstd::StringView what,
                   dstd::String* out) {
     const dstd::StringView text = ctx.message();
     if (text.empty()) {
-        out->assign(what);
+        out->assign(what.data(), what.size());
     } else {
         out->assign(text.data(), text.size());
     }

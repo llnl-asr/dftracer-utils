@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/cli/plugin_info.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 
 namespace dftracer::utils::cli {
 namespace {
 
-dstd::String join_or_none(const dstd::Vector<dstd::String>& names) {
+dstd::String join_or_none(dstd::Span<const dstd::String> names) {
     if (names.empty()) return "(none)";
     dstd::String out;
     for (const auto& name : names) {
@@ -17,7 +18,7 @@ dstd::String join_or_none(const dstd::Vector<dstd::String>& names) {
 }
 
 // One line per fact, so the output stays greppable.
-void line(dstd::String& out, const char* key, dstd::StringView value) {
+void line(dstd::String& out, dstd::StringView key, dstd::StringView value) {
     out += "  ";
     out += key;
     out += ": ";

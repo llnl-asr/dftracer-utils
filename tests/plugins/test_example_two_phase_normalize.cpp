@@ -5,9 +5,11 @@
 // relative to it, across files and with a filter on the view.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -33,11 +35,11 @@ using trace::views::ViewFile;
 namespace {
 
 dstd::String write_trace(dftu_utils_test::TestEnvironment& env,
-                         const char* name,
-                         const dstd::Vector<std::uint64_t>& starts) {
+                         dstd::CStringView name,
+                         dstd::Vector<std::uint64_t> starts) {
     const dstd::String dir = env.dir() + "/normalize";
     REQUIRE(dstd::fs::create_directories(dir).has_value());
-    const dstd::String pfw = dir + "/" + name + ".pfw";
+    const dstd::String pfw = dir + "/" + name.c_str() + ".pfw";
     dstd::String lines;
     for (const std::uint64_t ts : starts) {
         dstd::fmt_append<
@@ -51,8 +53,7 @@ dstd::String write_trace(dftu_utils_test::TestEnvironment& env,
     return gz;
 }
 
-dstd::Vector<ViewFile> build_indexes(
-    const dstd::Vector<dstd::String>& gz_files) {
+dstd::Vector<ViewFile> build_indexes(dstd::Vector<dstd::String> gz_files) {
     trace::index::build::ResolveAndBuildInput in;
     for (const auto& gz : gz_files) in.files.emplace_back(gz);
     in.require_checkpoints = true;

@@ -17,6 +17,7 @@
 #include <cmath>
 #include <iterator>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -35,11 +36,12 @@ void sort_unique(dstd::Vector<T>& v) {
 }
 
 template <class T>
-void intersect_set(bool& has, dstd::Vector<T>& dst, const dstd::Vector<T>& src,
+void intersect_set(bool& has, dstd::Vector<T>& dst,
+                   std::type_identity_t<dstd::Span<const T>> src,
                    bool src_has) {
     if (!src_has) return;
     if (!has) {
-        dst = src;
+        dst.assign(src.begin(), src.end());
         has = true;
         return;
     }
@@ -50,7 +52,7 @@ void intersect_set(bool& has, dstd::Vector<T>& dst, const dstd::Vector<T>& src,
 }
 
 template <class T>
-dstd::Vector<T> union_set(const dstd::Vector<T>& a, const dstd::Vector<T>& b) {
+dstd::Vector<T> union_set(dstd::Span<const T> a, dstd::Span<const T> b) {
     dstd::Vector<T> out;
     std::set_union(a.begin(), a.end(), b.begin(), b.end(),
                    std::back_inserter(out));
@@ -86,8 +88,8 @@ dstd::String lowered_leaf(Leaf leaf) {
     return out;
 }
 
-dstd::String join(const dstd::String& left, dstd::StringView op,
-                  const dstd::String& right) {
+dstd::String join(dstd::StringView left, dstd::StringView op,
+                  dstd::StringView right) {
     dstd::String out("(");
     out += left;
     out += ") ";
@@ -154,7 +156,7 @@ struct Translator {
     // literal is not one a set can hold.
     dstd::Optional<ComparisonFilter> set_of(
         const duql::detail::FieldNode& field,
-        const dstd::Vector<const duql::LiteralValue*>& values) {
+        dstd::Span<const duql::LiteralValue* const> values) {
         ComparisonFilter f;
         if (field.any) return fail();
         if (field.path == "cat" || field.path == "name") {
@@ -221,7 +223,9 @@ struct Translator {
             return f;
         }
         if (c.op != duql::CompareOp::Eq) return fail();
-        return set_of(c.field, {&c.value.value});
+        const duql::LiteralValue* only = &c.value.value;
+        return set_of(c.field,
+                      dstd::Span<const duql::LiteralValue* const>(&only, 1));
     }
 
     dstd::Optional<ComparisonFilter> in_list(const duql::detail::InNode& in) {
@@ -256,9 +260,9 @@ struct Translator {
             l->ts_end != UINT64_MAX || r->ts_begin != 0 ||
             r->ts_end != UINT64_MAX)
             return fail();
-        l->categories = union_set(l->categories, r->categories);
-        l->names = union_set(l->names, r->names);
-        l->pids = union_set(l->pids, r->pids);
+        l->categories = union_set<dstd::String>(l->categories, r->categories);
+        l->names = union_set<dstd::String>(l->names, r->names);
+        l->pids = union_set<std::uint64_t>(l->pids, r->pids);
         return l;
     }
 
@@ -539,8 +543,8 @@ CollapsedMap collapse_by_group(const trace::AggQueryResult& windows,
 }
 
 coro::CoroTask<dstd::Result<SideAggregate>> aggregate_side(
-    dstd::Span<const dstd::String> files, dstd::StringView index_dir,
-    const dstd::Vector<ComparisonFilter>& filters, std::uint64_t window_us,
+    dstd::Vector<dstd::String> files, dstd::String index_dir,
+    dstd::Vector<ComparisonFilter> filters, std::uint64_t window_us,
     std::size_t workers, dstd::StringIntern& strings) {
     SideAggregate side;
     side.groups.resize(filters.size());
@@ -549,8 +553,8 @@ coro::CoroTask<dstd::Result<SideAggregate>> aggregate_side(
     {
         dstd::HashMap<dstd::String, std::size_t> root_of;
         for (const auto& f : files) {
-            dstd::String root(trace::internal::determine_index_path(
-                f, dstd::String(index_dir)));
+            dstd::String root(
+                trace::internal::determine_index_path(f, index_dir));
             auto it = root_of.find(root);
             if (it == root_of.end()) {
                 it = root_of.emplace(root, base.sources.size()).first;
@@ -594,9 +598,11 @@ coro::CoroTask<dstd::Result<SideAggregate>> aggregate_side(
         }
         for (std::size_t i : cut) {
             if (all_cats)
-                fine.categories =
-                    union_set(fine.categories, filters[i].categories);
-            if (all_names) fine.names = union_set(fine.names, filters[i].names);
+                fine.categories = union_set<dstd::String>(
+                    fine.categories, filters[i].categories);
+            if (all_names)
+                fine.names =
+                    union_set<dstd::String>(fine.names, filters[i].names);
         }
         fine.filter = first.expr;
         trace::AggQuery coarse = fine;

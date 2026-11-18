@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dataframe/udf_registry.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/duql/lower.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
@@ -17,16 +18,19 @@
 namespace dftracer::utils::plugins::host {
 namespace {
 
-dftu_status find_op(::dftu_ctx* ctx, const char* name,
+dftu_status find_op(::dftu_ctx* ctx, dstd::CStringView name,
                     const ::dftu_op_desc** op) {
-    *op = name ? ::dftu_op_find(name) : nullptr;
+    *op = ::dftu_op_find(name.c_str());
     if (*op != nullptr) return DFTU_OK;
     return host_fail(ctx, DFTU_E_NOT_FOUND,
-                     dstd::fmt<"no op named '{}'">(
-                         dstd::StringView(name ? name : "(null)")));
+                     dstd::fmt<"no op named '{}'">(name.view()));
 }
 
-dftu_status rejected(::dftu_ctx* ctx, const char* name,
+dftu_status unnamed_op(::dftu_ctx* ctx) {
+    return host_fail(ctx, DFTU_E_NOT_FOUND, "no op named '(null)'");
+}
+
+dftu_status rejected(::dftu_ctx* ctx, dstd::StringView name,
                      bool may_be_checked = false) {
     // A plugin op whose result failed the check named its own reason; report
     // that instead of the shape mismatch that same null result would mean.
@@ -37,9 +41,9 @@ dftu_status rejected(::dftu_ctx* ctx, const char* name,
         dataframe::record_op_check_error({});
         return status;
     }
-    return host_fail(ctx, DFTU_E_INVALID,
-                     dstd::fmt<"op '{}' rejected: kind/arity/shape mismatch">(
-                         dstd::StringView(name)));
+    return host_fail(
+        ctx, DFTU_E_INVALID,
+        dstd::fmt<"op '{}' rejected: kind/arity/shape mismatch">(name));
 }
 
 dftu_status host_ops_run(::dftu_ctx* ctx, void*, const char* name,
@@ -47,6 +51,7 @@ dftu_status host_ops_run(::dftu_ctx* ctx, void*, const char* name,
                          const ::dftu_op_arg* args, ::dftu_series** out) {
     if (out == nullptr)
         return host_fail(ctx, DFTU_E_INVALID, "run: out is NULL");
+    if (name == nullptr) return unnamed_op(ctx);
     const ::dftu_op_desc* op = nullptr;
     if (const dftu_status found = find_op(ctx, name, &op); found < 0)
         return found;
@@ -63,6 +68,7 @@ dftu_status host_ops_run_aggregate(::dftu_ctx* ctx, void*, const char* name,
                                    ::dftu_scalar* out) {
     if (out == nullptr)
         return host_fail(ctx, DFTU_E_INVALID, "run_aggregate: out is NULL");
+    if (name == nullptr) return unnamed_op(ctx);
     const ::dftu_op_desc* op = nullptr;
     if (const dftu_status found = find_op(ctx, name, &op); found < 0)
         return found;
@@ -81,6 +87,7 @@ dftu_status host_ops_run_frame(::dftu_ctx* ctx, void*, const char* name,
                                ::dftu_dataframe** out) {
     if (out == nullptr)
         return host_fail(ctx, DFTU_E_INVALID, "run_frame: out is NULL");
+    if (name == nullptr) return unnamed_op(ctx);
     const ::dftu_op_desc* op = nullptr;
     if (const dftu_status found = find_op(ctx, name, &op); found < 0)
         return found;
@@ -96,6 +103,7 @@ dftu_status host_ops_run_lazy(::dftu_ctx* ctx, void*, const char* name,
                               ::dftu_lazyframe** out) {
     if (out == nullptr)
         return host_fail(ctx, DFTU_E_INVALID, "run_lazy: out is NULL");
+    if (name == nullptr) return unnamed_op(ctx);
     const ::dftu_op_desc* op = nullptr;
     if (const dftu_status found = find_op(ctx, name, &op); found < 0)
         return found;
@@ -157,7 +165,7 @@ dftu_status detail::register_plugin_op(::dftu_ctx* ctx,
                                        dstd::SharedPtr<PluginLibrary> library) {
     if (desc == nullptr)
         return host_fail(ctx, DFTU_E_INVALID, "register_op: desc is NULL");
-    if (refuse_plugin_op_name(desc->name)) {
+    if (desc->name == nullptr || refuse_plugin_op_name(desc->name)) {
         return host_fail(
             ctx, DFTU_E_INVALID,
             dstd::fmt<"op '{}' refused: the bare and 'dftu.' namespaces hold "

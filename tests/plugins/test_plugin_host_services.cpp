@@ -7,8 +7,10 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -52,9 +54,9 @@ struct HostFixture {
     dftu_plugin_host& host() { return fold->host(); }
     dftu_ctx* ctx() { return ctx_.get(); }
     test_plugin_common::Ctx ctx_;
-    dftu_str intern_str(const char* s) {
-        return host().intern(host().h, s,
-                             static_cast<std::uint32_t>(strlen(s)));
+    dftu_str intern_str(dstd::CStringView s) {
+        return host().intern(host().h, s.c_str(),
+                             static_cast<std::uint32_t>(s.size()));
     }
     ~HostFixture() {
         fold.reset();
@@ -62,7 +64,7 @@ struct HostFixture {
     }
 };
 
-std::uint64_t file_size(const dstd::String& path) {
+std::uint64_t file_size(dstd::CStringView path) {
     struct stat st{};
     return ::stat(path.c_str(), &st) == 0
                ? static_cast<std::uint64_t>(st.st_size)
@@ -130,8 +132,7 @@ TEST_CASE("plugin host: trace write then read round-trips events") {
     dstd::Vector<std::int64_t> ph(N, DFTU_PH_COMPLETE);
     for (std::uint32_t i = 0; i < N; ++i) ts[i] = 1000000 + i * 100;
 
-    auto string_col =
-        [](const dstd::Vector<dstd::String>& vals) -> dftu_series* {
+    auto string_col = [](dstd::Span<const dstd::String> vals) -> dftu_series* {
         dstd::Vector<std::int32_t> offsets(vals.size() + 1, 0);
         dstd::String data;
         for (std::size_t i = 0; i < vals.size(); ++i) {

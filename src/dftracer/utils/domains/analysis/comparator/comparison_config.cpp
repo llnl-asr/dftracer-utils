@@ -3,6 +3,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -121,8 +122,8 @@ bool ComparisonConfig::parse_node(simdjson::dom::element val,
 
 // static
 dstd::Optional<ComparisonConfig> ComparisonConfig::from_json_file(
-    const dstd::String& path, dstd::String& error) {
-    auto loaded = dstd::fs::read_file(path);
+    dstd::StringView path, dstd::String& error) {
+    auto loaded = dstd::fs::read_file(dstd::PathView(path));
     if (!loaded) {
         error = dstd::fmt<"failed to read or parse JSON file: {}">(path);
         return dstd::nullopt;
@@ -233,13 +234,13 @@ dstd::Optional<ComparisonConfig> ComparisonConfig::from_json_file(
 }
 
 // static
-ComparisonConfig ComparisonConfig::from_cli(const dstd::String& baseline,
-                                            const dstd::String& variant,
-                                            const dstd::String& query,
-                                            const dstd::String& group_by_str) {
+ComparisonConfig ComparisonConfig::from_cli(dstd::String baseline,
+                                            dstd::String variant,
+                                            dstd::String query,
+                                            dstd::StringView group_by_str) {
     ComparisonConfig cfg;
-    cfg.baseline = baseline;
-    cfg.variant = variant;
+    cfg.baseline = std::move(baseline);
+    cfg.variant = std::move(variant);
 
     ComparisonNode node;
     node.name = "root";
@@ -247,7 +248,7 @@ ComparisonConfig ComparisonConfig::from_cli(const dstd::String& baseline,
     // use cat like "dynamo", not POSIX/STDIO) is only applied when the caller
     // passes one. Defaulting to a POSIX/STDIO filter silently matched zero
     // events on non-IO traces.
-    node.query = query;
+    node.query = std::move(query);
     node.group_by =
         group_by_str.empty() ? split_csv("cat,name") : split_csv(group_by_str);
 
@@ -256,12 +257,12 @@ ComparisonConfig ComparisonConfig::from_cli(const dstd::String& baseline,
 }
 
 void ComparisonConfig::resolve_node(
-    ComparisonNode& node, const dstd::String& parent_query,
-    const dstd::Vector<dstd::String>& parent_metrics,
-    const dstd::Vector<double>& parent_percentiles, double parent_threshold,
-    const dstd::String& parent_sort_by) {
+    ComparisonNode& node, dstd::StringView parent_query,
+    dstd::Span<const dstd::String> parent_metrics,
+    dstd::Span<const double> parent_percentiles, double parent_threshold,
+    dstd::StringView parent_sort_by) {
     if (node.query.empty()) {
-        node.composed_query = parent_query;
+        node.composed_query = dstd::String(parent_query);
     } else if (parent_query.empty()) {
         node.composed_query = node.query;
     } else {
@@ -269,10 +270,17 @@ void ComparisonConfig::resolve_node(
             dstd::fmt<"({}) AND ({})">(parent_query, node.query);
     }
 
-    node.resolved_metrics = node.metrics.value_or(parent_metrics);
-    node.resolved_percentiles = node.percentiles.value_or(parent_percentiles);
+    node.resolved_metrics =
+        node.metrics ? *node.metrics
+                     : dstd::Vector<dstd::String>(parent_metrics.begin(),
+                                                  parent_metrics.end());
+    node.resolved_percentiles =
+        node.percentiles ? *node.percentiles
+                         : dstd::Vector<double>(parent_percentiles.begin(),
+                                                parent_percentiles.end());
     node.resolved_threshold_pct = node.threshold_pct.value_or(parent_threshold);
-    node.resolved_sort_by = node.sort_by.value_or(parent_sort_by);
+    node.resolved_sort_by =
+        node.sort_by ? *node.sort_by : dstd::String(parent_sort_by);
 
     for (auto& child : node.children) {
         resolve_node(child, node.composed_query, node.resolved_metrics,
@@ -290,13 +298,12 @@ void ComparisonConfig::resolve() {
 
 // static
 dstd::Optional<ComparisonConfig> ComparisonConfig::from_preset(
-    const dstd::String& preset, const dstd::String& baseline,
-    const dstd::String& variant) {
+    dstd::StringView preset, dstd::String baseline, dstd::String variant) {
     if (preset != "dlio") return dstd::nullopt;
 
     ComparisonConfig cfg;
-    cfg.baseline = baseline;
-    cfg.variant = variant;
+    cfg.baseline = std::move(baseline);
+    cfg.variant = std::move(variant);
 
     auto node = [](dstd::String name, dstd::String query,
                    dstd::Vector<ComparisonNode> children = {}) {

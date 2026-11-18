@@ -28,13 +28,13 @@ using namespace dftracer::utils::domains::server;
 namespace {
 
 struct Served {
-    explicit Served(const dstd::String& name) : dir(name) {}
+    explicit Served(dstd::StringView name) : dir(dstd::String(name)) {}
     dftu_utils_test::ScopedTestDir dir;
     dstd::UniquePtr<TraceIndex> index;
     Router router;
 };
 
-dstd::UniquePtr<Served> serve(const dstd::String& name) {
+dstd::UniquePtr<Served> serve(dstd::StringView name) {
     auto s = dstd::make_unique<Served>(name);
     dstd::String content = "[\n";
     for (int i = 0; i < 6; ++i)
@@ -64,8 +64,8 @@ dstd::UniquePtr<Served> serve(const dstd::String& name) {
     return s;
 }
 
-HttpResponse get(Served& s, const dstd::String& target,
-                 const char* method = "GET") {
+HttpResponse get(Served& s, dstd::StringView target,
+                 dstd::String method = "GET") {
     HttpRequest req;
     req.method = method;
     req.path = target;
@@ -81,7 +81,7 @@ HttpResponse get(Served& s, const dstd::String& target,
 }
 
 // `text` as a query-string value: everything but an unreserved byte escaped.
-dstd::String encode(const dstd::String& text) {
+dstd::String encode(dstd::StringView text) {
     static const char kHex[] = "0123456789ABCDEF";
     dstd::String out;
     for (const char c : text) {

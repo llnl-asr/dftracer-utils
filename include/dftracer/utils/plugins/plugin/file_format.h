@@ -190,7 +190,8 @@ struct FileFormatVt {
                             const dftu_cursor_vt** out_vt) noexcept {
         return to_status(ctx, [&]() -> dftu_status {
             ScanView view;
-            view.projection = string_views(req->projection, req->n_projection);
+            view.projection =
+                string_views({req->projection, abi_count(req->n_projection)});
             for (std::int32_t i = 0; i < req->n_filters; ++i)
                 view.filters.emplace_back(req->filters[i]);
             view.limit = req->limit;

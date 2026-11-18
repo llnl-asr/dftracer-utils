@@ -52,7 +52,7 @@ static bool prescan_plugin_args(int argc, char** argv,
     kept.push_back(argv[0]);
     for (int i = 1; i < argc; ++i) {
         const dstd::StringView arg = argv[i];
-        auto take_value = [&](const char* flag,
+        auto take_value = [&](dstd::StringView flag,
                               dstd::StringView& value) -> bool {
             if (i + 1 >= argc) {
                 DFTRACER_UTILS_LOG_ERROR("{} requires a value", flag);

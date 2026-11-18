@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_DOMAINS_ANALYSIS_COMPARATOR_COMPARISON_CONFIG_H
 
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <simdjson.h>
@@ -102,20 +103,19 @@ struct ComparisonConfig {
     /// Parse a JSON config file. Returns nullopt and sets @p error on
     /// failure.
     static dstd::Optional<ComparisonConfig> from_json_file(
-        const dstd::String& path, dstd::String& error);
+        dstd::StringView path, dstd::String& error);
 
     /// Build config from CLI arguments (quick mode without JSON).
     /// Creates a single root node with the given query and group-by.
-    static ComparisonConfig from_cli(const dstd::String& baseline,
-                                     const dstd::String& variant,
-                                     const dstd::String& query,
-                                     const dstd::String& group_by_str);
+    static ComparisonConfig from_cli(dstd::String baseline,
+                                     dstd::String variant, dstd::String query,
+                                     dstd::StringView group_by_str);
 
     /// Build a preset comparison config. Returns nullopt for unknown presets.
     /// Supported presets: "dlio".
-    static dstd::Optional<ComparisonConfig> from_preset(
-        const dstd::String& preset, const dstd::String& baseline,
-        const dstd::String& variant);
+    static dstd::Optional<ComparisonConfig> from_preset(dstd::StringView preset,
+                                                        dstd::String baseline,
+                                                        dstd::String variant);
 
     /// Resolve inheritance: compose queries and propagate defaults
     /// down the node tree. Must be called before using the config.
@@ -124,11 +124,10 @@ struct ComparisonConfig {
    private:
     static bool parse_node(simdjson::dom::element val, ComparisonNode& node,
                            dstd::String& error);
-    void resolve_node(ComparisonNode& node, const dstd::String& parent_query,
-                      const dstd::Vector<dstd::String>& parent_metrics,
-                      const dstd::Vector<double>& parent_percentiles,
-                      double parent_threshold,
-                      const dstd::String& parent_sort_by);
+    void resolve_node(ComparisonNode& node, dstd::StringView parent_query,
+                      dstd::Span<const dstd::String> parent_metrics,
+                      dstd::Span<const double> parent_percentiles,
+                      double parent_threshold, dstd::StringView parent_sort_by);
 };
 
 }  // namespace dftracer::utils::domains::analysis::comparator

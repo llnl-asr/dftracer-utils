@@ -52,23 +52,23 @@ CancelRegistry& CancelRegistry::instance() {
     return dstd::Singleton<CancelRegistry>::get();
 }
 
-CancelToken CancelRegistry::create(const dstd::String& id, int peer_fd) {
+CancelToken CancelRegistry::create(dstd::String id, int peer_fd) {
     auto state = dstd::make_shared<CancelState>();
     state->peer_fd = peer_fd;
     if (!id.empty()) {
         std::lock_guard<std::mutex> lock(mu_);
-        tokens_[id] = state;
+        tokens_[std::move(id)] = state;
     }
     return CancelToken(state);
 }
 
-void CancelRegistry::remove(const dstd::String& id) {
+void CancelRegistry::remove(dstd::StringView id) {
     if (id.empty()) return;
     std::lock_guard<std::mutex> lock(mu_);
     tokens_.erase(id);
 }
 
-bool CancelRegistry::cancel(const dstd::String& id) {
+bool CancelRegistry::cancel(dstd::StringView id) {
     if (id.empty()) return false;
     dstd::SharedPtr<CancelState> state;
     {

@@ -23,6 +23,7 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -113,7 +114,7 @@ void tag_invoke(simdjson::serialize_tag, BuilderType& b,
 // Serialize collected density blocks (+ optional individual events) into the
 // /viz/density response body. Shared by the live-scan and summary paths.
 static dstd::String serialize_density_body(
-    const dstd::Vector<dstd::String>& big, const DensityMap& dens,
+    dstd::Span<const dstd::String> big, const DensityMap& dens,
     double original_begin, double original_end, double threshold, int limit,
     bool truncated, bool ts_normalized, std::uint64_t display_global_min,
     double max_dur, TraceIndex::TimeMetric metric,
@@ -1022,7 +1023,8 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     assign_counter_depths(big, big_depth, dens);
     if (global_min > 0 || index.time_metric() != TraceIndex::TimeMetric::Us) {
         for (auto& e : big)
-            e = normalize_event_ts(e, global_min, index.time_metric());
+            e = normalize_event_ts(std::move(e), global_min,
+                                   index.time_metric());
     }
 
     dstd::String body = serialize_density_body(

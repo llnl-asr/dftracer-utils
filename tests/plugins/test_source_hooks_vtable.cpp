@@ -35,7 +35,7 @@ T run(coro::CoroTask<dstd::Result<T>> t) {
 }
 
 dstd::Vector<std::int64_t> ints(const dataframe::DataFrame& df,
-                                const dstd::String& name) {
+                                dstd::StringView name) {
     const dataframe::Series& c = df.column(name);
     const std::int64_t* p = c.data<std::int64_t>();
     return dstd::Vector<std::int64_t>(p, p + c.length());

@@ -13,6 +13,7 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -974,7 +975,7 @@ class SyncThenAsyncCursor : public dataframe::Cursor {
 // probe node. Exercises FilterCursor, SelectCursor and WithColumnCursor's
 // try_next in series over whatever source cursor is handed in.
 dataframe::LazyFrame build_probe_chain(dstd::SharedPtr<dataframe::Source> src,
-                                       const char* node_name) {
+                                       dstd::String node_name) {
     return dataframe::LazyFrame::scan(src)
         .filter(dataframe::col(0) > std::int64_t{0})
         .select({"val"})

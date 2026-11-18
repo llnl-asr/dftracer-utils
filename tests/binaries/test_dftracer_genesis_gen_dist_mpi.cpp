@@ -25,8 +25,8 @@ dstd::String binary() {
     return path;
 }
 
-dstd::String call(const dstd::String& name, int ts, int dur,
-                  const dstd::String& cat = "CPP_APP") {
+dstd::String call(dstd::StringView name, int ts, int dur,
+                  dstd::StringView cat = "CPP_APP") {
     dftu_utils_test::TextOut o;
     o << R"({"name":")" << name << R"(","cat":")" << cat
       << R"(","pid":1,"tid":1,"ts":)" << ts << R"(,"dur":)" << dur
@@ -35,7 +35,7 @@ dstd::String call(const dstd::String& name, int ts, int dur,
     return o.str();
 }
 
-void write_run(const dstd::Path& root, const dstd::String& input, int calls) {
+void write_run(const dstd::Path& root, dstd::StringView input, int calls) {
     const dstd::Path dir = root / "app" / "sys" / input / "nodes_1" / "ppn_1";
     REQUIRE(dstd::fs::create_directories(dir / "compacted").has_value());
     dftu_utils_test::FileOut(dir / "summary.json")
@@ -49,7 +49,7 @@ void write_run(const dstd::Path& root, const dstd::String& input, int calls) {
         dstd::String((dir / "compacted" / "set1.pfw.gz").str()), t);
 }
 
-dstd::Vector<dstd::String> sorted_gz_lines(const dstd::String& path) {
+dstd::Vector<dstd::String> sorted_gz_lines(dstd::StringView path) {
     dstd::Vector<dstd::String> out;
     gzFile f = gzopen(path.c_str(), "rb");
     REQUIRE(f != nullptr);

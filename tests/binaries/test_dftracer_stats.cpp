@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -44,13 +46,12 @@ dstd::String find_stats_binary() {
                                                 "dftracer_stats");
 }
 
-int run_stats(const dstd::String& binary,
-              const dstd::Vector<dstd::String>& args) {
+int run_stats(dstd::String binary, dstd::Vector<dstd::String> args) {
     return dftu_utils_test::run_process(binary, args);
 }
 
-dstd::String run_stats_capture(const dstd::String& binary,
-                               const dstd::Vector<dstd::String>& args,
+dstd::String run_stats_capture(dstd::String binary,
+                               dstd::Vector<dstd::String> args,
                                int* exit_code = nullptr) {
     return dftu_utils_test::run_process_capture(binary, args, true, exit_code);
 }
@@ -69,7 +70,7 @@ struct Fixture {
 // Writes files of 60, 120 and 180 events. Counts per category (3:2:1), name
 // (4:3:2:1) and the presence of "dur" (three of four events) are fixed, so the
 // expected report values follow from the loop below.
-Fixture write_fixture(const dstd::String& dir) {
+Fixture write_fixture(dstd::String dir) {
     static const char* const CATS[] = {"POSIX", "STDIO", "app"};
     static const int CAT_AT[] = {0, 0, 0, 1, 1, 2};
     static const char* const NAMES[] = {"read", "write", "open", "close"};
@@ -118,8 +119,7 @@ Fixture write_fixture(const dstd::String& dir) {
 }
 
 // The "    key   count" lines of a text report.
-dstd::Map<dstd::String, std::uint64_t> parse_counts(
-    const dstd::String& output) {
+dstd::Map<dstd::String, std::uint64_t> parse_counts(dstd::StringView output) {
     dstd::Map<dstd::String, std::uint64_t> counts;
     dftu_utils_test::LineStream in(output);
     dstd::String line;
@@ -133,7 +133,7 @@ dstd::Map<dstd::String, std::uint64_t> parse_counts(
     return counts;
 }
 
-dstd::Map<dstd::String, std::uintmax_t> snapshot(const dstd::String& dir) {
+dstd::Map<dstd::String, std::uintmax_t> snapshot(dstd::String dir) {
     dstd::Map<dstd::String, std::uintmax_t> files;
     for (const auto& e : dftu_utils_test::walk_dir(dir))
         if ((e.kind == dstd::fs::FileKind::File))
@@ -255,7 +255,7 @@ TEST_SUITE("DFTracerStats") {
             return;
         }
 
-        auto total_events = [](const dstd::String& json) -> long {
+        auto total_events = [](dstd::String json) -> long {
             auto p = json.find("total_events");
             if (p == dstd::String::npos) return -1;
             p = json.find_first_of("0123456789", p);
@@ -301,9 +301,10 @@ TEST_SUITE("DFTracerStats") {
         REQUIRE(rc == 0);
         const auto before = snapshot(env.dir());
 
-        auto report = [&](const dstd::String& name,
+        auto report = [&](dstd::StringView name,
                           dstd::Vector<dstd::String> extra = {}) {
-            dstd::Vector<dstd::String> args{env.dir(), "--report", name};
+            dstd::Vector<dstd::String> args{env.dir(), "--report",
+                                            dstd::String(name)};
             args.insert(args.end(), extra.begin(), extra.end());
             auto out = run_stats_capture(binary, args, &rc);
             CHECK(rc == 0);

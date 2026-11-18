@@ -2,7 +2,9 @@
 // `dftracer_plugin`: the scaffolds `new` writes and the child process `check`
 // runs.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
@@ -15,8 +17,8 @@ using namespace dftracer::utils;
 
 namespace {
 
-dstd::String env_or_probe(const char* var, const dstd::String& name) {
-    const char* p = std::getenv(var);
+dstd::String env_or_probe(dstd::CStringView var, dstd::String name) {
+    const char* p = std::getenv(var.c_str());
     if (p != nullptr && ::access(p, R_OK) == 0) return p;
     for (const dstd::String& c : {"./" + name, "../" + name, "../../" + name}) {
         if (::access(c.c_str(), R_OK) == 0) return c;
@@ -31,7 +33,7 @@ struct Output {
 };
 
 // Run the tool and capture stdout and stderr together.
-Output run(const dstd::String& binary, const dstd::Vector<dstd::String>& args) {
+Output run(dstd::CStringView binary, dstd::Vector<dstd::String> args) {
     int pipefd[2];
     if (::pipe(pipefd) < 0) return {};
 
@@ -70,15 +72,15 @@ Output run(const dstd::String& binary, const dstd::Vector<dstd::String>& args) {
     return out;
 }
 
-bool has(const dstd::String& haystack, dstd::StringView needle) {
+bool has(dstd::StringView haystack, dstd::StringView needle) {
     return haystack.find(needle) != dstd::String::npos;
 }
 
-bool write(const dstd::String& path, const dstd::String& text) {
+bool write(dstd::StringView path, dstd::StringView text) {
     return dstd::fs::write_file(dstd::PathView(path), text).has_value();
 }
 
-dstd::String read(const dstd::String& path) {
+dstd::String read(dstd::StringView path) {
     auto got = dstd::fs::read_file(dstd::PathView(path));
     return got ? dstd::String(*got) : dstd::String();
 }
@@ -87,7 +89,7 @@ dstd::String plugin_tool() {
     return env_or_probe("DFTRACER_UTILS_PLUGIN_PATH", "dftracer_plugin");
 }
 
-bool make_dir(const dstd::String& path) {
+bool make_dir(dstd::StringView path) {
     return dstd::fs::create_directories(dstd::PathView(path)).has_value();
 }
 

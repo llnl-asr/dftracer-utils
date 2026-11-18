@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/domains/analysis/comparator/comparison_config.h>
 #include <dftracer/utils/domains/analysis/comparator/comparison_result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -66,7 +67,7 @@ class ComparisonUtility {
     /// Recursively build the result tree from flattened visitors.
     NodeResult build_result_tree(
         const ComparisonNode& node,
-        const dstd::Vector<ComparisonVisitorPair>& visitors,
+        dstd::Span<const ComparisonVisitorPair> visitors,
         const dstd::StringIntern& intern, std::size_t& visitor_index) const;
 };
 

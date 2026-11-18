@@ -19,7 +19,7 @@ namespace test_plugin_common {
 // Indexes an already-written gzip trace, discarding the export output; the
 // caller only needs the resulting ViewFile.
 inline dftracer::utils::trace::views::ViewFile index_trace(
-    const dftracer::utils::dstd::String& gz) {
+    dftracer::utils::dstd::CStringView gz) {
     using View = dftracer::utils::trace::views::View;
     using ViewFile = dftracer::utils::trace::views::ViewFile;
     using ExportSink = dftracer::utils::trace::views::ExportSink;
@@ -42,7 +42,7 @@ inline dftracer::utils::trace::views::ViewFile index_trace(
 inline dftracer::utils::plugins::host::PluginRun run_set(
     const dftracer::utils::plugins::host::Plugins& set,
     const dftracer::utils::trace::views::View& view,
-    const char* tag = "plugin-run") {
+    dftracer::utils::dstd::StringView tag = "plugin-run") {
     dftracer::utils::plugins::host::PluginRun out;
     dftracer::utils::Runtime rt(2);
     auto task = dftracer::utils::coro::with_scope(
@@ -60,7 +60,8 @@ inline dftracer::utils::plugins::host::PluginRun run_set(
 
 // Text bytes of a named result, or "(missing)" if `name` is not present.
 inline dftracer::utils::dstd::String result_text(
-    dftracer::utils::plugins::host::PluginRun& run, const char* name) {
+    dftracer::utils::plugins::host::PluginRun& run,
+    dftracer::utils::dstd::StringView name) {
     auto it = run.results.results().find(name);
     if (it == run.results.results().end()) return "(missing)";
     const auto& bytes =

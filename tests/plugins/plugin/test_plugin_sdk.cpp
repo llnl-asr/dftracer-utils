@@ -38,7 +38,7 @@ dataframe::DataFrame run(
 }
 
 dstd::Vector<std::int64_t> ints(const dataframe::DataFrame& f,
-                                const char* name) {
+                                dstd::StringView name) {
     const dataframe::Series& c = f.column(name);
     const std::int64_t* p = c.data<std::int64_t>();
     return {p, p + c.length()};
@@ -102,7 +102,7 @@ class RangeSource {
         const auto n = static_cast<std::int64_t>(ids.size());
         dstd::Vector<const char*> names;
         dstd::Vector<dftu_series*> cols;
-        auto want = [&](const char* name) {
+        auto want = [&](dstd::StringView name) {
             if (req.projection.empty()) return true;
             for (dstd::StringView p : req.projection)
                 if (p == name) return true;
@@ -459,7 +459,7 @@ TEST_SUITE("plugin sdk batch strings") {
     TEST_CASE("Event reads a view string column inline and out of line") {
         const dstd::String long_row = "a view row longer than twelve bytes";
         std::uint8_t views[3 * 16] = {};
-        const auto put = [&](int row, const dstd::String& str,
+        const auto put = [&](int row, dstd::StringView str,
                              std::int32_t offset) {
             std::uint8_t* v = views + row * 16;
             const auto size = static_cast<std::int32_t>(str.size());

@@ -578,7 +578,7 @@ coro::CoroTask<void> group_worker(
 constexpr std::size_t COPY_BYTES = 8 * 1024 * 1024;
 
 // Copies all of `from` into `to` at `offset`.
-bool copy_into(const dstd::String& from, const dstd::File& to,
+bool copy_into(dstd::StringView from, const dstd::File& to,
                std::uint64_t offset) {
     auto source = dstd::File::open(dstd::PathView(from), {});
     if (!source) return false;
@@ -797,7 +797,7 @@ bool all_ranks(comm::Group& world, bool ok) {
 // concatenate into one valid file. Rank 0 sizes the file, then every rank
 // copies its part to its offset at the same time.
 int join_parts(comm::Group& world, dstd::StringView output,
-               const dstd::String& part, bool ok, const Report& report) {
+               dstd::StringView part, bool ok, const Report& report) {
     const std::uint32_t rank = world.rank();
     const auto part_size = ok ? dstd::fs::file_size(dstd::PathView(part))
                               : dstd::Expected<std::uint64_t, dstd::Error>(0);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/domains/analysis/statistics/detail_stats_view.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -31,7 +32,7 @@ static bool is_io_event(dstd::StringView name) {
 }
 
 static void build_group_key(dstd::String& key,
-                            const dstd::Vector<dstd::String>& group_by,
+                            dstd::Span<const dstd::String> group_by,
                             const DFTracerEvent& ev) {
     key.clear();
     for (std::size_t i = 0; i < group_by.size(); ++i) {
@@ -130,7 +131,7 @@ coro::CoroTask<dstd::Result<DetailedStatistics>> DetailStatsView::collect(
 
     auto fold = [group_by, &name_filter, &cat_filter](
                     DetailedStatistics& acc,
-                    const dstd::Vector<dstd::StringView>& lines) {
+                    dstd::Span<const dstd::StringView> lines) {
         dftracer::utils::json::RecordParser parser;
         dstd::String group_key_buf;
         group_key_buf.reserve(128);

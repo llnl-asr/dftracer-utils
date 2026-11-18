@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
@@ -17,8 +19,8 @@ using namespace dftracer::utils;
 
 namespace {
 
-dstd::String env_or_probe(const char* var, const dstd::String& name) {
-    const char* p = std::getenv(var);
+dstd::String env_or_probe(dstd::CStringView var, dstd::String name) {
+    const char* p = std::getenv(var.c_str());
     if (p != nullptr && ::access(p, X_OK) == 0) return p;
     for (const dstd::String& c : {"./" + name, "../" + name, "../../" + name}) {
         if (::access(c.c_str(), X_OK) == 0) return c;
@@ -43,8 +45,8 @@ struct RunResult {
 // Run the binary and capture its stderr, where host->log and the run summary
 // land. Everything the child touches after fork is precomputed so it calls
 // only async-signal-safe functions.
-RunResult run_capture_stderr(const dstd::String& binary,
-                             const dstd::Vector<dstd::String>& args) {
+RunResult run_capture_stderr(dstd::CStringView binary,
+                             dstd::Vector<dstd::String> args) {
     int pipefd[2];
     if (::pipe(pipefd) < 0) return {};
 
@@ -83,7 +85,7 @@ RunResult run_capture_stderr(const dstd::String& binary,
     return r;
 }
 
-bool read_gzip_text(const dstd::String& path, dstd::String& out) {
+bool read_gzip_text(dstd::CStringView path, dstd::String& out) {
     gzFile gz = gzopen(path.c_str(), "rb");
     if (gz == nullptr) return false;
     char buf[4096];
@@ -93,9 +95,10 @@ bool read_gzip_text(const dstd::String& path, dstd::String& out) {
     return gzclose(gz) == Z_OK && n == 0;
 }
 
-long first_capture(const dstd::String& text, const dstd::String& pattern) {
-    std::match_results<dstd::String::const_iterator> m;
-    if (std::regex_search(text, m, std::regex(pattern.c_str())))
+long first_capture(dstd::StringView text, dstd::CStringView pattern) {
+    std::match_results<dstd::StringView::const_iterator> m;
+    if (std::regex_search(text.begin(), text.end(), m,
+                          std::regex(pattern.c_str())))
         return dftu_utils_test::to_number<long>(
             dstd::String(m[1].first, m[1].second));
     return -1;

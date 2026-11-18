@@ -14,6 +14,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -259,9 +260,9 @@ inline DensityFold fold_density(json::Value& root, double threshold,
 // Demote a set of individual events (indices into `big`, already kept whole
 // because dur >= threshold) into density blocks. Lets a dense window cap its
 // individual-event count without dropping any activity from the view.
-inline void fold_overflow_events(const dstd::Vector<dstd::String>& big,
-                                 const dstd::Vector<double>& big_dur,
-                                 const dstd::Vector<std::uint32_t>& overflow,
+inline void fold_overflow_events(dstd::Span<const dstd::String> big,
+                                 dstd::Span<const double> big_dur,
+                                 dstd::Span<const std::uint32_t> overflow,
                                  double threshold, double begin,
                                  DensityMap& dens, dstd::StringView group_col) {
     json::Document document;
@@ -369,7 +370,7 @@ inline bool parse_lane_ts_dur(dstd::StringView event, std::int64_t& pid,
 // [ts, ts+threshold]; a bucket-sized sibling that merely overlaps it is not an
 // ancestor, so folded events stay on their sibling's row.
 inline dstd::Vector<std::uint32_t> assign_view_depths(
-    const dstd::Vector<dstd::String>& big, DensityMap& dens, double begin,
+    dstd::Span<const dstd::String> big, DensityMap& dens, double begin,
     double threshold) {
     dstd::Vector<std::uint32_t> depth(big.size(), 0);
 
@@ -461,8 +462,8 @@ inline dstd::Vector<std::uint32_t> assign_view_depths(
 // counter series at the same column, and a counter can share a real thread
 // lane. Stable row order by series name so rows do not swap between
 // requests/zooms.
-inline void assign_counter_depths(const dstd::Vector<dstd::String>& big,
-                                  const dstd::Vector<std::uint32_t>& big_depth,
+inline void assign_counter_depths(dstd::Span<const dstd::String> big,
+                                  dstd::Span<const std::uint32_t> big_depth,
                                   DensityMap& dens) {
     auto lane_of = [](std::int64_t pid, std::int64_t tid) {
         return (pid << 20) ^ tid;

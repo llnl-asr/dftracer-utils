@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi/index.h>
@@ -298,15 +299,14 @@ const ::dftu_svc_index g_index = {sizeof(::dftu_svc_index),
 }  // namespace
 
 dftu_status detail::register_plugin_index_extension(
-    ::dftu_ctx* ctx, const char* name, const ::dftu_index_extension* vt,
+    ::dftu_ctx* ctx, dstd::StringView name, const ::dftu_index_extension* vt,
     void* self, dstd::SharedPtr<PluginLibrary> library) {
     if (refuse_plugin_op_name(name)) {
         return host_fail(
             ctx, DFTU_E_INVALID,
             dstd::fmt<"index extension '{}' refused: the bare and 'dftu.' "
                       "namespaces are host-reserved, so an extension name "
-                      "must be '<plugin>.<name>'">(
-                dstd::StringView(name ? name : "(null)")));
+                      "must be '<plugin>.<name>'">(name));
     }
     auto ext = PluginIndexExtension::make(name, vt, self, std::move(library));
     if (!ext) return host_fail(ctx, ext.error());

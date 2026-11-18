@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/plugin_frame.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
@@ -304,12 +305,13 @@ class Host {
     class Sketch make_sketch() const;
 
    private:
-    dstd::Result<dftu_trace_writer*> trace_open_write(const char* path) const {
+    dstd::Result<dftu_trace_writer*> trace_open_write(
+        dstd::CStringView path) const {
         DFTRACER_UTILS_TRY(const dftu_svc_trace* e,
                            need(DFTU_SVC_TRACE, trace_ext_));
         dftu_trace_writer* w = nullptr;
-        DFTRACER_UTILS_TRY_VOID(
-            detail::reported(e->trace_open_write(ctx_, h_->h, path, &w)));
+        DFTRACER_UTILS_TRY_VOID(detail::reported(
+            e->trace_open_write(ctx_, h_->h, path.c_str(), &w)));
         return w;
     }
     /// Append every row of `df` as a trace event.
@@ -327,12 +329,13 @@ class Host {
     /// Scan `path` (auto-indexed) and call on_batch once per scanned batch with
     /// a dftu_dataframe*. A negative status from on_batch stops the read and is
     /// the result.
-    dstd::Result<void> trace_read(const char* path,
+    dstd::Result<void> trace_read(dstd::CStringView path,
                                   dftu_stream_item_fn on_batch,
                                   void* ud) const {
         DFTRACER_UTILS_TRY(const dftu_svc_trace* e,
                            need(DFTU_SVC_TRACE, trace_ext_));
-        return detail::reported(e->trace_read(ctx_, h_->h, path, on_batch, ud));
+        return detail::reported(
+            e->trace_read(ctx_, h_->h, path.c_str(), on_batch, ud));
     }
 
    public:
@@ -399,10 +402,6 @@ class Host {
     /// consumer reads for the same batch. consume returns NULL (and 0 len) when
     /// the producer has not published this batch; the borrow is valid only
     /// until the current on_batch returns.
-    std::uint64_t port_key(const char* name) const {
-        const dftu_svc_ports* e = ext(DFTU_SVC_PORTS, ports_ext_);
-        return e && e->port_key ? e->port_key(h_->h, name) : 0;
-    }
     void publish(std::uint64_t key, const void* data, std::uint32_t len) const {
         const dftu_svc_ports* e = ext(DFTU_SVC_PORTS, ports_ext_);
         if (e && e->publish) e->publish(h_->h, key, data, len);
@@ -411,15 +410,16 @@ class Host {
         const dftu_svc_ports* e = ext(DFTU_SVC_PORTS, ports_ext_);
         return e && e->consume ? e->consume(h_->h, key, out_size) : nullptr;
     }
-    dstd::Result<dftu_agg*> agg_new(const char* name,
-                                    const char* const* key_names,
-                                    std::uint32_t key_n,
+    dstd::Result<dftu_agg*> agg_new(dstd::CStringView name,
+                                    dstd::Span<const char* const> key_names,
                                     const dftu_agg_col* specs,
                                     std::uint32_t spec_n) const {
         DFTRACER_UTILS_TRY(const dftu_svc_agg* e, need(DFTU_SVC_AGG, agg_ext_));
         dftu_agg* out = nullptr;
-        DFTRACER_UTILS_TRY_VOID(detail::reported(e->agg_new(
-            ctx_, h_->h, name, key_names, key_n, specs, spec_n, &out)));
+        DFTRACER_UTILS_TRY_VOID(detail::reported(
+            e->agg_new(ctx_, h_->h, name.c_str(), key_names.data(),
+                       static_cast<std::uint32_t>(key_names.size()), specs,
+                       spec_n, &out)));
         return out;
     }
     dstd::Result<void> agg_accumulate(dftu_agg* a,
@@ -472,13 +472,15 @@ class Host {
 
     /// Named result channel: emit an opaque blob; the host copies `len` bytes.
     /// Surfaces from Plugins::run keyed by name. Best called at on_finalize.
+    /// `name` must not be null (@ref dstd::CStringView); an empty `name` is
+    /// refused with an error, and so is it in the frame and lazyframe forms.
     dstd::Result<void> emit_result(dstd::CStringView name,
                                    dstd::ByteView data) const {
         dftu_result_value v{};
         v.kind = DFTU_RESULT_KIND_BYTES;
         v.u.bytes.data = data.data();
         v.u.bytes.len = static_cast<std::uint64_t>(data.size());
-        return emit(name.c_str(), &v);
+        return emit(name, &v);
     }
     dstd::Result<void> emit_result(dstd::CStringView name,
                                    dstd::StringView data) const {
@@ -492,7 +494,7 @@ class Host {
         dftu_result_value v{};
         v.kind = DFTU_RESULT_KIND_FRAME;
         v.u.frame = df.get();
-        DFTRACER_UTILS_TRY_VOID(emit(name.c_str(), &v));
+        DFTRACER_UTILS_TRY_VOID(emit(name, &v));
         df.release();
         return {};
     }
@@ -500,13 +502,15 @@ class Host {
     /// at the Python edge. The plan must be self-contained.
     dstd::Result<void> emit_result_lazyframe(dstd::CStringView name,
                                              OwnedLazyFrame&& lf) const {
-        DFTRACER_UTILS_TRY_VOID(emit_result_lazyframe(name.c_str(), lf.get()));
+        DFTRACER_UTILS_TRY_VOID(emit_result_lazyframe(name, lf.get()));
         lf.release();
         return {};
     }
 
     /// Typed batch-scoped output port: send() publishes a trivially-copyable T
-    /// under `name` for a same-batch consumer. See publish/consume.
+    /// under `name` for a same-batch consumer. See publish/consume. `name` must
+    /// not be null (@ref dstd::CStringView); an empty `name` is a name, not
+    /// "no port".
     template <class T>
     OutPort<T> publish_port(dstd::CStringView name) const;
     /// Typed batch-scoped input port: recv() reads the T a producer published
@@ -514,9 +518,7 @@ class Host {
     template <class T>
     InPort<T> consume_port(dstd::CStringView name) const;
 
-    std::uint64_t port_key(dstd::CStringView name) const {
-        return port_key(name.c_str());
-    }
+    std::uint64_t port_key(dstd::CStringView name) const;
     void publish(std::uint64_t key, dstd::ByteView data) const {
         publish(key, data.data(), static_cast<std::uint32_t>(data.size()));
     }
@@ -538,7 +540,7 @@ class Host {
 
     Host(const dftu_plugin_host* h, dftu_ctx* ctx) : h_(h), ctx_(ctx) {}
 
-    dstd::Result<void> emit_result_lazyframe(const char* name,
+    dstd::Result<void> emit_result_lazyframe(dstd::CStringView name,
                                              dftu_lazyframe* lf) const {
         dftu_result_value v{};
         v.kind = DFTU_RESULT_KIND_LAZYFRAME;
@@ -549,24 +551,26 @@ class Host {
     /// Fetch a host-service group once and memoize it in `slot`; a missing
     /// group stays null.
     template <class T>
-    const T* ext(const char* id, const T*& slot) const {
+    const T* ext(dstd::CStringView id, const T*& slot) const {
         if (!slot && h_->get_service)
-            slot = static_cast<const T*>(h_->get_service(h_->h, id));
+            slot = static_cast<const T*>(h_->get_service(h_->h, id.c_str()));
         return slot;
     }
     template <class T>
-    dstd::Result<const T*> need(const char* id, const T*& slot) const {
+    dstd::Result<const T*> need(dstd::CStringView id, const T*& slot) const {
         const T* e = ext(id, slot);
         if (!e)
-            return make_error(dstd::Condition::Unsupported,
-                              dstd::String("host lacks the service ") + id);
+            return make_error(
+                dstd::Condition::Unsupported,
+                dstd::String("host lacks the service ") + id.c_str());
         return e;
     }
 
-    dstd::Result<void> emit(const char* name, dftu_result_value* v) const {
+    dstd::Result<void> emit(dstd::CStringView name,
+                            dftu_result_value* v) const {
         DFTRACER_UTILS_TRY(const dftu_svc_result* e,
                            need(DFTU_SVC_RESULT, result_ext_));
-        return detail::reported(e->emit(ctx_, h_->h, name, v));
+        return detail::reported(e->emit(ctx_, h_->h, name.c_str(), v));
     }
 
     const dftu_plugin_host* h_ = nullptr;
@@ -798,11 +802,9 @@ inline dstd::Result<Agg> Host::agg(
     dstd::Vector<dftu_agg_col> specs;
     specs.reserve(cols.size());
     for (const AggCol& c : cols) specs.push_back(detail::agg_col_raw(c));
-    DFTRACER_UTILS_TRY(
-        dftu_agg * a,
-        agg_new(name.c_str(), keys.data(),
-                static_cast<std::uint32_t>(keys.size()), specs.data(),
-                static_cast<std::uint32_t>(specs.size())));
+    DFTRACER_UTILS_TRY(dftu_agg * a,
+                       agg_new(name, keys, specs.data(),
+                               static_cast<std::uint32_t>(specs.size())));
     return Agg{*this, a};
 }
 
@@ -942,11 +944,15 @@ class InPort {
 
 template <class T>
 inline OutPort<T> Host::publish_port(dstd::CStringView name) const {
-    return OutPort<T>{*this, port_key(name.c_str())};
+    return OutPort<T>{*this, port_key(name)};
+}
+inline std::uint64_t Host::port_key(dstd::CStringView name) const {
+    const dftu_svc_ports* e = ext(DFTU_SVC_PORTS, ports_ext_);
+    return e && e->port_key ? e->port_key(h_->h, name.c_str()) : 0;
 }
 template <class T>
 inline InPort<T> Host::consume_port(dstd::CStringView name) const {
-    return InPort<T>{*this, port_key(name.c_str())};
+    return InPort<T>{*this, port_key(name)};
 }
 
 namespace detail {
@@ -1051,7 +1057,8 @@ class Batch {
     friend struct detail::BatchAccess;
 
     explicit Batch(const dftu_dataframe* df) noexcept;
-    static detail::ColBuf resolve(const dftu_dataframe* df, const char* name);
+    static detail::ColBuf resolve(const dftu_dataframe* df,
+                                  dstd::CStringView name);
     static bool is_str(const detail::ColBuf& c) noexcept {
         return c.type == DFTU_TYPE_STRING;
     }
@@ -1180,9 +1187,9 @@ inline dstd::StringView Event::arg_str(dstd::StringView key) const noexcept {
 }
 
 inline detail::ColBuf Batch::resolve(const dftu_dataframe* df,
-                                     const char* name) {
+                                     dstd::CStringView name) {
     detail::ColBuf c;
-    dftu_series* col = dftu_dataframe_column(df, name);
+    dftu_series* col = dftu_dataframe_column(df, name.c_str());
     if (!col) return c;
     c.handle = col;
     c.type = dftu_series_type(col);
@@ -1298,7 +1305,7 @@ inline dstd::Result<void> Host::trace_read(dstd::CStringView path,
                 return (*st.f)(df);
         });
     };
-    return trace_read(path.c_str(), thunk, &state);
+    return trace_read(path, thunk, &state);
 }
 
 /// Non-owning view over a compiled dftu_duql (see Host::compile). Host-owned

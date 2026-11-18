@@ -12,6 +12,7 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/host/provider_source.h>
@@ -25,7 +26,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-dftu_dataframe* empty_frame(const dstd::Vector<dstd::String>& names) {
+dftu_dataframe* empty_frame(dstd::Span<const dstd::String> names) {
     dstd::Vector<const char*> cnames;
     dstd::Vector<dftu_series*> cols;
     for (const dstd::String& n : names) {

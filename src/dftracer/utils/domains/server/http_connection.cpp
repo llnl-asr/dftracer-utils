@@ -37,7 +37,7 @@ coro::CoroTask<void> handle_connection(int client_fd,
 
         // Try to parse a complete request.
         HttpRequest req;
-        int parsed = req.parse(buf, buf_used);
+        int parsed = req.parse(dstd::StringView(buf, buf_used));
         if (parsed == -2) {
             // Incomplete — need more data.
             if (buf_used >= BUF_SIZE) {

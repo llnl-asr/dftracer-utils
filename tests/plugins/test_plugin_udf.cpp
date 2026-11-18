@@ -16,10 +16,12 @@
 #include <dftracer/utils/dataframe/udf.h>
 #include <dftracer/utils/dataframe/udf_registry.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -51,10 +53,10 @@ namespace {
 
 constexpr int ROWS = 12;
 
-dstd::String event(int ts, const dstd::String& args, int dur) {
+dstd::String event(int ts, dstd::CStringView args, int dur) {
     return R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":)" +
            dstd::to_string(ts) + R"(,"dur":)" + dstd::to_string(dur) +
-           R"(,"args":{)" + args + "}}";
+           R"(,"args":{)" + args.c_str() + "}}";
 }
 
 // Row i has ts 1000 + 100 i, dur 10 + i, and x = 3 i except in every fourth
@@ -70,9 +72,9 @@ dstd::Vector<dstd::String> lines_of(int rows) {
 }
 
 View view_of_lines(dftu_utils_test::TestEnvironment& env,
-                   const dstd::Vector<dstd::String>& lines,
-                   const dstd::String& name) {
-    const dstd::String pfw = env.dir() + "/" + name + ".pfw";
+                   dstd::Span<const dstd::String> lines,
+                   dstd::CStringView name) {
+    const dstd::String pfw = env.dir() + "/" + name.c_str() + ".pfw";
     {
         dftu_utils_test::FileOut o(pfw);
         for (const auto& l : lines) o << l << "\n";
@@ -95,7 +97,7 @@ dstd::Result<dataframe::DataFrame> collect(const View& v) {
 
 // The text of each cell of column `name`: a number, or `null`.
 dstd::Vector<dstd::String> cells(const dataframe::DataFrame& f,
-                                 dstd::StringView name) {
+                                 dstd::CStringView name) {
     std::size_t c = 0;
     while (c < f.names.size() && f.names[c] != name) ++c;
     REQUIRE(c < f.names.size());
@@ -129,8 +131,8 @@ dstd::Vector<dstd::String> cells(const dataframe::DataFrame& f,
     return out;
 }
 
-dstd::Vector<dstd::String> run(const View& v, dstd::StringView name,
-                               const dstd::String& query) {
+dstd::Vector<dstd::String> run(const View& v, dstd::CStringView name,
+                               dstd::StringView query) {
     const View q = v.duql(query);
     auto got = collect(q);
     INFO(query);
@@ -141,7 +143,7 @@ dstd::Vector<dstd::String> run(const View& v, dstd::StringView name,
 }
 
 // The failure message of the query, from building the view or running it.
-dstd::String failure(const View& v, const dstd::String& query) {
+dstd::String failure(const View& v, dstd::StringView query) {
     const View q = v.duql(query);
     if (const auto kept = q.status(); !kept.has_value())
         return kept.error().c_str();
@@ -150,12 +152,13 @@ dstd::String failure(const View& v, const dstd::String& query) {
     return {};
 }
 
-bool has(const dstd::String& text, dstd::StringView word) {
+bool has(dstd::StringView text, dstd::StringView word) {
     return text.find(word) != dstd::String::npos;
 }
 
-dstd::Optional<plugins::host::Plugins> load(const char* path) {
-    auto built = plugins::host::Plugins::builder().add(path).build();
+dstd::Optional<plugins::host::Plugins> load(dstd::StringView path) {
+    auto built =
+        plugins::host::Plugins::builder().add(dstd::String(path)).build();
     INFO((built.has_value() ? dstd::String{}
                             : dstd::String(built.error().message())));
     REQUIRE(built.has_value());
@@ -169,10 +172,10 @@ bool library_mapped() {
     return true;
 }
 
-std::int64_t counter(const char* symbol) {
+std::int64_t counter(dstd::CStringView symbol) {
     void* h = dlopen(UDF_PLUGIN_PATH, RTLD_NOW | RTLD_NOLOAD);
     REQUIRE(h != nullptr);
-    auto* fn = reinterpret_cast<std::int64_t (*)()>(dlsym(h, symbol));
+    auto* fn = reinterpret_cast<std::int64_t (*)()>(dlsym(h, symbol.c_str()));
     REQUIRE(fn != nullptr);
     const std::int64_t value = fn();
     dlclose(h);

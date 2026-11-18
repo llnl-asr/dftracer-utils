@@ -9,6 +9,7 @@
 
 #include <dftracer/utils/domains/server/json_builder.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/json/dom_form.h>
@@ -22,12 +23,12 @@
 
 namespace dftracer::utils::domains::server {
 
-// Parse the text of `s` in place when its spare capacity holds the simdjson
-// padding, as simdjson does for a std::string.
+// Parse the text of `s` in place. Grows the capacity of `s` to hold the
+// simdjson padding, so simdjson never copies the text.
 template <class Parser>
-inline auto parse_string(Parser& parser, const dstd::String& s) {
-    return parser.parse(s.data(), s.size(),
-                        s.capacity() - s.size() < simdjson::SIMDJSON_PADDING);
+inline auto parse_string(Parser& parser, dstd::String& s) {
+    s.reserve(s.size() + simdjson::SIMDJSON_PADDING);
+    return parser.parse(s.data(), s.size(), false);
 }
 
 // The value at dotted `path` under `root`.
@@ -130,7 +131,7 @@ struct TraceFields {
         if (res.error()) res = json::parse_refused(parser, raw);
         if (res.error() || !res.value_unsafe().is_object()) return false;
         const auto root = res.value_unsafe();
-        auto at = [&](const dstd::String& path) {
+        auto at = [&](dstd::StringView path) {
             return path.empty() ? dstd::nullopt : find_path(root, path);
         };
         auto number = [](dstd::Optional<simdjson::dom::element> el)
@@ -183,7 +184,7 @@ struct TraceFields {
     // Calls `fn` with each of `events` as a trace event; the view it gets
     // lasts until `fn` returns.
     template <typename Fn>
-    void for_each_event(const dstd::Vector<dstd::StringView>& events,
+    void for_each_event(dstd::Span<const dstd::StringView> events,
                         Fn&& fn) const {
         if (!by_path) {
             for (auto e : events) fn(e);

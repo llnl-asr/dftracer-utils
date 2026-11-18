@@ -52,8 +52,7 @@ dstd::String make_trace(int n) {
     return s;
 }
 
-void write_single_member(const dstd::String& path,
-                         const dstd::String& content) {
+void write_single_member(dstd::StringView path, dstd::StringView content) {
     fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
@@ -62,7 +61,7 @@ void write_single_member(const dstd::String& path,
               static_cast<std::streamsize>(member->size()));
 }
 
-dstd::String stats_body(Router& router, const dstd::String& target) {
+dstd::String stats_body(Router& router, dstd::StringView target) {
     HttpRequest req;
     req.method = "GET";
     req.path = target;

@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi/file_formats.h>
@@ -397,7 +398,7 @@ struct SinkHandle {
 class OptionsTree {
    public:
     explicit OptionsTree(
-        const dstd::Vector<dstd::Pair<dstd::String, dstd::String>>& options) {
+        dstd::Span<const dstd::Pair<dstd::String, dstd::String>> options) {
         const std::size_t n = options.size();
         strings_.reserve(2 * n);
         for (const dstd::Pair<dstd::String, dstd::String>& option : options) {

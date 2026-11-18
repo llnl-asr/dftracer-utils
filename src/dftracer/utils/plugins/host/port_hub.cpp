@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/plugins/host/port_hub.h>
 
 #include <algorithm>
@@ -70,7 +71,7 @@ bool scalar_type(dftu_type type) {
     return type == DFTU_T_I64 || type == DFTU_T_U64 || type == DFTU_T_F64;
 }
 
-dftu_port_status copy_out(const dstd::Vector<std::byte>& from, void* buf,
+dftu_port_status copy_out(dstd::Span<const std::byte> from, void* buf,
                           std::uint32_t cap, std::uint32_t* out_len) {
     *out_len = static_cast<std::uint32_t>(from.size());
     if (from.size() > cap) return DFTU_PORT_TOO_BIG;
@@ -408,9 +409,9 @@ dstd::Result<dftu_port_status> PortPhase::result(std::uint64_t generation,
     return copy_out(out, buf, cap, out_len);
 }
 
-PortHub::PortHub(const dstd::Vector<ChannelDecl>& channels,
-                 const dstd::Vector<PhaseDecl>& phases,
-                 const dstd::Vector<ChannelDecl>& senders) {
+PortHub::PortHub(dstd::Span<const ChannelDecl> channels,
+                 dstd::Span<const PhaseDecl> phases,
+                 dstd::Span<const ChannelDecl> senders) {
     for (const ChannelDecl& decl : channels) {
         if (decl.is_ref) continue;
         const std::uint64_t handle = dstd::hash::fnv1a_hash(decl.name);

@@ -12,7 +12,9 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/host/plugins.h>
@@ -77,9 +79,9 @@ DataFrame make_frame() {
     return df;
 }
 
-WindowColumn frame_of(WindowFunc func, const char* out, std::int64_t min_count,
-                      std::int64_t preceding, std::int64_t following,
-                      WindowFrameMode mode) {
+WindowColumn frame_of(WindowFunc func, dstd::StringView out,
+                      std::int64_t min_count, std::int64_t preceding,
+                      std::int64_t following, WindowFrameMode mode) {
     WindowColumn w;
     w.func = func;
     w.out = out;
@@ -87,16 +89,16 @@ WindowColumn frame_of(WindowFunc func, const char* out, std::int64_t min_count,
     return w;
 }
 
-WindowColumn udaf_of(const char* name, const char* out, std::int64_t min_count,
-                     std::int64_t preceding, std::int64_t following,
-                     WindowFrameMode mode) {
+WindowColumn udaf_of(dstd::String name, dstd::StringView out,
+                     std::int64_t min_count, std::int64_t preceding,
+                     std::int64_t following, WindowFrameMode mode) {
     WindowColumn w = frame_of(WindowFunc::FrameUdaf, out, min_count, preceding,
                               following, mode);
     w.set_udaf(name, {"v"});
     return w;
 }
 
-WindowColumn sum_of(const char* out, std::int64_t min_count,
+WindowColumn sum_of(dstd::StringView out, std::int64_t min_count,
                     std::int64_t preceding, std::int64_t following,
                     WindowFrameMode mode) {
     WindowColumn w = frame_of(WindowFunc::FrameSum, out, min_count, preceding,
@@ -105,7 +107,7 @@ WindowColumn sum_of(const char* out, std::int64_t min_count,
     return w;
 }
 
-Cells cells(const DataFrame& f, dstd::StringView name) {
+Cells cells(const DataFrame& f, dstd::String name) {
     std::size_t c = 0;
     while (c < f.names.size() && f.names[c] != name) ++c;
     REQUIRE(c < f.names.size());
@@ -119,7 +121,7 @@ Cells cells(const DataFrame& f, dstd::StringView name) {
     return out;
 }
 
-DataFrame run(const dstd::Vector<WindowColumn>& specs) {
+DataFrame run(dstd::Vector<WindowColumn> specs) {
     auto got = dataframe::window(make_frame(), {"p"}, {"o"}, specs);
     INFO(
         (got.has_value() ? dstd::String{} : dstd::String(got.error().c_str())));
@@ -127,7 +129,7 @@ DataFrame run(const dstd::Vector<WindowColumn>& specs) {
     return std::move(*got);
 }
 
-dstd::String failure(const dstd::Vector<WindowColumn>& specs) {
+dstd::String failure(dstd::Vector<WindowColumn> specs) {
     auto got = dataframe::window(make_frame(), {"p"}, {"o"}, specs);
     return got.has_value() ? dstd::String{} : dstd::String(got.error().c_str());
 }
@@ -363,7 +365,7 @@ DataFrame make_big(std::int64_t rows, std::int64_t parts) {
     return df;
 }
 
-DataFrame run_on(const DataFrame& df, const dstd::Vector<WindowColumn>& specs) {
+DataFrame run_on(const DataFrame& df, dstd::Vector<WindowColumn> specs) {
     auto got = dataframe::window(df, {"p"}, {"o"}, specs);
     INFO(
         (got.has_value() ? dstd::String{} : dstd::String(got.error().c_str())));
@@ -373,7 +375,7 @@ DataFrame run_on(const DataFrame& df, const dstd::Vector<WindowColumn>& specs) {
 
 using DoubleCells = dstd::Vector<dstd::Optional<double>>;
 
-DoubleCells double_cells(const DataFrame& f, dstd::StringView name) {
+DoubleCells double_cells(const DataFrame& f, dstd::String name) {
     std::size_t c = 0;
     while (c < f.names.size() && f.names[c] != name) ++c;
     REQUIRE(c < f.names.size());
@@ -529,10 +531,10 @@ TEST_CASE("a combine failure of a tree window reaches the caller") {
 
 namespace {
 
-std::int64_t counter(const char* symbol) {
+std::int64_t counter(dstd::CStringView symbol) {
     void* h = dlopen(UDAF_PLUGIN_PATH, RTLD_NOW | RTLD_NOLOAD);
     REQUIRE(h != nullptr);
-    auto* fn = reinterpret_cast<std::int64_t (*)()>(dlsym(h, symbol));
+    auto* fn = reinterpret_cast<std::int64_t (*)()>(dlsym(h, symbol.c_str()));
     REQUIRE(fn != nullptr);
     const std::int64_t value = fn();
     dlclose(h);

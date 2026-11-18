@@ -6,9 +6,11 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
@@ -49,7 +51,7 @@ struct TestFrame {
     TestFrame(TestFrame&& o) noexcept : df(o.df) { o.df = nullptr; }
 };
 
-dftu_series* string_column(const dstd::Vector<dstd::String>& vals) {
+dftu_series* string_column(dstd::Span<const dstd::String> vals) {
     dstd::Vector<std::int32_t> offsets(vals.size() + 1, 0);
     dstd::String data;
     for (std::size_t i = 0; i < vals.size(); ++i) {
@@ -63,8 +65,8 @@ dftu_series* string_column(const dstd::Vector<dstd::String>& vals) {
 
 // A [cat, name] string-column frame; only the columns dftu_svc_duql's tests
 // need.
-TestFrame cat_name_frame(const dstd::Vector<dstd::String>& cats,
-                         const dstd::Vector<dstd::String>& names) {
+TestFrame cat_name_frame(dstd::Vector<dstd::String> cats,
+                         dstd::Vector<dstd::String> names) {
     const char* col_names[2] = {"cat", "name"};
     dftu_series* cols[2] = {string_column(cats), string_column(names)};
     TestFrame f;
@@ -72,13 +74,13 @@ TestFrame cat_name_frame(const dstd::Vector<dstd::String>& cats,
     return f;
 }
 
-dftu_series* u64_column(const dstd::Vector<std::uint64_t>& vals) {
+dftu_series* u64_column(dstd::Span<const std::uint64_t> vals) {
     return dftu_series_new_flat(DFTU_TYPE_UINT64, vals.data(),
                                 static_cast<std::int64_t>(vals.size()),
                                 nullptr);
 }
 
-dftu_series* i64_column(const dstd::Vector<std::int64_t>& vals) {
+dftu_series* i64_column(dstd::Span<const std::int64_t> vals) {
     return dftu_series_new_flat(DFTU_TYPE_INT64, vals.data(),
                                 static_cast<std::int64_t>(vals.size()),
                                 nullptr);
@@ -129,7 +131,7 @@ dftu_status run(::dftu_task* t, dstd::String* message = nullptr) {
 
 Ctx* g_harness_ctx = nullptr;
 
-void copy_text(const dstd::String& text, char* out, std::uint64_t cap) {
+void copy_text(dstd::CStringView text, char* out, std::uint64_t cap) {
     std::snprintf(out, static_cast<std::size_t>(cap), "%s", text.c_str());
 }
 
@@ -669,7 +671,7 @@ TEST_CASE("C ABI: dftu_svc_fileio writer create/open/chunk/close from C") {
 
 namespace {
 
-dstd::String write_text(const dstd::String& path, const dstd::String& text) {
+dstd::String write_text(dstd::String path, dstd::CStringView text) {
     dstd::fs::write_file(dstd::PathView(path), text).discard();
     return path;
 }
@@ -702,12 +704,13 @@ dstd::Vector<dstd::String> read_lines(Ctx& c, dftu_plugin_host& host,
 }
 
 // How many entries of `dir` start with `prefix`.
-int entries_with_prefix(const dstd::String& dir, const char* prefix) {
+int entries_with_prefix(dstd::CStringView dir, dstd::CStringView prefix) {
     int count = 0;
     DIR* d = ::opendir(dir.c_str());
     if (d == nullptr) return 0;
     while (const struct dirent* e = ::readdir(d)) {
-        if (std::strncmp(e->d_name, prefix, std::strlen(prefix)) == 0) ++count;
+        if (std::strncmp(e->d_name, prefix.c_str(), prefix.size()) == 0)
+            ++count;
     }
     ::closedir(d);
     return count;
@@ -715,8 +718,8 @@ int entries_with_prefix(const dstd::String& dir, const char* prefix) {
 
 // A gzip file of `text` written through gz_open/gz_append/gz_close, in members
 // of `member_size` bytes.
-void write_gz_from_c(Ctx& c, dftu_plugin_host& host, const dstd::String& path,
-                     const dstd::String& text, std::uint64_t member_size,
+void write_gz_from_c(Ctx& c, dftu_plugin_host& host, dstd::String path,
+                     dstd::CStringView text, std::uint64_t member_size,
                      dftu_gz_summary* summary) {
     ::dftu_gz_writer* w = nullptr;
     ::dftu_task* t = nullptr;

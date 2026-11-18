@@ -62,7 +62,7 @@ void write_mixture(W& w, const FittedMixture& m) {
 }
 
 template <class W>
-void write_block(W& w, const char* name, const DlioTimingBlock& block) {
+void write_block(W& w, dstd::StringView name, const DlioTimingBlock& block) {
     w.key(name);
     w.begin_object();
     if (const auto* single = std::get_if<FittedDistribution>(&block.model))

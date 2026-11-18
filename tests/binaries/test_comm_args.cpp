@@ -76,7 +76,7 @@ dstd::Vector<std::uint64_t> cpus(std::size_t first, std::size_t last) {
     return words;
 }
 
-std::size_t share(const dstd::Vector<dstd::Vector<std::uint64_t>>& masks,
+std::size_t share(dstd::Span<const dstd::Vector<std::uint64_t>> masks,
                   std::size_t rank, std::size_t limit) {
     return cli::core_share(dstd::Span<const dstd::Vector<std::uint64_t>>(
                                masks.data(), masks.size()),

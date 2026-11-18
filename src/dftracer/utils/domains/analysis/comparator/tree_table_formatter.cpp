@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -98,7 +99,7 @@ dstd::String fmt_duration(double us) {
 
 // Format a byte-scaled quantity with a binary (1024) ladder. `suffix` is
 // appended to the unit ("" for sizes, "/s" for bandwidth).
-dstd::String fmt_bytes_scaled(double value, const char* suffix) {
+dstd::String fmt_bytes_scaled(double value, dstd::StringView suffix) {
     constexpr double KB = 1024.0;
     constexpr double MB = 1024.0 * 1024.0;
     constexpr double GB = 1024.0 * 1024.0 * 1024.0;
@@ -110,7 +111,7 @@ dstd::String fmt_bytes_scaled(double value, const char* suffix) {
 
 dstd::String fmt_size(double bytes) { return fmt_bytes_scaled(bytes, ""); }
 
-bool all_group_zero(const dstd::Vector<const MetricComparison*>& group) {
+bool all_group_zero(dstd::Span<const MetricComparison* const> group) {
     for (const auto* mc : group) {
         if (mc->baseline_value != 0.0 || mc->variant_value != 0.0) return false;
     }
@@ -126,7 +127,7 @@ struct MetricGroup {
 };
 
 dstd::Vector<MetricGroup> group_metrics(
-    const dstd::Vector<MetricComparison>& metrics) {
+    dstd::Span<const MetricComparison> metrics) {
     dstd::Vector<MetricGroup> groups;
     dstd::HashMap<dstd::String, std::size_t> group_idx;
 
@@ -154,7 +155,7 @@ dstd::Vector<MetricGroup> group_metrics(
     return groups;
 }
 
-bool metrics_have_data(const dstd::Vector<MetricComparison>& metrics) {
+bool metrics_have_data(dstd::Span<const MetricComparison> metrics) {
     for (const auto& mc : metrics) {
         if (mc.baseline_value != 0.0 || mc.variant_value != 0.0) return true;
     }
@@ -172,7 +173,7 @@ bool node_has_data(const NodeResult& node) {
 }
 
 // True when every non-zero metric in the list has negligible significance.
-bool metrics_all_negligible(const dstd::Vector<MetricComparison>& metrics) {
+bool metrics_all_negligible(dstd::Span<const MetricComparison> metrics) {
     for (const auto& mc : metrics) {
         if ((mc.baseline_value != 0.0 || mc.variant_value != 0.0) &&
             mc.significance > Significance::Negligible) {
@@ -209,7 +210,7 @@ static dstd::Pair<bool, bool> gather_node_stats_impl(const NodeResult& node,
     stats.total++;
 
     bool has_reg = false, has_imp = false;
-    auto scan = [&](const dstd::Vector<MetricComparison>& metrics) {
+    auto scan = [&](dstd::Span<const MetricComparison> metrics) {
         for (const auto& mc : metrics) {
             if (mc.significance >= Significance::Medium) {
                 if (mc.is_regression)
@@ -250,20 +251,19 @@ struct RegressionEntry {
     Significance sig = Significance::Negligible;
 };
 
-static void collect_regressions(const NodeResult& node,
-                                const dstd::String& prefix,
+static void collect_regressions(const NodeResult& node, dstd::StringView prefix,
                                 dstd::Vector<RegressionEntry>& out) {
     dstd::String here =
         prefix.empty() ? node.name : dstd::fmt<"{} > {}">(prefix, node.name);
 
-    auto push_regressions = [&](const dstd::Vector<MetricComparison>& metrics,
-                                const dstd::String& path) {
+    auto push_regressions = [&](dstd::Span<const MetricComparison> metrics,
+                                dstd::StringView path) {
         for (const auto& mc : metrics) {
             if (mc.significance >= Significance::Medium && mc.is_regression &&
                 (mc.baseline_value != 0.0 || mc.variant_value != 0.0)) {
-                out.push_back({path, mc.metric_name, mc.pct_change,
-                               mc.baseline_value, mc.variant_value,
-                               mc.significance});
+                out.push_back({dstd::String(path), mc.metric_name,
+                               mc.pct_change, mc.baseline_value,
+                               mc.variant_value, mc.significance});
             }
         }
     };
@@ -284,7 +284,7 @@ dstd::String fmt_generic(double v) { return dstd::fmt<"{:.2f}">(v); }
 // Display width of a UTF-8 string (characters, not bytes).
 // Counts one display column per Unicode code point by skipping
 // UTF-8 continuation bytes (10xxxxxx).
-int display_width(const dstd::String& s) {
+int display_width(dstd::StringView s) {
     int w = 0;
     for (unsigned char c : s) {
         if ((c & 0xC0) != 0x80) ++w;
@@ -305,7 +305,7 @@ void lpad(dstd::String& s, int target) {
 }  // namespace
 
 dstd::String TreeTableFormatter::format_value(double v,
-                                              const dstd::String& m) const {
+                                              dstd::StringView m) const {
     if (v == 0.0) return "0";
     dstd::String grp = metric_group(m);
     if (grp == "dur") return fmt_duration(v);
@@ -320,7 +320,7 @@ dstd::String TreeTableFormatter::format_value(double v,
 }
 
 dstd::String TreeTableFormatter::format_delta(double d,
-                                              const dstd::String& m) const {
+                                              dstd::StringView m) const {
     dstd::String base;
     dstd::String grp = metric_group(m);
     if (grp == "dur" || grp == "time") {
@@ -386,7 +386,7 @@ dstd::String TreeTableFormatter::format_val_str(const MetricComparison& mc,
 // ---------------------------------------------------------------------------
 
 void TreeTableFormatter::measure_metrics_tree(
-    const dstd::Vector<MetricComparison>& metrics, const dstd::String& prefix,
+    dstd::Span<const MetricComparison> metrics, dstd::StringView prefix,
     ColumnWidths& cw) const {
     // branch_mid/last are 4 display columns each (unicode or ASCII).
     const int BRANCH_W = 4;
@@ -443,8 +443,8 @@ void TreeTableFormatter::measure_metrics_tree(
 }
 
 void TreeTableFormatter::render_leaf(std::FILE* out, const MetricComparison& mc,
-                                     const dstd::String& leaf_prefix,
-                                     const dstd::String& leaf_name,
+                                     dstd::StringView leaf_prefix,
+                                     dstd::StringView leaf_name,
                                      const ColumnWidths& cw) const {
     const char* col = "";
     if (mc.significance >= Significance::Medium) {
@@ -461,7 +461,8 @@ void TreeTableFormatter::render_leaf(std::FILE* out, const MetricComparison& mc,
     dstd::String pct_s = format_pct(mc.pct_change);
     dstd::String sig_s = format_significance(mc.significance);
 
-    dstd::String left = leaf_prefix + leaf_name;
+    dstd::String left(leaf_prefix);
+    left += leaf_name;
     rpad(left, cw.left);
     lpad(base_s, cw.baseline);
     lpad(var_s, cw.variant);
@@ -474,8 +475,8 @@ void TreeTableFormatter::render_leaf(std::FILE* out, const MetricComparison& mc,
 }
 
 void TreeTableFormatter::render_metrics_tree(
-    std::FILE* out, const dstd::Vector<MetricComparison>& metrics,
-    const dstd::String& prefix, bool /*is_last_section*/,
+    std::FILE* out, dstd::Span<const MetricComparison> metrics,
+    dstd::StringView prefix, bool /*is_last_section*/,
     const ColumnWidths& cw) const {
     auto groups = group_metrics(metrics);
 
@@ -489,12 +490,14 @@ void TreeTableFormatter::render_metrics_tree(
         bool is_standalone = g.items.size() == 1 &&
                              metric_group(g.items[0]->metric_name).empty();
         if (is_standalone) {
-            render_leaf(out, *g.items[0], prefix + br, g.name, cw);
+            render_leaf(out, *g.items[0], dstd::String(prefix) + br, g.name,
+                        cw);
         } else {
-            std::fprintf(out, "%s%s%s\n", prefix.c_str(), br, g.name.c_str());
+            std::fprintf(out, "%.*s%s%s\n", static_cast<int>(prefix.size()),
+                         prefix.data(), br, g.name.c_str());
 
-            dstd::String cont =
-                prefix + (is_last_group ? branch_none() : branch_cont());
+            dstd::String cont = dstd::String(prefix) +
+                                (is_last_group ? branch_none() : branch_cont());
             for (std::size_t i = 0; i < g.items.size(); ++i) {
                 bool leaf_last = (i + 1 == g.items.size());
                 const char* lbr = leaf_last ? branch_last() : branch_mid();
@@ -510,7 +513,7 @@ void TreeTableFormatter::render_metrics_tree(
 // ---------------------------------------------------------------------------
 
 void TreeTableFormatter::measure_node(const NodeResult& node,
-                                      const dstd::String& prefix, bool is_last,
+                                      dstd::StringView prefix, bool is_last,
                                       bool is_top_level,
                                       ColumnWidths& cw) const {
     if (!node_has_data(node)) return;
@@ -520,7 +523,7 @@ void TreeTableFormatter::measure_node(const NodeResult& node,
     if (is_top_level) {
         cont = dstd::String(is_last ? branch_none() : branch_cont());
     } else {
-        cont = prefix + (is_last ? branch_none() : branch_cont());
+        cont = dstd::String(prefix) + (is_last ? branch_none() : branch_cont());
     }
 
     const int BRANCH_W = 4;
@@ -556,7 +559,7 @@ void TreeTableFormatter::measure_node(const NodeResult& node,
 }
 
 void TreeTableFormatter::render_node(std::FILE* out, const NodeResult& node,
-                                     const dstd::String& prefix, bool is_last,
+                                     dstd::StringView prefix, bool is_last,
                                      bool is_top_level,
                                      const ColumnWidths& cw) const {
     const char* branch = is_last ? branch_last() : branch_mid();
@@ -591,14 +594,16 @@ void TreeTableFormatter::render_node(std::FILE* out, const NodeResult& node,
         cont = dstd::String(is_last ? branch_none() : branch_cont());
     } else {
         if (*annotation) {
-            std::fprintf(out, "%s%s%s%s%s %s%s%s\n", prefix.c_str(), branch,
+            std::fprintf(out, "%.*s%s%s%s%s %s%s%s\n",
+                         static_cast<int>(prefix.size()), prefix.data(), branch,
                          color_bold(), node.name.c_str(), color_reset(),
                          ann_open, annotation, ann_close);
         } else {
-            std::fprintf(out, "%s%s%s%s%s\n", prefix.c_str(), branch,
-                         color_bold(), node.name.c_str(), color_reset());
+            std::fprintf(out, "%.*s%s%s%s%s\n", static_cast<int>(prefix.size()),
+                         prefix.data(), branch, color_bold(), node.name.c_str(),
+                         color_reset());
         }
-        cont = prefix + (is_last ? branch_none() : branch_cont());
+        cont = dstd::String(prefix) + (is_last ? branch_none() : branch_cont());
     }
 
     if (!has_data || negligible) return;
@@ -781,7 +786,7 @@ void build_metric_json(dstd::String& out, const MetricComparison& mc) {
 }
 
 void build_metrics_arr(dstd::String& out,
-                       const dstd::Vector<MetricComparison>& ms) {
+                       dstd::Span<const MetricComparison> ms) {
     out += "[";
     for (std::size_t i = 0; i < ms.size(); ++i) {
         if (i > 0) out += ",";

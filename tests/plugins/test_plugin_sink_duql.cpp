@@ -60,8 +60,9 @@ ViewFile file_of(dftu_utils_test::TestEnvironment& env, int rows) {
     return f;
 }
 
-dstd::Optional<plugins::host::Plugins> load(const char* path) {
-    auto loaded = plugins::host::Plugins::Builder().add(path).build();
+dstd::Optional<plugins::host::Plugins> load(dstd::StringView path) {
+    auto loaded =
+        plugins::host::Plugins::Builder().add(dstd::String(path)).build();
     if (!loaded) {
         MESSAGE("cannot load ", path, ": ", loaded.error().c_str());
         return dstd::nullopt;

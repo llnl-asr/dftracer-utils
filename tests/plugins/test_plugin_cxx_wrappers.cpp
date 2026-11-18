@@ -39,7 +39,7 @@ namespace {
 
 trace::views::detail::FoldEvent evt(dstd::StringIntern& intern,
                                     std::uint64_t pid, std::uint64_t dur,
-                                    const char* name = "read") {
+                                    dstd::StringView name = "read") {
     trace::views::detail::FoldEvent e;
     e.pid = pid;
     e.dur = dur;
@@ -134,7 +134,7 @@ void run_wrappers(dstd::StringIntern& intern,
 }
 
 dftu_dataframe* result_frame(plugins::NamedResultRegistry& named,
-                             const char* name) {
+                             dstd::StringView name) {
     auto it = named.results().find(name);
     if (it == named.results().end()) return nullptr;
     if (!std::holds_alternative<plugins::OwnedDataFrame>(it->second))

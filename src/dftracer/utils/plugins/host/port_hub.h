@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
@@ -130,9 +131,9 @@ class PortHub {
     /// `senders` holds every end, owner or reference, that declared
     /// DFTU_CHANNEL_F_SENDS; the hub closes a channel once each declarer of
     /// such an end has finished (see @ref sender_finished).
-    PortHub(const dstd::Vector<ChannelDecl>& channels,
-            const dstd::Vector<PhaseDecl>& phases,
-            const dstd::Vector<ChannelDecl>& senders);
+    PortHub(dstd::Span<const ChannelDecl> channels,
+            dstd::Span<const PhaseDecl> phases,
+            dstd::Span<const ChannelDecl> senders);
     ~PortHub();
     PortHub(const PortHub&) = delete;
     PortHub& operator=(const PortHub&) = delete;

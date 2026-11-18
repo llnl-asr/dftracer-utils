@@ -53,9 +53,9 @@ class CancelRegistry {
     /// An empty id yields an unregistered token, still usable for
     /// disconnect-driven cancellation. `peer_fd` (>= 0) enables the disconnect
     /// probe.
-    CancelToken create(const dstd::String& id, int peer_fd = -1);
-    void remove(const dstd::String& id);
-    bool cancel(const dstd::String& id);
+    CancelToken create(dstd::String id, int peer_fd = -1);
+    void remove(dstd::StringView id);
+    bool cancel(dstd::StringView id);
     std::size_t size() const;
 
    private:

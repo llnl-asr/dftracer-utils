@@ -226,7 +226,7 @@ TEST_SUITE("CollapseByGroup") {
 }
 
 TEST_SUITE("ComparisonFilter") {
-    static ComparisonFilter filter_of(const dstd::String& text) {
+    static ComparisonFilter filter_of(dstd::StringView text) {
         auto q = dftracer::utils::duql::Query::from_string(text);
         REQUIRE(q.has_value());
         auto f = filter_from_query(*q);
@@ -375,7 +375,8 @@ TEST_SUITE("CompareMetrics") {
         auto base = make_collapsed(100.0, 500.0, 0.0, 0.0, 0.0, 1);
         auto var = make_collapsed(150.0, 500.0, 0.0, 0.0, 0.0, 1);
 
-        auto results = compare_metrics(base, var, {"count"}, {});
+        const dstd::String names[] = {"count"};
+        auto results = compare_metrics(base, var, names, {});
         REQUIRE(results.size() == 1);
         const auto& cmp = results[0];
         CHECK(cmp.metric_name == "count");
@@ -387,7 +388,8 @@ TEST_SUITE("CompareMetrics") {
         auto base = make_collapsed(10.0, 200.0, 0.0, 0.0, 0.0, 1);
         auto var = make_collapsed(10.0, 300.0, 0.0, 0.0, 0.0, 1);
 
-        auto results = compare_metrics(base, var, {"duration"}, {});
+        const dstd::String names[] = {"duration"};
+        auto results = compare_metrics(base, var, names, {});
         // At least the mean entry; no percentile entries since percentiles={}
         REQUIRE_FALSE(results.empty());
         auto it = std::find_if(results.begin(), results.end(),
@@ -403,7 +405,8 @@ TEST_SUITE("CompareMetrics") {
         auto base = make_collapsed(10.0, 100.0, 512.0, 0.0, 0.0, 1);
         auto var = make_collapsed(10.0, 100.0, 1024.0, 0.0, 0.0, 1);
 
-        auto results = compare_metrics(base, var, {"size"}, {});
+        const dstd::String names[] = {"size"};
+        auto results = compare_metrics(base, var, names, {});
         REQUIRE_FALSE(results.empty());
         auto it = std::find_if(results.begin(), results.end(),
                                [](const MetricComparison& c) {
@@ -418,7 +421,8 @@ TEST_SUITE("CompareMetrics") {
         auto base = make_collapsed(10.0, 100.0, 0.0, 0.0, 0.0, 1);
         auto var = make_collapsed(10.0, 100.0, 0.0, 0.0, 0.0, 1);
 
-        auto results = compare_metrics(base, var, {"transfer_size"}, {});
+        const dstd::String names[] = {"transfer_size"};
+        auto results = compare_metrics(base, var, names, {});
         auto it = std::find_if(results.begin(), results.end(),
                                [](const MetricComparison& c) {
                                    return c.metric_name == "transfer_size";
@@ -431,7 +435,8 @@ TEST_SUITE("CompareMetrics") {
         auto base = make_collapsed(10.0, 100.0, 0.0, 0.0, 1000.0, 1);
         auto var = make_collapsed(10.0, 100.0, 0.0, 0.0, 500.0, 1);
 
-        auto results = compare_metrics(base, var, {"bandwidth"}, {});
+        const dstd::String names[] = {"bandwidth"};
+        auto results = compare_metrics(base, var, names, {});
         REQUIRE(results.size() == 1);
         CHECK(results[0].metric_name == "bandwidth");
         CHECK(results[0].is_regression == true);
@@ -448,7 +453,8 @@ TEST_SUITE("CompareMetrics") {
         var.window_count = 1;
         add_events(var, 100, 10);
 
-        auto results = compare_metrics(base, var, {"count"}, {});
+        const dstd::String names[] = {"count"};
+        auto results = compare_metrics(base, var, names, {});
         REQUIRE(results.size() == 1);
         CHECK(results[0].pct_change == doctest::Approx(100.0).epsilon(0.01));
     }

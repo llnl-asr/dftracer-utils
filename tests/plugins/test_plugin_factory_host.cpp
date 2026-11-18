@@ -6,6 +6,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
@@ -29,7 +30,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-dstd::String destroy_marks(const dstd::String& marker) {
+dstd::String destroy_marks(dstd::StringView marker) {
     auto text = dstd::fs::read_file(dstd::PathView(marker));
     return text ? dstd::String(*text) : dstd::String();
 }
@@ -86,8 +87,8 @@ namespace {
 constexpr int EVENTS = 64;
 
 ViewFile make_trace(dftu_utils_test::TestEnvironment& env,
-                    const dstd::String& tag) {
-    const dstd::String dir = env.dir() + "/" + tag;
+                    dstd::CStringView tag) {
+    const dstd::String dir = env.dir() + "/" + tag.c_str();
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     const dstd::String pfw = dir + "/trace.pfw";
     dstd::String ofs;

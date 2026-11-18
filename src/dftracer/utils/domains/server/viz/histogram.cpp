@@ -17,6 +17,7 @@
 #include <dftracer/utils/domains/server/viz/summary_build.h>
 #include <dftracer/utils/domains/server/viz_api.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -105,7 +106,7 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
     if (view.query) dv = dv.filter(*view.query);
     if (!single_file || fields.by_path) dv = dv.time_range(begin, end);
     auto mapped = co_await dv.map_batches<DurAcc>(
-        [&fields](DurAcc& a, const dstd::Vector<dstd::StringView>& events) {
+        [&fields](DurAcc& a, dstd::Span<const dstd::StringView> events) {
             fields.for_each_event(events, [&a](dstd::StringView e) {
                 EventScalars s;
                 if (parse_event_scalars(e, s) && s.has_dur)

@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/c_api.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -29,7 +30,7 @@ namespace detail {
 /// plugin wants every event, or a query failed to parse. Identical strings are
 /// deduplicated so the union never repeats a term.
 dstd::Optional<duql::Query> plugin_union_prune_query(
-    const dstd::Vector<const char*>& plan_queries);
+    dstd::Span<const char* const> plan_queries);
 
 }  // namespace detail
 

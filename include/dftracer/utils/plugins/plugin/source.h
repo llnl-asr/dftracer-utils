@@ -307,7 +307,8 @@ class SchemaBuilder {
     explicit SchemaBuilder(dftu_schema* s) noexcept : s_(s) {}
 
     /// Append a column whose time values are microseconds, the unit an ABI
-    /// column that declares none reads in.
+    /// column that declares none reads in. `name` must not be null (@ref
+    /// dstd::CStringView); an empty `name` gives an unnamed column.
     std::int32_t add(dstd::CStringView name, TypeId type,
                      bool nullable = true) {
         return add(name, type, TimeUnit::Micro, nullable);
@@ -429,11 +430,15 @@ concept HasApply =
     requires(const S& s) { s.apply_tail(std::int64_t{}); } ||
     requires(const S& s, const JoinView<S>& v) { s.apply_join(v); };
 
-inline dstd::Vector<dstd::StringView> string_views(const char* const* p,
-                                                   std::int32_t n) {
+inline std::size_t abi_count(std::int32_t n) noexcept {
+    return n > 0 ? static_cast<std::size_t>(n) : 0;
+}
+
+inline dstd::Vector<dstd::StringView> string_views(
+    dstd::Span<const char* const> p) {
     dstd::Vector<dstd::StringView> out;
-    out.reserve(static_cast<std::size_t>(n > 0 ? n : 0));
-    for (std::int32_t i = 0; i < n; ++i) out.emplace_back(p[i] ? p[i] : "");
+    out.reserve(p.size());
+    for (const char* s : p) out.emplace_back(s ? s : "");
     return out;
 }
 
@@ -467,7 +472,8 @@ struct SourceVt {
         auto* box = static_cast<Box*>(self);
         return to_status(ctx, [&]() -> dftu_status {
             ScanView view;
-            view.projection = string_views(req->projection, req->n_projection);
+            view.projection =
+                string_views({req->projection, abi_count(req->n_projection)});
             for (std::int32_t i = 0; i < req->n_filters; ++i)
                 view.filters.emplace_back(req->filters[i]);
             view.limit = req->limit;
@@ -571,10 +577,10 @@ struct SourceVt {
                     if (!j.other_vt || j.other_vt->scan != &SourceVt<S>::scan)
                         break;
                     const S& other = *static_cast<Box*>(j.other_self)->source;
-                    JoinView<S> v{other, string_views(j.left_on, j.n_on),
-                                  string_views(j.right_on, j.n_on),
-                                  static_cast<JoinHow>(j.how),
-                                  j.suffix ? j.suffix : ""};
+                    JoinView<S> v{
+                        other, string_views({j.left_on, abi_count(j.n_on)}),
+                        string_views({j.right_on, abi_count(j.n_on)}),
+                        static_cast<JoinHow>(j.how), j.suffix ? j.suffix : ""};
                     return s.apply_join(v);
                 }
                 break;
@@ -586,7 +592,7 @@ struct SourceVt {
 
     static SortView sort_view(const dftu_apply_sort_args& a) {
         SortView v;
-        v.by = string_views(a.by, a.n_by);
+        v.by = string_views({a.by, abi_count(a.n_by)});
         for (std::int32_t i = 0; i < a.n_by; ++i)
             v.descending.push_back(a.descending[i] != 0);
         return v;

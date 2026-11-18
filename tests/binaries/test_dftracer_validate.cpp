@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -50,13 +52,12 @@ dstd::String find_validate_binary() {
 }
 
 // Run the binary, capture stdout, and report the exit code via *rc.
-dstd::String run_validate_capture(const dstd::String& binary,
-                                  const dstd::Vector<dstd::String>& args,
-                                  int* rc) {
+dstd::String run_validate_capture(dstd::String binary,
+                                  dstd::Vector<dstd::String> args, int* rc) {
     return dftu_utils_test::run_process_capture(binary, args, false, rc);
 }
 
-bool contains(const dstd::String& hay, const char* needle) {
+bool contains(dstd::StringView hay, dstd::StringView needle) {
     return hay.find(needle) != dstd::String::npos;
 }
 

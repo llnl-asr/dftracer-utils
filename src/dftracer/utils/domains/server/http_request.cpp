@@ -17,9 +17,9 @@ bool icase_equal(dstd::StringView a, dstd::StringView b) {
 
 }  // namespace
 
-int HttpRequest::parse(const char *buf, std::size_t len) {
+int HttpRequest::parse(dstd::StringView buf) {
     parser::ParsedRequest parsed;
-    int ret = parser::parse_request(buf, len, parsed);
+    int ret = parser::parse_request(buf, parsed);
     if (ret < 0) return ret;
 
     method = parsed.method;

@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -139,7 +140,7 @@ void tag_invoke(simdjson::serialize_tag, BuilderType& b, const StatRow& r) {
 static dstd::String serialize_stats_body(std::uint64_t total_count,
                                          double total_dur, double wall,
                                          bool truncated,
-                                         const dstd::Vector<StatRow>& rows) {
+                                         dstd::Span<const StatRow> rows) {
     auto& b = scratch_json_builder();
     b.start_object();
     b.append_key_value("count", total_count);
@@ -317,7 +318,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
 
     auto fold_events = [begin, end, scan_begin, interval_native, &gcol, cov_bw,
                         &fields](StatMap& acc,
-                                 const dstd::Vector<dstd::StringView>& events) {
+                                 dstd::Span<const dstd::StringView> events) {
         thread_local dftracer::utils::json::RecordParser parser;
         thread_local dstd::String buf;
         fields.for_each_event(events, [&](dstd::StringView ev) {

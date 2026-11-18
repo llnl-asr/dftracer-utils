@@ -20,6 +20,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple, Union
 
@@ -69,6 +70,17 @@ def _is_gcc(cxx: str) -> bool:
         return False
     text = proc.stdout.lower()
     return "clang" not in text and ("free software foundation" in text or "gcc" in text)
+
+
+@functools.lru_cache(maxsize=None)
+def _cxx_version(cxx: str) -> str:
+    # A compiler upgraded in place keeps its path; its version line must still
+    # change the cache key.
+    try:
+        proc = subprocess.run([cxx, "--version"], capture_output=True, text=True)
+    except OSError:
+        return ""
+    return proc.stdout
 
 
 def _plugin_abi_headers(base: Path) -> List[Path]:
@@ -153,6 +165,7 @@ def _make_toolchain() -> Toolchain:
     parts = [
         include,
         cxx,
+        _cxx_version(cxx),
         "no-gnu-unique" if gcc else "",
         sys.platform,
         _abi_fingerprint(include),
@@ -162,7 +175,13 @@ def _make_toolchain() -> Toolchain:
     return Toolchain(include, cxx, tuple(flags), stamp)
 
 
-_TOOLCHAIN_ENV = ("CXX", "PATH", "DFTRACER_UTILS_PLUGIN_INCLUDE", "DFTRACER_UTILS_JIT_CACHE")
+_TOOLCHAIN_ENV = (
+    "CXX",
+    "PATH",
+    "HOME",
+    "DFTRACER_UTILS_PLUGIN_INCLUDE",
+    "DFTRACER_UTILS_JIT_CACHE",
+)
 _TOOLCHAINS: Dict[Tuple[Optional[str], ...], Toolchain] = {}
 
 
@@ -191,11 +210,15 @@ def source_digest(source: str, extra_flags: Sequence[str] = ()) -> str:
     return h.hexdigest()[:16]
 
 
+def _unique() -> str:
+    return f"{os.getpid()}.{threading.get_ident()}"
+
+
 def _compile(src: Path, out: Path, extra_flags: Sequence[str]) -> None:
-    # Built beside the final name and renamed, so a process that builds the same
-    # source at the same time never loads a half-written library.
+    # Built beside the final name and renamed, so a process or thread that builds
+    # the same source at the same time never loads a half-written library.
     tc = toolchain()
-    tmp = out.with_name(f"{out.stem}.{os.getpid()}{out.suffix}")
+    tmp = out.with_name(f"{out.stem}.{_unique()}{out.suffix}")
     cmd = [tc.cxx, *tc.flags, *extra_flags, "-o", str(tmp), str(src)]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
@@ -231,8 +254,12 @@ def compile_source(
             return str(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     src_path = out_path.with_suffix(".cpp")
-    src_path.write_text(source, encoding="utf-8")
-    _compile(src_path, out_path, extra)
+    tmp_src = out_path.with_name(f"{name}.{_unique()}.cpp")
+    tmp_src.write_text(source, encoding="utf-8")
+    try:
+        _compile(tmp_src, out_path, extra)
+    finally:
+        os.replace(tmp_src, src_path)
     return str(out_path)
 
 

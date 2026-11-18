@@ -191,3 +191,28 @@ def test_cflags_drop_gnu_unique_only_for_gcc(tmp_path, monkeypatch, banner, want
         assert ("-fno-gnu-unique" in _build.cflags()) is wanted
     finally:
         _build._is_gcc.cache_clear()
+
+
+@pytest.mark.skipif(not _HAS_CXX, reason="no C++ compiler available")
+def test_threads_building_one_source_all_get_the_library(tmp_path):
+    import threading
+
+    from dftracer.utils import _build
+
+    source = 'extern "C" int answer() { return 42; }\n'
+    paths, errors = [], []
+
+    def build():
+        try:
+            paths.append(_build.compile_source(source, "race", cache=tmp_path, group="g"))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=build) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert len(set(paths)) == 1
+    assert ctypes.CDLL(paths[0]).answer() == 42

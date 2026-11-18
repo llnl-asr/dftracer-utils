@@ -88,6 +88,11 @@ class Parser {
                            "{}.{}">(v.text, DUQL_VERSION_MAJOR,
                                     DUQL_VERSION_MINOR));
         }
+        if (explain_prefix()) {
+            advance();
+            q.explain = accept_word("analyze") ? ExplainMode::Analyze
+                                               : ExplainMode::Plan;
+        }
         while (true) {
             if (word("let") && peek(1).kind == Tok::Name &&
                 peek(2).kind == Tok::Assign) {
@@ -156,6 +161,9 @@ class Parser {
     bool word(dstd::StringView w) const {
         return at(Tok::Name) && ascii_iequals(cur().text, w);
     }
+    // At the start of a query, like a stage name; a field of that name is
+    // written with backticks.
+    bool explain_prefix() const { return word("explain"); }
     bool accept_word(dstd::StringView w) {
         if (!word(w)) return false;
         advance();

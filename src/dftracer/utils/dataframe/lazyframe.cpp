@@ -29,6 +29,7 @@
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>  // find_node
 #include <dftracer/utils/dataframe/internal/rest_column.h>
+#include <dftracer/utils/dataframe/internal/run_counters.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>   // dftu_schema
 #include <dftracer/utils/dataframe/internal/spill.h>  // external-merge spill
 #include <dftracer/utils/dataframe/join.h>            // HashJoin (join cursor)
@@ -40,6 +41,7 @@
 #include <dftracer/utils/dataframe/types.h>     // byte_width, buffer_bytes
 #include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -59,8 +61,10 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
+#include <atomic>
 #if defined(__GLIBC__)
 #include <malloc.h>
 #endif
@@ -1653,9 +1657,9 @@ class NodeCursor final : public Cursor {
     static dstd::Result<dstd::UniquePtr<Cursor>> make(
         const NodeOp& node, dstd::UniquePtr<Cursor> in,
         dstd::Span<const dstd::String> in_schema, Schema declared_out,
-        std::uint64_t budget) {
-        auto opened =
-            node.impl->open(std::move(in), in_schema, node.args, budget);
+        std::uint64_t budget, dstd::SharedPtr<RunCounters> counters) {
+        auto opened = node.impl->open(std::move(in), in_schema, node.args,
+                                      budget, std::move(counters));
         if (!opened) return opened.error();
         return dstd::UniquePtr<Cursor>(dstd::make_unique<NodeCursor>(
             node.name, std::move(declared_out), std::move(*opened)));
@@ -3157,6 +3161,15 @@ struct PlanAccess {
     static std::uint64_t memory_budget(const LazyFrame& lf) {
         return lf.memory_budget_;
     }
+    static const dstd::SharedPtr<RunCounters>& run_counters(
+        const LazyFrame& lf) {
+        return lf.run_counters_;
+    }
+    static LazyFrame with_run(LazyFrame lf,
+                              dstd::SharedPtr<RunCounters> counters) {
+        lf.run_counters_ = std::move(counters);
+        return lf;
+    }
     static LazyFrame make(dstd::SharedPtr<const Source> source,
                           dstd::Vector<dstd::SharedPtr<const LazyOp>> ops,
                           std::uint64_t memory_budget) {
@@ -4402,7 +4415,8 @@ dstd::Result<dstd::Optional<DataFrame>> try_fuse_map(
 // partner plan of `op`.
 CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                          dstd::Span<const dstd::String> sch,
-                         std::uint64_t budget, bool own_rest) {
+                         std::uint64_t budget, bool own_rest,
+                         const dstd::SharedPtr<RunCounters>& counters) {
     const auto own_sch = [&] {
         return dstd::Vector<dstd::String>(sch.begin(), sch.end());
     };
@@ -4532,14 +4546,18 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                 if (budget != memory::NO_SPILL_BUDGET && budget > 0 &&
                     detail::PlanAccess::memory_budget(other) == 0)
                     other = other.memory_budget(budget);
+                other =
+                    detail::PlanAccess::with_run(std::move(other), counters);
                 return dstd::make_unique<JoinCursor>(
                     std::move(in), own_sch(), o.left_fields, std::move(other),
                     o.left_on, o.right_on, o.how, o.suffix, budget,
                     o.nulls_equal, own_rest);
             },
             [&](const ConcatOp& o) -> CursorResult {
-                return dstd::make_unique<ConcatCursor>(std::move(in), o.other,
-                                                       has_rest(sch));
+                return dstd::make_unique<ConcatCursor>(
+                    std::move(in),
+                    detail::PlanAccess::with_run(o.other, counters),
+                    has_rest(sch));
             },
             [&](const TapOp& o) -> CursorResult {
                 return dstd::make_unique<TapCursor>(std::move(in), own_sch(),
@@ -4645,7 +4663,7 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                 auto declared = call_node_output_schema(o, sch);
                 if (!declared) return declared.error();
                 return NodeCursor::make(o, std::move(in), sch,
-                                        std::move(*declared), budget);
+                                        std::move(*declared), budget, counters);
             }},
         op.node);
 }
@@ -5626,11 +5644,111 @@ dstd::Vector<dstd::String> LazyFrame::schema() const {
     return names;
 }
 
-dstd::String LazyFrame::explain() const {
-    const PlanParts plan = optimize_parts(source_, ops_);
+namespace {
+
+// The scan request lowering hands `source` for `ops`, and which ops its filters
+// came from. A leading Select is a pure source projection: pushdown_projections
+// emits one with the filter col-refs already remapped into it, and a user's own
+// leading select is one too. Push it into the scan so the source harvests only
+// those columns; the source returns them in this exact order, so the
+// now-identity Select and the remapped filters stay positionally aligned.
+struct PlannedScan {
+    ScanRequest req;
+    // Ops before the filters that are folded into the scan.
+    std::size_t first = 0;
+    // The index in `ops` of each of req.filters.
+    dstd::Vector<std::size_t> cand_pos;
+};
+
+PlannedScan plan_scan_request(
+    dstd::Span<const dstd::SharedPtr<const LazyOp>> ops, std::uint64_t budget) {
+    PlannedScan plan;
+    ScanRequest& req = plan.req;
+    if (!ops.empty())
+        if (const auto* s = std::get_if<SelectOp>(&ops.front()->node);
+            s && rest_rule(*ops.front(), {}) == RestRule::Omits) {
+            req.projection = s->names;
+            plan.first = 1;
+        }
+
+    // Candidate filters: the contiguous run right after the optional
+    // projection. Their col-refs are positional against the scan's column set
+    // (projection when present, else the source schema), which is exactly what
+    // scan() resolves them against.
+    req.memory_budget = budget;
+    for (std::size_t i = plan.first; i < ops.size(); ++i) {
+        const auto* f = std::get_if<FilterOp>(&ops[i]->node);
+        if (!f) break;
+        req.filters.push_back(f->pred);
+        plan.cand_pos.push_back(i);
+    }
+
+    // A slice reachable from the scan through row-preserving ops bounds how
+    // many rows the source need produce. Only when NOTHING removes rows on the
+    // way: the source applies the request as a whole, and whether it honored a
+    // filter is only known from the ScanResult it has not returned yet, so a
+    // limit sent alongside an unapplied filter would truncate the source before
+    // the engine ever filters. req.filters being empty is what rules that out.
+    // The Slice op still runs below - limit is a hint, and a source may return
+    // more rows than asked (or ignore it entirely).
+    if (req.filters.empty()) {
+        for (std::size_t i = plan.first; i < ops.size(); ++i) {
+            const auto& n = ops[i]->node;
+            if (const auto* s = std::get_if<SliceOp>(&n)) {
+                // offset + len is how many rows must be produced to satisfy
+                // the window. Signed overflow is UB, so leave the limit unset
+                // when the sum would not fit; unset just means the source
+                // produces everything, which is what a window that large
+                // wanted anyway.
+                if (s->offset >= 0 && s->len >= 0 &&
+                    s->offset <=
+                        std::numeric_limits<std::int64_t>::max() - s->len)
+                    req.limit = s->offset + s->len;
+                break;
+            }
+            // Row-count- and order-preserving ops keep a source prefix a valid
+            // prefix of this op's output; anything else (filter, sort, group,
+            // explode, unique, sample, take, reverse) does not.
+            if (!std::holds_alternative<SelectOp>(n) &&
+                !std::holds_alternative<WithColumnOp>(n) &&
+                !std::holds_alternative<RenameOp>(n) &&
+                !std::holds_alternative<FillNullOp>(n) &&
+                !std::holds_alternative<WithRowIndexOp>(n))
+                break;
+        }
+    }
+    return plan;
+}
+
+// `explain()` of the plan `plan`: the scan, what the source says about it, and
+// each op with what a plugin node says about it.
+dstd::String plan_text(const PlanParts& plan, std::uint64_t memory_budget) {
     dstd::String s = dstd::fmt<"scan [{}]">(join_names(plan.source->names()));
-    for (const auto& op : plan.ops) s += dstd::fmt<"\n{}">(describe_op(*op));
+    const PlannedScan scan = plan_scan_request(
+        plan.ops, memory::resolve_spill_budget(memory_budget));
+    const SourceExplain said = plan.source->explain(scan.req);
+    if (const dstd::String line = explain_line(said.label, said.lines);
+        !line.empty())
+        s += dstd::fmt<"\n{}">(line);
+    for (const auto& op : plan.ops) {
+        s += dstd::fmt<"\n{}">(describe_op(*op));
+        if (const auto* node = std::get_if<NodeOp>(&op->node);
+            node && node->impl) {
+            const dstd::Vector<ExplainLine> lines =
+                node->impl->explain(node->args);
+            if (const dstd::String line =
+                    explain_line(dstd::fmt<"node '{}'">(node->name), lines);
+                !line.empty())
+                s += dstd::fmt<"\n{}">(line);
+        }
+    }
     return s;
+}
+
+}  // namespace
+
+dstd::String LazyFrame::explain() const {
+    return plan_text(optimize_parts(source_, ops_), memory_budget_);
 }
 
 LazyFrame LazyFrame::memory_budget(std::uint64_t bytes) const {
@@ -5744,78 +5862,96 @@ class GuardCursor final : public Cursor {
     dstd::UniquePtr<Cursor> in_;
 };
 
+// What an EXPLAIN ANALYZE run measured at one stage of the chain.
+struct StageStats {
+    dstd::String label;
+    std::atomic<std::uint64_t> rows{0};
+    std::atomic<std::uint64_t> ns{0};
+};
+
+// What an EXPLAIN ANALYZE run measured: each stage of the chain, from the scan
+// up, and the votes the source gave the filters it was offered.
+struct AnalyzeRun {
+    dstd::SharedPtr<RunCounters> counters = dstd::make_shared<RunCounters>();
+    dstd::Vector<dstd::UniquePtr<StageStats>> stages;
+    dstd::Vector<Pushed> votes;
+
+    StageStats* add_stage(dstd::String label) {
+        stages.push_back(dstd::make_unique<StageStats>());
+        stages.back()->label = std::move(label);
+        return stages.back().get();
+    }
+};
+
+// Counts the rows a stage hands on and the time spent in its next(), inputs
+// included. Only an EXPLAIN ANALYZE chain has it.
+class StatsCursor final : public Cursor {
+   public:
+    StatsCursor(dstd::UniquePtr<Cursor> in, StageStats* stats)
+        : in_(std::move(in)), stats_(stats) {}
+
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        const std::uint64_t start = dstd::steady_now_ns();
+        auto task = in_->next(max_rows);
+        MorselResult out = co_await std::move(task);
+        note(start, out);
+        co_return std::move(out);
+    }
+
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
+        const std::uint64_t start = dstd::steady_now_ns();
+        if (!in_->try_next(max_rows, out)) return false;
+        note(start, out);
+        return true;
+    }
+
+    dstd::Optional<dstd::Vector<dstd::String>> out_names() const override {
+        return in_->out_names();
+    }
+
+    coro::CoroTask<bool> narrow(const Expr& predicate) override {
+        auto task = in_->narrow(predicate);
+        co_return co_await std::move(task);
+    }
+
+    std::uint64_t resident_bytes() const override {
+        return in_->resident_bytes();
+    }
+
+    coro::CoroTask<std::uint64_t> reclaim(std::uint64_t want) override {
+        auto task = in_->reclaim(want);
+        co_return co_await std::move(task);
+    }
+
+   private:
+    void note(std::uint64_t start, const MorselResult& out) {
+        stats_->ns.fetch_add(dstd::steady_now_ns() - start,
+                             std::memory_order_relaxed);
+        if (out && *out)
+            stats_->rows.fetch_add(static_cast<std::uint64_t>((*out)->rows),
+                                   std::memory_order_relaxed);
+    }
+
+    dstd::UniquePtr<Cursor> in_;
+    StageStats* stats_;
+};
+
 // Lower `ops` onto `source`: push a leading projection and the contiguous run
 // of filters after it into the scan, then stack every op the source did not
 // apply exactly. This is the plan's lowering (b); the driver below runs it.
 dstd::Result<CursorChain> lower_cursor_chain(
     dstd::SharedPtr<const Source> source_ptr,
-    dstd::Span<const dstd::SharedPtr<const LazyOp>> ops, std::uint64_t budget) {
+    dstd::Span<const dstd::SharedPtr<const LazyOp>> ops, std::uint64_t budget,
+    const dstd::SharedPtr<RunCounters>& counters,
+    AnalyzeRun* analyze = nullptr) {
     const Source& source = *source_ptr;
     const dstd::Vector<dstd::String> names = source.names();
 
-    // A leading Select is a pure source projection: pushdown_projections emits
-    // one with the filter col-refs already remapped into it, and a user's own
-    // leading select is one too. Push it into the scan so the source harvests
-    // only those columns; the source returns them in this exact order, so the
-    // now-identity Select and the remapped filters stay positionally aligned.
-    dstd::Vector<dstd::String> projection;
-    std::size_t first = 0;
-    if (!ops.empty())
-        if (const auto* s = std::get_if<SelectOp>(&ops.front()->node);
-            s && rest_rule(*ops.front(), {}) == RestRule::Omits) {
-            projection = s->names;
-            first = 1;
-        }
-
-    // Candidate filters: the contiguous run right after the optional
-    // projection. Their col-refs are positional against the scan's column set
-    // (projection when present, else the source schema), which is exactly what
-    // scan() resolves them against.
-    ScanRequest req;
-    req.projection = projection;
-    req.memory_budget = budget;
-    dstd::Vector<std::size_t> cand_pos;
-    for (std::size_t i = first; i < ops.size(); ++i) {
-        const auto* f = std::get_if<FilterOp>(&ops[i]->node);
-        if (!f) break;
-        req.filters.push_back(f->pred);
-        cand_pos.push_back(i);
-    }
-
-    // A slice reachable from the scan through row-preserving ops bounds how
-    // many rows the source need produce. Only when NOTHING removes rows on the
-    // way: the source applies the request as a whole, and whether it honored a
-    // filter is only known from the ScanResult it has not returned yet, so a
-    // limit sent alongside an unapplied filter would truncate the source before
-    // the engine ever filters. req.filters being empty is what rules that out.
-    // The Slice op still runs below - limit is a hint, and a source may return
-    // more rows than asked (or ignore it entirely).
-    if (req.filters.empty()) {
-        for (std::size_t i = first; i < ops.size(); ++i) {
-            const auto& n = ops[i]->node;
-            if (const auto* s = std::get_if<SliceOp>(&n)) {
-                // offset + len is how many rows must be produced to satisfy
-                // the window. Signed overflow is UB, so leave the limit unset
-                // when the sum would not fit; unset just means the source
-                // produces everything, which is what a window that large
-                // wanted anyway.
-                if (s->offset >= 0 && s->len >= 0 &&
-                    s->offset <=
-                        std::numeric_limits<std::int64_t>::max() - s->len)
-                    req.limit = s->offset + s->len;
-                break;
-            }
-            // Row-count- and order-preserving ops keep a source prefix a valid
-            // prefix of this op's output; anything else (filter, sort, group,
-            // explode, unique, sample, take, reverse) does not.
-            if (!std::holds_alternative<SelectOp>(n) &&
-                !std::holds_alternative<WithColumnOp>(n) &&
-                !std::holds_alternative<RenameOp>(n) &&
-                !std::holds_alternative<FillNullOp>(n) &&
-                !std::holds_alternative<WithRowIndexOp>(n))
-                break;
-        }
-    }
+    PlannedScan planned = plan_scan_request(ops, budget);
+    ScanRequest& req = planned.req;
+    req.counters = counters;
+    const dstd::Vector<dstd::String> projection = req.projection;
+    const dstd::Vector<std::size_t>& cand_pos = planned.cand_pos;
 
     auto scanned = source.scan(req);
     if (!scanned) return scanned.error();
@@ -5830,6 +5966,11 @@ dstd::Result<CursorChain> lower_cursor_chain(
     CursorChain chain;
     chain.source = std::move(source_ptr);
     chain.cursor = dstd::make_unique<GuardCursor>(std::move(r.cursor));
+    if (analyze) {
+        analyze->votes = r.filters;
+        chain.cursor = dstd::make_unique<StatsCursor>(
+            std::move(chain.cursor), analyze->add_stage("scan"));
+    }
     chain.schema = projection.empty() ? names : projection;
     if (!chain.schema.empty() &&
         std::find(drop.begin(), drop.end(), false) != drop.end()) {
@@ -5869,9 +6010,13 @@ dstd::Result<CursorChain> lower_cursor_chain(
             chain.schema.pop_back();
         }
         auto made = make_cursor(*ops[i], std::move(chain.cursor), chain.schema,
-                                budget, own_rest);
+                                budget, own_rest, counters);
         if (!made) return made.error();
         chain.cursor = std::move(*made);
+        if (analyze)
+            chain.cursor = dstd::make_unique<StatsCursor>(
+                std::move(chain.cursor),
+                analyze->add_stage(describe_op(*ops[i])));
         chain.schema = has_rest(chain.schema)
                            ? rest_out_schema(*ops[i], chain.schema)
                            : out_schema(*ops[i], std::move(chain.schema));
@@ -5907,7 +6052,8 @@ coro::AsyncGenerator<dstd::Result<DataFrame>> drive_cursor_chain(
 namespace {
 
 coro::AsyncGenerator<dstd::Result<DataFrame>> stream_plan(
-    PlanParts plan, std::uint64_t memory_budget, std::int64_t batch_size) {
+    PlanParts plan, std::uint64_t memory_budget, std::int64_t batch_size,
+    const dstd::SharedPtr<RunCounters>& counters) {
     // 0 resolves to auto (~1/3 RAM), same policy as View.
     const std::uint64_t budget = memory::resolve_spill_budget(memory_budget);
     const std::int64_t eff_rows =
@@ -5920,7 +6066,8 @@ coro::AsyncGenerator<dstd::Result<DataFrame>> stream_plan(
     memory::PoolHandle pool = memory::detail::Manager::get().root().child(
         "query", memory::PoolKind::Results);
     memory::detail::Scope scope{pool ? *pool : memory::detail::current_pool()};
-    auto lowered = lower_cursor_chain(std::move(plan.source), plan.ops, budget);
+    auto lowered =
+        lower_cursor_chain(std::move(plan.source), plan.ops, budget, counters);
     if (!lowered) return failed_stream(lowered.error());
     CursorChain chain = std::move(*lowered);
     chain.pool = std::move(pool);
@@ -5933,11 +6080,94 @@ coro::AsyncGenerator<dstd::Result<DataFrame>> stream_plan(
 
 }  // namespace
 
+namespace {
+
+// Pulls `chain` to its end and drops the rows, so each stage's counts and
+// times are the ones of a real run. The cursors are gone when it returns, and
+// with them every cursor of the plugins, so the counters are complete.
+coro::CoroTask<dstd::Result<void>> drain_analyzed(CursorChain chain,
+                                                  std::int64_t rows) {
+    dstd::Optional<dstd::Error> failed;
+    for (;;) {
+        auto task = chain.cursor->next(rows);
+        auto m = co_await std::move(task);
+        if (!m) {
+            failed = m.error();
+            break;
+        }
+        if (!*m) break;
+    }
+    chain.cursor.reset();
+    if (failed) co_return *failed;
+    co_return dstd::Result<void>{};
+}
+
+// The chain of `plan`, measuring into `run`, under the pool of the run.
+dstd::Result<CursorChain> open_analyzed(PlanParts plan,
+                                        std::uint64_t memory_budget,
+                                        AnalyzeRun& run) {
+    const std::uint64_t budget = memory::resolve_spill_budget(memory_budget);
+    memory::PoolHandle pool = memory::detail::Manager::get().root().child(
+        "query", memory::PoolKind::Results);
+    memory::detail::Scope scope{pool ? *pool : memory::detail::current_pool()};
+    auto lowered = lower_cursor_chain(std::move(plan.source), plan.ops, budget,
+                                      run.counters, &run);
+    if (!lowered) return lowered.error();
+    CursorChain chain = std::move(*lowered);
+    chain.pool = std::move(pool);
+    return chain;
+}
+
+dstd::String format_millis(std::uint64_t ns) {
+    return dstd::fmt<"{}.{}">(ns / 1000000, (ns / 100000) % 10);
+}
+
+}  // namespace
+
+coro::CoroTask<dstd::Result<dstd::String>> LazyFrame::explain_analyze(
+    std::int64_t batch_size) const {
+    if (error_) co_return *error_;
+    PlanParts plan = optimize_parts(source_, ops_);
+    dstd::String text = plan_text(plan, memory_budget_);
+    AnalyzeRun run;
+    auto chain = open_analyzed(std::move(plan), memory_budget_, run);
+    if (!chain) co_return chain.error();
+    auto draining = drain_analyzed(
+        std::move(*chain), batch_size > 0 ? batch_size : DEFAULT_BATCH_SIZE);
+    auto ran = co_await std::move(draining);
+    if (!ran) co_return ran.error();
+
+    const char* const vote_name[] = {"no", "inexact", "exact"};
+    text += "\nanalyze:";
+    for (std::size_t i = 0; i < run.votes.size(); ++i)
+        text += dstd::fmt<"\n  pushed filter {}: {}">(
+            i, vote_name[static_cast<std::size_t>(run.votes[i])]);
+    std::uint64_t rows_in = 0;
+    for (std::size_t i = 0; i < run.stages.size(); ++i) {
+        const StageStats& st = *run.stages[i];
+        const std::uint64_t rows_out = st.rows.load(std::memory_order_relaxed);
+        text +=
+            i == 0
+                ? dstd::fmt<"\n  {}: rows out {}, time (incl. inputs) {} ms">(
+                      st.label, rows_out,
+                      format_millis(st.ns.load(std::memory_order_relaxed)))
+                : dstd::fmt<
+                      "\n  {}: rows in {}, rows out {}, time (incl. inputs) {} "
+                      "ms">(
+                      st.label, rows_in, rows_out,
+                      format_millis(st.ns.load(std::memory_order_relaxed)));
+        rows_in = rows_out;
+    }
+    for (const CounterTotal& c : run.counters->totals())
+        text += dstd::fmt<"\n  counter {}.{}: {}">(c.owner, c.name, c.value);
+    co_return text;
+}
+
 coro::AsyncGenerator<dstd::Result<DataFrame>> LazyFrame::stream(
     std::int64_t batch_size) const {
     if (error_) return failed_stream(*error_);
     return stream_plan(optimize_parts(source_, ops_), memory_budget_,
-                       batch_size);
+                       batch_size, run_counters_);
 }
 
 namespace {
@@ -5947,7 +6177,8 @@ dstd::Result<CursorChain> open_chain(const LazyFrame& lf) {
                                     detail::PlanAccess::ops(lf));
     return lower_cursor_chain(
         std::move(plan.source), plan.ops,
-        memory::resolve_spill_budget(detail::PlanAccess::memory_budget(lf)));
+        memory::resolve_spill_budget(detail::PlanAccess::memory_budget(lf)),
+        detail::PlanAccess::run_counters(lf));
 }
 
 CursorResult without_rest_column(CursorChain chain) {
@@ -6010,7 +6241,8 @@ bool may_expand(const LazyOp& op) {
 }
 
 coro::CoroTask<dstd::Result<DataFrame>> collect_plan(
-    PlanParts plan, std::uint64_t memory_budget, std::int64_t batch_size) {
+    PlanParts plan, std::uint64_t memory_budget, std::int64_t batch_size,
+    dstd::SharedPtr<RunCounters> counters) {
     // A resident source runs whole-column, matching eager, unless an op can
     // make more than it reads or the frame is past half the automatic budget
     // (a sort or a group-by holds about its input again). An explicit
@@ -6028,7 +6260,8 @@ coro::CoroTask<dstd::Result<DataFrame>> collect_plan(
     }
     const std::uint64_t budget = memory::resolve_spill_budget(memory_budget);
     auto draining = drain_stream(
-        stream_plan(std::move(plan), memory_budget, batch_size), budget);
+        stream_plan(std::move(plan), memory_budget, batch_size, counters),
+        budget);
     co_return co_await std::move(draining);
 }
 
@@ -6340,7 +6573,8 @@ coro::CoroTask<dstd::Result<DataFrame>> collect_owned(LazyFrame plan,
         if (!batched) co_return batched.error();
     }
     auto collecting =
-        collect_plan(finish_tree(std::move(tree)), budget, batch_size);
+        collect_plan(finish_tree(std::move(tree)), budget, batch_size,
+                     detail::PlanAccess::run_counters(plan));
     co_return co_await std::move(collecting);
 }
 
@@ -6404,7 +6638,8 @@ coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_all(
     for (PlannedTree& t : trees) {
         const std::uint64_t budget =
             common::share_spill_budget(t.memory_budget, trees.size());
-        runs.push_back(collect_plan(finish_tree(std::move(t)), budget, 0));
+        runs.push_back(
+            collect_plan(finish_tree(std::move(t)), budget, 0, nullptr));
     }
     auto results = co_await coro::when_all(std::move(runs));
     dstd::Vector<DataFrame> frames;

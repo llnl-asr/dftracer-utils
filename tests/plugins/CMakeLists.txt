@@ -42,6 +42,7 @@ set(PLUGINS_TEST_SOURCES
     test_plugin_file_formats.cpp
     test_global_plugins.cpp
     test_plugin_format_index.cpp
+    test_plugin_explain.cpp
     test_plugin_sink_duql.cpp
     test_plugin_node_duql.cpp
     test_provider_pushdown.cpp
@@ -234,7 +235,8 @@ foreach(fh_plugin toy_format_plugin toy_format_tie_plugin
                   scan_registers_op_plugin index_minmax_plugin
                   index_columns_plugin index_no_step_plugin udf_plugin
                   udf_clash_plugin udaf_plugin udaf_bad_plugin
-                  leaky_plugin crash_plugin reject_destroy_plugin)
+                  leaky_plugin crash_plugin reject_destroy_plugin
+                  explain_plugin)
   add_library(${fh_plugin} MODULE ${fh_plugin}.c)
   target_set_warnings(${fh_plugin})
   set_target_properties(
@@ -291,7 +293,7 @@ foreach(cxx_plugin builder_plugin config_keys_plugin reads_projection_plugin
                   broken_frame_plugin borrowed_frame_plugin
                   sessionize_input_plugin macro_plugin macro_error_plugin
                   error_after_register_plugin empty_config_key_plugin
-                  sdk_chunked_format_plugin)
+                  sdk_chunked_format_plugin sdk_explain_plugin)
   add_library(${cxx_plugin} MODULE ${cxx_plugin}.cpp)
   target_set_warnings(${cxx_plugin})
   set_target_properties(
@@ -327,7 +329,7 @@ foreach(df_plugin toy_format_plugin toy_format_tie_plugin
                   macro_plugin macro_error_plugin
                   error_after_register_plugin empty_config_key_plugin
                   leaky_plugin crash_plugin index_columns_plugin
-                  sdk_chunked_format_plugin)
+                  sdk_chunked_format_plugin sdk_explain_plugin explain_plugin)
   if(TARGET dftracer_utils_dataframe::shared)
     target_link_libraries(${df_plugin} PRIVATE dftracer_utils_dataframe::shared)
   elseif(TARGET dftracer_utils_dataframe::static)
@@ -588,6 +590,16 @@ if(TARGET plugins_test_plugin_format_index)
   add_dependencies(plugins_test_plugin_format_index chunked_format_plugin
                    chunked_alt_plugin chunked_v2_plugin index_columns_plugin
                    sdk_chunked_format_plugin)
+endif()
+
+if(TARGET plugins_test_plugin_explain)
+  target_compile_definitions(
+    plugins_test_plugin_explain PRIVATE
+    EXPLAIN_PLUGIN_PATH="$<TARGET_FILE:explain_plugin>"
+    CHUNKED_FORMAT_PLUGIN_PATH="$<TARGET_FILE:chunked_format_plugin>"
+    SDK_EXPLAIN_PLUGIN_PATH="$<TARGET_FILE:sdk_explain_plugin>")
+  add_dependencies(plugins_test_plugin_explain explain_plugin
+                   chunked_format_plugin sdk_explain_plugin)
 endif()
 
 if(TARGET plugins_test_plugin_sink_duql)

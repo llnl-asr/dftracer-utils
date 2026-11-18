@@ -151,9 +151,13 @@ void c_root_destroy(void*) {}
 dftu_status c_apply(dftu_ctx*, void* self, const dftu_apply_request* req,
                     dftu_apply_result* out);
 
-const dftu_source_vt DERIVED_VT = {
-    sizeof(dftu_source_vt), c_schema, c_derived_scan,
-    c_derived_destroy,      nullptr,  nullptr};
+const dftu_source_vt DERIVED_VT = {sizeof(dftu_source_vt),
+                                   c_schema,
+                                   c_derived_scan,
+                                   c_derived_destroy,
+                                   nullptr,
+                                   nullptr,
+                                   nullptr};
 
 dftu_status c_apply(dftu_ctx*, void* self, const dftu_apply_request* req,
                     dftu_apply_result* out) {
@@ -188,8 +192,13 @@ dftu_status c_apply(dftu_ctx*, void* self, const dftu_apply_request* req,
     return DFTU_OK;
 }
 
-const dftu_source_vt ROOT_VT = {sizeof(dftu_source_vt), c_schema, c_root_scan,
-                                c_root_destroy,         nullptr,  c_apply};
+const dftu_source_vt ROOT_VT = {sizeof(dftu_source_vt),
+                                c_schema,
+                                c_root_scan,
+                                c_root_destroy,
+                                nullptr,
+                                c_apply,
+                                nullptr};
 
 dataframe::LazyFrame c_frame(ApplyFixture& fx) {
     return dataframe::LazyFrame::scan(
@@ -307,9 +316,13 @@ TEST_SUITE("source_hooks_c_abi") {
 
     TEST_CASE("a source without apply keeps the ScanRequest path") {
         ApplyFixture fx;
-        const dftu_source_vt vt = {
-            sizeof(dftu_source_vt), c_schema, c_root_scan,
-            c_root_destroy,         nullptr,  nullptr};
+        const dftu_source_vt vt = {sizeof(dftu_source_vt),
+                                   c_schema,
+                                   c_root_scan,
+                                   c_root_destroy,
+                                   nullptr,
+                                   nullptr,
+                                   nullptr};
         dataframe::LazyFrame lf =
             dataframe::LazyFrame::scan(
                 plugins::host::make_provider_source(vt, &fx))
@@ -350,8 +363,13 @@ void chain_destroy(void* self) {
 dftu_status chain_apply(dftu_ctx*, void* self, const dftu_apply_request*,
                         dftu_apply_result* out);
 
-const dftu_source_vt CHAIN_VT = {sizeof(dftu_source_vt), c_schema, chain_scan,
-                                 chain_destroy,          nullptr,  chain_apply};
+const dftu_source_vt CHAIN_VT = {sizeof(dftu_source_vt),
+                                 c_schema,
+                                 chain_scan,
+                                 chain_destroy,
+                                 nullptr,
+                                 chain_apply,
+                                 nullptr};
 
 dftu_status chain_apply(dftu_ctx*, void* self, const dftu_apply_request*,
                         dftu_apply_result* out) {

@@ -77,6 +77,11 @@ The first line may declare the language version, as ``duql 0.0`` or
 minor version is not greater. A missing minor counts as ``0``. Printed queries
 always carry the engine's version.
 
+After the version line, ``explain`` or ``explain analyze`` makes the query give
+its own plan in place of its rows (see `Explain`_). At the start of a query
+``explain`` is a keyword, like a stage name: a field with that name is written
+with backticks, ```explain` == 1``.
+
 Paths
 -----
 
@@ -166,7 +171,7 @@ Comparisons do not chain.
 
 .. code-block:: text
 
-   query    = [ "duql" int ] { decl } [ pipeline ]
+   query    = [ "duql" int ] [ "explain" [ "analyze" ] ] { decl } [ pipeline ]
    decl     = "let" name "=" pipeline ";"
             | "def" name [ "(" names ")" ] "=" body ";"
             | "source" name "{" [ member { ";" member } [ ";" ] ] "}"
@@ -191,6 +196,23 @@ a case-insensitive substring match; it needs a string on the left.
 ``scripts/duql.lark`` holds the complete grammar, with the argument forms
 of each stage. The ``duql_grammar`` test checks it against the samples in
 ``tests/duql/grammar_samples.duql``.
+
+Explain
+-------
+
+``explain`` before a query gives the plan, one row per line in the column
+``plan``, and runs nothing: the steps of the pipeline, and under a plugin node
+the lines its explain hook adds. ``explain analyze`` also runs the plan to its
+end, drops the rows and adds what each stage measured: the rows it handed on and
+the time spent in it and its inputs, the votes of the source for each filter it
+was offered (``exact``, ``inexact`` or ``no``), and the named counters plugins
+added to during the run. ``View::explain_duql`` and ``TraceViewer.explain_duql``
+return the same text as one string, and ``Pipe.explain(analyze=True)`` builds the
+prefix.
+
+.. code-block:: text
+
+   explain analyze from "trace.pfw.gz" | where cat == "POSIX" | take 10
 
 Conditions
 ----------

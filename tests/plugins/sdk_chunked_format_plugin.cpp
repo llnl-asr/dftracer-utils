@@ -78,8 +78,14 @@ class SdkFile : public FormatFile {
         return offsets_[static_cast<std::size_t>(chunk * ROWS_PER_CHUNK)];
     }
 
+    dstd::Result<void> explain(const ScanView&, const ExplainOut& out) {
+        out.add("rows_per_chunk", dstd::to_string(ROWS_PER_CHUNK));
+        return ok();
+    }
+
     dstd::Result<ScanResult<FormatCursor>> scan(std::uint64_t chunk,
                                                 const ScanView& view) override {
+        counter("chunks", 1);
         if (const char* log = std::getenv("SDK_CHUNKED_LOG")) {
             if (std::FILE* f = std::fopen(log, "a")) {
                 std::fprintf(f, "%lld\n", static_cast<long long>(chunk));

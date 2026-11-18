@@ -151,6 +151,11 @@ Status Applier::stage(const duql::PipelineCall& c) {
                 "'call {}' takes no arguments; a plugin node has no signature">(
                 c.op);
         lines.push_back(dstd::fmt<"node {}">(c.op));
+        if (auto said = dataframe::explain_line(
+                dstd::fmt<"node '{}'">(c.op),
+                dataframe::find_node(c.op)->explain(dataframe::OpArgs{}));
+            !said.empty())
+            lines.push_back(std::move(said));
         v_ =
             v_.with_lazy(v_.lazy().op(dstd::String(c.op), dataframe::OpArgs{}));
         cols_.clear();

@@ -589,6 +589,16 @@ char* dftu_lazyframe_explain(const dftu_lazyframe* lf) {
     return dup_string(lf->lf.explain());
 }
 
+char* dftu_lazyframe_explain_analyze(const dftu_lazyframe* lf,
+                                     std::int64_t batch_size) {
+    if (!lf) return nullptr;
+    auto out = dftracer::utils::default_runtime()
+                   .submit(lf->lf.explain_analyze(batch_size))
+                   .get();
+    if (!out) return nullptr;
+    return dup_string(*out);
+}
+
 dftu_lazyframe* dftu_lazyframe_filter(const dftu_lazyframe* lf,
                                       const dftu_expr* pred) {
     if (!lf || !pred) return nullptr;

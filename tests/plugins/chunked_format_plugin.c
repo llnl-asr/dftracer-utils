@@ -20,6 +20,10 @@
  * defined), whose rows format also claims CHK1 files, so a test can change a
  * file's owner by loading the other build.
  *
+ * The rows format has an explain hook (the filters and chunk rows of a scan)
+ * and counts `chunks` (scans opened) and `rows` (rows framed); the plain format
+ * has neither, so a test sees a format with no hook beside one with it.
+ *
  * chunked_format_scan_log() reports the chunks scan() opened since the last
  * chunked_format_reset(), in order, so a test can see which chunks a scan read,
  * and chunked_format_open_count() the files open() was called on.
@@ -236,6 +240,7 @@ static dftu_status cursor_next(dftu_ctx* ctx, void* self, int64_t max_rows,
         *out = NULL;
         return DFTU_END;
     }
+    dftu_counter(ctx, "rows", n);
 
     int n_columns = 0;
     for (int c = 0; c < cursor->n_columns; ++c) {
@@ -309,6 +314,7 @@ static dftu_status file_scan(dftu_ctx* ctx, void* handle, uint64_t chunk,
     }
     if (scan_count < SCAN_LOG_CAP) scan_log[scan_count] = (int64_t)chunk;
     ++scan_count;
+    dftu_counter(ctx, "chunks", 1);
     *out_cursor_self = cursor;
     *out_vt = &CURSOR_VT;
     return DFTU_OK;
@@ -341,6 +347,19 @@ static int32_t plain_probe(void* unused_self, const uint8_t* head, uint64_t n,
 
 static void format_destroy(void* unused_self) { (void)unused_self; }
 
+static dftu_status file_explain(dftu_ctx* unused_ctx, void* unused_handle,
+                                const dftu_scan_request* req,
+                                const dftu_explain_out* out) {
+    char text[32];
+    (void)unused_ctx;
+    (void)unused_handle;
+    snprintf(text, sizeof(text), "%d", (int)req->n_filters);
+    out->add(out->self, "filters_offered", 15, text, strlen(text));
+    snprintf(text, sizeof(text), "%d", CHUNK_ROWS);
+    out->add(out->self, "chunk_rows", 10, text, strlen(text));
+    return DFTU_OK;
+}
+
 static const dftu_file_format_vt ROWS_VT = {
     .struct_size = sizeof(dftu_file_format_vt),
     .probe = rows_probe,
@@ -350,7 +369,8 @@ static const dftu_file_format_vt ROWS_VT = {
     .scan = file_scan,
     .close = file_close,
     .destroy = format_destroy,
-    .chunk_token = file_chunk_token};
+    .chunk_token = file_chunk_token,
+    .explain = file_explain};
 
 static const dftu_file_format_vt PLAIN_VT = {
     .struct_size = sizeof(dftu_file_format_vt),

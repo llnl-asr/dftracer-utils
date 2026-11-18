@@ -197,12 +197,15 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         """Run the duql pipeline ``text`` with ``params`` bound to its
         ``$name`` parameters (bool, int, float or str, or a list of them for
         ``x in $name``). Leading ``where``
-        stages filter events in the scan; later stages run on its columns."""
+        stages filter events in the scan; later stages run on its columns. A
+        query with an ``explain`` prefix returns a one-column ``plan`` view of
+        the plan, one row per line."""
         return self._trace(_ext.TraceViewer.duql(self, text, params))
 
     def explain_duql(self, text: str, **params: DuqlParam) -> str:
-        """The plan :meth:`duql` builds, one step per line, without
-        scanning."""
+        """The plan :meth:`duql` builds, one step per line, without scanning.
+        ``text`` starting with ``explain analyze`` also runs the plan and adds
+        what each stage measured."""
         return _ext.TraceViewer.explain_duql(self, text, params)
 
     def select(self, *items: SelectItem) -> TraceViewer:
@@ -629,9 +632,11 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         """The materialized-view files that would serve this query, or ``[]``."""
         return list(_ext.TraceViewer.mv_source(self))
 
-    def explain(self) -> str:
-        """The optimized plan as text, for introspection and tests."""
-        return self.lazy().explain()
+    def explain(self, analyze: bool = False) -> str:
+        """The optimized plan as text, for introspection and tests. With
+        ``analyze=True`` the plan runs and the text adds what each stage
+        measured (see :meth:`LazyFrame.explain`)."""
+        return self.lazy().explain(analyze=analyze)
 
     def stream(self, batch_size: int = 65536) -> Iterator[DataFrame]:
         """The rows as :class:`DataFrame` chunks of about ``batch_size`` rows,

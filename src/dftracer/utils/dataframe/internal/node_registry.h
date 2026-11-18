@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -29,12 +30,26 @@ class NodeImpl {
     /// Opens the node's output cursor over `input`, whose frames carry
     /// `input_names`. On success the cursor owns `input`; on failure `input`
     /// dies with the call. `memory_budget` is the plan's budget in bytes,
-    /// never 0.
+    /// never 0. `counters` is the EXPLAIN ANALYZE run the cursor adds its
+    /// plugin counters to, or null; a cursor that adds to it keeps the
+    /// reference for as long as it lives.
     virtual dstd::Result<dstd::UniquePtr<Cursor>> open(
         dstd::UniquePtr<Cursor> input,
         dstd::Span<const dstd::String> input_names, const OpArgs& args,
-        std::uint64_t memory_budget) const = 0;
+        std::uint64_t memory_budget,
+        dstd::SharedPtr<RunCounters> counters) const = 0;
+
+    /// The lines this node adds to an explain of a plan that runs it with
+    /// `args`. The default adds none.
+    virtual dstd::Vector<ExplainLine> explain(const OpArgs&) const {
+        return {};
+    }
 };
+
+/// A plugin's explain as one line, `  label: key=value; key=value`; empty when
+/// `lines` is.
+dstd::String explain_line(dstd::StringView label,
+                          dstd::Span<const ExplainLine> lines);
 
 /// Registers `impl` under `name`. A name already taken is refused, never
 /// replaced.

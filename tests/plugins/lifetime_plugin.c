@@ -80,8 +80,13 @@ static void src_destroy(void* self) {
     mark('s');
 }
 
-static const dftu_source_vt SRC_VT = {
-    sizeof(dftu_source_vt), src_schema, src_scan, src_destroy, NULL, NULL};
+static const dftu_source_vt SRC_VT = {sizeof(dftu_source_vt),
+                                      src_schema,
+                                      src_scan,
+                                      src_destroy,
+                                      NULL,
+                                      NULL,
+                                      NULL};
 
 typedef struct {
     void* in_self;
@@ -138,7 +143,7 @@ static void node_destroy(void* self) {
 }
 
 static const dftu_node_vt NODE_VT = {sizeof(dftu_node_vt), node_schema,
-                                     node_open, node_destroy};
+                                     node_open, node_destroy, NULL};
 
 static dftu_dataframe* first_row(const dftu_dataframe* df) {
     return dftu_dataframe_head(df, 1);

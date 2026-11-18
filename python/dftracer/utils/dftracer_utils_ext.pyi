@@ -1183,7 +1183,14 @@ class LazyFrame:
         Time or Duration column. A type the plan cannot know statically is 0
         (unknown)."""
         ...
-    def explain(self) -> str: ...
+    def explain(
+        self, analyze: bool = False, batch_size: int = 0, runtime: RuntimeArg = None
+    ) -> str:
+        """The optimized plan, one step per line, with what each plugin source,
+        file format and node says about it. ``analyze=True`` runs the plan, drops
+        the rows and adds the rows and time of each stage, the filters the source
+        really took and the counters the plugins added."""
+        ...
     def collect(self, batch_size: int = 0, runtime: RuntimeArg = None) -> PublicDataFrame: ...
     def sink(
         self,
@@ -1536,7 +1543,8 @@ class TraceViewer:
         text: str,
         params: Mapping[str, bool | int | float | str | Sequence[bool | int | float | str]],
     ) -> Self:
-        """The duql pipeline ``text`` over this view, ``params`` bound."""
+        """The duql pipeline ``text`` over this view, ``params`` bound. A query
+        with an ``explain`` prefix returns a one-column ``plan`` view."""
         ...
     def explain_duql(
         self,

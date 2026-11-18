@@ -2010,6 +2010,15 @@ DFTU_EXPORT char* dftu_lazyframe_schema(const dftu_lazyframe* lf);
  * error. */
 DFTU_EXPORT char* dftu_lazyframe_explain(const dftu_lazyframe* lf);
 
+/** Run the plan to its end, dropping the rows, and return the plan as
+ * dftu_lazyframe_explain does with the rows, time and filter votes each stage
+ * measured and the counters plugins added during the run. `batch_size` is the
+ * scan chunk size, as for dftu_lazyframe_collect. Does NOT consume `lf`. A new
+ * malloc'd C string the caller frees with dftu_duql_string_free. NULL on error,
+ * including a run that fails and a second analysis started while one runs. */
+DFTU_EXPORT char* dftu_lazyframe_explain_analyze(const dftu_lazyframe* lf,
+                                                 int64_t batch_size);
+
 /** Keep rows where `pred` (a dftu_expr over the frame's columns by position) is
  * true. `pred` is borrowed. NULL on error. */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_filter(const dftu_lazyframe* lf,

@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/detail/ast.h>
+#include <dftracer/utils/duql/explain_mode.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/term.h>
 #include <dftracer/utils/duql/wildcard.h>
@@ -419,6 +420,8 @@ struct Side {
 struct Program {
     dstd::Vector<Side> sides;
     Pipeline main;
+    /// The `explain` prefix of the text; the plan is the same either way.
+    ExplainMode explain = ExplainMode::None;
     bool args_fallback = false;
 };
 

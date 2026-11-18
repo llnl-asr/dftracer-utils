@@ -126,6 +126,13 @@ typedef struct dftu_file_format_vt {
        are the error the host reports and the file is not indexed. */
     dftu_status (*chunk_token)(dftu_ctx* ctx, void* file, uint64_t chunk,
                                uint64_t* token);
+    /** Optional (NULL means nothing to add to an explain). Append to `out` the
+       key and value lines that describe what a scan of `file` would do for
+       `req`, as dftu_source_vt::explain does; `req` is borrowed for the call.
+       The host adds the file's chunk count and the chunks the index keeps. */
+    dftu_status (*explain)(dftu_ctx* ctx, void* file,
+                           const dftu_scan_request* req,
+                           const dftu_explain_out* out);
 } dftu_file_format_vt;
 
 /** A writer a plugin registers under a name: it takes whole dataframes and

@@ -3965,6 +3965,7 @@ dftracer::utils::dstd::Expected<duql::Program, duql::DuqlError> compile_program(
     auto out = Lowering(params, text, roles, plugins).program(*tree, rowsets);
     if (!out) return dftracer::utils::dstd::Unexpected(out.error());
     out->args_fallback = fallback;
+    out->explain = tree->explain;
     return out;
 }
 

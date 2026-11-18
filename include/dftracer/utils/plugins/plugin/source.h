@@ -442,9 +442,40 @@ inline dstd::Vector<dstd::StringView> string_views(
     return out;
 }
 
+inline ScanView scan_view_of(const dftu_scan_request& req) {
+    ScanView view;
+    view.projection =
+        string_views({req.projection, abi_count(req.n_projection)});
+    for (std::int32_t i = 0; i < req.n_filters; ++i)
+        view.filters.emplace_back(req.filters[i]);
+    view.limit = req.limit;
+    view.memory_budget = req.memory_budget;
+    return view;
+}
+
+/// A source that says what scan() would do for a request:
+///   dstd::Result<void> explain(const ScanView&, const ExplainOut&) const;
+/// The host then sets dftu_source_vt::explain and prints its lines.
+template <class S>
+concept HasExplain =
+    requires(const S& s, const ScanView& v, const ExplainOut& out) {
+        { s.explain(v, out) } -> std::same_as<dstd::Result<void>>;
+    };
+
 template <class S>
 struct SourceVt {
     using Box = SourceBox<S>;
+
+    static dftu_status explain(dftu_ctx* ctx, void* self,
+                               const dftu_scan_request* req,
+                               const dftu_explain_out* out) noexcept
+        requires HasExplain<S>
+    {
+        auto* box = static_cast<Box*>(self);
+        return to_status(ctx, [&]() {
+            return box->source->explain(scan_view_of(*req), ExplainOut(out));
+        });
+    }
 
     static dftu_status schema(dftu_ctx* ctx, void* self,
                               const char* const** out_names,
@@ -626,6 +657,7 @@ struct SourceVt {
             t.destroy = destroy;
             if constexpr (HasSchema<S>) t.schema_types = schema_types;
             if constexpr (HasApply<S>) t.apply = apply;
+            if constexpr (HasExplain<S>) t.explain = explain;
             return t;
         }();
         return &VT;

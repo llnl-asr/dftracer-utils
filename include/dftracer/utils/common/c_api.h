@@ -84,6 +84,13 @@ typedef struct dftu_ctx_vt {
     /** DFTU_OK, or DFTU_E_CANCELLED when the call was cancelled. Cheap;
        call it once per morsel in a long loop and return what it gives. */
     dftu_status (*check)(dftu_ctx* c);
+    /** Optional (NULL or a short struct_size means counters are off; use
+       dftu_counter or dftu_counter_n). Adds `delta` to the counter `name`
+       (`len` bytes, no NUL needed) of the plugin that makes the call. The host
+       sums the counters of one EXPLAIN ANALYZE run and prints them; outside
+       such a run the call does nothing. Cheap and safe to call from any thread,
+       once per morsel or per chunk rather than per row. */
+    void (*counter)(dftu_ctx* c, const char* name, uint32_t len, int64_t delta);
 } dftu_ctx_vt;
 
 struct dftu_ctx {
@@ -102,6 +109,27 @@ static inline dftu_status dftu_fail(dftu_ctx* c, dftu_status code,
 }
 
 static inline dftu_status dftu_check(dftu_ctx* c) { return c->vt->check(c); }
+
+/** Adds `delta` to the run counter `name` (`len` bytes, no NUL needed). Does
+   nothing when the host has no counters, so a plugin calls it without a check.
+ */
+static inline void dftu_counter_n(dftu_ctx* c, const char* name, uint32_t len,
+                                  int64_t delta) {
+    if (!c || !c->vt || !name) return;
+    if (c->vt->struct_size <
+            offsetof(dftu_ctx_vt, counter) + sizeof(c->vt->counter) ||
+        !c->vt->counter)
+        return;
+    c->vt->counter(c, name, len, delta);
+}
+
+/** As dftu_counter_n, for a NUL-terminated `name`. */
+static inline void dftu_counter(dftu_ctx* c, const char* name, int64_t delta) {
+    uint32_t n = 0;
+    if (!name) return;
+    while (name[n]) ++n;
+    dftu_counter_n(c, name, n, delta);
+}
 
 #ifdef __cplusplus
 }

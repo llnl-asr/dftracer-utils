@@ -204,9 +204,13 @@ dftu_status fixture_scan(dftu_ctx*, void* self, const dftu_plugin_host*,
 void fixture_destroy(void*) {}
 
 dstd::SharedPtr<dataframe::Source> make_fixture_source(FixtureConfig& cfg) {
-    static const dftu_source_vt vt = {
-        sizeof(dftu_source_vt), fixture_schema, fixture_scan,
-        fixture_destroy,        nullptr,        nullptr};
+    static const dftu_source_vt vt = {sizeof(dftu_source_vt),
+                                      fixture_schema,
+                                      fixture_scan,
+                                      fixture_destroy,
+                                      nullptr,
+                                      nullptr,
+                                      nullptr};
     return plugins::host::make_provider_source(vt, &cfg);
 }
 
@@ -227,8 +231,13 @@ dstd::SharedPtr<dataframe::Source> make_scan_source(
     dftu_status (*scan)(dftu_ctx*, void*, const dftu_plugin_host*,
                         const dftu_scan_request*, std::int32_t*, void**,
                         const dftu_cursor_vt**)) {
-    const dftu_source_vt vt = {sizeof(dftu_source_vt), fixture_schema, scan,
-                               fixture_destroy,        nullptr,        nullptr};
+    const dftu_source_vt vt = {sizeof(dftu_source_vt),
+                               fixture_schema,
+                               scan,
+                               fixture_destroy,
+                               nullptr,
+                               nullptr,
+                               nullptr};
     return plugins::host::make_provider_source(vt, &cfg);
 }
 

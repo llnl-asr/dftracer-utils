@@ -42,7 +42,8 @@ struct ProxyCtx {
         return r->vt->check(r);
     }
     static const dftu_ctx_vt* vt() {
-        static const dftu_ctx_vt VT = {sizeof(dftu_ctx_vt), set_error, check};
+        static const dftu_ctx_vt VT = {sizeof(dftu_ctx_vt), set_error, check,
+                                       nullptr};
         return &VT;
     }
 

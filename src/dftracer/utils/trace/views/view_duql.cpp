@@ -13,6 +13,7 @@
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/plan/rowsets.h>
 #include <dftracer/utils/trace/index/record_schema.h>
 #include <dftracer/utils/trace/index/source.h>
@@ -301,7 +302,8 @@ View detail::with_named_columns(const View& v,
 }
 
 dstd::Result<dstd::Pair<View, dstd::Vector<dstd::String>>> View::duql_plan(
-    dstd::StringView text, const duql::Params& params) const {
+    dstd::StringView text, const duql::Params& params,
+    duql::ExplainMode* mode) const {
     if (auto kept = lf_.status(); !kept) return kept.error();
     if (auto resolved = detail::resolve_record_schema(*plan_); !resolved)
         return resolved.error();
@@ -484,14 +486,57 @@ dstd::Result<dstd::Pair<View, dstd::Vector<dstd::String>>> View::duql_plan(
     auto main = build(ctx, sides.program.main, false, lines, true);
     if (!main) return main.error();
     if (auto kept = main->view.status(); !kept) return kept.error();
+    if (mode) *mode = sides.program.explain;
     return dstd::Pair<View, dstd::Vector<dstd::String>>{std::move(main->view),
                                                         std::move(lines)};
 }
 
+namespace {
+
+// The explain text of a planned program: the duql steps one per line, then,
+// for `explain analyze`, the plan as it ran.
+dstd::Result<dstd::String> explain_text(
+    const dstd::Pair<View, dstd::Vector<dstd::String>>& planned,
+    duql::ExplainMode mode) {
+    dstd::String out;
+    for (const auto& l : planned.second) {
+        out += l;
+        out += '\n';
+    }
+    if (mode != duql::ExplainMode::Analyze) return out;
+    auto ran =
+        default_runtime().submit(planned.first.lazy().explain_analyze()).get();
+    if (!ran) return ran.error();
+    out += "run:\n";
+    out += *ran;
+    out += '\n';
+    return out;
+}
+
+}  // namespace
+
 View View::duql(dstd::StringView text, const duql::Params& params) const {
-    auto planned = duql_plan(text, params);
+    duql::ExplainMode mode = duql::ExplainMode::None;
+    auto planned = duql_plan(text, params, &mode);
     if (!planned) return failed(planned.error());
-    return std::move(planned->first);
+    if (mode == duql::ExplainMode::None) return std::move(planned->first);
+    // An `explain` prefix makes the query give its own plan, one row per line
+    // in the column `plan`; `explain analyze` runs the plan to make it.
+    auto said = explain_text(*planned, mode);
+    if (!said) return failed(said.error());
+    dstd::Vector<dstd::String> rows;
+    dstd::StringView rest = *said;
+    while (!rest.empty()) {
+        const std::size_t end = rest.find('\n');
+        rows.emplace_back(rest.substr(0, end));
+        rest.remove_prefix(end == dstd::StringView::npos ? rest.size()
+                                                         : end + 1);
+    }
+    dataframe::DataFrame frame;
+    frame.names.emplace_back("plan");
+    frame.columns.push_back(dataframe::Series::strings(
+        dstd::Span<const dstd::String>(rows.data(), rows.size())));
+    return planned->first.with_lazy(frame.lazy());
 }
 
 View View::duql(const duql::Pipe& pipe) const {
@@ -505,14 +550,10 @@ View View::duql(const duql::Pipe& pipe) const {
 
 dstd::Result<dstd::String> View::explain_duql(
     dstd::StringView text, const duql::Params& params) const {
-    auto planned = duql_plan(text, params);
+    duql::ExplainMode mode = duql::ExplainMode::None;
+    auto planned = duql_plan(text, params, &mode);
     if (!planned) return planned.error();
-    dstd::String out;
-    for (const auto& l : planned->second) {
-        out += l;
-        out += '\n';
-    }
-    return out;
+    return explain_text(*planned, mode);
 }
 
 }  // namespace dftracer::utils::trace::views

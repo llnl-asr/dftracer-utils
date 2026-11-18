@@ -20,6 +20,7 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/explain_mode.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/trace/time_metric.h>
@@ -761,7 +762,9 @@ class View : public dataframe::LazyOps<View> {
     /// `where` stages filter the scan, a leading field-only `select` is the
     /// scan projection, and the later stages run on the scanned columns.
     /// A query that does not compile against this view's columns and record
-    /// schema is an InvalidArgument error, kept as @ref status.
+    /// schema is an InvalidArgument error, kept as @ref status. A query with
+    /// an `explain` prefix returns a one-column `plan` view of the plan, one
+    /// row per line.
     View duql(dstd::StringView text, const duql::Params& params = {}) const;
     /// Apply the builder pipeline `pipe` with its bound parameters. The input
     /// error of `pipe`, when it holds one, is an InvalidArgument error kept as
@@ -773,7 +776,9 @@ class View : public dataframe::LazyOps<View> {
     }
     View query(const duql::Pipe& pipe) const { return duql(pipe); }
     /// The plan duql() builds, one step per line; nothing is scanned. The
-    /// error is that of duql().
+    /// error is that of duql(). With an `explain analyze` prefix on `text` it
+    /// also runs the plan and adds what each stage measured (see
+    /// @ref dataframe::LazyFrame::explain_analyze).
     dstd::Result<dstd::String> explain_duql(
         dstd::StringView text, const duql::Params& params = {}) const;
     /// Same as explain_duql().
@@ -1057,7 +1062,8 @@ class View : public dataframe::LazyOps<View> {
         const View& v);
     friend detail::ScanPlan detail::scan_plan_of(const View& v);
     dstd::Result<dstd::Pair<View, dstd::Vector<dstd::String>>> duql_plan(
-        dstd::StringView text, const duql::Params& params) const;
+        dstd::StringView text, const duql::Params& params,
+        duql::ExplainMode* mode = nullptr) const;
 
     detail::ScanPlan plan_;
     dataframe::LazyFrame lf_;

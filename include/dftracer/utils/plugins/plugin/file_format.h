@@ -146,6 +146,18 @@ concept HasChunkToken = requires(typename F::File& file, std::uint64_t chunk) {
     { file.chunk_token(chunk) } -> std::same_as<dstd::Result<std::uint64_t>>;
 };
 
+/// A file that says what scan() of a chunk would do for a request:
+///   using File = MyFile;  // derives from FormatFile, and open() returns it
+///   dstd::Result<void> MyFile::explain(const ScanView&, const ExplainOut&);
+/// The host then sets dftu_file_format_vt::explain and prints its lines after
+/// its own (the chunks the index keeps).
+template <class F>
+concept HasFileExplain = requires(typename F::File& file, const ScanView& view,
+                                  const ExplainOut& out) {
+    requires std::is_base_of_v<FormatFile, typename F::File>;
+    { file.explain(view, out) } -> std::same_as<dstd::Result<void>>;
+};
+
 template <class F>
 struct FileFormatVt {
     using Box = FormatBox;
@@ -251,6 +263,24 @@ struct FileFormatVt {
         }
     }
 
+    static dftu_status explain(dftu_ctx* ctx, void* file,
+                               const dftu_scan_request* req,
+                               const dftu_explain_out* out) noexcept {
+        if constexpr (HasFileExplain<F>) {
+            return to_status(ctx, [&]() {
+                return static_cast<typename F::File*>(
+                           static_cast<FormatFileBox*>(file)->file.get())
+                    ->explain(scan_view_of(*req), ExplainOut(out));
+            });
+        } else {
+            (void)ctx;
+            (void)file;
+            (void)req;
+            (void)out;
+            return DFTU_E_INTERNAL;
+        }
+    }
+
     static void close(void* file) { delete static_cast<FormatFileBox*>(file); }
 
     static void destroy(void* self) { delete static_cast<Box*>(self); }
@@ -268,6 +298,7 @@ struct FileFormatVt {
             t.close = close;
             t.destroy = destroy;
             if constexpr (HasChunkToken<F>) t.chunk_token = chunk_token;
+            if constexpr (HasFileExplain<F>) t.explain = explain;
             return t;
         }();
         return &VT;

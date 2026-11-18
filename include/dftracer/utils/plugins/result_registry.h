@@ -297,7 +297,7 @@ struct OwnedLazyFrame {
         // and an empty plan is the answer, as before.
         static const dftu_ctx_vt VT = {
             sizeof(dftu_ctx_vt), detail::drop_reason,
-            [](dftu_ctx*) -> dftu_status { return DFTU_OK; }};
+            [](dftu_ctx*) -> dftu_status { return DFTU_OK; }, nullptr};
         dftu_ctx ctx{sizeof(dftu_ctx), 0, &VT, nullptr};
         dftu_lazyframe* made = nullptr;
         if (ops_->run_lazy(&ctx, host_, name.c_str(), in, n, args, &made) < 0 ||

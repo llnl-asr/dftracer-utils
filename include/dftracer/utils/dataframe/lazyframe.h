@@ -139,6 +139,8 @@ struct Schema {
     dstd::Vector<Field> fields;
 };
 
+class RunCounters;
+
 /// A pushdown request the optimizer hands a Source at scan time.
 struct ScanRequest {
     /// Columns the plan needs, in the order the scan must return them. Empty
@@ -153,6 +155,10 @@ struct ScanRequest {
     /// The resolved @ref LazyFrame budget (bytes); a streaming source may use
     /// it to bound its own in-flight buffering. Most sources ignore it.
     std::uint64_t memory_budget = 0;
+    /// The counters of the EXPLAIN ANALYZE run this scan belongs to, or null.
+    /// A source that runs plugin code keeps it for as long as its cursors live
+    /// and adds the plugins' counters to it; a plain run has none.
+    dstd::SharedPtr<RunCounters> counters;
 };
 
 /// What Source::scan gives: a fresh async Cursor plus, per @ref ScanRequest
@@ -163,6 +169,21 @@ struct ScanResult {
 };
 
 class Source;
+
+/// One line a plugin adds to an explain: what it would do, as a key and a
+/// value (`pushed filters` and `0 of 1`).
+struct ExplainLine {
+    dstd::String key;
+    dstd::String value;
+};
+
+/// What a source says about the scan it would run, for LazyFrame::explain:
+/// who it is (`provider 'a.b'`) and its lines. A source that has nothing to say
+/// leaves both empty and explain prints nothing for it.
+struct SourceExplain {
+    dstd::String label;
+    dstd::Vector<ExplainLine> lines;
+};
 
 /// How a source took an op offered by a planning hook (Source::apply_*).
 enum class ApplyStatus {
@@ -256,6 +277,11 @@ class Source {
     /// every op that keeps rows and returns them, by name, after the declared
     /// columns; it refuses an op that has no rule for them.
     virtual bool undeclared_columns() const { return false; }
+    /// What scan(`req`) would do, without scanning: `req` is the request
+    /// LazyFrame::explain builds for the plan. Called outside a scan, from any
+    /// thread, and may read the source's own state but opens no cursor. The
+    /// default says nothing.
+    virtual SourceExplain explain(const ScanRequest&) const { return {}; }
 
     virtual dstd::Optional<SourceApplication> apply_filter(const Expr&) const {
         return dstd::nullopt;
@@ -681,6 +707,17 @@ class LazyFrame {
     /// introspection and tests.
     dstd::String explain() const;
 
+    /// Runs the plan and returns what @ref explain returns, with the rows each
+    /// stage handed on and the time spent inside it and its inputs, the filters
+    /// the source really took (`exact`, `inexact` or `no`) and the named
+    /// counters the plugins added to during the run (dftu_ctx_vt::counter).
+    /// The plan runs to its end and its rows are dropped, so it reads what a
+    /// collect() reads. Each call counts for itself, so analyses at once do
+    /// not mix. A failed plan is the error. `batch_size` is the scan chunk
+    /// size, as for collect().
+    coro::CoroTask<dstd::Result<dstd::String>> explain_analyze(
+        std::int64_t batch_size = 0) const;
+
     /// Pull-based chunk generator: the streaming terminal. Each yielded
     /// @ref DataFrame is standalone, carrying its own schema. One-shot: re-run
     /// from the @ref LazyFrame to restart. `batch_size` is the scan chunk
@@ -759,6 +796,9 @@ class LazyFrame {
     dstd::Vector<dstd::SharedPtr<const LazyOp>> ops_;
     std::uint64_t memory_budget_ = 0;
     dstd::SharedPtr<const dstd::Error> error_;
+    // The EXPLAIN ANALYZE run this plan is a partner of (a join's or concat's
+    // other side), or null; set only by the plan that holds it.
+    dstd::SharedPtr<RunCounters> run_counters_;
 };
 
 /// The two-step lazy group-by: a plan and its key columns, with the

@@ -433,9 +433,13 @@ class Pipe:
             return None
         return {k: v[0] for k, v in got.items()}
 
-    def explain(self) -> str:
-        """The plan, one step per line; nothing is scanned."""
-        return self._viewer().explain_duql(self.raw(), **self._params)
+    def explain(self, analyze: bool = False) -> str:
+        """The plan, one step per line; nothing is scanned. With ``analyze=True``
+        the plan also runs to its end, its rows dropped, and the text adds the
+        rows and time of each stage, the filters the source really took and the
+        counters the plugins added."""
+        prefix = "explain analyze\n" if analyze else ""
+        return self._viewer().explain_duql(prefix + self.raw(), **self._params)
 
 
 class Source:

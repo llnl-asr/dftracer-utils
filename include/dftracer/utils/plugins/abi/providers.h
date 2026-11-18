@@ -297,6 +297,16 @@ typedef struct dftu_source_vt {
        output. */
     dftu_status (*apply)(dftu_ctx* ctx, void* self,
                          const dftu_apply_request* req, dftu_apply_result* out);
+    /** Optional (NULL means nothing to add to an explain). Append to `out` the
+       key and value lines that describe what scan() would do for `req`, the
+       request LazyFrame::explain builds for the plan (the same fields scan()
+       gets, `req` borrowed for the call, no cursor opened and nothing read).
+       Called on any thread, outside a scan, with a `ctx` the host frees when
+       the call returns; on failure the host prints no line for this source
+       and logs the ctx message. */
+    dftu_status (*explain)(dftu_ctx* ctx, void* self,
+                           const dftu_scan_request* req,
+                           const dftu_explain_out* out);
 } dftu_source_vt;
 
 /** Build-phase registry of named sources. Fetched via

@@ -169,6 +169,7 @@ dftracer/utils/duql/detail/ast_string.h
 dftracer/utils/duql/detail/query_access.h
 dftracer/utils/duql/detail/string_literal.h
 dftracer/utils/duql/error.h
+dftracer/utils/duql/explain_mode.h
 dftracer/utils/duql/query.h
 dftracer/utils/duql/types.h
 dftracer/utils/duql/value_map.h

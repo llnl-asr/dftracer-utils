@@ -240,7 +240,8 @@ static bool eq(const SourceDecl& a, const SourceDecl& b) {
 }
 
 bool equal(const Program& a, const Program& b) {
-    return eq(a.decls, b.decls) && eq(a.pipeline, b.pipeline);
+    return a.explain == b.explain && eq(a.decls, b.decls) &&
+           eq(a.pipeline, b.pipeline);
 }
 
 namespace {
@@ -1026,6 +1027,9 @@ dstd::String to_text(const Pipeline& pipeline) {
 dstd::String to_text(const Program& query) {
     Printer p;
     p.out += "duql " DFTRACER_UTILS_DUQL_VERSION_STRING "\n";
+    if (query.explain != ExplainMode::None)
+        p.out += query.explain == ExplainMode::Analyze ? "explain analyze\n"
+                                                       : "explain\n";
     for (const Decl& decl : query.decls) {
         if (const auto* let = std::get_if<Let>(&decl)) {
             p.out += "let ";

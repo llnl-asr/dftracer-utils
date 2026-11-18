@@ -2224,6 +2224,77 @@ chunks tokens by naming its file class and giving it a method:
 leaves it NULL for a class without both. ``tests/plugins/
 sdk_chunked_format_plugin.cpp`` is an example.
 
+**Explain and counters.** A plugin source, file format and node can say what it
+plans, and add to named counters while a plan runs. Both are optional and need
+no registration beyond the vtable.
+
+``dftu_source_vt::explain(ctx, self, req, out)``,
+``dftu_file_format_vt::explain(ctx, file, req, out)`` and
+``dftu_node_vt::explain(ctx, self, args, out)`` are the last field of each
+vtable, so a plugin built before them loads unchanged. A source and a format get
+the ``dftu_scan_request`` that ``LazyFrame::explain`` builds for the plan (the
+same projection, filters and limit a scan gets), and a node gets its
+``dftu_op_arg``; both are borrowed for the call and nothing is opened or read.
+The plugin calls ``out->add(out->self, key, key_len, value, value_len)`` once per
+line; the host copies both strings, so they need not outlive the call. A hook
+states what the plugin would do (the filters it accepts, the chunks it reads, an
+option that shapes the scan). A NULL hook adds nothing, and a hook that fails
+adds nothing and logs its message. A format also gets a ``chunks=K of N read``
+line from the host, the chunks its index keeps.
+
+.. code-block:: text
+
+   scan [id, v]
+     provider 'explain_plugin.src': filters_offered=1; filters_accepted=1; columns=2
+   filter
+   op explain_plugin.pass
+     node 'explain_plugin.pass': mode=pass
+
+``dftu_counter(ctx, "morsels", 1)`` (or ``dftu_counter_n`` with a length) adds to
+the counter ``name`` of the source, format or node whose callback makes the call;
+``dftu_ctx_vt::counter`` is the last field of the ctx vtable, and the inline
+helper checks that the host has it, so a plugin calls it without a check. Call it
+from ``scan`` and ``next``, once per morsel or chunk and not per row. Outside
+``LazyFrame::explain_analyze`` the call does nothing (a null check). An analysis
+makes counters of its own and hands them to the scans and nodes it opens, and
+each cursor keeps a reference, so the counters live as long as anything adds to
+them. Two analyses at once on two threads each count only their own run, and a
+plain run of the same plugin beside an analysis adds to nothing. The other side
+of a join, a cross join or a concat counts too, and so do its own direct
+partners; a partner plan that a partner collects in batches is read without the
+analysis, so its plugins add nothing, and the stage lines show only the main
+chain. Call the helper only inside the callback: the ``ctx`` is valid for that call only, and the SDK's
+``plugins::counter`` does nothing on a thread that is in no callback.
+
+``LazyFrame::explain_analyze()`` (Python ``explain(analyze=True)``,
+``dftu_lazyframe_explain_analyze``, and ``explain analyze`` in duql) runs the plan
+to its end, drops the rows and appends what it measured:
+
+.. code-block:: text
+
+   analyze:
+     pushed filter 0: inexact
+     scan: rows out 6, time (incl. inputs) 0.1 ms
+     filter: rows in 6, rows out 4, time (incl. inputs) 0.2 ms
+     op explain_plugin.pass: rows in 4, rows out 4, time (incl. inputs) 0.2 ms
+     counter explain_plugin.pass.frames: 2
+     counter explain_plugin.src.morsels: 2
+     counter explain_plugin.src.rows: 6
+
+``pushed filter`` is what the source voted for each filter it was offered
+(``exact``, ``inexact`` or ``no``), the same votes the scan acts on. A stage's
+time (incl. inputs) includes the stages below it, since each pulls from the one before. A
+counter line is ``<registered name>.<counter>``.
+
+A C++ plugin adds the hooks to its class: ``dstd::Result<void> explain(const
+ScanView&, const ExplainOut&) const`` on a source, the same (not const) on the
+file class of a format (``using File = MyFile;``, as for ``chunk_token``), and
+``dstd::Result<void> explain(const OpArgs&, const ExplainOut&) const`` on a node;
+``PluginBuilder`` sets the vtable entry for a class that has the method.
+``plugins::counter("rows", n)`` adds to a counter from inside any SDK callback.
+``tests/plugins/explain_plugin.c`` is a C plugin with the hooks and counters,
+and ``tests/plugins/sdk_explain_plugin.cpp`` a C++ one.
+
 **Sinks.** ``DFTU_SVC_FILE_FORMATS`` also takes a ``dftu_sink_vt``
 (``register_sink``, ``PluginBuilder::sink<S>``): an output format whose ``bind``
 gets a ``BindView`` of the caller's column ``names``, their ``types`` and the

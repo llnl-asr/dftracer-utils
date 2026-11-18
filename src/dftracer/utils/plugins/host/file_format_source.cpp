@@ -6,6 +6,7 @@
 
 #include <dftracer/utils/common/c_api_error.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -16,6 +17,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -26,6 +28,7 @@
 #include <dftracer/utils/plugins/abi/value.h>
 #include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/cursor_host.h>
+#include <dftracer/utils/plugins/host/explain_abi.h>
 #include <dftracer/utils/plugins/host/file_format_source.h>
 #include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/host/plugin_task.h>
@@ -134,6 +137,9 @@ class FormatSource final : public dataframe::FormatFileSource,
     dataframe::Schema schema() const override { return file_->schema; }
 
     dstd::Result<dataframe::ScanResult> scan(
+        const dataframe::ScanRequest& req) const override;
+
+    dataframe::SourceExplain explain(
         const dataframe::ScanRequest& req) const override;
 
     dstd::StringView plugin_version() const override {
@@ -247,7 +253,8 @@ class FormatCursor final : public dataframe::Cursor {
         cursor_ = make_plugin_cursor(
             chunk.vt, chunk.cursor_self, std::move(host_), req_.projection,
             expected_types_, source_,
-            dstd::fmt<"file format '{}' next">(file_->handle->name));
+            dstd::fmt<"file format '{}' next">(file_->handle->name),
+            file_->handle->name, req_.counters);
     }
 
     // Releases the chunk just ended and opens the next one. No error means
@@ -299,7 +306,7 @@ class VtableFormat final : public dataframe::FileFormatFactory {
         dstd::StringView path, dstd::StringView index_dir) override {
         const dstd::String path_str(path);
         void* file = nullptr;
-        plugins::AbiContext ctx;
+        plugins::AbiContext ctx({}, handle_->name);
         dftu_status status =
             handle_->vt.open(ctx.get(), handle_->self, path_str.c_str(), &file);
         if (status < 0) return plugin_error(ctx, status, "file format open");
@@ -309,7 +316,7 @@ class VtableFormat final : public dataframe::FileFormatFactory {
                 dstd::Condition::Internal, handle_->name);
 
         ::dftu_schema declared;
-        plugins::AbiContext schema_ctx;
+        plugins::AbiContext schema_ctx({}, handle_->name);
         status = handle_->vt.schema(schema_ctx.get(), file, &declared);
         if (status < 0) {
             handle_->close_file(file);
@@ -325,7 +332,7 @@ class VtableFormat final : public dataframe::FileFormatFactory {
         schema.fields = std::move(declared.top);
 
         std::uint64_t chunks = 0;
-        plugins::AbiContext chunks_ctx;
+        plugins::AbiContext chunks_ctx({}, handle_->name);
         status = handle_->vt.chunks(chunks_ctx.get(), file, &chunks);
         if (status < 0) {
             handle_->close_file(file);
@@ -343,7 +350,7 @@ class VtableFormat final : public dataframe::FileFormatFactory {
             tokens.reserve(chunks);
             for (std::uint64_t chunk = 0; chunk < chunks; ++chunk) {
                 std::uint64_t token = 0;
-                plugins::AbiContext token_ctx;
+                plugins::AbiContext token_ctx({}, handle_->name);
                 status = handle_->vt.chunk_token(token_ctx.get(), file, chunk,
                                                  &token);
                 if (status < 0) {
@@ -412,7 +419,7 @@ dstd::Result<OpenedChunk> FormatSource::scan_chunk(
                                               "file format", req.memory_budget);
     void* cursor_self = nullptr;
     const ::dftu_cursor_vt* cursor_vt = nullptr;
-    plugins::AbiContext ctx;
+    plugins::AbiContext ctx({}, file_->handle->name, req.counters.get());
     const dftu_status status =
         vt.scan(ctx.get(), file_->file, chunk, host->host(), &creq,
                 out_pushed.data(), &cursor_self, &cursor_vt);
@@ -484,6 +491,30 @@ dstd::Vector<std::uint64_t> FormatSource::chunks_to_read(
     for (std::uint64_t chunk = 0; chunk < file_->chunks; ++chunk)
         all.push_back(chunk);
     return all;
+}
+
+dataframe::SourceExplain FormatSource::explain(
+    const dataframe::ScanRequest& req) const {
+    const ::dftu_file_format_vt& vt = file_->handle->vt;
+    dataframe::SourceExplain said;
+    said.label = dstd::fmt<"file format '{}'">(file_->handle->name);
+    said.lines.push_back(dataframe::ExplainLine{
+        "chunks",
+        dstd::fmt<"{} of {} read">(chunks_to_read(req).size(), file_->chunks)});
+    if (!vt.explain) return said;
+    const AbiScanRequest creq(req);
+    ExplainLines lines;
+    plugins::AbiContext ctx({}, file_->handle->name);
+    const dftu_status status =
+        vt.explain(ctx.get(), file_->file, creq.get(), lines.out());
+    if (status < 0) {
+        DFTRACER_UTILS_LOG_WARN(
+            "{}", plugin_error(ctx, status, "file format explain").format());
+        return said;
+    }
+    for (dataframe::ExplainLine& l : lines.take())
+        said.lines.push_back(std::move(l));
+    return said;
 }
 
 dstd::Result<dataframe::ScanResult> FormatSource::scan(

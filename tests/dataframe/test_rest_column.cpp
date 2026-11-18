@@ -258,10 +258,10 @@ class PassNode final : public NodeImpl {
         return in;
     }
 
-    dstd::Result<dstd::UniquePtr<Cursor>> open(dstd::UniquePtr<Cursor> input,
-                                               dstd::Span<const dstd::String>,
-                                               const OpArgs&,
-                                               std::uint64_t) const override {
+    dstd::Result<dstd::UniquePtr<Cursor>> open(
+        dstd::UniquePtr<Cursor> input, dstd::Span<const dstd::String>,
+        const OpArgs&, std::uint64_t,
+        dstd::SharedPtr<RunCounters>) const override {
         return input;
     }
 };

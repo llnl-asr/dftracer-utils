@@ -81,7 +81,7 @@ dftu_status check(dftu_ctx*) {
     return t_cancel.requested() ? DFTU_E_CANCELLED : DFTU_OK;
 }
 
-const dftu_ctx_vt CALL_VT = {sizeof(dftu_ctx_vt), &set_error, &check};
+const dftu_ctx_vt CALL_VT = {sizeof(dftu_ctx_vt), &set_error, &check, nullptr};
 
 }  // namespace
 

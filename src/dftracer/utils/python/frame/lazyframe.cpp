@@ -820,14 +820,34 @@ PyObject* LazyFrame_schema(PyObject* self, PyObject*) {
     return guard([&] { return str_list_from(b->lf.schema()); });
 }
 
-PyObject* LazyFrame_explain(PyObject* self, PyObject*) {
+PyObject* LazyFrame_explain(PyObject* self, PyObject* args, PyObject* kwds) {
     LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
-    return guard([&] {
-        const dftracer::utils::dstd::String text = b->lf.explain();
-        return PyUnicode_FromStringAndSize(
-            text.data(), static_cast<Py_ssize_t>(text.size()));
-    });
+    int analyze = 0;
+    long long batch_size = 0;
+    PyObject* runtime_arg = nullptr;
+    if (!parse_kw<"|pLO">(args, kwds, {"analyze", "batch_size", "runtime"},
+                          &analyze, &batch_size, &runtime_arg))
+        return nullptr;
+    dftracer::utils::dstd::String text;
+    if (analyze == 0) {
+        return guard([&] {
+            text = b->lf.explain();
+            return PyUnicode_FromStringAndSize(
+                text.data(), static_cast<Py_ssize_t>(text.size()));
+        });
+    }
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
+        runtime_from_arg(runtime_arg);
+    if (!rt) return nullptr;
+    const LazyFrame lf = b->lf;
+    if (!run_blocking([&] {
+            text = dftracer::utils::python::core::py_unwrap(
+                rt->submit(lf.explain_analyze(batch_size)).get());
+        }))
+        return nullptr;
+    return PyUnicode_FromStringAndSize(text.data(),
+                                       static_cast<Py_ssize_t>(text.size()));
 }
 
 PyObject* LazyFrame_collect(PyObject* self, PyObject* args, PyObject* kwds) {
@@ -1266,8 +1286,11 @@ PyMethodDef LazyFrame_methods[] = {
      "stream(batch_size=0, runtime=None) -> iterator of DataFrame chunks."},
     {"schema", LazyFrame_schema, METH_NOARGS,
      "schema() -> list[str] of output column names, or [] if data-dependent."},
-    {"explain", LazyFrame_explain, METH_NOARGS,
-     "explain() -> str of the optimized plan."},
+    {"explain", DFTU_PYCFUNCTION(LazyFrame_explain),
+     METH_VARARGS | METH_KEYWORDS,
+     "explain(analyze=False, batch_size=0, runtime=None) -> str of the "
+     "optimized plan; analyze=True runs it and adds rows, time, votes and "
+     "plugin counters."},
     {"collect", DFTU_PYCFUNCTION(LazyFrame_collect),
      METH_VARARGS | METH_KEYWORDS,
      "collect(batch_size=65536) -> DataFrame, running the pipeline."},

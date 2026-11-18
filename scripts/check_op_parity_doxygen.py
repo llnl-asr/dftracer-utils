@@ -137,6 +137,7 @@ ALLOWLIST = {
         "collect",
         "collect_group_state",
         "explain",
+        "explain_analyze",
         "scan",
         "scan_file",
         "schema",

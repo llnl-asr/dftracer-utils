@@ -12,6 +12,7 @@
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 #include <dftracer/utils/dataframe/internal/join_names.h>
 #include <dftracer/utils/dataframe/internal/provider_registry.h>
+#include <dftracer/utils/dataframe/internal/run_counters.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/error.h>
@@ -22,6 +23,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/cursor_host.h>
+#include <dftracer/utils/plugins/host/explain_abi.h>
 #include <dftracer/utils/plugins/host/frame_check.h>
 #include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/host/plugin_task.h>
@@ -99,14 +101,17 @@ class ProviderCursor final : public dataframe::Cursor {
         dstd::Vector<dstd::String> expected_projection,
         dstd::Vector<dataframe::TypeId> expected_types,
         dftracer::utils::dstd::SharedPtr<const dataframe::Source> source,
-        dstd::String label)
-        : source_(std::move(source)),
+        dstd::String label, dstd::String owner,
+        dstd::SharedPtr<dataframe::RunCounters> counters)
+        : counters_(std::move(counters)),
+          source_(std::move(source)),
           vt_(),
           self_(self),
           host_(std::move(host)),
           expected_projection_(std::move(expected_projection)),
           expected_types_(std::move(expected_types)),
-          label_(std::move(label)) {
+          label_(std::move(label)),
+          owner_(std::move(owner)) {
         common::copy_struct(&vt_, sizeof(vt_), vt, vt->struct_size,
                             plugin_struct_min_size(PluginStruct::CursorVt));
     }
@@ -162,7 +167,7 @@ class ProviderCursor final : public dataframe::Cursor {
         AbiHandle<::dftu_expr, ::dftu_expr_free> h(
             dataframe::expr_handle_wrap(predicate));
         const coro::CancelView cancel = co_await coro::this_coro::cancel_view;
-        plugins::AbiContext ctx(cancel);
+        plugins::AbiContext ctx(cancel, owner_, counters_.get());
         ::dftu_task* t = nullptr;
         const dftu_status status =
             vt_.narrow(ctx.get(), self_, h.get(), &applied, &t);
@@ -189,7 +194,7 @@ class ProviderCursor final : public dataframe::Cursor {
     bool call_next(coro::CancelView cancel, std::int64_t max_rows,
                    dataframe::MorselResult& out) {
         host_->poll_reclaim();
-        plugins::AbiContext ctx(cancel);
+        plugins::AbiContext ctx(cancel, owner_, counters_.get());
         // The member is the out slot: a pending task writes it after this
         // call returns, so it must outlive the task.
         ::dftu_task* pending = nullptr;
@@ -257,6 +262,8 @@ class ProviderCursor final : public dataframe::Cursor {
         return dataframe::MorselResult(std::move(m));
     }
 
+    // Last to go, so the run outlives the plugin cursor that adds to it.
+    dstd::SharedPtr<dataframe::RunCounters> counters_;
     // Released after the cursor itself: a derived source's destroy() runs
     // only once every cursor it opened is gone.
     dftracer::utils::dstd::SharedPtr<const dataframe::Source> source_;
@@ -270,6 +277,9 @@ class ProviderCursor final : public dataframe::Cursor {
        plugin and the callback: "provider 'a.b' next", "file format 'a.f'
        next". */
     dstd::String label_;
+    // The registered name of the source, which the cursor's run counters are
+    // added under.
+    dstd::String owner_;
     ::dftu_dataframe* pending_frame_ = nullptr;
     ::dftu_task* pending_task_ = nullptr;
 };
@@ -440,6 +450,27 @@ class ProviderSource final
         return std::move(*read);
     }
 
+    dataframe::SourceExplain explain(
+        const dataframe::ScanRequest& req) const override {
+        dataframe::SourceExplain said;
+        if (!handle_->vt.explain) return said;
+        const AbiScanRequest creq(req);
+        ExplainLines lines;
+        plugins::AbiContext ctx({}, handle_->name);
+        const dftu_status status = handle_->vt.explain(ctx.get(), handle_->self,
+                                                       creq.get(), lines.out());
+        if (status < 0) {
+            DFTRACER_UTILS_LOG_WARN(
+                "{}", plugin_error(ctx, status, "provider explain").format());
+            return said;
+        }
+        said.label = handle_->name.empty()
+                         ? dstd::String("provider")
+                         : dstd::fmt<"provider '{}'">(handle_->name);
+        said.lines = lines.take();
+        return said;
+    }
+
     dstd::Result<dataframe::ScanResult> scan(
         const dataframe::ScanRequest& req) const override {
         dataframe::ScanResult r;
@@ -475,7 +506,7 @@ class ProviderSource final
 
         void* cursor_self = nullptr;
         const ::dftu_cursor_vt* vt = nullptr;
-        plugins::AbiContext ctx;
+        plugins::AbiContext ctx({}, handle_->name, req.counters.get());
         auto host = dstd::make_unique<CursorHost>(handle_->memory, "provider",
                                                   req.memory_budget);
         const dftu_status status =
@@ -502,7 +533,8 @@ class ProviderSource final
             declared_types(*read, req.projection);
         r.cursor = dstd::make_unique<ProviderCursor>(
             vt, cursor_self, std::move(host), req.projection,
-            std::move(expected_types), shared_from_this(), label());
+            std::move(expected_types), shared_from_this(), label(),
+            handle_->name, req.counters);
         return r;
     }
 
@@ -644,10 +676,12 @@ dstd::UniquePtr<dataframe::Cursor> make_plugin_cursor(
     const ::dftu_cursor_vt* vt, void* self, dstd::UniquePtr<CursorHost> host,
     dstd::Vector<dstd::String> expected_projection,
     dstd::Vector<dataframe::TypeId> expected_types,
-    dstd::SharedPtr<const dataframe::Source> source, dstd::String label) {
+    dstd::SharedPtr<const dataframe::Source> source, dstd::String label,
+    dstd::String owner, dstd::SharedPtr<dataframe::RunCounters> counters) {
     return dstd::make_unique<ProviderCursor>(
         vt, self, std::move(host), std::move(expected_projection),
-        std::move(expected_types), std::move(source), std::move(label));
+        std::move(expected_types), std::move(source), std::move(label),
+        std::move(owner), std::move(counters));
 }
 
 dataframe::Pushed plugin_pushed(std::int32_t value) { return to_pushed(value); }

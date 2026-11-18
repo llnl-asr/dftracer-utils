@@ -78,6 +78,8 @@ def _kernel_operand(s: "Series") -> "Series":
     return s.astype("int8") if s.dtype == DType.BOOL else s
 
 
+_TEMPORAL = frozenset([DType.TIME32, DType.TIME64, DType.TIMESTAMP, DType.DURATION])
+_FLOATS = frozenset([DType.FLOAT32, DType.FLOAT64])
 _BYTES = frozenset([DType.STRING, DType.LARGE_STRING, DType.BINARY, DType.LARGE_BINARY])
 
 
@@ -85,16 +87,41 @@ def _is_number(d: DType) -> bool:
     return d.is_numeric or d == DType.BOOL
 
 
+def _scaled_differs(a: "Series", b: "Series") -> "Series[bool]":
+    """``differs`` for a duration or time in two units: the finer side ``f``
+    times coarser equals the finer value exactly when it divides evenly and
+    the quotient matches, so no value is scaled up and none can overflow."""
+    if a.time_unit > b.time_unit:
+        return _scaled_differs(b, a)
+    factor = 1000 ** (b.time_unit - a.time_unit)
+    fine, coarse = b.astype("int64"), a.astype("int64")
+    same = ((fine % factor) == 0) & ((fine // factor) == coarse)
+    ne = (~same).fillna(False)
+    nulls = _kernel_operand(a.is_null()).compare_series(_kernel_operand(b.is_null()), _CMP_NE)
+    return ne | nulls
+
+
 def differs(a: "Series", b: "Series") -> "Series[bool]":
     """Bool, never null: true where the two Series (one length) hold different
-    values; a null equals a null, a null differs from a value and a NaN differs
-    from everything. A number against text differs on every present row; a
+    values; a null equals a null, a null differs from a value and a NaN equals
+    a NaN only at the same position. A number against text differs on every
+    present row. Times of one type but another unit or zone compare as
+    instants (a timestamp), differ on every present row (a timestamp, aware
+    against naive) or exactly in integers (a duration or time of two units); a
     pair of dtypes the row compare kernel does not take (nested, decimal,
-    mixed time kinds) compares by value in Python."""
+    mixed time kinds) also compares by value in Python."""
     da, db = a.dtype, b.dtype
     if (_is_number(da) and db in _BYTES) or (da in _BYTES and _is_number(db)):
         return ~(a.is_null() & b.is_null())
-    if not ((da == db and da in _NATIVE_COMPARE) or (_is_number(da) and _is_number(db))):
+    by_value = not ((da == db and da in _NATIVE_COMPARE) or (_is_number(da) and _is_number(db)))
+    if da == db and da in _TEMPORAL and (a.time_unit, a.timezone) != (b.time_unit, b.timezone):
+        if da != DType.TIMESTAMP:
+            return _scaled_differs(a, b)
+        elif bool(a.timezone) != bool(b.timezone):
+            return ~(a.is_null() & b.is_null())
+        else:
+            a, b = a.dt.epoch("ns"), b.dt.epoch("ns")
+    if by_value:
         from .series import Series
 
         return cast(
@@ -108,6 +135,8 @@ def differs(a: "Series", b: "Series") -> "Series[bool]":
             ),
         )
     ne = _kernel_operand(a).compare_series(_kernel_operand(b), _CMP_NE).fillna(False)
+    if da in _FLOATS and db in _FLOATS:
+        ne = ne & ~(a.is_nan().fillna(False) & b.is_nan().fillna(False))
     if a.null_count == 0 and b.null_count == 0:
         return ne
     nulls = _kernel_operand(a.is_null()).compare_series(_kernel_operand(b.is_null()), _CMP_NE)

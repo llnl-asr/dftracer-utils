@@ -93,6 +93,10 @@ stable in every mode: equal values and nulls keep their input order, also with
 ``descending=True`` and nulls first. A lazy sort that asks for nulls first is
 not pushed into a source that sorts, which orders nulls last.
 
+``first_valid_index()`` and ``last_valid_index()`` skip nulls only: a NaN is a
+value here, where pandas skips it. ``equals`` and ``compare`` follow pandas for
+a NaN: two NaN at the same position are equal and ``compare`` does not list them.
+
 ``unique(maintain_order=False)`` is the polars one: the distinct values, a null
 kept once, sorted with nulls first, or in order of first occurrence with
 ``maintain_order=True``; ``drop_duplicates(keep="first")`` is the pandas result

@@ -84,7 +84,6 @@ series.sample#1[F] | semantics | [values] [nan, -2.5, 3.0] vs [3.0, -2.5, 1.5]
 series.explode#1[I] | engine | [error] ours raised DFTUtilsValueError: explode: v is not a List column
 series.explode#1[F] | engine | [error] ours raised DFTUtilsValueError: explode: v is not a List column
 series.explode#1[S] | engine | [error] ours raised DFTUtilsValueError: explode: v is not a List column
-series.equals#1[F] | semantics | [values] False vs True
 series.pipe#1[I] | semantics | [raises] polars raised AttributeError, ours returned
 series.pipe#1[F] | semantics | [raises] polars raised AttributeError, ours returned
 series.map#1[I] | semantics | [raises] polars raised TypeError, ours returned
@@ -144,8 +143,6 @@ frame.to_dict#1[N] | semantics | [values] {'a': [1, None, 3, 2, 2], 'b': [1.5, N
 frame.to_dict#2[N] | semantics | [error] ours raised TypeError: DataFrame.to_dict() got an unexpected keyword argument 'as_series'
 frame.to_dicts#1[N] | semantics | [values] [{'a': 1, 'b': 1.5}, {'a': None, 'b': None}, {'a': 3, 'b': nan}, {'a': 2, 'b': -2.5}, {'a': 2, 'b': 3.0}] vs [{'a': 1, 'b': 1.5}, {'a': None, 'b': None}, {'a': 3, 'b': nan}, {'a': 2, 'b': -2.
 frame.get_columns#1[M] | semantics | [values] [[1, None, 3, 2, 2], [1.5, None, nan, -2.5, 3.0], ['x', None, 'y', 'x', 'y'], [True, False, True, True, False]] vs [shape: (5,) Series: 'a' [i64] [ 	1 	null 	3 	2 	2 ], shape: (5,) Series: 'b
-frame.equals#1[M] | semantics | [values] False vs True
-frame.equals#1[N] | semantics | [values] False vs True
 frame.hstack#1[N] | shape | [shape] columns ['a', 'b', 'column_0'] vs ['a', 'b', 'z']
 frame.update#1[N] | shape | [type] ours NoneType (scalar), library DataFrame (frame)
 frame.partition_by#1[M] | semantics | [values] [   a     b  c     d 0  1   1.5  x  True 1  2  -2.5  x  True,       a    b     c      d 0  None  NaN  None  False,    a    b  c      d 0  3  NaN  y   True 1  2  3.0  y  False] vs [shape: (2, 

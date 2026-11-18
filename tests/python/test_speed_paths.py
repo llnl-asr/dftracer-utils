@@ -113,7 +113,7 @@ class TestGroups:
             ("y", 1): [1],
             (None, 2): [2, 4],
         }
-        assert df.groupby("a").groups == {"x": [0, 2], "y": [1]}
+        assert df.groupby("a").groups == {"x": [0, 3], "y": [1]}
 
     def test_empty_frame(self):
         assert DataFrame({"k": [], "v": []}).groupby("k").groups == {}
@@ -180,3 +180,95 @@ class TestCompareKeepsEveryDtype:
         assert got["index"] == list(want.index)
         assert got["self"] == want["self"].tolist()
         assert got["other"] == want["other"].tolist()
+
+
+def _typed(values, kind, unit_code, zone=""):
+    from dftracer.utils import dftracer_utils_ext as ext
+
+    return ext._series_retype(Series.from_list(values, DType.INT64), int(kind), unit_code, zone)
+
+
+class TestTemporalUnits:
+    def test_duration_units_differ_with_the_same_ints(self):
+        s, ms = _typed([1, 2], DType.DURATION, 0), _typed([1, 2], DType.DURATION, 1)
+        assert not s.equals(ms)
+        assert s.compare(ms).to_dict()["index"] == [0, 1]
+
+    def test_timestamp_units_equal_at_the_same_instants(self):
+        us, ms = _typed([1000, 2000], DType.TIMESTAMP, 2), _typed([1, 2], DType.TIMESTAMP, 1)
+        assert us.equals(ms)
+        assert us.compare(ms).to_dict() == {"index": [], "self": [], "other": []}
+        other = _typed([1, 3], DType.TIMESTAMP, 1)
+        assert us.compare(other).to_dict()["index"] == [1]
+
+    def test_aware_differs_from_naive(self):
+        naive, aware = _typed([1, 2], DType.TIMESTAMP, 2), _typed([1, 2], DType.TIMESTAMP, 2, "UTC")
+        assert not naive.equals(aware)
+        assert naive.compare(aware).to_dict()["index"] == [0, 1]
+
+    @pytest.mark.parametrize("kind", [DType.DURATION, DType.TIME64])
+    def test_units_below_a_microsecond_are_exact(self, kind):
+        ns = _typed([1500, 1000, 2000, 7], kind, 3)
+        us = _typed([1, 1, 2, 0], kind, 2)
+        assert ns.compare(us)["index"].to_list() == [0, 3]
+        assert us.compare(ns)["index"].to_list() == [0, 3]
+        assert not ns.equals(us)
+        assert _typed([1000, 2000], kind, 3).equals(_typed([1, 2], kind, 2))
+
+    def test_scaling_cannot_overflow_into_equal(self):
+        big = 2**62
+        ns, s = _typed([big], DType.DURATION, 3), _typed([big], DType.DURATION, 0)
+        assert not ns.equals(s)
+        assert ns.compare(s)["index"].to_list() == [0]
+
+    def test_unit_mismatch_keeps_nulls(self):
+        ns = _typed([1000, None], DType.DURATION, 3)
+        us = _typed([1, None], DType.DURATION, 2)
+        assert ns.equals(us)
+        assert not ns.equals(_typed([1, 2], DType.DURATION, 2))
+
+    def test_same_unit_and_zone_still_native(self):
+        a, b = _typed([1, 2], DType.DURATION, 1), _typed([1, 2], DType.DURATION, 1)
+        assert a.equals(b)
+
+
+class TestGroupsEdges:
+    def test_a_user_column_named_row(self):
+        df = DataFrame({"_row": [2, 1, 2], "v": [1, 2, 3]})
+        assert df.groupby("_row").groups == {2: [0, 2], 1: [1]}
+        assert DataFrame({"k": [1, 2, 1], "_row": [9, 8, 7]}).groupby("k").groups == {
+            1: [0, 2],
+            2: [1],
+        }
+
+    def test_signed_zero_keys_share_a_group(self):
+        df = DataFrame({"k": Series.from_list([0.0, 1.0, -0.0, 0.0])})
+        assert df.groupby("k").groups == {0.0: [0, 2, 3], 1.0: [1]}
+
+    def test_bool_keys_are_bool_labels(self):
+        df = DataFrame({"k": [True, False, True]})
+        groups = df.groupby("k").groups
+        assert groups == {True: [0, 2], False: [1]}
+        assert all(type(k) is bool for k in groups)
+
+    def test_dropna_keeps_original_positions(self):
+        df = DataFrame({"a": ["x", "y", None, "x", None, "z", "y"], "v": list(range(7))})
+        assert df.groupby("a").groups == {"x": [0, 3], "y": [1, 6], "z": [5]}
+        assert df.groupby("a")[["v"]].groups == {"x": [0, 3], "y": [1, 6], "z": [5]}
+
+
+class TestNaNParity:
+    def test_equals_aligned_nan(self):
+        nan = float("nan")
+        assert Series.from_list([1.0, nan]).equals(Series.from_list([1.0, nan]))
+        assert not Series.from_list([1.0, nan]).equals(Series.from_list([1.0, 2.0]))
+        assert not Series.from_list([1.0, nan]).equals(Series.from_list([1.0, None]))
+        a = DataFrame({"x": [1.0, nan]})
+        assert a.equals(DataFrame({"x": [1.0, nan]}))
+
+    def test_compare_skips_aligned_nan(self):
+        nan = float("nan")
+        got = Series.from_list([1.0, nan, nan, None]).compare(
+            Series.from_list([1.0, nan, 2.0, nan])
+        )
+        assert got.to_dict()["index"] == [2, 3]

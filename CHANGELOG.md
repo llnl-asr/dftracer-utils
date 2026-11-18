@@ -183,6 +183,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   `Series.compare`, `Series.equals`, `DataFrame.equals`, `first_valid_index`, `last_valid_index`, `GroupBy.groups`, `Series.repeat` and `Series.drop` run on the engine kernels in place of a Python loop over the rows.
   On 1M rows (median of 5 rounds): `Series.compare` 57 to 2 ms, `equals` 65 to 2 ms, the four valid-index calls 99 to 36 ms, `GroupBy.groups` 63 to 36 ms.
   `compare` and `equals` use the row compare kernel for numbers, bool, strings, binary, dates and times; a number against text differs on every present row (as pandas); nested, decimal and mixed time columns compare by value in Python.
+  `compare` and `equals` match times by instant when only the unit or the zone differs (a naive timestamp never equals an aware one; a duration in seconds never equals one in milliseconds with the same integers, and 1500 ns never equals 1 us), and two NaN at the same position are equal, as in pandas.
+  `GroupBy.groups` keeps the user column named `_row`, merges `0.0` and `-0.0`, returns `bool` labels for a bool key, and gives the positions of the original rows when null keys are left out.
   `import dftracer.utils` takes 31 ms in place of 47: the version comes from the generated `_version.py` (the build already writes it) and not from `importlib.metadata`, and `asyncio`, `concurrent.futures`, `inspect` and `logging` load on first use.
   Probes for Arrow and pyarrow in the pandas and polars converters run once.
   `benchmarks/python/micro_bench.py` times these calls.

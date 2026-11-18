@@ -76,9 +76,11 @@ class GroupBy:
         )
         out._single = picked[0] if len(picked) == 1 else None
         out._sort = self._sort
+        out._rows = self._rows
         return out
 
     _single: "Optional[str]" = None
+    _rows: "Optional[Series]" = None
     _sort: bool = False
 
     def _sorted(self, out: DataFrame) -> DataFrame:
@@ -403,19 +405,28 @@ class GroupBy:
             return {(): list(range(len(frame)))}
         if len(frame) == 0:
             return {}
-        order = cast(
-            "List[int]", frame.with_row_index("_row").sort_values(self._keys)["_row"].to_list()
+        row = "_row"
+        while row in frame.columns:
+            row = "_" + row
+        marked = (
+            frame.with_row_index(row) if self._rows is None else frame.with_column(row, self._rows)
         )
+        order = cast("List[int]", marked.sort_values(self._keys)[row].to_list())
         sizes = self.size().sort_by_multi(self._keys)
-        labels = [sizes[k].to_list() for k in self._keys]
+        labels = [
+            sizes[k].astype(DType.BOOL).to_list()
+            if frame[k].dtype == DType.BOOL
+            else sizes[k].to_list()
+            for k in self._keys
+        ]
         counts = cast("List[int]", sizes["size"].to_list())
         out: Dict[object, List[int]] = {}
         start = 0
         for g, n in enumerate(counts):
             label = labels[0][g] if len(labels) == 1 else tuple(c[g] for c in labels)
-            out[label] = order[start : start + n]
+            out.setdefault(label, []).extend(order[start : start + n])
             start += n
-        return dict(sorted(out.items(), key=lambda kv: kv[1][0]))
+        return dict(sorted(((k, sorted(v)) for k, v in out.items()), key=lambda kv: kv[1][0]))
 
     indices = groups
 

@@ -1559,13 +1559,20 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
                 keys.append(k)
             else:
                 raise KeyError(f"group_by: no column named {k!r}")
+        rows: "Optional[Series]" = None
         if dropna:
             for k in keys:
                 if source._col(k).null_count:
-                    source = source.filter(source._col(k).notna())
+                    if rows is None:
+                        rows = DataFrame({"v": source._col(k)}).with_row_index("_i")["_i"]
+                    present = source._col(k).notna()
+                    rows = rows.filter(present)
+                    source = source.filter(present)
         if not aggs:
             # The Python object over this wrapper, so the index names carry.
-            return GroupBy(source, keys)
+            grouped = GroupBy(source, keys)
+            grouped._rows = rows
+            return grouped
         return _ext.DataFrame.group_by(source, *[k for k in keys], *[a for a in aggs])
 
     def reduce(self, agg: str) -> "DataFrame":

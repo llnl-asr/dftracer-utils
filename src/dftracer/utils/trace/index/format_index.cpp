@@ -122,9 +122,9 @@ coro::CoroTask<dstd::Result<void>> build_format_index(
     extensions::ColumnFeeder feeder(make_summaries(settings));
     if (!settings.config.path_summaries.empty())
         feeder.set_path_filter(
-            [&config = settings.config](dstd::StringView path,
+            [&config = settings.config](dstd::StringView column,
                                         store::IndexExtension ext) {
-                return config.builds(path, ext);
+                return config.builds(column, ext);
             });
     dstd::UniquePtr<extensions::ExtensionBuilders> plugin_builders;
     auto registered = extensions::registered_extensions();

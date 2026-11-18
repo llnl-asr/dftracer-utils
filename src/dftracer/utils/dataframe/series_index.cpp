@@ -821,7 +821,7 @@ dstd::Result<Series> Series::reindex(dstd::Span<const Series> keys,
     Series out = filled->rename(handle_->name).with_index(views, keys);
     if (!out.valid())
         return invalid_argument<"reindex: the keys cannot be row labels">();
-    return std::move(out);
+    return out;
 }
 
 dstd::Result<DataFrame> DataFrame::reindex(dstd::Span<const Series> keys,

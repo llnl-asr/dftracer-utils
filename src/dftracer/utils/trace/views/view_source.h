@@ -171,7 +171,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
         dstd::Vector<dstd::SharedPtr<const ViewSource>> members);
 
     /// The plan this source scans.
-    const detail::ScanPlan& plan() const { return plan_; }
+    const detail::ScanPlan& scan_plan() const { return plan_; }
     TraceOutput output() const { return output_; }
     /// Push projection into the plan's select and each translatable predicate
     /// into its query (reported Exact - the scan filters events, not just

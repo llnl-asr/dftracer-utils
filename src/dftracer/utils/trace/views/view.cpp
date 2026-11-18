@@ -518,7 +518,7 @@ namespace {
 // The scan plan the source under a view's engine ops reads.
 detail::scan::ScanPlan scanned_plan(const dataframe::LazyFrame& lf) {
     return static_cast<const ViewSource&>(*dataframe::detail::plan_source(lf))
-        .plan();
+        .scan_plan();
 }
 
 }  // namespace
@@ -601,7 +601,7 @@ View View::reshape(
     if (!residual) {
         const auto& src = static_cast<const ViewSource&>(
             *dataframe::detail::plan_source(planned));
-        detail::ScanPlan next = step(src.plan());
+        detail::ScanPlan next = step(src.scan_plan());
         if (next->error) return failed(*next->error);
         dataframe::LazyFrame lf = dataframe::detail::rebase(
             planned, dstd::make_shared<ViewSource>(next));
@@ -626,7 +626,7 @@ bool View::aggregates() const {
         dataframe::detail::plan_source(dataframe::detail::optimize_plan(lf_))
             .get());
     return src && src->output() == TraceOutput::Events &&
-           !detail::is_row_query(*src->plan());
+           !detail::is_row_query(*src->scan_plan());
 }
 
 dstd::Result<detail::scan::ScanPlan> View::absorbed(dstd::StringView method,
@@ -647,7 +647,7 @@ dstd::Result<detail::scan::ScanPlan> View::absorbed(dstd::StringView method,
         dataframe::detail::plan_source(planned).get());
     if (!src || src->output() != TraceOutput::Events)
         return fail("needs a trace scan");
-    detail::scan::ScanPlan v = src->plan();
+    detail::scan::ScanPlan v = src->scan_plan();
     const bool events = need == Need::Events || need == Need::EventsHead ||
                         need == Need::EventsWindow;
     if (window && need == Need::EventsHead && window->first != 0)

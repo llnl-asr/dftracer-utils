@@ -149,7 +149,7 @@ dstd::String optimized(const dataframe::LazyFrame& lf) {
     dstd::String ops = opt.explain();
     ops = ops.substr(ops.find('\n') == dstd::String::npos ? ops.size()
                                                           : ops.find('\n'));
-    return canonical(*src->plan()) + "\nops:" + dstd::String(ops);
+    return canonical(*src->scan_plan()) + "\nops:" + dstd::String(ops);
 }
 
 void check_same_rows(const dataframe::DataFrame& a,
@@ -711,7 +711,7 @@ TEST_SUITE("View - expression keys") {
 
         // Materialize the rollup through the absorbed view.
         const views::detail::scan::ScanPlan absorbed =
-            absorbed_source(keyed(25).lazy())->plan();
+            absorbed_source(keyed(25).lazy())->scan_plan();
         const auto want25 =
             counts(test_view_common::run(views::detail::scan::collect_frame(
                 views::detail::scan::materialize(absorbed, 0, 0))));

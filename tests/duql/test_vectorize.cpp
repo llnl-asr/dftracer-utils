@@ -50,9 +50,9 @@ dstd::Vector<std::uint8_t> validity(const V& v) {
 
 template <class V>
 dataframe::Series numbers(dataframe::TypeId type, const V& v) {
-    using T = typename V::value_type::value_type;
-    dstd::Vector<T> data;
-    for (const auto& x : v) data.push_back(x.value_or(T{}));
+    using Elem = typename V::value_type::value_type;
+    dstd::Vector<Elem> data;
+    for (const auto& x : v) data.push_back(x.value_or(Elem{}));
     const auto bits = validity(v);
     return dataframe::Series::flat(type, data.data(), N, bits.data());
 }

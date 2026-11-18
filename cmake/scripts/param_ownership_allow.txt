@@ -173,7 +173,6 @@ src/dftracer/utils/trace/views/view_source.cpp 2
 src/dftracer/utils/trace/views/view_source.h 2
 tests/dataframe/builders_types.h 19
 tests/dataframe/expr_ok.h 4
-tests/dataframe/test_agg_extended_ops.cpp 1
 tests/dataframe/test_agg_state.cpp 9
 tests/dataframe/test_c_api_buffers.cpp 1
 tests/dataframe/test_cast_followups.cpp 2

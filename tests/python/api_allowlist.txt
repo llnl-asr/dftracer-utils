@@ -221,6 +221,7 @@ Expr.add | expr-node:_Bin | -
 Expr.alias | expr-node:Named | -
 Expr.and_ | expr-node:_Logical | -
 Expr.apply | python-semantics | Python logic that does not build one node
+Expr.approx_quantile | expr-node:Agg | -
 Expr.approx_topk | expr-node:Agg | -
 Expr.arg_sort | expr-node:_ColumnOpNode | -
 Expr.argmax | expr-node:Agg | -
@@ -258,6 +259,7 @@ Expr.fill_null | python-semantics | built from other Expr methods (fillna)
 Expr.find | expr-node:_StrFind | -
 Expr.findall | expr-node:_StrFn | -
 Expr.first | python-semantics | Python logic that does not build one node
+Expr.floordiv | python-semantics | built from other Expr methods (_series_arith)
 Expr.forward_fill | expr-node:_ColumnOpNode | -
 Expr.fullmatch | expr-node:_StrPred | -
 Expr.ge | expr-node:_Cmp | -
@@ -287,13 +289,13 @@ Expr.join | expr-node:_StrFn | -
 Expr.kurt | python-semantics | Python logic that does not build one node
 Expr.last | python-semantics | Python logic that does not build one node
 Expr.le | expr-node:_Cmp | -
+Expr.len | expr-node:Agg | -
 Expr.len_bytes | expr-node:_StrLen | -
 Expr.len_chars | expr-node:_StrLen | -
 Expr.like | expr-node:_StrPred | -
 Expr.list_sorted | expr-node:Agg | -
 Expr.ljust | python-semantics | built from other Expr methods (pad_end)
 Expr.log10 | python-semantics | Python logic that does not build one node
-Expr.log1p | python-semantics | Python logic that does not build one node
 Expr.lower | expr-node:_StrMap | -
 Expr.lstrip | expr-node:_StrMap | -
 Expr.lt | expr-node:_Cmp | -
@@ -301,13 +303,17 @@ Expr.mask | expr-node:_Select | -
 Expr.match | expr-node:_StrPred | -
 Expr.max | python-semantics | Python logic that does not build one node
 Expr.mean | python-semantics | Python logic that does not build one node
+Expr.median | python-semantics | built from other Expr methods (quantile)
 Expr.min | python-semantics | Python logic that does not build one node
+Expr.mod | python-semantics | built from other Expr methods (_series_arith)
 Expr.mul | expr-node:_Bin | -
+Expr.n_unique | python-semantics | built from other Expr methods (distinct)
 Expr.ne | expr-node:_Cmp | -
 Expr.neg | expr-node:_Unary | -
 Expr.normalize | expr-node:_StrFn | -
 Expr.not_ | expr-node:_Logical | -
 Expr.not_in | expr-node:_IsIn | -
+Expr.null_count | expr-node:Agg | -
 Expr.or_ | expr-node:_Logical | -
 Expr.over | expr-node:_ColumnOpNode | -
 Expr.pad | python-semantics | built from other Expr methods (pad_end, pad_start)
@@ -315,6 +321,7 @@ Expr.pad_end | expr-node:_StrFn | -
 Expr.pad_start | expr-node:_StrFn | -
 Expr.partition | expr-node:_StrFn | -
 Expr.percentile | expr-node:Agg | -
+Expr.pow | python-semantics | built from other Expr methods (_series_arith)
 Expr.prod | python-semantics | Python logic that does not build one node
 Expr.quantile | expr-node:Agg | -
 Expr.rank | expr-node:_ColumnOpNode | -

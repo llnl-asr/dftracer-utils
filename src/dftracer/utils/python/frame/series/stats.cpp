@@ -21,6 +21,10 @@ PyObject* Series_quantile(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!parse_kw<"|ds">(args, kwds, {"q", "interpolation"}, &q,
                          &interpolation))
         return nullptr;
+    if (!(q >= 0.0 && q <= 1.0)) {
+        PyErr_SetString(PyExc_ValueError, "quantile: q must be in [0, 1]");
+        return nullptr;
+    }
     const dftracer::utils::dstd::StringView which = interpolation;
     dftu_interpolation code = DFTU_INTERP_LINEAR;
     if (which == "nearest")
@@ -37,8 +41,7 @@ PyObject* Series_quantile(PyObject* self, PyObject* args, PyObject* kwds) {
                         "'nearest', 'lower', 'higher' or 'midpoint'");
         return nullptr;
     }
-    if (a->count() == 0) Py_RETURN_NONE;
-    return PyFloat_FromDouble(without_gil(a->length(), [&] {
+    return reduced_float(*a, without_gil(a->length(), [&] {
         return dftu_series_quantile_interp(a->handle(), q, code);
     }));
 }
@@ -46,9 +49,9 @@ PyObject* Series_median(PyObject* self, PyObject*) {
     Held held_a(self);
     Series* a = held_a.get();
     if (!a) return nullptr;
-    if (a->count() == 0) Py_RETURN_NONE;
-    return PyFloat_FromDouble(without_gil(
-        a->length(), [&] { return dftu_series_quantile(a->handle(), 0.5); }));
+    return reduced_float(*a, without_gil(a->length(), [&] {
+        return dftu_series_quantile(a->handle(), 0.5);
+    }));
 }
 PyObject* Series_variance(PyObject* self, PyObject* args, PyObject* kwds) {
     Held held_a(self);
@@ -56,7 +59,7 @@ PyObject* Series_variance(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!a) return nullptr;
     int sample = 1;
     if (!parse_kw<"|p">(args, kwds, {"sample"}, &sample)) return nullptr;
-    return PyFloat_FromDouble(without_gil(a->length(), [&] {
+    return reduced_float(*a, without_gil(a->length(), [&] {
         return dftu_series_variance(a->handle(), sample);
     }));
 }
@@ -66,9 +69,9 @@ PyObject* Series_stddev(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!a) return nullptr;
     int sample = 1;
     if (!parse_kw<"|p">(args, kwds, {"sample"}, &sample)) return nullptr;
-    if (a->count() == 0) Py_RETURN_NONE;
-    return PyFloat_FromDouble(without_gil(
-        a->length(), [&] { return dftu_series_stddev(a->handle(), sample); }));
+    return reduced_float(*a, without_gil(a->length(), [&] {
+        return dftu_series_stddev(a->handle(), sample);
+    }));
 }
 PyObject* Series_value_counts(PyObject* self, PyObject*) {
     Held held_a(self);

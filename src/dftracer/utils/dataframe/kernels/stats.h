@@ -12,7 +12,7 @@
 namespace dftracer::utils::dataframe {
 
 /// Variance of the non-null values. `sample` divides by (n-1) (Bessel), else by
-/// n. 0 when fewer than 2 (sample) or 1 (population) values.
+/// n. NaN when there is no value, and for one value in the sample form.
 double variance(const Series& v, bool sample = true);
 
 /// Standard deviation (sqrt of variance).
@@ -36,6 +36,14 @@ double quantile(const Series& v, double q);
 
 /// The q-th quantile with @p interp choosing the result between two ranks.
 double quantile(const Series& v, double q, Interpolation interp);
+
+/// The q-th quantile of @p values, which are reordered and may hold NaN (ranked
+/// above every number). NaN for no value or a NaN @p q; @p q is clamped to
+/// [0, 1]. @p may_have_nan false skips the scan for a NaN: the caller knows
+/// the values came from an integer column. The merged state of the exact
+/// quantile aggregate finishes through this.
+double quantile_of(dstd::Vector<double>& values, double q, Interpolation interp,
+                   bool may_have_nan = true);
 
 /// The median (quantile 0.5).
 double median(const Series& v);

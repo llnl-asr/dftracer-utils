@@ -108,13 +108,7 @@ series.ge#1[F] | semantics | [values] [False, None, False, False, False, False] 
 series.gt#1[F] | semantics | [values] [False, None, False, False, False, False] vs [False, None, True, False, False, False]
 series.ge#2[F] | semantics | [values] [False, None, False, False, True, False] vs [False, None, True, False, True, False]
 series.gt#2[F] | semantics | [values] [False, None, False, False, True, False] vs [False, None, True, False, True, False]
-frame.sum#1[E] | shape | [shape] rows 0 vs 1
-frame.mean#1[E] | shape | [shape] rows 0 vs 1
 frame.median#1[E] | semantics | [dtype] a: str vs float64
-frame.min#1[E] | shape | [shape] rows 0 vs 1
-frame.max#1[E] | shape | [shape] rows 0 vs 1
-frame.std#1[E] | shape | [shape] rows 0 vs 1
-frame.var#1[E] | shape | [shape] rows 0 vs 1
 frame.null_count#1[N] | semantics | [dtype] a: int64 vs uint32
 frame.null_count#1[E] | semantics | [dtype] a: int64 vs uint32
 frame.std#2[N] | shape | [error] ours raised TypeError: DataFrame.std() got an unexpected keyword argument 'ddof'
@@ -187,29 +181,22 @@ groupby.quantile#1[G] | keyword | [error] ours raised TypeError: DataFrame.group
 groupby.head#1[G] | keyword | [error] ours raised TypeError: DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
 groupby.tail#1[G] | keyword | [error] ours raised TypeError: DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
 groupby.all#1[G] | keyword | [error] ours raised TypeError: DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
-expr.log1p#1[Z] | semantics | [values] r: [0.0, -inf, inf, nan, nan, None, 709.1962086421661, 1.0986122886681096, 6.566672429803241, nan, 0.0] vs [0.0, -inf, inf, nan, nan, None, 709.1962086421661, 1.0986122886681098, 6.5666724298
+expr.len#1[I] | semantics | [dtype] r: int64 vs uint32
+expr.len#1[F] | semantics | [dtype] r: int64 vs uint32
+expr.len#1[S] | semantics | [dtype] r: int64 vs uint32
+expr.n_unique#1[I] | semantics | [dtype] r: int64 vs uint32
+expr.n_unique#1[F] | semantics | [dtype] r: int64 vs uint32
+expr.n_unique#1[S] | semantics | [dtype] r: int64 vs uint32
+expr.null_count#1[I] | semantics | [dtype] r: int64 vs uint32
+expr.null_count#1[F] | semantics | [dtype] r: int64 vs uint32
+expr.null_count#1[S] | semantics | [dtype] r: int64 vs uint32
 expr.round#1[F] | keyword | [error] ours raised TypeError: Expr.__getattr__.<locals>.<lambda>() takes 0 positional arguments but 1 was given
 expr.round#1[Z] | keyword | [error] ours raised TypeError: Expr.__getattr__.<locals>.<lambda>() takes 0 positional arguments but 1 was given
-expr.pow#1[I] | missing | [error] ours raised AttributeError: pow
-expr.pow#1[F] | missing | [error] ours raised AttributeError: pow
-expr.median#1[I] | missing | [error] ours raised AttributeError: median
-expr.median#1[F] | missing | [error] ours raised AttributeError: median
 expr.var#1[I] | keyword | [error] ours raised TypeError: _make_agg_method.<locals>.method() got an unexpected keyword argument 'ddof'
 expr.var#1[F] | keyword | [error] ours raised TypeError: _make_agg_method.<locals>.method() got an unexpected keyword argument 'ddof'
 expr.count#1[I] | semantics | [dtype] r: int64 vs uint32
 expr.count#1[F] | semantics | [dtype] r: int64 vs uint32
 expr.count#1[S] | semantics | [dtype] r: int64 vs uint32
-expr.len#1[I] | missing | [error] ours raised AttributeError: len
-expr.len#1[F] | missing | [error] ours raised AttributeError: len
-expr.len#1[S] | missing | [error] ours raised AttributeError: len
-expr.n_unique#1[I] | missing | [error] ours raised AttributeError: n_unique
-expr.n_unique#1[F] | missing | [error] ours raised AttributeError: n_unique
-expr.n_unique#1[S] | missing | [error] ours raised AttributeError: n_unique
-expr.null_count#1[I] | missing | [error] ours raised AttributeError: null_count
-expr.null_count#1[F] | missing | [error] ours raised AttributeError: null_count
-expr.null_count#1[S] | missing | [error] ours raised AttributeError: null_count
-expr.quantile#1[I] | semantics | [values] r: [1.993861087526097] vs [2.0]
-expr.quantile#1[F] | semantics | [values] r: [2.1383094396301454e+307] vs [1.5]
 expr.arg_max#1[I] | missing | [error] ours raised AttributeError: arg_max
 expr.arg_max#1[F] | missing | [error] ours raised AttributeError: arg_max
 expr.arg_min#1[I] | missing | [error] ours raised AttributeError: arg_min

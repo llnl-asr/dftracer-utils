@@ -33,7 +33,8 @@ enum {
     DFTU_SCALAR_TAG_U64 = 1,
     DFTU_SCALAR_TAG_F64 = 2,
     DFTU_SCALAR_TAG_STR = 3,
-    DFTU_SCALAR_TAG_ERR = 4
+    DFTU_SCALAR_TAG_ERR = 4,
+    DFTU_SCALAR_TAG_NULL = 5
 };
 
 /** A scalar operand, tagged by its domain so a kernel converts it to the
@@ -51,7 +52,11 @@ enum {
  * the operation and the column type. The error and its message are BORROWED
  * from thread-local storage and stay valid until the next reduction on the same
  * thread, so copy them if they must outlive that. The other value members are
- * not meaningful for an ERR scalar. */
+ * not meaningful for an ERR scalar.
+ *
+ * A NULL scalar means "no value": the C++ Series::min and Series::max return it
+ * for a column with no valid row (the C functions keep their 0 result). Its
+ * `value` is zero, so a reader that ignores the tag sees 0. */
 #ifndef DFTU_TYPEDEF_DFTU_SCALAR
 #define DFTU_TYPEDEF_DFTU_SCALAR
 typedef struct dftu_scalar dftu_scalar;
@@ -918,7 +923,10 @@ DFTU_EXPORT dftu_series* dftu_series_argsort_nulls(const dftu_series* v,
                                                    int32_t nulls_last);
 
 /** Summary statistics over the non-null values of a FLAT column. Moment stats
- * are numeric-only; quantile sorts (SIMD); nunique/unique work for any type. */
+ * are numeric-only; quantile sorts (SIMD); nunique/unique work for any type.
+ * `sample` nonzero divides by n - 1. variance and stddev give NaN for no valid
+ * value and, for the sample form, for one; 0.0 for a NULL `v` or a type with no
+ * numeric value. */
 DFTU_EXPORT double dftu_series_variance(const dftu_series* v, int32_t sample);
 DFTU_EXPORT double dftu_series_stddev(const dftu_series* v, int32_t sample);
 DFTU_EXPORT double dftu_series_skewness(const dftu_series* v);
@@ -940,13 +948,15 @@ enum {
 };
 
 /** The exact `q` quantile (q clamped to [0, 1]) of the non-null values with
- * linear interpolation; NaN when there is no value. A NaN value ranks above
- * every number. Nothing is allocated for the caller. */
+ * linear interpolation; NaN when there is no value or `q` is NaN. A NaN value
+ * ranks above every number. Returns 0.0 when `v` is NULL. Nothing is allocated
+ * for the caller. */
 DFTU_EXPORT double dftu_series_quantile(const dftu_series* v, double q);
 /** Like dftu_series_quantile, with `interp` (a dftu_interpolation) choosing the
  * result when `q * (n - 1)` falls between two ranks: LINEAR blends them,
  * NEAREST rounds the rank half away from zero, LOWER and HIGHER take the rank
- * below or above, MIDPOINT their mean. An unknown `interp` gives NaN. */
+ * below or above, MIDPOINT their mean. An unknown `interp` or a NaN `q` gives
+ * NaN; a NULL `v` gives 0.0. */
 DFTU_EXPORT double dftu_series_quantile_interp(const dftu_series* v, double q,
                                                dftu_interpolation interp);
 DFTU_EXPORT int64_t dftu_series_nunique(const dftu_series* v);
@@ -993,6 +1003,12 @@ DFTU_EXPORT dftu_series* dftu_series_pct_change(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_sqrt(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_exp(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_log(const dftu_series* v);
+/** log(1 + x) and exp(x) - 1 over the values, as a Float64 column that keeps
+ * the input's validity: exact for a tiny x where log(1 + x) and exp(x) - 1
+ * lose every digit. NULL for a nested, string or Bool column. Caller owns the
+ * result. */
+DFTU_EXPORT dftu_series* dftu_series_log1p(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_expm1(const dftu_series* v);
 
 /** Predicate masks over a column, each a bit-packed Bool column that keeps
  * the input's validity (a null value has a null answer).

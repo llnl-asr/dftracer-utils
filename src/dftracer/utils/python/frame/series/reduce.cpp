@@ -20,6 +20,8 @@ PyObject* scalar_to_py(dftu_scalar v) {
             return PyUnicode_DecodeUTF8(v.value.s ? v.value.s : "",
                                         static_cast<Py_ssize_t>(v.len),
                                         "strict");
+        case DFTU_SCALAR_TAG_NULL:
+            Py_RETURN_NONE;
         case DFTU_SCALAR_TAG_ERR:
             PyErr_SetString(PyExc_TypeError,
                             v.value.err != nullptr && v.value.err->message

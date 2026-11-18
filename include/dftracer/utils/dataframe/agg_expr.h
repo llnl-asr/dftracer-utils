@@ -60,8 +60,16 @@ AggExprSpec agg_kurt(Expr value, dstd::String out = "kurt");
 /// kurtosis (NaN below four); NaN for a constant column.
 AggExprSpec agg_skew_unbiased(Expr value, dstd::String out = "skew");
 AggExprSpec agg_kurt_unbiased(Expr value, dstd::String out = "kurt");
-/// A DDSketch quantile at level `q` in [0, 1] (mergeable, order-independent).
+/// An approximate DDSketch quantile at level `q` in [0, 1]: mergeable in
+/// bounded memory and order-independent, exact only to the sketch's relative
+/// accuracy. @ref agg_quantile is the exact one.
 AggExprSpec agg_pct(Expr value, double q, dstd::String out = "pct");
+/// The exact quantile at level `q` in [0, 1], @p interp choosing the result
+/// between two ranks; null for a group with no present value. The state keeps
+/// every present value (see @ref AggOp::Quantile).
+AggExprSpec agg_quantile(Expr value, double q,
+                         Interpolation interp = Interpolation::Linear,
+                         dstd::String out = "quantile");
 /// The DDSketch histogram of `value`, a list<struct{lo,hi,count}> per group.
 AggExprSpec agg_hist(Expr value, dstd::String out = "hist");
 /// Sum of squares of `value` (Float64), from the shared @ref FieldStat.

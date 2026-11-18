@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add the exact quantile aggregate, `AggOp::Quantile` / `Agg::Quantile` / `DFTU_AGG_QUANTILE` ("quantile"), with `agg_quantile` and `dftu_agg_quantile`: the group keeps every present value (8 bytes each), partial states merge by concatenation, the aggregation spill path bounds the state across groups and a group with no value is null.
+  `Expr.quantile(q, interpolation="nearest")` (Polars), `Expr.percentile(p, interpolation="linear")` and `Expr.median()` are exact; `Expr.approx_quantile(q)` is the DDSketch estimate they used to be.
+  `GroupBy.quantile` and `LazyGroupBy.quantile` take `interpolation` and run on the aggregate.
+  A level outside [0, 1] or NaN raises `ValueError`.
+- Add `Series.log1p`, `Series.expm1` and the expression forms, with the kernels `dftu_series_log1p` and `dftu_series_expm1`; `Expr.log1p` was `log(x + 1)` and lost a tiny `x`.
+- Add `Expr.pow`, `floordiv`, `mod` and the operators `**`, `//` and `%` over the Series kernels, and `Expr.median`, `n_unique`, `len` and `null_count` aggregates.
 - Add the Polars names `select_seq`, `with_columns_seq` (frames and plans), `DataFrame.is_sorted`, `iter_slices`, `remove`, `bottom_k`, `LazyFrame.top_k`, `bottom_k`, `shift`, `cast`, `gather_every`, `remove`, `Series.not_`, `clear`, `radians`, `degrees`, `Expr.radians`, `degrees`, `pipe`, `Series.dt.total_days` to `total_nanoseconds` (whole units, truncated toward zero, in integer arithmetic), `Series.dt.timestamp`, `to_string`, `min`, `max`, `Series.str.head`, `tail`, and `Expr.str.head`, `tail`, `Expr.dt.timestamp`, `to_string`.
 - `scripts/api_coverage.py` rejects a `needs-kernel` line whose detail points to a method we already have.
 - Add `scripts/api_coverage.py`, a gate that lists the public names of pandas (`DataFrame`, `Series`, both group-bys, `.str`, `.dt`) and Polars (`DataFrame`, `Series`, `LazyFrame`, `Expr`, both group-bys, the `str`, `dt` and `list` namespaces), subtracts ours and the reasoned list in `scripts/api_coverage_exclude.txt`, and fails on a name that is neither; `--report` prints the table.
@@ -918,6 +924,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- A keyless aggregation over no rows is one row (`DataFrame.sum()`, `mean()` and the like, `group_by()` with no key): `sum` is 0 and the other reductions are null.
+- `Expr.str.find` is null where the needle is absent (Polars); `Series.str.find` keeps -1.
+- The linear quantile of more than 262144 rows ranks a NaN of either sign above every number, and it selects the two ranks without a full sort for Int32, Float32 and other widths as well as Float64 and Int64.
+- `Series.clip` and `Expr.clip` with one bound on an integer column saturate an infinite or out-of-range bound in the kernel; the cast of an infinity was undefined.
+- A column with no valid value gives `None` for `min`, `max`, `mean`, `median`, `quantile`, `var` and `std` only after the type check, so a string column raises `TypeError` whether it is empty or not; the engine reports "no value" (a NULL scalar from C++ `Series::min` and `max`, NaN from `mean`, `variance`, `stddev` and `quantile`) and the Python binding turns it into `None` in one place.
+  The C++ `variance` and `stddev` are NaN for no value and, in the sample form, for one value.
+  The C scalar tags gain `DFTU_SCALAR_TAG_NULL`.
+- `to_pandas` tests expect what it documents: `Int64` for an integer column with nulls and `category` for a dictionary column.
 - `Series.exp`, `Series.log` and the expression forms follow IEEE for zero, negatives, infinities, NaN and overflow: `log` of a negative is NaN, `log(0)` is `-inf`, `exp` of a large value is `inf` and NaN stays NaN.
   A vector that held such a value was computed outside the range of the SIMD routine and returned garbage.
   `sign` of NaN is NaN, and `clip` leaves a NaN value as it is and ignores a NaN bound.

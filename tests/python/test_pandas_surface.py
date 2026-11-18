@@ -937,7 +937,7 @@ def test_groupby_prod_cumprod_median_quantile_match_pandas():
     assert _d(holes.group_by("k").median()) == {"k": ["x", "y"], "v": [None, 2.0]}
     with pytest.raises(ValueError):
         g.quantile(1.5)
-    with pytest.raises(ValueError, match="exact group-by method"):
+    with pytest.raises(ValueError, match="group-by method"):
         g.agg("median")
     # describe now carries the exact quartiles.
     ours = _d(g.describe())

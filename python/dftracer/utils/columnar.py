@@ -233,11 +233,13 @@ _UNARY_CODES = {
     "is_nan": 10,
     "is_finite": 11,
     "is_infinite": 12,
+    "log1p": 13,
+    "expm1": 14,
 }
 # Unary ops whose result is a Bool mask (not the input's numeric type).
 _UNARY_BOOL = frozenset({"is_nan", "is_finite", "is_infinite"})
 # Unary ops that widen to float.
-_UNARY_FLOAT = frozenset({"log", "sqrt", "exp"})
+_UNARY_FLOAT = frozenset({"log", "sqrt", "exp", "log1p", "expm1"})
 # BinaryOp codes (vec::BinaryOp).
 _BIN_OP_CODE = {"+": 0, "-": 1, "*": 2, "/": 3}
 
@@ -279,7 +281,24 @@ _AGG_CODE = {
     "prod": 35,
     "sketch_quantile": 36,
     "udaf": 37,
+    "quantile": 40,
 }
+
+_INTERPOLATIONS = {"linear": 0, "nearest": 1, "lower": 2, "higher": 3, "midpoint": 4}
+
+
+def _quantile_param(q: float, interpolation: str) -> float:
+    """The ``param`` of the exact ``quantile`` aggregate: the level plus twice
+    the interpolation code (``quantile_param`` in agg.h)."""
+    if not 0.0 <= q <= 1.0:
+        raise ValueError(f"quantile: q must be in [0, 1], not {q!r}")
+    code = _INTERPOLATIONS.get(interpolation) if isinstance(interpolation, str) else None
+    if code is None:
+        raise ValueError(
+            "quantile: interpolation must be 'linear', 'nearest', 'lower', 'higher' or 'midpoint'"
+        )
+    return float(q) + 2.0 * code
+
 
 _NOT_PUSHABLE = (
     "not an index-pushable predicate; compute it with .apply() or filter the materialized frame"
@@ -320,6 +339,50 @@ class Expr:
 
     def __rtruediv__(self, other: "Union[Expr, Agg, int, float]") -> "Expr":
         return _Bin("/", _wrap(other), self)
+
+    def _series_arith(self, name: str, other: object, reverse: bool = False) -> "Expr":
+        """The Python-semantics ``floordiv`` / ``mod`` / ``pow`` of the Series
+        kernels, as a column op: ``other`` is an expression or a number."""
+        from ._expr_ops import ColumnOp
+
+        if isinstance(other, Expr):
+            first, second = (other, self) if reverse else (self, other)
+            return _ColumnOpNode(first, ColumnOp(f"dftu.series.{name}", second))
+        if isinstance(other, bool) or not isinstance(other, (int, float)):
+            raise TypeError(f"{name}: expected a column expr or a number, got {other!r}")
+        return _ColumnOpNode(
+            self, ColumnOp(f"dftu.series.{name}_scalar", None, other, 1 if reverse else 0)
+        )
+
+    def __floordiv__(self, other: object) -> "Expr":
+        return self._series_arith("floordiv", other)
+
+    def __rfloordiv__(self, other: object) -> "Expr":
+        return self._series_arith("floordiv", other, True)
+
+    def __mod__(self, other: object) -> "Expr":
+        return self._series_arith("mod", other)
+
+    def __rmod__(self, other: object) -> "Expr":
+        return self._series_arith("mod", other, True)
+
+    def __pow__(self, other: object) -> "Expr":
+        return self._series_arith("pow", other)
+
+    def __rpow__(self, other: object) -> "Expr":
+        return self._series_arith("pow", other, True)
+
+    def floordiv(self, other: "Union[Expr, int, float]") -> "Expr":
+        """Floor division (Python semantics); ``//``."""
+        return self._series_arith("floordiv", other)
+
+    def mod(self, other: "Union[Expr, int, float]") -> "Expr":
+        """Remainder with the sign of the divisor (Python semantics); ``%``."""
+        return self._series_arith("mod", other)
+
+    def pow(self, exponent: "Union[Expr, int, float]") -> "Expr":
+        """This expression raised to ``exponent``; ``**``."""
+        return self._series_arith("pow", exponent)
 
     # Comparisons build predicate Exprs. Against a number, or == / != against a
     # string, they also evaluate in memory to a boolean mask; against a bool
@@ -652,9 +715,6 @@ class Expr:
 
     def log10(self) -> "Expr":
         return self.log() / math.log(10.0)  # type: ignore[attr-defined]
-
-    def log1p(self) -> "Expr":
-        return (self + 1).log()  # type: ignore[attr-defined]
 
     def over(self, keys: "Union[str, Sequence[str]]") -> "Expr":
         """The group-wise form of the column op this expression is (polars
@@ -1016,8 +1076,9 @@ class Expr:
         return _StrLen(self, chars=True)
 
     def find(self, needle: str) -> "Expr":
-        """Byte index of the first ``needle``, or -1 (Int64)."""
-        return _StrFind(self, needle)
+        """Byte index of the first ``needle`` (Int64), null where it is absent
+        (Polars ``str.find``); ``Series.str.find`` gives -1, as pandas."""
+        return _StrFind(self, needle, True)
 
     def replace(self, old: str, new: str) -> "Expr":
         """Replace the first ``old`` with ``new`` in each value. Takes ``str``
@@ -1042,10 +1103,44 @@ class Expr:
         """The byte substring ``[start, start + length)`` of each value."""
         return _StrSlice(self, start, length)
 
-    def quantile(self, q: float) -> "Agg":
-        """A DDSketch quantile at level ``q`` in [0, 1], per group (an
-        :class:`Agg`). Mergeable, so the parallel/distributed path is exact to
-        the sketch's relative accuracy."""
+    def quantile(
+        self,
+        quantile: float,
+        interpolation: "Literal['linear', 'nearest', 'lower', 'higher', 'midpoint']" = "nearest",
+    ) -> "Agg":
+        """The exact quantile at level ``quantile`` in [0, 1], per group (an
+        :class:`Agg`); null for a group with no present value. ``interpolation``
+        picks the result between two ranks, ``"nearest"`` as in Polars. The
+        group state keeps every present value (8 bytes each), spilled across
+        groups under the memory budget; :meth:`approx_quantile` is the bounded
+        memory sketch."""
+        return Agg("quantile", self, param=_quantile_param(quantile, interpolation))
+
+    def median(self) -> "Agg":
+        """The exact median per group (an :class:`Agg`): :meth:`quantile` at
+        0.5, whose two interpolations of the middle ranks agree."""
+        return self.quantile(0.5, "linear")
+
+    def n_unique(self) -> "Agg":
+        """The number of distinct present values per group (an :class:`Agg`):
+        :meth:`distinct`, a KMV sketch that is exact below 1024 values."""
+        return self.distinct()
+
+    def len(self) -> "Agg":
+        """The row count per group, nulls included (an :class:`Agg`)."""
+        return Agg("count", self)
+
+    def null_count(self) -> "Agg":
+        """The number of null values per group (an :class:`Agg`)."""
+        name = f"null_count_{self.name}" if isinstance(self, _Col) else "null_count"
+        return Agg("sum", self.is_null().cast("int64"), name)
+
+    def approx_quantile(self, q: float) -> "Agg":
+        """An approximate quantile at level ``q`` in [0, 1], per group, from a
+        DDSketch: mergeable in bounded memory, exact only to the sketch's
+        relative accuracy."""
+        if not 0.0 <= q <= 1.0:
+            raise ValueError(f"approx_quantile: q must be in [0, 1], not {q!r}")
         return Agg("pct", self, param=q)
 
     def sketch_quantile(self, q: float) -> "Agg":
@@ -1058,10 +1153,17 @@ class Expr:
             raise ValueError(f"sketch_quantile: q must be in [0, 1], not {q!r}")
         return Agg("sketch_quantile", self, param=q)
 
-    def percentile(self, p: float) -> "Agg":
-        """A percentile ``p`` in [0, 100], per group (numpy-style);
-        ``F.dur.percentile(99)`` is ``F.dur.quantile(0.99)``."""
-        return Agg("pct", self, param=p / 100.0)
+    def percentile(
+        self,
+        p: float,
+        interpolation: "Literal['linear', 'nearest', 'lower', 'higher', 'midpoint']" = "linear",
+    ) -> "Agg":
+        """The exact percentile ``p`` in [0, 100], per group (numpy-style,
+        linear interpolation by default); ``F.dur.percentile(99)`` is
+        ``F.dur.quantile(0.99, "linear")``."""
+        if not 0.0 <= p <= 100.0:
+            raise ValueError(f"percentile: p must be in [0, 100], not {p!r}")
+        return Agg("quantile", self, param=_quantile_param(p / 100.0, interpolation))
 
     def busy(self, resolution: "Union[int, float, str, None]" = None) -> "Agg":
         """Trace occupancy (``TraceViewer.agg`` only): the time at least one
@@ -1196,6 +1298,8 @@ class Expr:
         def log(self) -> "Expr": ...
         def sqrt(self) -> "Expr": ...
         def exp(self) -> "Expr": ...
+        def log1p(self) -> "Expr": ...
+        def expm1(self) -> "Expr": ...
         def sign(self) -> "Expr": ...
         def negate(self) -> "Expr": ...
         def trunc(self) -> "Expr": ...
@@ -1600,9 +1704,10 @@ class _StrLen(Expr):
 
 
 class _StrFind(Expr):
-    def __init__(self, arg: Expr, needle: str) -> None:
+    def __init__(self, arg: Expr, needle: str, null_on_miss: bool = False) -> None:
         self.arg = arg
         self.needle = needle
+        self.null_on_miss = null_on_miss
 
 
 class _StrReplace(Expr):
@@ -2958,7 +3063,7 @@ def _emit_ast(expr: Expr, resolve: Callable[[str], int], ast: List[tuple]) -> No
         ast.append((_AST_STR_LEN, 1 if expr.chars else 0))
     elif isinstance(expr, _StrFind):
         _emit_ast(expr.arg, resolve, ast)
-        ast.append((_AST_STR_FIND, expr.needle))
+        ast.append((_AST_STR_FIND, expr.needle, 1 if expr.null_on_miss else 0))
     elif isinstance(expr, _StrReplace):
         _emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_STR_REPLACE, expr.old, expr.new, 1 if expr.all else 0))
@@ -3085,6 +3190,9 @@ class Agg:
         if isinstance(self.value, _Col):
             if self.op == "pct":
                 return f"p{int(round(self.param * 100))}_{self.value.name}"
+            if self.op == "quantile":
+                level = self.param - 2.0 * math.floor(self.param / 2.0)
+                return f"p{int(round(level * 100))}_{self.value.name}"
             op = "count" if self.op == "count_valid" else self.op
             return f"{op}_{self.value.name}"
         return self.op
@@ -3228,13 +3336,18 @@ _PANDAS_AGG_NAMES = {
     "kurt": "kurt_unbiased",
 }
 _PANDAS_AGG_APPROXIMATE = {
-    "median": "quantile(0.5)",
-    "quantile": "quantile(q)",
+    "median": "quantile(0.5, 'linear')",
+    "quantile": "quantile(q, 'linear')",
     "nunique": "distinct()",
 }
 
 
 def _agg_op_name(name: str) -> str:
+    if name in ("median", "quantile"):
+        raise ValueError(
+            f"agg({name!r}): a quantile needs its level; spell it "
+            f"col(...).{_PANDAS_AGG_APPROXIMATE[name]}, or use the group-by method .{name}()"
+        )
     if name in _PANDAS_AGG_APPROXIMATE:
         raise ValueError(
             f"agg({name!r}): the engine's {_PANDAS_AGG_APPROXIMATE[name]} is a sketch "
@@ -3527,19 +3640,19 @@ class GroupBy:
         over this frame, collected."""
         return self.quantile(0.5)
 
-    def quantile(self, q: float = 0.5) -> DataFrame:
-        """The exact ``q`` quantile of each numeric column per group, linear
-        interpolation (pandas ``GroupBy.quantile``)."""
+    def quantile(self, q: float = 0.5, interpolation: str = "linear") -> DataFrame:
+        """The exact ``q`` quantile of each numeric column per group; the
+        interpolation (``linear``, ``nearest``, ``lower``, ``higher`` or
+        ``midpoint``) is linear by default (pandas ``GroupBy.quantile``)."""
         from .lazyframe import group_quantile
 
         frame = self._frame()
         columns = self._value_columns()
         if frame.num_rows == 0:
-            if not 0.0 <= q <= 1.0:
-                raise ValueError(f"quantile: q must be in [0, 1], not {q!r}")
+            _quantile_param(q, interpolation)
             picked = frame[self._keys + columns]
             return picked.astype({c: "float64" for c in columns})
-        out = group_quantile(frame.lazy(), self._keys, columns, float(q)).collect()
+        out = group_quantile(frame.lazy(), self._keys, columns, float(q), interpolation).collect()
         return self._sorted(out)
 
     def ffill(self) -> DataFrame:

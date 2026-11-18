@@ -949,6 +949,8 @@ enum class UnaryOp : std::int32_t {
     IsNan = 10,
     IsFinite = 11,
     IsInfinite = 12,
+    Log1p = 13,
+    Expm1 = 14,
 };
 
 /// Mirrors dftu_scalar_tag: the domain a dftu_scalar carries.
@@ -958,6 +960,7 @@ enum class ScalarTag : std::int32_t {
     F64 = 2,
     Str = 3,
     Err = 4,
+    Null = 5,
 };
 
 /// Bytes to hold `n` values of `t` in Arrow layout. Bool is bit-packed

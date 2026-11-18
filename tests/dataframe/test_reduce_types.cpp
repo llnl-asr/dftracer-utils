@@ -11,6 +11,7 @@
 #include <doctest/doctest.h>
 #include <task_result.h>
 
+#include <cmath>
 #include <cstdint>
 
 using namespace dftracer::utils;
@@ -156,7 +157,7 @@ TEST_CASE("a code that is not sum, min or max is refused") {
     }
 }
 
-TEST_CASE("numeric reductions and an empty column are unchanged") {
+TEST_CASE("numeric reductions, and an empty column has no extreme or mean") {
     dataframe::Series x = i64({3, 1, 4});
     CHECK(dftu_utils_test::ok(x.sum()).i64() == 8);
     CHECK(dftu_utils_test::ok(x.min()).i64() == 1);
@@ -165,5 +166,7 @@ TEST_CASE("numeric reductions and an empty column are unchanged") {
 
     dataframe::Series none = i64({});
     CHECK(dftu_utils_test::ok(none.sum()).i64() == 0);
-    CHECK(dftu_utils_test::ok(none.mean()) == 0.0);
+    CHECK(std::isnan(dftu_utils_test::ok(none.mean())));
+    CHECK(dftu_utils_test::ok(none.min()).tag() == DFTU_SCALAR_TAG_NULL);
+    CHECK(dftu_utils_test::ok(none.max()).tag() == DFTU_SCALAR_TAG_NULL);
 }

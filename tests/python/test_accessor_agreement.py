@@ -270,7 +270,11 @@ def test_an_expr_str_method_takes_the_keywords_of_the_series_method(method, kwar
         s = dft.Series(["abc", "a", "bca"], name="x")
     want = getattr(s.str, method)(**kwargs)
     got = _on_expr(s, lambda e: getattr(e.str, method)(**kwargs))
-    assert got == want.to_list()
+    expected = want.to_list()
+    if method == "find":
+        # Expr is Polars-shaped: null for no match where the Series gives -1.
+        expected = [None if v == -1 else v for v in expected]
+    assert got == expected
 
 
 def test_decode_and_its_errors_keyword_agree():

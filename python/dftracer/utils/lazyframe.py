@@ -983,54 +983,24 @@ def agg_spec_strings(
     return strings
 
 
-def group_quantile(plan: LazyFrame, keys: List[str], columns: List[str], q: float) -> LazyFrame:
-    """The exact ``q`` quantile of each of ``columns`` per group, as plan
-    steps (pandas ``GroupBy.quantile`` with linear interpolation, the
-    default): per column, the present values ranked within the group by a
-    window, the two rows bracketing ``q * (n - 1)`` kept, then one group-by
-    interpolating between them. Columns join on the keys; the result is
-    sorted by the keys, one Float64 column per input column."""
-    from .columnar import Agg, _Col
+def group_quantile(
+    plan: LazyFrame,
+    keys: List[str],
+    columns: List[str],
+    q: float,
+    interpolation: str = "linear",
+) -> LazyFrame:
+    """The exact ``q`` quantile of each of ``columns`` per group (pandas
+    ``GroupBy.quantile``, linear interpolation by default), as one streaming
+    group-by of the engine's exact ``quantile`` aggregate. The result is sorted
+    by the keys, one Float64 column per input column, named as the input."""
+    from .columnar import Agg, _Col, _quantile_param
 
-    if not 0.0 <= q <= 1.0:
-        raise ValueError(f"quantile: q must be in [0, 1], not {q!r}")
+    param = _quantile_param(q, interpolation)
     if not columns:
         raise ValueError("quantile: no numeric column to reduce")
-    all_key = "__dftu_all__"
-    by = keys or [all_key]
-    # A never-null constant key (is_null is present on every row).
-    source = (
-        plan if keys else plan.with_column(all_key, _Col(columns[0]).is_null().cast("int64") * 0)
-    )
-    rn, n, pos, lo = "__dftu_rn__", "__dftu_n__", "__dftu_pos__", "__dftu_lo__"
-    # Every group, so one with no present value keeps a null row.
-    out = source.select(*by).unique()
-    for c in columns:
-        low, high, frac = f"__dftu_lo_{c}__", f"__dftu_hi_{c}__", f"__dftu_frac_{c}__"
-        present = source.select(*(by + [c])).filter(_Col(c).is_not_null())
-        ranked = present.window(
-            partition_by=by,
-            order_by=[c],
-            specs=[("row_number", rn), ("frame_count", c, None, None, n)],
-        )
-        placed = (
-            ranked.with_column(pos, (_Col(n) - 1) * q)
-            .with_column(lo, _Col(pos).floor())
-            .with_column(frac, _Col(pos) - _Col(lo))
-        )
-        # The rows at floor(pos) and ceil(pos), 1-based row numbers.
-        bracket = placed.filter(
-            ((_Col(rn) - _Col(lo) - 1) == 0) | ((_Col(rn) - _Col(pos).ceil() - 1) == 0)
-        )
-        reduced = LazyGroupBy(bracket, by).agg(
-            Agg("min", _Col(c), low), Agg("max", _Col(c), high), Agg("min", _Col(frac), frac)
-        )
-        value = reduced.with_column(c, _Col(low) + (_Col(high) - _Col(low)) * _Col(frac)).select(
-            *(by + [c])
-        )
-        out = out.join(value, on=by, how="left")
-    out = out.sort_by_multi(by)
-    return out.select(*(keys + columns)) if keys else out.select(*columns)
+    out = LazyGroupBy(plan, keys).agg(*[Agg("quantile", _Col(c), c, param=param) for c in columns])
+    return out.sort_by_multi(keys) if keys else out
 
 
 def _drop_null_key_groups(grouped: LazyFrame, keys: Sequence[str]) -> LazyFrame:
@@ -1196,10 +1166,13 @@ class LazyGroupBy:
         ``GroupBy.median``), as :func:`group_quantile` plan steps."""
         return self.quantile(0.5)
 
-    def quantile(self, q: float = 0.5) -> LazyFrame:
-        """The exact ``q`` quantile of each numeric column per group, linear
-        interpolation (pandas ``GroupBy.quantile``)."""
-        return group_quantile(self._plan, self._keys, self._value_columns(), float(q))
+    def quantile(self, q: float = 0.5, interpolation: str = "linear") -> LazyFrame:
+        """The exact ``q`` quantile of each numeric column per group; the
+        interpolation (``linear``, ``nearest``, ``lower``, ``higher`` or
+        ``midpoint``) is linear by default (pandas ``GroupBy.quantile``)."""
+        return group_quantile(
+            self._plan, self._keys, self._value_columns(), float(q), interpolation
+        )
 
     def ffill(self) -> LazyFrame:
         """:meth:`GroupBy.ffill` as a plan step; ``bfill`` likewise."""

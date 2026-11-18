@@ -350,7 +350,17 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 dftracer::utils::dstd::StringView needle;
                 if (!py_str_view(arg(1), &needle)) return false;
                 dataframe::Expr a = pop();
-                stack.push_back(dataframe::expr_str_find(a, needle));
+                dataframe::Expr found = dataframe::expr_str_find(a, needle);
+                // A third item asks for null where the needle is absent.
+                if (PyTuple_GET_SIZE(t) > 2 && PyObject_IsTrue(arg(2))) {
+                    found = dataframe::expr_select(
+                        dataframe::expr_cmp(
+                            dataframe::CmpOp::Ge, found,
+                            dataframe::to_scalar<std::int64_t>(0)),
+                        found,
+                        dataframe::expr_lit_null(dataframe::TypeId::Int64));
+                }
+                stack.push_back(std::move(found));
                 break;
             }
             case AstStrReplace: {

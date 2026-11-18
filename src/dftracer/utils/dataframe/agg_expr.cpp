@@ -63,6 +63,11 @@ AggExprSpec agg_kurt_unbiased(Expr value, dstd::String out) {
 AggExprSpec agg_pct(Expr value, double q, dstd::String out) {
     return {AggOp::Pct, std::move(value), std::move(out), q};
 }
+AggExprSpec agg_quantile(Expr value, double q, Interpolation interp,
+                         dstd::String out) {
+    return {AggOp::Quantile, std::move(value), std::move(out),
+            quantile_param(q, interp)};
+}
 AggExprSpec agg_hist(Expr value, dstd::String out) {
     return {AggOp::Hist, std::move(value), std::move(out)};
 }
@@ -280,6 +285,16 @@ dftu_agg_spec dftu_agg_last(const dftu_expr* value, const char* out) {
 }
 dftu_agg_spec dftu_agg_pct(const dftu_expr* value, double q, const char* out) {
     return make_spec(DFTU_AGG_PCT, value, out, q);
+}
+dftu_agg_spec dftu_agg_quantile(const dftu_expr* value, double q,
+                                std::int32_t interp, const char* out) {
+    const bool known =
+        interp >= DFTU_INTERP_LINEAR && interp <= DFTU_INTERP_MIDPOINT;
+    return make_spec(
+        DFTU_AGG_QUANTILE, value, out,
+        dataframe::quantile_param(
+            q, known ? static_cast<dataframe::Interpolation>(interp)
+                     : dataframe::Interpolation::Linear));
 }
 dftu_agg_spec dftu_agg_hist(const dftu_expr* value, const char* out) {
     return make_spec(DFTU_AGG_HIST, value, out);

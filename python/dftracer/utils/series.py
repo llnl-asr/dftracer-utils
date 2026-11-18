@@ -1291,20 +1291,10 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         """Variance with ``ddof`` degrees of freedom (0 = population, 1 =
         sample, the pandas default); the engine has kernels for those two.
         None for a column with no present value; NaN below ``ddof + 1``
-        present values, as pandas (the kernel's readout is 0)."""
-        n = self.count()
-        if n == 0:
-            return None
-        if n < ddof + 1:
-            return float("nan")
+        present values, as pandas."""
         return self.variance(_ddof_sample(ddof))
 
     def std(self, ddof: int = 1) -> Optional[float]:
-        n = self.count()
-        if n == 0:
-            return None
-        if n < ddof + 1:
-            return float("nan")
         return self.stddev(_ddof_sample(ddof))
 
     def skew(self, bias: bool = False) -> Optional[float]:

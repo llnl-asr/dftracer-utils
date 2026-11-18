@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
+#include <dftracer/utils/dataframe/kernels/stats.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -632,6 +633,21 @@ static DataFrame finalize_impl(const AggState& st_in,
                     st.prod_acc[static_cast<std::size_t>(g) * st.n_prod +
                                 static_cast<std::size_t>(slot)];
             out.columns.push_back(Series::flat_f64(v.data(), ng));
+        } else if (sp.op == AggOp::Quantile) {
+            const int slot = st.spec_qv[s];
+            const auto n = static_cast<std::size_t>(ng);
+            const double q = quantile_level(sp.param);
+            const Interpolation interp = quantile_interpolation(sp.param);
+            dstd::Vector<double> v(n, 0.0);
+            dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0);
+            for (std::size_t g = 0; g < n && slot >= 0; ++g) {
+                dstd::Vector<double> values =
+                    st.qv[g * st.n_qv + static_cast<std::size_t>(slot)];
+                if (values.empty()) continue;
+                v[g] = quantile_of(values, q, interp);
+                valid[g >> 3] |= static_cast<std::uint8_t>(1u << (g & 7));
+            }
+            out.columns.push_back(Series::flat_f64(v.data(), ng, valid.data()));
         } else if (sp.op == AggOp::SketchQuantile) {
             const int slot = st.spec_msk[s];
             const auto n = static_cast<std::size_t>(ng);

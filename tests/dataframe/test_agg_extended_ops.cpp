@@ -14,6 +14,7 @@
 #include <task_result.h>
 
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 
 using namespace dftracer::utils;
@@ -72,6 +73,12 @@ dstd::Vector<AggSpec> all_specs() {
         AggSpec{AggOp::RegrIntercept, VC_YV, "regr_intercept", 0.0, VC_BY},
         AggSpec{AggOp::RegrR2, VC_YV, "regr_r2", 0.0, VC_BY},
         AggSpec{AggOp::Prod, VC_BY, "prod"},
+        AggSpec{AggOp::Quantile, VC_BY, "q_linear",
+                quantile_param(0.4, Interpolation::Linear)},
+        AggSpec{AggOp::Quantile, VC_BY, "q_nearest",
+                quantile_param(0.4, Interpolation::Nearest)},
+        AggSpec{AggOp::Quantile, VC_YV, "q_mid",
+                quantile_param(0.4, Interpolation::Midpoint)},
     };
 }
 
@@ -185,6 +192,54 @@ TEST_CASE("extended aggregate ops produce the exact expected values") {
           doctest::Approx(1.0));
     CHECK(r.column("regr_r2").data<double>()[g0] == doctest::Approx(1.0));
     CHECK(r.column("regr_r2").data<double>()[g1] == doctest::Approx(1.0));
+
+    // The by values of group 0 rank 2 4 5 9 and of group 1 rank 1 3 7 8; the
+    // level 0.4 falls at rank position 1.2.
+    CHECK(r.column("q_linear").data<double>()[g0] == doctest::Approx(4.2));
+    CHECK(r.column("q_linear").data<double>()[g1] == doctest::Approx(3.8));
+    CHECK(r.column("q_nearest").data<double>()[g0] == 4.0);
+    CHECK(r.column("q_nearest").data<double>()[g1] == 3.0);
+    // y = 2 * by + 1 ranks 5 9 11 19 and 3 7 15 17: the midpoint of ranks 1, 2.
+    CHECK(r.column("q_mid").data<double>()[g0] == 10.0);
+    CHECK(r.column("q_mid").data<double>()[g1] == 11.0);
+}
+
+TEST_CASE("Quantile skips nulls, ranks NaN last and is null with no value") {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    dstd::Vector<std::int64_t> k{0, 0, 0, 0, 1, 1, 2};
+    dstd::Vector<double> v{3.0, nan, 1.0, 2.0, 9.0, 7.0, 5.0};
+    // Row 6 (group 2) is null: that group has no value.
+    dstd::Vector<std::uint8_t> valid{0x3F};
+    Series sk = Series::flat_i64(k.data(), 7);
+    Series sv = Series::flat_f64(v.data(), 7, valid.data());
+    dstd::Vector<AggSpec> specs{
+        AggSpec{AggOp::Quantile, 0, "median",
+                quantile_param(0.5, Interpolation::Linear)}};
+    DataFrame r =
+        dftu_utils_test::ok(dataframe::group_agg({&sk}, {&sv}, specs, {"k"}));
+    const Series med = r.column("median");
+    REQUIRE(med.length() == 3);
+    const std::int64_t g0 = row_of(r, "k", 0);
+    const std::int64_t g1 = row_of(r, "k", 1);
+    const std::int64_t g2 = row_of(r, "k", 2);
+    CHECK(med.data<double>()[g0] == 2.5);  // ranks 1 2 3 NaN
+    CHECK(med.data<double>()[g1] == 8.0);
+    CHECK(med.is_null(g2));
+}
+
+TEST_CASE("a keyless aggregate over no rows is one row") {
+    dstd::Vector<std::int64_t> none;
+    Series sv = Series::flat_i64(none.data(), 0);
+    dstd::Vector<AggSpec> specs{
+        AggSpec{AggOp::Sum, 0, "sum"}, AggSpec{AggOp::Mean, 0, "mean"},
+        AggSpec{AggOp::Quantile, 0, "q",
+                quantile_param(0.5, Interpolation::Linear)}};
+    DataFrame r = dftu_utils_test::ok(
+        dataframe::group_agg({}, {&sv}, specs, dstd::Vector<dstd::String>{}));
+    REQUIRE(r.num_rows() == 1);
+    CHECK(r.column("sum").data<std::int64_t>()[0] == 0);
+    CHECK(r.column("mean").is_null(0));
+    CHECK(r.column("q").is_null(0));
 }
 
 TEST_CASE("extended aggregate ops round-trip through serialize/deserialize") {

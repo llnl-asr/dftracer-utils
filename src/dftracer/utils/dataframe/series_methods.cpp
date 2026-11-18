@@ -119,17 +119,25 @@ dstd::Result<Scalar> Series::sum() const {
     if (!r) return r.error();
     return Scalar{*r};
 }
-dstd::Result<Scalar> Series::min() const {
+// The refusal of a type comes first; a column with no valid row then has no
+// extreme to give.
+static dstd::Result<Scalar> extreme(const Series& s, dftu_series* handle,
+                                    dftu_reduce_op op) {
     const dstd::Result<dftu_scalar> r =
-        reduction_result(dftu_series_reduce(handle_, DFTU_REDUCE_MIN));
+        reduction_result(dftu_series_reduce(handle, op));
     if (!r) return r.error();
+    if (s.count() == 0) {
+        dftu_scalar none{};
+        none.kind = DFTU_SCALAR_TAG_NULL;
+        return Scalar{none};
+    }
     return Scalar{*r};
 }
+dstd::Result<Scalar> Series::min() const {
+    return extreme(*this, handle_, DFTU_REDUCE_MIN);
+}
 dstd::Result<Scalar> Series::max() const {
-    const dstd::Result<dftu_scalar> r =
-        reduction_result(dftu_series_reduce(handle_, DFTU_REDUCE_MAX));
-    if (!r) return r.error();
-    return Scalar{*r};
+    return extreme(*this, handle_, DFTU_REDUCE_MAX);
 }
 Scalar Series::product() const { return dftu_series_product(handle_); }
 Scalar Series::mode() const { return dftu_series_mode(handle_); }
@@ -145,7 +153,7 @@ dstd::Result<double> Series::mean() const {
     if (!total_sum) return total_sum.error();
     const double total = scalar_as_double(*total_sum);
     const std::int64_t n = count();
-    return n == 0 ? 0.0 : total / static_cast<double>(n);
+    return n == 0 ? std::nan("") : total / static_cast<double>(n);
 }
 double Series::variance(bool sample) const {
     return dftu_series_variance(handle_, sample ? 1 : 0);
@@ -251,6 +259,8 @@ Series Series::pct_change() const {
 Series Series::sqrt() const { return derived(dftu_series_sqrt(handle_)); }
 Series Series::exp() const { return derived(dftu_series_exp(handle_)); }
 Series Series::log() const { return derived(dftu_series_log(handle_)); }
+Series Series::log1p() const { return derived(dftu_series_log1p(handle_)); }
+Series Series::expm1() const { return derived(dftu_series_expm1(handle_)); }
 Series Series::unique(bool maintain_order) const {
     return derived(dftu_series_unique_nulls(handle_, maintain_order ? 1 : 0));
 }

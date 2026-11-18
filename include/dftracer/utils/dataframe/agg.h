@@ -37,7 +37,8 @@ enum class AggOp {
     Kurt = 8,   ///< excess (population) kurtosis
     First = 9,  ///< first non-null value in row order (order-independent merge)
     Last = 10,  ///< last non-null value in row order
-    Pct = 11,   ///< a DDSketch quantile (level in AggSpec::param), mergeable
+    Pct = 11,   ///< an approximate DDSketch quantile (level in AggSpec::param),
+                ///< mergeable in bounded memory; Quantile is the exact one
     Hist = 12,  ///< the DDSketch histogram, a list<struct{lo,hi,count}> column
     ArgMax =
         13,  ///< the String repr of `value_col` at the row maximizing `by_col`
@@ -111,12 +112,35 @@ enum class AggOp {
     SkewUnbiased = 38,
     /// The pandas sample excess kurtosis G2, Float64: NaN below four values
     /// and when they are all equal.
-    KurtUnbiased = 39
+    KurtUnbiased = 39,
+    /// The exact quantile of the present values of `value_col`, Float64 (null
+    /// for a group with none). `param` is quantile_param(q, interpolation).
+    /// The state keeps every present value (8 bytes each) and merges by
+    /// concatenation, so it grows with the rows of a group; the spill path of
+    /// the aggregation engine bounds it across groups, but one group's values
+    /// must fit in memory when it is finalized. For a bounded-memory estimate
+    /// use Pct.
+    Quantile = 40
 };
 
 /// The last row of agg_ops.def, which bounds every serialized op code. A row
 /// appended to the table moves it (c_api_enum_lockstep.cpp checks).
-inline constexpr AggOp AGG_OP_LAST = AggOp::KurtUnbiased;
+inline constexpr AggOp AGG_OP_LAST = AggOp::Quantile;
+
+/// The AggSpec::param of AggOp::Quantile: the level @p q in [0, 1] plus twice
+/// the @ref Interpolation code, so one number carries both.
+inline double quantile_param(double q, Interpolation interp) noexcept {
+    return q + 2.0 * static_cast<double>(static_cast<std::int32_t>(interp));
+}
+/// The @ref Interpolation half of a quantile_param.
+inline Interpolation quantile_interpolation(double param) noexcept {
+    return static_cast<Interpolation>(static_cast<std::int32_t>(param / 2.0));
+}
+/// The level half of a quantile_param.
+inline double quantile_level(double param) noexcept {
+    return param -
+           2.0 * static_cast<double>(static_cast<std::int32_t>(param / 2.0));
+}
 
 /// Ops taking a second input through `by_col`: the extremum ArgMax/ArgMin
 /// maximize/minimize, the ordered list/top-k ops order by, the co-moment ops

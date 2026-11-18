@@ -347,8 +347,9 @@ def test_pandas_agg_forms():
     assert ints.agg("sum", axis=1).to_list() == [4, 5]
     with pytest.raises(ValueError, match="sum, mean, min, max and count"):
         df.agg("var", axis=1)
-    # The pandas names whose engine form is a sketch are refused, not approximated.
-    with pytest.raises(ValueError, match="sketch"):
+    # A quantile name needs its level, and nunique's engine form is a sketch:
+    # both are refused, not approximated.
+    with pytest.raises(ValueError, match="needs its level"):
         df.agg("median")
     with pytest.raises(ValueError, match="sketch"):
         gb.agg({"a": "nunique"})

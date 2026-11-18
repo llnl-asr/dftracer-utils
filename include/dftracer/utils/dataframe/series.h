@@ -414,7 +414,9 @@ class Series {
     /// and max of a string column give a STR scalar borrowing the column. A
     /// reduction the engine does not define for the column type (sum of a
     /// string, sum of a timestamp) returns an InvalidArgument error naming the
-    /// operation and the type; it never returns 0 for a refusal.
+    /// operation and the type; it never returns 0 for a refusal. A column with
+    /// no valid row gives sum 0, and min and max a NULL scalar (no value); the
+    /// refusal of a type comes first.
     dstd::Result<Scalar> sum() const;
     dstd::Result<Scalar> min() const;
     dstd::Result<Scalar> max() const;
@@ -425,8 +427,11 @@ class Series {
     std::int64_t arg_min() const;  ///< index of min non-null value (-1 if none)
     std::int64_t arg_max() const;  ///< index of max non-null value (-1 if none)
     std::int64_t count() const;    ///< non-null row count
-    /// The mean; the error of sum() for a type with no sum.
+    /// The mean; the error of sum() for a type with no sum. NaN for a column
+    /// with no valid row.
     dstd::Result<double> mean() const;
+    /// The variance and standard deviation: NaN for a column with no valid row
+    /// and, for the sample form, for one valid row.
     double variance(bool sample = true) const;
     double stddev(bool sample = true) const;
     double skewness() const;
@@ -435,9 +440,12 @@ class Series {
     /// kurtosis (NaN below four); NaN for a column with no spread.
     double skewness_unbiased() const;
     double kurtosis_unbiased() const;
+    /// The exact quantile of the valid values, `q` clamped to [0, 1]; NaN for
+    /// no valid row or a NaN `q`.
     double quantile(double q) const;
     /// The exact quantile with @p interp choosing the result between ranks.
     double quantile(double q, Interpolation interp) const;
+    /// The median; NaN for a column with no valid row.
     double median() const;
     std::int64_t nunique() const;
 
@@ -521,6 +529,9 @@ class Series {
     Series sqrt() const;
     Series exp() const;
     Series log() const;
+    /// log(1 + x) and exp(x) - 1, exact for a tiny x.
+    Series log1p() const;
+    Series expm1() const;
     /// The distinct values, a null kept once; first-occurrence order when
     /// `maintain_order`, otherwise ascending with the null first.
     Series unique(bool maintain_order = false) const;

@@ -1093,6 +1093,8 @@ class Compiler {
                     case UnaryOp::Log:
                     case UnaryOp::Sqrt:
                     case UnaryOp::Exp:
+                    case UnaryOp::Log1p:
+                    case UnaryOp::Expm1:
                         t = TypeId::Float64;
                         break;
                     default:
@@ -3583,6 +3585,12 @@ dstd::Vector<Series> eval_chunk(const dstd::Vector<SlotOp>& prog,
                         break;
                     case UnaryOp::Exp:
                         r = dftu_series_exp(A());
+                        break;
+                    case UnaryOp::Log1p:
+                        r = dftu_series_log1p(A());
+                        break;
+                    case UnaryOp::Expm1:
+                        r = dftu_series_expm1(A());
                         break;
                     case UnaryOp::Sign:
                         r = dftu_series_sign(A());

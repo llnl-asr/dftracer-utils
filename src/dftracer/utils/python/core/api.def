@@ -83,6 +83,10 @@ PY_METHOD(Series, exp, "dftu.series.exp", NONE, FLOAT, KEEP, NO, "", "", "",
           "Exponential -> Float64 Series.")
 PY_METHOD(Series, log, "dftu.series.log", NONE, FLOAT, KEEP, NO, "", "", "",
           "Natural log -> Float64 Series.")
+PY_METHOD(Series, log1p, "dftu.series.log1p", NONE, FLOAT, KEEP, NO, "", "", "",
+          "log(1 + x) -> Float64 Series, exact for a tiny x.")
+PY_METHOD(Series, expm1, "dftu.series.expm1", NONE, FLOAT, KEEP, NO, "", "", "",
+          "exp(x) - 1 -> Float64 Series, exact for a tiny x.")
 PY_METHOD(Series, is_null, "dftu.series.null_mask", NONE, BOOL, KEEP, NO, "", "", "",
           "Bool mask: row is null.")
 PY_METHOD(Series, is_not_null, "dftu.series.valid_mask", NONE, BOOL, KEEP, NO, "", "", "",

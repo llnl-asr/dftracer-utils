@@ -408,6 +408,12 @@ dstd::String agg_serialize(const AggState& st_in, bool compact) {
     put(s, static_cast<std::uint8_t>(st.has_prod ? 1 : 0));
     if (st.has_prod)
         for (double p : st.prod_acc) put(s, p);
+    put(s, static_cast<std::uint8_t>(st.has_qv ? 1 : 0));
+    if (st.has_qv)
+        for (const dstd::Vector<double>& values : st.qv) {
+            put(s, static_cast<std::uint64_t>(values.size()));
+            for (double v : values) put(s, v);
+        }
     put(s, static_cast<std::uint8_t>(st.has_kmv ? 1 : 0));
     if (st.has_kmv) {
         for (const KmvMap& m : st.kmv) {
@@ -886,6 +892,18 @@ dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
         if (!r.count(sz)) return corrupt_blob();
         st->prod_acc.resize(sz);
         for (std::size_t i = 0; i < sz; ++i) st->prod_acc[i] = r.get<double>();
+    }
+    if (st->has_qv != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
+    if (st->has_qv) {
+        const std::size_t sz = static_cast<std::size_t>(ng) * st->n_qv;
+        if (!r.count(sz)) return corrupt_blob();
+        st->qv.resize(sz);
+        for (std::size_t i = 0; i < sz; ++i) {
+            const std::uint64_t cnt = r.get<std::uint64_t>();
+            if (cnt > r.left() / sizeof(double)) return corrupt_blob();
+            st->qv[i].resize(static_cast<std::size_t>(cnt));
+            for (double& v : st->qv[i]) v = r.get<double>();
+        }
     }
     if (st->has_kmv != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
     if (st->has_kmv) {

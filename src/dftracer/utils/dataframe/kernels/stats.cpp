@@ -134,11 +134,15 @@ bool refuse_non_numeric(const char* op, TypeId t) {
 
 double variance(const Series& v, bool sample) {
     if (refuse_non_numeric("variance", v.type())) return 0.0;
+    if (const auto n = v.length() - v.null_count(); n == 0 || (sample && n < 2))
+        return std::nan("");
     return field_stat_reduce(v, 0, v.length()).variance(sample);
 }
 
 double stddev(const Series& v, bool sample) {
     if (refuse_non_numeric("stddev", v.type())) return 0.0;
+    if (const auto n = v.length() - v.null_count(); n == 0 || (sample && n < 2))
+        return std::nan("");
     return field_stat_reduce(v, 0, v.length()).stddev(sample);
 }
 
@@ -164,10 +168,13 @@ double kurtosis_unbiased(const Series& v) {
 
 namespace {
 
-// The order-preserving bit pattern of a double (the sort kernels' key).
+// The order-preserving bit pattern of a double (the sort kernels' key); every
+// NaN, whatever its sign bit, takes the largest key so it ranks above every
+// number.
 // FloatFlip by Michael Herf, Radix Tricks (2001), MIT-style license,
 // https://stereopsis.com/radix.html
 std::uint64_t sortable_key(double f) {
+    if (std::isnan(f)) return ~0ULL;
     std::uint64_t u = std::bit_cast<std::uint64_t>(f);
     return u ^ ((u >> 63) ? ~0ULL : 0x8000000000000000ULL);
 }
@@ -177,7 +184,8 @@ std::uint64_t sortable_key(double f) {
 // cells), without sorting: sampled splitters cut the key range into
 // buckets, one parallel histogram places the two positions, and only the
 // bucket (or two) that holds them is collected and sorted. Falls back to
-// a full sort (NaN) when the keys crowd one bucket.
+// a full sort (NaN) when the keys crowd one bucket, or when either position
+// ranks among the NaN cells of a float column.
 template <class T, class KeyFn>
 dstd::Pair<double, double> two_order_statistics(const T* x, std::size_t n,
                                                 const std::uint8_t* validity,
@@ -246,8 +254,12 @@ dstd::Pair<double, double> two_order_statistics(const T* x, std::size_t n,
             dstd::Vector<T>& out = parts[static_cast<std::size_t>(b) / GRAIN];
             for (std::int64_t i = b; i < e; ++i) {
                 const std::size_t k = which[static_cast<std::size_t>(i)];
-                if (k >= b0 && k <= b1)
-                    out.push_back(x[static_cast<std::size_t>(i)]);
+                if (k < b0 || k > b1) continue;
+                const T v = x[static_cast<std::size_t>(i)];
+                if constexpr (std::is_floating_point_v<T>) {
+                    if (std::isnan(v)) continue;
+                }
+                out.push_back(v);
             }
         });
     dstd::Vector<T> held;
@@ -255,6 +267,9 @@ dstd::Pair<double, double> two_order_statistics(const T* x, std::size_t n,
     for (const auto& p : parts) held.insert(held.end(), p.begin(), p.end());
     std::sort(held.begin(), held.end());
     const std::size_t at = lo - start[b0];
+    const std::size_t in_range = start[b1 + 1] - start[b0];
+    if (at >= held.size() || (at + 1 < in_range && at + 1 >= held.size()))
+        return {std::nan(""), std::nan("")};
     return {
         static_cast<double>(held[at]),
         static_cast<double>(at + 1 < held.size() ? held[at + 1] : held[at])};
@@ -271,7 +286,8 @@ double quantile(const Series& v, double q) {
 }
 
 double quantile(const Series& v, double q, Interpolation interp) {
-    if (refuse_non_numeric("quantile", v.type())) return std::nan("");
+    if (refuse_non_numeric("quantile", v.type()) || std::isnan(q))
+        return std::nan("");
     const auto n = static_cast<std::size_t>(v.length() - v.null_count());
     if (n == 0) return std::nan("");
     double pos = std::clamp(q, 0.0, 1.0) * static_cast<double>(n - 1);
@@ -297,18 +313,45 @@ double quantile(const Series& v, double q, Interpolation interp) {
             return frac == 0.0 ? a : a * (1.0 - frac) + b * frac;
     }
     dstd::Vector<double> x = nonnull_values(v);
+    const bool is_float = v.type() == TypeId::Float64 ||
+                          v.type() == TypeId::Float32 ||
+                          v.type() == TypeId::Float16;
+    return quantile_of(x, q, interp, is_float);
+}
+
+double quantile_of(dstd::Vector<double>& x, double q, Interpolation interp,
+                   bool may_have_nan) {
+    const std::size_t n = x.size();
+    if (n == 0 || std::isnan(q)) return std::nan("");
+    const double pos = std::clamp(q, 0.0, 1.0) * static_cast<double>(n - 1);
+    const auto lo = static_cast<std::size_t>(pos);
+    double frac = pos - static_cast<double>(lo);
+    if (lo + 1 >= n) frac = 0.0;
+    const bool linear = interp == Interpolation::Linear;
+    // The selection keys a NaN above every number and gives up when a rank
+    // falls among the NaN cells, so it needs no scan for one.
+    if (linear && n > (std::size_t{1} << 18) && parallel_backend_installed()) {
+        auto [a, b] =
+            two_order_statistics(x.data(), n, nullptr, lo, sortable_key);
+        if (!std::isnan(a))
+            return frac == 0.0 ? a : a * (1.0 - frac) + b * frac;
+    }
     // NaN ranks above every number: sort the numbers and let the ranks past
     // them read NaN, so the sort never compares a NaN.
-    const auto numbers = static_cast<std::size_t>(
-        std::partition(x.begin(), x.end(),
-                       [](double d) { return !std::isnan(d); }) -
-        x.begin());
+    const auto is_nan = [](double d) { return d != d; };
+    const std::size_t numbers =
+        may_have_nan && std::any_of(x.begin(), x.end(), is_nan)
+            ? static_cast<std::size_t>(
+                  std::partition(x.begin(), x.end(),
+                                 [&](double d) { return !is_nan(d); }) -
+                  x.begin())
+            : n;
+    const std::size_t hi = std::min(lo + 1, n - 1);
     parallel_packed_sort(x.data(), numbers,
                          [](double a, double b) { return a < b; });
     const auto rank = [&](std::size_t i) {
         return i < numbers ? x[i] : std::nan("");
     };
-    const std::size_t hi = std::min(lo + 1, n - 1);
     switch (interp) {
         case Interpolation::Linear:
             return frac == 0.0 ? rank(lo)

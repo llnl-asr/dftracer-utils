@@ -271,12 +271,22 @@ fails the run until its line is deleted.
 
 A method that both libraries spell the same way but give another result is
 one method of ours, and it follows pandas on a ``Series`` and ``DataFrame``
-and Polars on an ``Expr``. The cases are listed as findings: ``quantile``
+and Polars on an ``Expr``. ``Expr.quantile`` defaults to ``nearest`` as
+Polars does, ``Expr.percentile`` to ``linear`` as numpy, and ``Expr.str.find``
+gives null for no match. The cases are listed as findings: ``Series.quantile``
 defaults to ``linear`` (Polars ``nearest``; pass ``interpolation``),
-``str.find`` gives -1 for no match (Polars null), ``rank``, ``ge``, ``gt``
+``Series.str.find`` gives -1 for no match (Polars null), ``rank``, ``ge``, ``gt``
 and the comparison operators treat a NaN as IEEE does (Polars ranks it above
 every number), and a float NaN is a value and not a null where pandas reads it
 as missing.
+
+The quantile of a group is exact: ``col("x").quantile(q, interpolation)``,
+``percentile(p)`` and ``median()`` keep every present value of the group, 8
+bytes each, merge partial states by concatenation, and spill across groups under
+the aggregation memory budget; one group's values must fit in memory when the
+group is finalized. ``approx_quantile(q)`` is the bounded-memory DDSketch
+estimate. A reduction over no rows with no key is one row (``sum`` 0, the rest
+null).
 
 See also
 ---------

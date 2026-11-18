@@ -51,13 +51,51 @@ void AbsImpl(const void* av, void* ov, std::size_t n) {
     }
 }
 
+// A clip bound read as `T`. On an integer column an infinite, NaN or
+// out-of-range bound saturates (a NaN bound clips nothing) where a plain cast
+// would be undefined.
+template <class T>
+T clip_bound(dftu_scalar s, bool upper) {
+    if constexpr (std::is_integral_v<T>) {
+        constexpr T LOW = std::numeric_limits<T>::lowest();
+        constexpr T HIGH = std::numeric_limits<T>::max();
+        switch (s.kind) {
+            case DFTU_SCALAR_TAG_I64:
+                if (s.value.i < 0 && std::is_unsigned_v<T>) return LOW;
+                if (s.value.i >= 0 && static_cast<std::uint64_t>(s.value.i) >
+                                          static_cast<std::uint64_t>(HIGH))
+                    return HIGH;
+                if (s.value.i < 0 && std::is_signed_v<T> &&
+                    s.value.i < static_cast<std::int64_t>(LOW))
+                    return LOW;
+                return static_cast<T>(s.value.i);
+            case DFTU_SCALAR_TAG_U64:
+                return s.value.u > static_cast<std::uint64_t>(HIGH)
+                           ? HIGH
+                           : static_cast<T>(s.value.u);
+            case DFTU_SCALAR_TAG_STR:
+            case DFTU_SCALAR_TAG_ERR:
+                return upper ? HIGH : LOW;
+            default: {
+                const double d = s.value.d;
+                if (d != d) return upper ? HIGH : LOW;
+                if (d >= static_cast<double>(HIGH)) return HIGH;
+                if (d <= static_cast<double>(LOW)) return LOW;
+                return static_cast<T>(d);
+            }
+        }
+    } else {
+        return scalar_value<T>(s);
+    }
+}
+
 template <class T>
 void ClipImpl(const void* av, dftu_scalar lo, dftu_scalar hi, void* ov,
               std::size_t n) {
     const T* a = static_cast<const T*>(av);
     T* out = static_cast<T*>(ov);
-    T l = scalar_value<T>(lo);
-    T h = scalar_value<T>(hi);
+    T l = clip_bound<T>(lo, false);
+    T h = clip_bound<T>(hi, true);
     // A NaN bound clips nothing and a NaN value stays NaN (Polars, pandas).
     if constexpr (std::is_floating_point_v<T>) {
         if (l != l) l = -std::numeric_limits<T>::infinity();
@@ -210,15 +248,50 @@ void ExpF64Impl(double* p, std::size_t n) {
     const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     const auto lo = hwy::HWY_NAMESPACE::Set(d, -700.0);
     const auto hi = hwy::HWY_NAMESPACE::Set(d, 700.0);
+    // Four vectors share one all-lanes test, so the horizontal reduction runs
+    // a quarter as often.
     std::size_t i = 0;
-    for (; i + lanes <= n; i += lanes) {
-        const auto x = hwy::HWY_NAMESPACE::LoadU(d, p + i);
-        if (hwy::HWY_NAMESPACE::AllTrue(
-                d, hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Ge(x, lo),
-                                           hwy::HWY_NAMESPACE::Le(x, hi)))) {
-            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Exp(d, x), d, p + i);
+    for (; i + 4 * lanes <= n; i += 4 * lanes) {
+        const auto x0 = hwy::HWY_NAMESPACE::LoadU(d, p + i);
+        const auto x1 = hwy::HWY_NAMESPACE::LoadU(d, p + i + lanes);
+        const auto x2 = hwy::HWY_NAMESPACE::LoadU(d, p + i + 2 * lanes);
+        const auto x3 = hwy::HWY_NAMESPACE::LoadU(d, p + i + 3 * lanes);
+        const auto ok = hwy::HWY_NAMESPACE::And(
+            hwy::HWY_NAMESPACE::And(
+                hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Ge(x0, lo),
+                                        hwy::HWY_NAMESPACE::Le(x0, hi)),
+                hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Ge(x1, lo),
+                                        hwy::HWY_NAMESPACE::Le(x1, hi))),
+            hwy::HWY_NAMESPACE::And(
+                hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Ge(x2, lo),
+                                        hwy::HWY_NAMESPACE::Le(x2, hi)),
+                hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Ge(x3, lo),
+                                        hwy::HWY_NAMESPACE::Le(x3, hi))));
+        if (hwy::HWY_NAMESPACE::AllTrue(d, ok)) {
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Exp(d, x0), d,
+                                       p + i);
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Exp(d, x1), d,
+                                       p + i + lanes);
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Exp(d, x2), d,
+                                       p + i + 2 * lanes);
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Exp(d, x3), d,
+                                       p + i + 3 * lanes);
         } else {
-            for (std::size_t j = i; j < i + lanes; ++j) p[j] = std::exp(p[j]);
+            // A bad value spoils only its own vector.
+            for (std::size_t v = 0; v < 4; ++v) {
+                const std::size_t at = i + v * lanes;
+                const auto x = hwy::HWY_NAMESPACE::LoadU(d, p + at);
+                if (hwy::HWY_NAMESPACE::AllTrue(
+                        d, hwy::HWY_NAMESPACE::And(
+                               hwy::HWY_NAMESPACE::Ge(x, lo),
+                               hwy::HWY_NAMESPACE::Le(x, hi)))) {
+                    hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Exp(d, x), d,
+                                               p + at);
+                } else {
+                    for (std::size_t j = at; j < at + lanes; ++j)
+                        p[j] = std::exp(p[j]);
+                }
+            }
         }
     }
     for (; i < n; ++i) p[i] = std::exp(p[i]);
@@ -231,14 +304,46 @@ void LogF64Impl(double* p, std::size_t n) {
     const auto max =
         hwy::HWY_NAMESPACE::Set(d, std::numeric_limits<double>::max());
     std::size_t i = 0;
-    for (; i + lanes <= n; i += lanes) {
-        const auto x = hwy::HWY_NAMESPACE::LoadU(d, p + i);
-        if (hwy::HWY_NAMESPACE::AllTrue(
-                d, hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Gt(x, zero),
-                                           hwy::HWY_NAMESPACE::Le(x, max)))) {
-            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Log(d, x), d, p + i);
+    for (; i + 4 * lanes <= n; i += 4 * lanes) {
+        const auto x0 = hwy::HWY_NAMESPACE::LoadU(d, p + i);
+        const auto x1 = hwy::HWY_NAMESPACE::LoadU(d, p + i + lanes);
+        const auto x2 = hwy::HWY_NAMESPACE::LoadU(d, p + i + 2 * lanes);
+        const auto x3 = hwy::HWY_NAMESPACE::LoadU(d, p + i + 3 * lanes);
+        const auto ok = hwy::HWY_NAMESPACE::And(
+            hwy::HWY_NAMESPACE::And(
+                hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Gt(x0, zero),
+                                        hwy::HWY_NAMESPACE::Le(x0, max)),
+                hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Gt(x1, zero),
+                                        hwy::HWY_NAMESPACE::Le(x1, max))),
+            hwy::HWY_NAMESPACE::And(
+                hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Gt(x2, zero),
+                                        hwy::HWY_NAMESPACE::Le(x2, max)),
+                hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Gt(x3, zero),
+                                        hwy::HWY_NAMESPACE::Le(x3, max))));
+        if (hwy::HWY_NAMESPACE::AllTrue(d, ok)) {
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Log(d, x0), d,
+                                       p + i);
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Log(d, x1), d,
+                                       p + i + lanes);
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Log(d, x2), d,
+                                       p + i + 2 * lanes);
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Log(d, x3), d,
+                                       p + i + 3 * lanes);
         } else {
-            for (std::size_t j = i; j < i + lanes; ++j) p[j] = std::log(p[j]);
+            for (std::size_t v = 0; v < 4; ++v) {
+                const std::size_t at = i + v * lanes;
+                const auto x = hwy::HWY_NAMESPACE::LoadU(d, p + at);
+                if (hwy::HWY_NAMESPACE::AllTrue(
+                        d, hwy::HWY_NAMESPACE::And(
+                               hwy::HWY_NAMESPACE::Gt(x, zero),
+                               hwy::HWY_NAMESPACE::Le(x, max)))) {
+                    hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Log(d, x), d,
+                                               p + at);
+                } else {
+                    for (std::size_t j = at; j < at + lanes; ++j)
+                        p[j] = std::log(p[j]);
+                }
+            }
         }
     }
     for (; i < n; ++i) p[i] = std::log(p[i]);
@@ -855,6 +960,8 @@ Series pct_change(const Series& v) {
 Series sqrt(const Series& v) { return Series{dftu_series_sqrt(v.handle())}; }
 Series exp(const Series& v) { return Series{dftu_series_exp(v.handle())}; }
 Series log(const Series& v) { return Series{dftu_series_log(v.handle())}; }
+Series log1p(const Series& v) { return Series{dftu_series_log1p(v.handle())}; }
+Series expm1(const Series& v) { return Series{dftu_series_expm1(v.handle())}; }
 
 }  // namespace dftracer::utils::dataframe
 
@@ -1185,6 +1292,34 @@ dftu_series* dftu_series_log(const dftu_series* a) {
     HWY_DYNAMIC_DISPATCH(LogKernel)
     (reinterpret_cast<double*>(writable(out->data)),
      static_cast<std::size_t>(a->length));
+    return out;
+}
+
+// log1p and expm1 stay precise for a tiny x, where log(1 + x) and exp(x) - 1
+// lose every digit; libm gives them, one value at a time.
+dftu_series* dftu_series_log1p(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_log1p(flat_a));
+
+    using namespace dftracer::utils::dataframe;
+    if (a->encoding != Encoding::Flat || !is_numeric(a->type) ||
+        a->type == TypeId::Bool)
+        return nullptr;
+    dftu_series* out = widen_to_f64(a);
+    double* p = reinterpret_cast<double*>(writable(out->data));
+    for (std::int64_t i = 0; i < a->length; ++i) p[i] = std::log1p(p[i]);
+    return out;
+}
+
+dftu_series* dftu_series_expm1(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_expm1(flat_a));
+
+    using namespace dftracer::utils::dataframe;
+    if (a->encoding != Encoding::Flat || !is_numeric(a->type) ||
+        a->type == TypeId::Bool)
+        return nullptr;
+    dftu_series* out = widen_to_f64(a);
+    double* p = reinterpret_cast<double*>(writable(out->data));
+    for (std::int64_t i = 0; i < a->length; ++i) p[i] = std::expm1(p[i]);
     return out;
 }
 

@@ -73,6 +73,7 @@ void agg_permute_groups(AggState& st, const dstd::Vector<std::int64_t>& perm) {
     }
     if (st.has_bitor) permute_blocks(st.bitor_acc, perm, st.n_bitor);
     if (st.has_prod) permute_blocks(st.prod_acc, perm, st.n_prod);
+    if (st.has_qv) permute_blocks(st.qv, perm, st.n_qv);
     if (st.has_msk) permute_blocks(st.msk, perm, st.n_msk);
     if (st.has_kmv) permute_blocks(st.kmv, perm, st.n_kmv);
     if (st.has_lst) permute_blocks(st.lst, perm, st.n_lst);
@@ -200,6 +201,11 @@ AggStatePtr agg_extract_groups(const AggState& st_in,
             for (std::size_t slot = 0; slot < st.n_prod; ++slot)
                 out->prod_acc[o * st.n_prod + slot] = st.prod_acc[pbase + slot];
         }
+        if (st.has_qv) {
+            const std::size_t qbase = static_cast<std::size_t>(g) * st.n_qv;
+            for (std::size_t slot = 0; slot < st.n_qv; ++slot)
+                out->qv[o * st.n_qv + slot] = st.qv[qbase + slot];
+        }
         if (st.has_msk) {
             const std::size_t mbase = static_cast<std::size_t>(g) * st.n_msk;
             for (std::size_t slot = 0; slot < st.n_msk; ++slot)
@@ -304,6 +310,7 @@ static bool agg_op_seedable(AggOp op) {
         case AggOp::Utilization:
         case AggOp::Active:
         case AggOp::Prod:
+        case AggOp::Quantile:
         case AggOp::SketchQuantile:
         case AggOp::Udaf:
             return false;

@@ -420,9 +420,9 @@ bool plain_key(const Series& c, PlainKey& out) {
 bool plain_shape(const AggState& st, const dstd::Vector<const Series*>& keys,
                  const dstd::Vector<const Series*>& values,
                  dstd::Vector<PlainKey>& k, dstd::Vector<Plain8>& v) {
-    if (st.has_fl || st.has_arg || st.has_bitor || st.has_prod || st.has_msk ||
-        st.has_kmv || st.has_lst || st.has_ss || st.has_co || st.has_set ||
-        st.has_occ || st.has_dyn || st.has_udaf)
+    if (st.has_fl || st.has_arg || st.has_bitor || st.has_prod || st.has_qv ||
+        st.has_msk || st.has_kmv || st.has_lst || st.has_ss || st.has_co ||
+        st.has_set || st.has_occ || st.has_dyn || st.has_udaf)
         return false;
     k.resize(keys.size());
     for (std::size_t j = 0; j < keys.size(); ++j)
@@ -1350,6 +1350,11 @@ dstd::Result<void> agg_accumulate(AggState& st,
               : !values.empty() ? values[0]->length()
                                 : 0;
     const std::int64_t clen = end - begin;
+    // An aggregate with no key is one group, even over no rows.
+    if (st.nkeys == 0 && st.ngroups() == 0)
+        st.find_or_add_group([](std::size_t) { return std::int64_t{0}; },
+                             [](std::size_t) { return dstd::StringView{}; },
+                             [](std::size_t) { return false; });
     // A List column's elements, fetched once per batch for the set slots.
     dstd::Vector<Series> set_elems;
     dstd::Vector<char> set_slot_typed;
@@ -1501,6 +1506,16 @@ dstd::Result<void> agg_accumulate(AggState& st,
                 if (vc->is_null(i)) continue;
                 st.prod_acc[pbase + slot] *=
                     read_as_double(*vc, i, col_domain(vc->type()));
+            }
+        }
+        if (st.has_qv) {
+            const std::size_t qbase = static_cast<std::size_t>(g) * st.n_qv;
+            for (std::size_t slot = 0; slot < st.n_qv; ++slot) {
+                const Series* vc =
+                    values[static_cast<std::size_t>(st.qv_val_col[slot])];
+                if (vc->is_null(i)) continue;
+                st.qv[qbase + slot].push_back(
+                    read_as_double(*vc, i, col_domain(vc->type())));
             }
         }
         if (st.has_msk) {

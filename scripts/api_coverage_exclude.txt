@@ -203,7 +203,6 @@ polars Series.is_close | needs-kernel | approximate float equality with toleranc
 polars Series.is_first_distinct | needs-kernel | first/last occurrence masks; the engine has no first-occurrence kernel
 polars Series.is_last_distinct | needs-kernel | first/last occurrence masks; the engine has no first-occurrence kernel
 polars Series.log10 | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Series.log1p | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Series.lower_bound | needs-kernel | the minimum and maximum value of the dtype; read it from the dtype
 polars Series.map_elements | python-semantics | a Python callable per element or window; use apply with a traced function or an expression
 polars Series.max_by | needs-kernel | by-column reductions and top-k; the argmax and topk aggregates give them per group
@@ -293,7 +292,6 @@ polars LazyFrame.update | needs-kernel | no plan step; DataFrame.update is eager
 polars Expr.all | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
 polars Expr.append | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
 polars Expr.approx_n_unique | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
-polars Expr.approx_quantile | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
 polars Expr.arccos | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Expr.arccosh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Expr.arcsin | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
@@ -344,7 +342,6 @@ polars Expr.ext | needs-kernel | namespace for list (partial: Expr.list is absen
 polars Expr.extend_constant | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
 polars Expr.fill_nan | needs-kernel | length-changing or positional column op with no expression node (the evaluator keeps the row count, except through a plan step)
 polars Expr.filter | needs-kernel | length-changing or positional column op with no expression node (the evaluator keeps the row count, except through a plan step)
-polars Expr.floordiv | needs-kernel | binary op node: the expression evaluator has + - * / only (Series has floordiv_scalar, mod_scalar, pow_scalar as column ops)
 polars Expr.gather | needs-kernel | length-changing or positional column op with no expression node (the evaluator keeps the row count, except through a plan step)
 polars Expr.gather_every | needs-kernel | length-changing or positional column op with no expression node (the evaluator keeps the row count, except through a plan step)
 polars Expr.has_nulls | needs-kernel | aggregate or distinct op with no Expr form (Series and DataFrame have it); the Agg table lacks the row
@@ -361,7 +358,6 @@ polars Expr.is_not_nan | needs-kernel | no expression form; the Series kernel is
 polars Expr.is_sorted | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
 polars Expr.item | needs-kernel | length-changing or positional column op with no expression node (the evaluator keeps the row count, except through a plan step)
 polars Expr.kurtosis | needs-kernel | aggregate or distinct op with no Expr form (Series and DataFrame have it); the Agg table lacks the row
-polars Expr.len | needs-kernel | aggregate or distinct op with no Expr form (Series and DataFrame have it); the Agg table lacks the row
 polars Expr.limit | needs-kernel | length-changing or positional column op with no expression node (the evaluator keeps the row count, except through a plan step)
 polars Expr.list | needs-kernel | namespace for list (partial: Expr.list is absent), struct and extension dtypes; no accessor nodes
 polars Expr.lower_bound | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
@@ -369,20 +365,15 @@ polars Expr.map | python-semantics | a Python callable inside an expression; use
 polars Expr.map_batches | python-semantics | a Python callable inside an expression; use a traced function through apply or the jit lane
 polars Expr.map_elements | python-semantics | a Python callable inside an expression; use a traced function through apply or the jit lane
 polars Expr.max_by | needs-kernel | by-column selection or ordering; the topk/bottomk/argmax aggregates take a by column per group, there is no row-selecting node
-polars Expr.median | needs-kernel | aggregate or distinct op with no Expr form (Series and DataFrame have it); the Agg table lacks the row
 polars Expr.meta | out-of-scope | expression serialization and introspection (D3b out-of-scope plan serialize)
 polars Expr.min_by | needs-kernel | by-column selection or ordering; the topk/bottomk/argmax aggregates take a by column per group, there is no row-selecting node
-polars Expr.mod | needs-kernel | binary op node: the expression evaluator has + - * / only (Series has floordiv_scalar, mod_scalar, pow_scalar as column ops)
 polars Expr.mode | needs-kernel | aggregate or distinct op with no Expr form (Series and DataFrame have it); the Agg table lacks the row
-polars Expr.n_unique | needs-kernel | aggregate or distinct op with no Expr form (Series and DataFrame have it); the Agg table lacks the row
 polars Expr.nan_max | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
 polars Expr.nan_min | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
 polars Expr.ne_missing | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
-polars Expr.null_count | needs-kernel | aggregate or distinct op with no Expr form (Series and DataFrame have it); the Agg table lacks the row
 polars Expr.peak_max | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
 polars Expr.peak_min | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op
 polars Expr.pipe_with_dtype | python-semantics | a Python callable inside an expression; use a traced function through apply or the jit lane
-polars Expr.pow | needs-kernel | binary op node: the expression evaluator has + - * / only (Series has floordiv_scalar, mod_scalar, pow_scalar as column ops)
 polars Expr.product | needs-kernel | aggregate or distinct op with no Expr form (Series and DataFrame have it); the Agg table lacks the row
 polars Expr.qcut | needs-kernel | no expression form; Series.cut and qcut are eager
 polars Expr.reinterpret | needs-kernel | no expression form; the Series kernel is missing or not exposed as a column op

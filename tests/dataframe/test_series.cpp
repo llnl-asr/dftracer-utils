@@ -18,6 +18,7 @@
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/kernels/stats.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/span.h>
@@ -28,6 +29,7 @@
 #include <memory/fresh_process.h>
 #include <task_result.h>
 
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -2044,6 +2046,115 @@ TEST_SUITE("vec") {
         Series ignored = dataframe::clip(kc, to_scalar(nan), hi);
         CHECK(ignored.data<double>()[2] == -2.5);
         CHECK(ignored.data<double>()[3] == 2.0);
+    }
+
+    TEST_CASE("quantile: the selection path ranks a NaN of either sign last") {
+        dataframe::install_runtime_parallel_backend();
+        constexpr std::int64_t N = 300000;
+        dstd::Vector<double> f(static_cast<std::size_t>(N));
+        for (std::int64_t i = 0; i < N; ++i)
+            f[static_cast<std::size_t>(i)] = static_cast<double>(i);
+        f[5] = std::bit_cast<double>(std::uint64_t{0xFFF8000000000000ULL});
+        Series fc = Series::flat_f64(f.data(), N);
+        CHECK(dataframe::median(fc) == 150000.5);
+        f[5] = std::numeric_limits<double>::quiet_NaN();
+        CHECK(dataframe::median(Series::flat_f64(f.data(), N)) == 150000.5);
+        CHECK(std::isnan(dataframe::quantile(fc, 1.0)));
+        CHECK(dataframe::quantile(fc, 0.0) == 0.0);
+
+        // Another width reaches the selection through the double copy.
+        dstd::Vector<std::int32_t> w(static_cast<std::size_t>(N));
+        for (std::int64_t i = 0; i < N; ++i)
+            w[static_cast<std::size_t>(i)] =
+                static_cast<std::int32_t>((i * 7919) % N);
+        Series wc = Series::flat(TypeId::Int32, w.data(), N);
+        CHECK(dataframe::median(wc) == 149999.5);
+        CHECK(dataframe::quantile(wc, 0.25) == doctest::Approx(74999.75));
+    }
+
+    TEST_CASE("quantile: NaN q gives NaN") {
+        dstd::Vector<std::int64_t> v{1, 2, 3, 4};
+        Series c = Series::flat_i64(v.data(), 4);
+        CHECK(std::isnan(
+            dataframe::quantile(c, std::numeric_limits<double>::quiet_NaN())));
+        CHECK(std::isnan(
+            dataframe::quantile(c, std::numeric_limits<double>::quiet_NaN(),
+                                Interpolation::Nearest)));
+    }
+
+    TEST_CASE("clip: an infinite or out-of-range bound saturates on integers") {
+        const double inf = std::numeric_limits<double>::infinity();
+        const std::int64_t i64min = std::numeric_limits<std::int64_t>::min();
+        const std::int64_t i64max = std::numeric_limits<std::int64_t>::max();
+        dstd::Vector<std::int64_t> v{-5, 0, 7, i64min, i64max};
+        Series c = Series::flat_i64(v.data(), 5);
+        Series lower_only = dataframe::clip(c, to_scalar(2.0), to_scalar(inf));
+        const std::int64_t* a = lower_only.data<std::int64_t>();
+        CHECK(a[0] == 2);
+        CHECK(a[2] == 7);
+        CHECK(a[3] == 2);
+        CHECK(a[4] == i64max);
+        Series upper_only = dataframe::clip(c, to_scalar(-inf), to_scalar(1.0));
+        const std::int64_t* b = upper_only.data<std::int64_t>();
+        CHECK(b[0] == -5);
+        CHECK(b[2] == 1);
+        CHECK(b[3] == i64min);
+        CHECK(b[4] == 1);
+        Series both = dataframe::clip(c, to_scalar(-inf), to_scalar(inf));
+        CHECK(both.data<std::int64_t>()[3] == i64min);
+        CHECK(both.data<std::int64_t>()[4] == i64max);
+
+        dstd::Vector<std::int32_t> w{-5, 0, 7};
+        Series wc = Series::flat(TypeId::Int32, w.data(), 3);
+        Series w_lower = dataframe::clip(wc, to_scalar(1.0), to_scalar(inf));
+        CHECK(w_lower.data<std::int32_t>()[0] == 1);
+        CHECK(w_lower.data<std::int32_t>()[2] == 7);
+        Series w_wide = dataframe::clip(wc, to_scalar(-1e30), to_scalar(1e30));
+        CHECK(w_wide.data<std::int32_t>()[0] == -5);
+        CHECK(w_wide.data<std::int32_t>()[2] == 7);
+
+        const std::uint64_t u64max = std::numeric_limits<std::uint64_t>::max();
+        dstd::Vector<std::uint64_t> u{0, 5, u64max};
+        Series uc = Series::flat(TypeId::Uint64, u.data(), 3);
+        Series u_lower = dataframe::clip(uc, to_scalar(3.0), to_scalar(inf));
+        CHECK(u_lower.data<std::uint64_t>()[0] == 3);
+        CHECK(u_lower.data<std::uint64_t>()[2] == u64max);
+        Series u_upper = dataframe::clip(uc, to_scalar(-inf), to_scalar(4.0));
+        CHECK(u_upper.data<std::uint64_t>()[1] == 4);
+        CHECK(u_upper.data<std::uint64_t>()[0] == 0);
+        Series u_both = dataframe::clip(uc, to_scalar(-inf), to_scalar(inf));
+        CHECK(u_both.data<std::uint64_t>()[2] == u64max);
+    }
+
+    TEST_CASE("an empty column has no min or max and a NaN mean and spread") {
+        dstd::Vector<std::int64_t> nothing;
+        Series empty = Series::flat_i64(nothing.data(), 0);
+        CHECK(dftu_utils_test::ok(empty.min()).tag() == DFTU_SCALAR_TAG_NULL);
+        CHECK(dftu_utils_test::ok(empty.max()).tag() == DFTU_SCALAR_TAG_NULL);
+        CHECK(scalar_value<std::int64_t>(dftu_utils_test::ok(empty.sum())) ==
+              0);
+        CHECK(std::isnan(dftu_utils_test::ok(empty.mean())));
+        CHECK(std::isnan(empty.median()));
+        CHECK(std::isnan(empty.variance(true)));
+        CHECK(std::isnan(empty.variance(false)));
+        CHECK(std::isnan(empty.stddev(true)));
+
+        // All null: no valid row either.
+        dstd::Vector<std::int64_t> v{1, 2};
+        const std::uint8_t none = 0;
+        Series nulls = Series::flat_i64(v.data(), 2, &none);
+        CHECK(dftu_utils_test::ok(nulls.min()).tag() == DFTU_SCALAR_TAG_NULL);
+
+        dstd::Vector<std::int64_t> one{4};
+        Series single = Series::flat_i64(one.data(), 1);
+        CHECK(std::isnan(single.variance(true)));
+        CHECK(single.variance(false) == 0.0);
+        CHECK(dftu_utils_test::ok(single.min()).tag() == DFTU_SCALAR_TAG_I64);
+
+        // The refusal of a type comes before the empty check.
+        dstd::Vector<dstd::String> none_s;
+        Series strs = Series::strings(none_s);
+        CHECK(!strs.mean());
     }
 
     TEST_CASE("D1 windowed stats: rolling_var/std/median/quantile") {

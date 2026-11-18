@@ -68,8 +68,11 @@ enum class Agg {
     Udaf,  ///< the registered user-defined aggregate named by GroupAgg::fn
     SkewUnbiased,  ///< pandas sample skewness of `column`, Float64 (NaN below
                    ///< three values and for a constant column)
-    KurtUnbiased   ///< pandas sample excess kurtosis of `column`, Float64 (NaN
+    KurtUnbiased,  ///< pandas sample excess kurtosis of `column`, Float64 (NaN
                    ///< below four values and for a constant column)
+    Quantile       ///< the exact quantile of `column`, Float64: `param` is
+                   ///< quantile_param(q, interpolation); the state keeps every
+                   ///< value (see AggOp::Quantile)
 };
 
 /// Canonical lowercase name of `agg` (the string the C ABI accepts).
@@ -93,6 +96,7 @@ struct GroupAgg {
     dstd::String column;
     dstd::String out;
     double param = 0.0;  ///< Pct, SketchQuantile: quantile q in [0, 1];
+                         ///< Quantile: quantile_param(q, interpolation);
                          ///< occupancy: occ_cell_us;
                          ///< Distinct/TopK/BottomK/ApproxTopK/Sample: k;
                          ///< SetUnion: nonzero asks for the typed list

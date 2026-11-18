@@ -490,6 +490,8 @@ EXPR_CASES = [
     ("round", "FZ", (1,), {}),
     ("sign", "IFZ", (), {}),
     ("pow", "IF", (2,), {}),
+    ("floordiv", "IF", (2,), {}),
+    ("mod", "IF", (3,), {}),
     ("clip", "IFZ", (), {"lower_bound": -1, "upper_bound": 2}),
     ("sum", "IF", (), {}),
     ("mean", "IF", (), {}),

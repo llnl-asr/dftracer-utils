@@ -441,14 +441,14 @@ PyMethodDef Series_methods[] = {
      "Sum of the valid values; a bool column counts True as 1, so (x > "
      "2).sum() counts the matches. Raises TypeError for a column type with "
      "no sum (string, most temporal types)."},
-    {"min", series_reduce_scalar<&Series::min, true>, METH_NOARGS,
+    {"min", series_reduce_scalar<&Series::min>, METH_NOARGS,
      "Smallest valid value, None when no value is valid. A bool column gives "
      "0 or 1 and a string column the bytewise smallest string; raises "
      "TypeError for a type with no order here."},
-    {"max", series_reduce_scalar<&Series::max, true>, METH_NOARGS,
+    {"max", series_reduce_scalar<&Series::max>, METH_NOARGS,
      "Largest valid value, over the same column types as min; None when no "
      "value is valid."},
-    {"mean", series_reduce_f64<&Series::mean, true>, METH_NOARGS,
+    {"mean", series_reduce_f64<&Series::mean>, METH_NOARGS,
      "Mean of the valid values, None when no value is valid; a bool column "
      "gives the fraction that is True. Raises TypeError for a column type with "
      "no sum."},

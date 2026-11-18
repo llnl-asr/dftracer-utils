@@ -90,6 +90,9 @@ std::size_t agg_approx_bytes(const AggState& st) {
     }
     if (st.has_bitor) total += st.bitor_acc.size() * sizeof(std::uint64_t);
     if (st.has_prod) total += st.prod_acc.size() * sizeof(double);
+    if (st.has_qv)
+        for (const dstd::Vector<double>& v : st.qv)
+            total += v.capacity() * sizeof(double) + sizeof(v);
     if (st.has_msk)
         for (const MergeSketch& sk : st.msk)
             total += sk.bins().size() * 24 + 64;
@@ -233,6 +236,7 @@ DataType agg_output_type(AggOp op, const DataType& value, double param) {
         case AggOp::SkewUnbiased:
         case AggOp::KurtUnbiased:
         case AggOp::Pct:
+        case AggOp::Quantile:
         case AggOp::SumSq:
         case AggOp::Busy:
         case AggOp::Concurrency:

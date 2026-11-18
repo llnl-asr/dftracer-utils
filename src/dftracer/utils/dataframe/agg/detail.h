@@ -541,6 +541,15 @@ class AggState : public dstd::HeapObject {
     dstd::Vector<std::int32_t> prod_val_col;
     dstd::Vector<double> prod_acc;  // groups * n_prod
 
+    // Quantile: one slot per distinct value column holding every present
+    // value of the group as a double, so merge is a concatenation and the
+    // quantile is read at finalize.
+    bool has_qv = false;
+    std::size_t n_qv = 0;
+    dstd::Vector<int> spec_qv;              // spec -> slot, or -1
+    dstd::Vector<std::int32_t> qv_val_col;
+    dstd::Vector<dstd::Vector<double>> qv;  // groups * n_qv
+
     // SketchQuantile: one slot per distinct value column holding the merge of
     // every valid serialized DDSketch of the group; the quantile is read at
     // finalize, so specs with different `param` share a slot. An empty sketch
@@ -1152,6 +1161,25 @@ class AggState : public dstd::HeapObject {
         }
         has_prod = n_prod > 0;
 
+        spec_qv.assign(specs.size(), -1);
+        qv_val_col.clear();
+        n_qv = 0;
+        for (std::size_t s = 0; s < specs.size(); ++s) {
+            if (specs[s].op != AggOp::Quantile) continue;
+            int slot = -1;
+            for (std::size_t k = 0; k < n_qv; ++k)
+                if (qv_val_col[k] == specs[s].value_col) {
+                    slot = static_cast<int>(k);
+                    break;
+                }
+            if (slot < 0) {
+                slot = static_cast<int>(n_qv++);
+                qv_val_col.push_back(specs[s].value_col);
+            }
+            spec_qv[s] = slot;
+        }
+        has_qv = n_qv > 0;
+
         spec_msk.assign(specs.size(), -1);
         msk_val_col.clear();
         n_msk = 0;
@@ -1373,6 +1401,7 @@ class AggState : public dstd::HeapObject {
         }
         if (has_bitor) bitor_acc.resize(bitor_acc.size() + n_bitor, 0);
         if (has_prod) prod_acc.resize(prod_acc.size() + n_prod, 1.0);
+        if (has_qv) qv.resize(qv.size() + n_qv);
         if (has_msk) msk.resize(msk.size() + n_msk);
         if (has_kmv) kmv.resize(kmv.size() + n_kmv);
         if (has_lst) lst.resize(lst.size() + n_lst);
@@ -1717,6 +1746,15 @@ class AggState : public dstd::HeapObject {
             for (std::size_t slot = 0; slot < n_prod; ++slot)
                 prod_acc[dp + slot] *= other.prod_acc[sp + slot];
         }
+        if (has_qv) {
+            const std::size_t dq = static_cast<std::size_t>(g) * n_qv;
+            const std::size_t sq = static_cast<std::size_t>(j) * n_qv;
+            for (std::size_t slot = 0; slot < n_qv; ++slot) {
+                dstd::Vector<double>& dst = qv[dq + slot];
+                const dstd::Vector<double>& src = other.qv[sq + slot];
+                dst.insert(dst.end(), src.begin(), src.end());
+            }
+        }
         if (has_msk) {
             const std::size_t dm = static_cast<std::size_t>(g) * n_msk;
             const std::size_t sm = static_cast<std::size_t>(j) * n_msk;
@@ -1837,6 +1875,10 @@ class AggState : public dstd::HeapObject {
         n_prod = other.n_prod;
         spec_prod = other.spec_prod;
         prod_val_col = other.prod_val_col;
+        has_qv = other.has_qv;
+        n_qv = other.n_qv;
+        spec_qv = other.spec_qv;
+        qv_val_col = other.qv_val_col;
         has_msk = other.has_msk;
         n_msk = other.n_msk;
         spec_msk = other.spec_msk;

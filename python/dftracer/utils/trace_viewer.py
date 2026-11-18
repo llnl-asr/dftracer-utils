@@ -17,6 +17,7 @@ naming the first op it cannot take.
 from __future__ import annotations
 
 import json
+import math
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -109,9 +110,13 @@ def _agg_specs(specs: Sequence[Union[str, Agg]]) -> "tuple[List[str], List[str],
                 "TraceViewer.agg() needs a bare-field aggregate like F.dur.sum(); "
                 "aggregate a computed value with with_column() then group_by()"
             )
-        spec = f"{'count' if s.op == 'count_valid' else s.op}:{s.value.name}"
+        # The index keeps DDSketches, so a quantile here is the sketch's.
+        op = "pct" if s.op == "quantile" else s.op
+        spec = f"{'count' if s.op == 'count_valid' else op}:{s.value.name}"
         if s.op == "pct":
             spec += f":{s.param}"
+        elif s.op == "quantile":
+            spec += f":{s.param - 2.0 * math.floor(s.param / 2.0)}"
         strings.append(spec)
         if s.op in _OCCUPANCY and s.param:
             grids.add(int(s.param))

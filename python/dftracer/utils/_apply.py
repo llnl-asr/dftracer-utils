@@ -128,6 +128,7 @@ def _trace(
 ) -> "tuple[Optional[Expr], str]":
     """Tier 1: run ``func`` once on a symbolic argument. The Expr it built, or
     None and the reason."""
+    from ._expr_ops import has_column_op
     from .columnar import Expr
 
     if _uses_identity_test(func):
@@ -142,6 +143,8 @@ def _trace(
         _check_columns(traced, source)
     except _trace_errors() as e:
         return None, f"{type(e).__name__}: {e}"
+    if has_column_op(traced):
+        return None, "a column op is not a row-wise node; lowered from source instead"
     return traced, ""
 
 

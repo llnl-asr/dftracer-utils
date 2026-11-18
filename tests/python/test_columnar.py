@@ -767,9 +767,8 @@ def test_group_by_first_last():
 
 
 def test_group_by_quantile_percentile():
-    # Per-group DDSketch quantiles: F.x.quantile(q) and F.x.percentile(p) land
-    # within the sketch's relative accuracy of the true value. Both the string
-    # spec and the F-expression forms are covered.
+    # F.x.approx_quantile(q) lands within the DDSketch's relative accuracy of
+    # the true value; F.x.quantile and percentile are exact.
     import numpy as np
 
     from dftracer.utils.columnar import F
@@ -782,7 +781,7 @@ def test_group_by_quantile_percentile():
 
     out = (
         batch.group_by("cat")
-        .agg(F.dur.quantile(0.5).alias("p50"), F.dur.percentile(90).alias("p90"))
+        .agg(F.dur.approx_quantile(0.5).alias("p50"), F.dur.approx_quantile(0.9).alias("p90"))
         .to_pandas()
         .set_index("cat")
         .sort_index()
@@ -794,10 +793,18 @@ def test_group_by_quantile_percentile():
         assert out.loc[c, "p50"] == pytest.approx(true_p50, rel=0.03)
         assert out.loc[c, "p90"] == pytest.approx(true_p90, rel=0.03)
 
-    # percentile(p) == quantile(p/100).
-    a = batch.group_by("cat").agg(F.dur.percentile(99).alias("x")).to_pandas()
-    b = batch.group_by("cat").agg(F.dur.quantile(0.99).alias("x")).to_pandas()
-    assert a["x"].to_list() == pytest.approx(b["x"].to_list())
+    # percentile(p) == quantile(p/100, "linear"), both exact (numpy's default).
+    a = batch.group_by("cat").agg(F.dur.percentile(99).alias("x")).to_pandas().set_index("cat")
+    b = (
+        batch.group_by("cat")
+        .agg(F.dur.quantile(0.99, "linear").alias("x"))
+        .to_pandas()
+        .set_index("cat")
+    )
+    for c in (0, 1):
+        want = np.percentile(dur[cats == c], 99)
+        assert a.loc[c, "x"] == pytest.approx(want, rel=1e-12)
+        assert b.loc[c, "x"] == pytest.approx(want, rel=1e-12)
 
 
 def test_group_by_hist():

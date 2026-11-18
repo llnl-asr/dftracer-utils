@@ -42,7 +42,14 @@ dftu_agg_spec dftu_agg_skew_unbiased(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_kurt_unbiased(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_first(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_last(const dftu_expr* value, const char* out);
+/** The approximate DDSketch quantile at level `q` in [0, 1]. */
 dftu_agg_spec dftu_agg_pct(const dftu_expr* value, double q, const char* out);
+/** The exact quantile at level `q` in [0, 1] (`interp` a dftu_interpolation
+ * from dataframe/c_api.h); null for a group with no present value. The group
+ * state keeps every present value, 8 bytes each. An `interp` outside the enum
+ * is read as DFTU_INTERP_LINEAR. */
+dftu_agg_spec dftu_agg_quantile(const dftu_expr* value, double q,
+                                int32_t interp, const char* out);
 dftu_agg_spec dftu_agg_hist(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_sumsq(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_argmax(const dftu_expr* value, const dftu_expr* by,

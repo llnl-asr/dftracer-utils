@@ -27,6 +27,8 @@ static_assert(code(AggOp::SkewUnbiased) == DFTU_AGG_SKEW_UNBIASED);
 static_assert(code(AggOp::KurtUnbiased) == DFTU_AGG_KURT_UNBIASED);
 static_assert(code(Agg::SkewUnbiased) == DFTU_AGG_SKEW_UNBIASED);
 static_assert(code(Agg::KurtUnbiased) == DFTU_AGG_KURT_UNBIASED);
+static_assert(code(AggOp::Quantile) == DFTU_AGG_QUANTILE);
+static_assert(code(Agg::Quantile) == DFTU_AGG_QUANTILE);
 static_assert(code(Encoding::View) == 4);
 static_assert(code(Encoding::Chunked) == 5);
 
@@ -49,6 +51,7 @@ static_assert(code(ScalarKind::U64) == DFTU_SCALAR_TAG_U64);
 static_assert(code(ScalarKind::F64) == DFTU_SCALAR_TAG_F64);
 static_assert(code(ScalarKind::Str) == DFTU_SCALAR_TAG_STR);
 static_assert(code(ScalarKind::Err) == DFTU_SCALAR_TAG_ERR);
+static_assert(code(ScalarKind::Null) == DFTU_SCALAR_TAG_NULL);
 
 static_assert(-(code(dstd::Condition::Unknown) + 1) == DFTU_E_UNKNOWN);
 static_assert(-(code(dstd::Condition::Internal) + 1) == DFTU_E_INTERNAL);
@@ -211,6 +214,7 @@ static_assert(code(ScalarTag::U64) == DFTU_SCALAR_TAG_U64);
 static_assert(code(ScalarTag::F64) == DFTU_SCALAR_TAG_F64);
 static_assert(code(ScalarTag::Str) == DFTU_SCALAR_TAG_STR);
 static_assert(code(ScalarTag::Err) == DFTU_SCALAR_TAG_ERR);
+static_assert(code(ScalarTag::Null) == DFTU_SCALAR_TAG_NULL);
 
 // Every TypeId mirrors a dftu_dtype, in lockstep, so a plugin can name any
 // type a Series can hold through the C ABI.

@@ -45,8 +45,9 @@ Series labelled(Series values, dstd::Vector<Series> levels) {
 
 Series over(Series level) {
     dstd::Vector<Series> levels;
+    const std::int64_t rows = level.length();
     levels.push_back(std::move(level));
-    return labelled(f64s({0, 1, 2, 3, 4, 5, 6}).slice(0, levels[0].length()),
+    return labelled(f64s({0, 1, 2, 3, 4, 5, 6}).slice(0, rows),
                     std::move(levels));
 }
 

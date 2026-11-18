@@ -92,8 +92,7 @@ top-level and ``args.*`` alike (``F("args.level").mean()``).
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
-         from dftracer.utils.columnar import F
+         from dftracer.utils import F, TraceViewer
 
          df = (TraceViewer("trace.pfw.gz")
                .group_by("cat")

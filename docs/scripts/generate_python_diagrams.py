@@ -44,16 +44,16 @@ PAGE_CLASSES = {
     "dfanalyzer": ["DFAnalyzerAggregatedTraceViewer", "HLMConfig"],
 }
 
-# Which module file backs each page's classes.
+# Which module files back each page's classes.
 PAGE_MODULE = {
-    "columnar": "columnar",
-    "dataframe": "dataframe",
-    "series": "series",
-    "trace_viewer": "trace_viewer",
-    "duql": "duql",
-    "runtime": "runtime",
-    "indexer": "indexer",
-    "dfanalyzer": "dfanalyzer",
+    "columnar": ("expr", "_eval", "groupby"),
+    "dataframe": ("dataframe",),
+    "series": ("series",),
+    "trace_viewer": ("trace_viewer",),
+    "duql": ("duql",),
+    "runtime": ("runtime",),
+    "indexer": ("indexer",),
+    "dfanalyzer": ("dfanalyzer",),
 }
 
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -112,8 +112,10 @@ def sanitize(name: str) -> str:
 def build_diagram(
     page: str, registry: dict[str, PyClass], max_members: int = 2
 ) -> str | None:
-    module = PAGE_MODULE[page]
-    documented = [c for c in PAGE_CLASSES[page] if c in registry and registry[c].module == module]
+    modules = PAGE_MODULE[page]
+    documented = [
+        c for c in PAGE_CLASSES[page] if c in registry and registry[c].module in modules
+    ]
     if not documented:
         return None
     in_group = set(documented)

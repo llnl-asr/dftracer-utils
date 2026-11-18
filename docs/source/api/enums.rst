@@ -44,7 +44,10 @@ Series dtypes
    :undoc-members:
 
 ``DType`` is an ``IntEnum`` that mirrors the engine's type ids; it is also
-exported at the package top level.
+exported at the package top level. ``is_integer``, ``is_float`` and
+``is_numeric`` classify a type, and ``int_range`` gives the ``(min, max)`` of an
+integer type (``None`` for the others). ``dftracer.utils.enums`` is the one
+table for dtypes and time units; the other modules derive their lookups from it.
 
 Time units
 ----------

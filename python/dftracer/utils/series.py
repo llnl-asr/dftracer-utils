@@ -18,7 +18,6 @@ import json
 import math
 from typing import (
     TYPE_CHECKING,
-    Any,
     Callable,
     Dict,
     List,
@@ -35,18 +34,37 @@ from typing import (
 
 from . import dftracer_utils_ext as _ext
 from ._aliases import install as _install_aliases
+from ._convert import (
+    NeedsArrow,
+    _arrow_native,
+    _indices,
+    _native_numpy,
+    _pandas_default,
+    _pandas_nullable,
+    _polars_native,
+    _polars_via_arrow,
+    _require_pyarrow,
+    _to_pandas,
+    numpy_to_native,
+    pandas_to_native,
+    polars_to_native,
+)
 from ._pandas_series import _SeriesPandasMixin
-from .enums import _DTYPE_BY_NAME, DType
+from .enums import (
+    DT_UNIT_CODES,
+    DTYPE_BY_NAME,
+    EPOCH_NS,
+    FREQ_NS,
+    DType,
+    dt_unit,
+    rule_to_units,
+)
 
 if TYPE_CHECKING:
-    from types import ModuleType
-
     import numpy as np  # ty: ignore[import-not-found]
     import pandas as pd  # ty: ignore[import-not-found]
     import polars as pl  # ty: ignore[import-not-found]
     import pyarrow as pa  # ty: ignore[import-not-found]
-    from pandas._libs.missing import NAType  # ty: ignore[import-not-found]
-    from pandas.api.extensions import ExtensionArray  # ty: ignore[import-not-found]
     from typing_extensions import Self
 
     from .dataframe import DataFrame
@@ -65,20 +83,13 @@ _PY_DTYPES: Dict[type, DType] = {
 _NUMPY_NAMES = {"str": "string", "str_": "string", "bool_": "bool"}
 
 
-_INT_BITS = {DType.INT8: 8, DType.INT16: 16, DType.INT32: 32, DType.INT64: 64}
-_UINT_BITS = {DType.UINT8: 8, DType.UINT16: 16, DType.UINT32: 32, DType.UINT64: 64}
-
-
 def _dtype_limits(dtype: DType) -> "Optional[Tuple[Union[int, float], Union[int, float]]]":
     """The lowest and highest value a numeric column of ``dtype`` can hold (the
     missing bound of a one-sided ``clip``); ``None`` for a type with no limits
     here."""
-    if dtype in _INT_BITS:
-        bits = _INT_BITS[dtype]
-        return -(1 << (bits - 1)), (1 << (bits - 1)) - 1
-    if dtype in _UINT_BITS:
-        return 0, (1 << _UINT_BITS[dtype]) - 1
-    if dtype in (DType.FLOAT32, DType.FLOAT64):
+    if dtype.int_range is not None:
+        return dtype.int_range
+    if dtype.is_float:
         return float("-inf"), float("inf")
     return None
 
@@ -90,7 +101,7 @@ def _resolve_dtype(dtype: "Union[str, int, DType, type]") -> int:
     name and TypeError on any other argument."""
     if isinstance(dtype, str):
         try:
-            return int(_DTYPE_BY_NAME[dtype.lower()])
+            return int(DTYPE_BY_NAME[dtype.lower()])
         except KeyError:
             raise ValueError(f"unknown dtype name: {dtype!r}") from None
     if isinstance(dtype, type) or hasattr(dtype, "kind"):
@@ -102,7 +113,7 @@ def _resolve_dtype(dtype: "Union[str, int, DType, type]") -> int:
             name = getattr(dtype, "__name__", "")
         name = _NUMPY_NAMES.get(name, name)
         try:
-            return int(_DTYPE_BY_NAME[name.lower()])
+            return int(DTYPE_BY_NAME[name.lower()])
         except KeyError:
             pass
     else:
@@ -119,358 +130,28 @@ def _resolve_dtype(dtype: "Union[str, int, DType, type]") -> int:
 _R = TypeVar("_R", bound="Scalar")
 
 
-def _to_pandas(arrow_obj: Any, arrow: bool) -> Any:
-    """``pyarrow`` to pandas: NumPy dtypes (a copy) or, with ``arrow``, the
-    ``pd.ArrowDtype`` columns that share the Arrow buffers."""
-    if not arrow:
-        return arrow_obj.to_pandas()
-    import pandas as pd  # ty: ignore[import-not-found]
-
-    return arrow_obj.to_pandas(types_mapper=pd.ArrowDtype)
-
-
-_POLARS_DTYPES: Dict[DType, str] = {
-    DType.BOOL: "Boolean",
-    DType.INT8: "Int8",
-    DType.INT16: "Int16",
-    DType.INT32: "Int32",
-    DType.INT64: "Int64",
-    DType.UINT8: "UInt8",
-    DType.UINT16: "UInt16",
-    DType.UINT32: "UInt32",
-    DType.UINT64: "UInt64",
-    DType.FLOAT32: "Float32",
-    DType.FLOAT64: "Float64",
-    DType.STRING: "String",
-    DType.LARGE_STRING: "String",
-    DType.BINARY: "Binary",
-    DType.LARGE_BINARY: "Binary",
-}
-_FLOATS = (DType.FLOAT32, DType.FLOAT64)
-_INTEGERS = (
-    DType.INT8,
-    DType.INT16,
-    DType.INT32,
-    DType.INT64,
-    DType.UINT8,
-    DType.UINT16,
-    DType.UINT32,
-    DType.UINT64,
-)
-_NATIVE_OBJECT_TYPES = (
-    DType.STRING,
-    DType.LARGE_STRING,
-    DType.BINARY,
-    DType.LARGE_BINARY,
-    DType.LIST,
-    DType.LARGE_LIST,
-    DType.STRUCT,
-)
-
-
-_NUMPY_UNITS = ("s", "ms", "us", "ns")
-_NAT = -(1 << 63)
-_TEMPORAL_KINDS = {
-    DType.DATE32: "D",
-    DType.DATE64: "ms",
-    DType.TIMESTAMP: None,
-    DType.DURATION: None,
-}
-_PYTHON_OBJECT_TYPES = (
-    DType.TIME32,
-    DType.TIME64,
-    DType.DECIMAL128,
-    DType.DECIMAL256,
-    DType.FIXED_SIZE_BINARY,
-    DType.FIXED_SIZE_LIST,
-    DType.MAP,
-)
-
-
-def _temporal_numpy(native: "Series", dtype: DType) -> "np.ndarray":
-    """A date, timestamp or duration column as ``datetime64`` or ``timedelta64``
-    (UTC values for a zoned timestamp), with ``NaT`` for null."""
-    import numpy as np  # ty: ignore[import-not-found]
-
-    unit = _TEMPORAL_KINDS[dtype] or _NUMPY_UNITS[native.time_unit]
-    phys = native._physical()
-    if dtype == DType.DATE32:
-        phys = phys._cast(int(DType.INT64))
-    if phys.null_count:
-        phys = phys.fillna(_NAT)
-    kind = "timedelta64" if dtype == DType.DURATION else "datetime64"
-    return np.array(memoryview(phys)).view(f"{kind}[{unit}]")  # ty: ignore[invalid-argument-type]
-
-
-def _object_numpy(values: Sequence[object]) -> "np.ndarray":
-    import numpy as np  # ty: ignore[import-not-found]
-
-    out = np.empty(len(values), dtype=object)
-    for i, v in enumerate(values):
-        out[i] = v
-    return out
-
-
-def _parts(
-    native: "Series", nullable: bool, na: "Optional[NAType]" = None
-) -> Tuple[bytearray, Optional[bytearray], str]:
-    """The column's values, null mask and numpy dtype string from one native
-    pass (``Series._np_parts``): bytearrays that numpy wraps without a copy."""
-    return native._np_parts(nullable, na)
-
-
-def _frombuffer(data: Union[bytes, bytearray, memoryview], dtype: str) -> "np.ndarray":
-    import numpy as np  # ty: ignore[import-not-found]
-
-    return np.frombuffer(data, dtype=dtype)
-
-
-def _native_numpy(native: "Series") -> "np.ndarray":
-    """The native column as a NumPy array without pyarrow; TypeError for a
-    type with no native conversion."""
-    import numpy as np  # ty: ignore[import-not-found]
-
-    try:
-        # memoryview forces the native buffer protocol (a plain
-        # np.asarray(handle) can fall back to a 0-d object array).
-        # The native buffer support is not in the stub (PEP 688 is 3.12+).
-        return np.asarray(memoryview(native))  # ty: ignore[invalid-argument-type]
-    except (BufferError, TypeError):
-        pass
-    if DType(native.type) in (DType.STRING, DType.LARGE_STRING):
-        out = np.empty(native.length, dtype=object)
-        native._str_into(out, None)
-        return out
-    if native.encoding != 0:
-        native = native.materialize()
-    dtype = DType(native.type)
-    nulls = native.null_count
-    if dtype in _FLOATS or dtype in _INTEGERS:
-        values, _, dt = _parts(native, False)
-        return _frombuffer(values, dt)
-    if dtype in _TEMPORAL_KINDS:
-        return _temporal_numpy(native, dtype)
-    if dtype == DType.FLOAT16:
-        return np.array(
-            [float("nan") if v is None else v for v in native._to_pylist()], dtype=np.float16
-        )
-    if dtype == DType.BOOL and not nulls:
-        values, _, _ = _parts(native, False)
-        return _frombuffer(values, "u1").view(np.bool_)
-    if dtype == DType.BOOL or dtype in _NATIVE_OBJECT_TYPES or dtype in _PYTHON_OBJECT_TYPES:
-        return _object_numpy(native._to_pylist())
-    raise TypeError(f"no native conversion for column type '{dtype.name.lower()}'")
-
-
-_POLARS_NATIVE_ONLY = (DType.FLOAT16, DType.DECIMAL128, DType.DECIMAL256)
-
-
-def _polars_via_arrow(native: "Series") -> bool:
-    """Whether the Arrow capsule gives polars the dtype the native path does: not
-    for Float16 and decimals."""
-    return hasattr(native, "__arrow_c_array__") and DType(native.type) not in _POLARS_NATIVE_ONLY
-
-
-def _polars_native(native: "Series", pl: Any) -> "pl.Series":
-    """The column as a polars Series built natively, with no pyarrow."""
-    dtype = DType(native.type)
-    if dtype in _TEMPORAL_KINDS:
-        values = _temporal_numpy(native, dtype)
-        if values.dtype.name.endswith("[s]"):
-            values = values.astype(values.dtype.name.replace("[s]", "[ms]"))
-        out = pl.Series(values)
-        if dtype == DType.TIMESTAMP and native.timezone:
-            out = out.dt.replace_time_zone("UTC").dt.convert_time_zone(native.timezone)
-        return out
-    if dtype == DType.FLOAT16:
-        import numpy as np  # ty: ignore[import-not-found]
-
-        return pl.Series(_native_numpy(native).astype(np.float32))  # type: ignore[union-attr]
-    values: Any = native._to_pylist()
-    if native.encoding == 2 and dtype in (DType.STRING, DType.LARGE_STRING):
-        return pl.Series(values, dtype=pl.Categorical)
-    if dtype == DType.MAP:
-        values = [
-            None if row is None else [{"key": k, "value": v} for k, v in row] for row in values
-        ]
-    polars_dtype = _POLARS_DTYPES.get(dtype)
-    return pl.Series(values, dtype=getattr(pl, polars_dtype) if polars_dtype else None)
-
-
-def _pandas_values(native: "Series") -> "Union[pd.Series, np.ndarray]":
-    """The column as a pandas Series or NumPy array built without pyarrow: a
-    zoned timestamp gets its zone, everything else its NumPy array."""
-    import pandas as pd  # ty: ignore[import-not-found]
-
-    if DType(native.type) in (DType.STRING, DType.LARGE_STRING) and hasattr(
-        native, "__arrow_c_array__"
-    ):
-        import numpy as np  # ty: ignore[import-not-found]
-
-        string = pd.Series(np.array(["x"], dtype=object)).dtype
-        if isinstance(string, pd.StringDtype) and string.storage == "pyarrow":
-            try:
-                import pyarrow as pa  # ty: ignore[import-not-found]
-            except ImportError:
-                pass
-            else:
-                arr = pa.array(native)
-                if pa.types.is_dictionary(arr.type):
-                    arr = pa.DictionaryArray.from_arrays(
-                        arr.indices, arr.dictionary.cast(pa.large_string())
-                    )
-                return pd.Series(pd.array(arr, dtype=string))
-    values = _native_numpy(native)
-    if DType(native.type) != DType.TIMESTAMP or not native.timezone:
-        return values
-
-    return pd.Series(values).dt.tz_localize("UTC").dt.tz_convert(native.timezone)
-
-
-def _pandas_categorical(native: "Series") -> "pd.Categorical":
-    """A dictionary-encoded string column as ``pd.Categorical``. With pyarrow the
-    codes and the dictionary are taken as they are, so no string is built per
-    row, and the categories keep the dictionary order without its unused
-    entries. Without pyarrow the codes are not reachable, so the strings are
-    built once and the categories come out sorted."""
-    import numpy as np  # ty: ignore[import-not-found]
-    import pandas as pd  # ty: ignore[import-not-found]
-
-    if hasattr(native, "__arrow_c_array__"):
-        try:
-            import pyarrow as pa  # ty: ignore[import-not-found]
-        except ImportError:
-            pass
-        else:
-            arr = pa.array(native)
-            if pa.types.is_dictionary(arr.type):
-                # pandas refuses repeated or null categories, which Arrow allows.
-                if arr.dictionary.null_count or len(arr.dictionary.unique()) != len(arr.dictionary):
-                    arr = arr.dictionary_decode().dictionary_encode()
-                codes = arr.indices.fill_null(-1).to_numpy(zero_copy_only=False)
-                categories = arr.dictionary.to_pandas()
-                out = pd.Categorical.from_codes(codes, categories=pd.Index(categories))
-                return out.remove_unused_categories()
-    values = np.empty(native.length, dtype=object)
-    native._str_into(values, None)
-    return pd.Categorical(values)
-
-
-def _pandas_default(native: "Series") -> "Union[pd.Series, np.ndarray, ExtensionArray]":
-    """The default ``to_pandas`` column: ``pd.Categorical`` for a dictionary
-    column, pandas' nullable dtype for an integer, bool or (where the default
-    string dtype is ``object``) string column that holds nulls, and the NumPy
-    form for the rest."""
-    if native.encoding == 2 and DType(native.type) in (DType.STRING, DType.LARGE_STRING):
-        return _pandas_categorical(native)
-    if native.null_count:
-        dtype = DType(native.type)
-        if (
-            dtype in _INTEGERS
-            or dtype == DType.BOOL
-            or (dtype in (DType.STRING, DType.LARGE_STRING) and not _default_string_dtype())
-        ):
-            values = _pandas_nullable(native)
-            if values is not None:
-                return values
-    return _pandas_values(native)
-
-
-def _default_string_dtype() -> bool:
-    """Whether pandas already stores strings in a ``StringDtype`` that holds
-    missing values (pandas 3)."""
-    import numpy as np  # ty: ignore[import-not-found]
-    import pandas as pd  # ty: ignore[import-not-found]
-
-    return isinstance(pd.Series(np.array(["x"], dtype=object)).dtype, pd.StringDtype)
-
-
-def _pandas_nullable(native: "Series") -> "Optional[ExtensionArray]":
-    """The column as pandas' own nullable extension array (``Int8`` .. ``UInt64``,
-    ``Float32``, ``Float64``, ``boolean``, ``string``), built without pyarrow; a
-    null is ``pd.NA`` and a float NaN stays NaN. ``None`` for a type with no such
-    dtype, which the caller converts as usual."""
-    import numpy as np  # ty: ignore[import-not-found]
-    import pandas as pd  # ty: ignore[import-not-found]
-
-    dtype = DType(native.type)
-    if native.encoding == 2 and dtype in (DType.STRING, DType.LARGE_STRING):
-        return _pandas_categorical(native)
-    if dtype in (DType.STRING, DType.LARGE_STRING):
-        out = np.empty(native.length, dtype=object)
-        native._str_into(out, pd.NA)
-        string = pd.StringDtype()
-        if getattr(string, "storage", "python") == "python":
-            return cast(Any, string.construct_array_type())(out)
-        return pd.array(out, dtype=string)
-    if native.encoding != 0:
-        native = native.materialize()
-    if dtype in _INTEGERS or dtype in _FLOATS:
-        values, mask, dt = _parts(native, True)
-        arr = _frombuffer(values, dt)
-        m = _frombuffer(mask, "?") if mask is not None else np.zeros(len(arr), dtype=bool)
-        return (
-            pd.arrays.IntegerArray(arr, m)
-            if dtype in _INTEGERS
-            else pd.arrays.FloatingArray(arr, m)
-        )
-    if dtype == DType.BOOL:
-        values, mask, _ = _parts(native, True)
-        arr = _frombuffer(values, "u1").view(np.bool_)
-        m = _frombuffer(mask, "?") if mask is not None else np.zeros(len(arr), dtype=bool)
-        return pd.arrays.BooleanArray(arr, m)
-    return None
-
-
-def _apply_index(pdf: "pd.DataFrame", index: "Union[str, Sequence[str]]") -> "pd.DataFrame":
-    """``pdf`` with the named columns moved into the pandas index, in the order
-    given (a MultiIndex for several names). KeyError names an unknown column and
-    ValueError a repeated one."""
-    names = [index] if isinstance(index, str) else list(index)
-    if not names:
-        raise ValueError("to_pandas: index must name at least one column")
-    seen: "set[str]" = set()
-    for name in names:
-        if name not in pdf.columns:
-            raise KeyError(f"to_pandas: no column named {name!r} to use as the index")
-        if name in seen:
-            raise ValueError(f"to_pandas: index column {name!r} is repeated")
-        seen.add(name)
-    return pdf.set_index(names if len(names) > 1 else names[0])
-
-
-def _arrow_native(name: str) -> Callable[..., Any]:
-    """The native Arrow entry point `name`."""
-    return getattr(_ext, name)
-
-
-def _require_pyarrow() -> "ModuleType":
-    try:
-        import pyarrow as pa  # ty: ignore[import-not-found]
-    except ImportError:
-        raise ImportError(
-            "pyarrow is required for Arrow conversion. Install with: pip install pyarrow"
-        ) from None
-    return pa
+def require_utf8(op: str, encoding: str) -> None:
+    if encoding.lower().replace("_", "-") not in ("utf-8", "utf8"):
+        raise ValueError(f"{op}: only utf-8 is supported, not {encoding!r}")
 
 
 _LOGICAL_AND = 0
 _LOGICAL_OR = 1
 
-_NormForm = Literal["NFC", "NFKC", "NFD", "NFKD"]
+NormForm = Literal["NFC", "NFKC", "NFD", "NFKD"]
 # c_api.h DFTU_NORM_* and DFTU_WRAP_*.
 _NORM_FORMS: Dict[str, int] = {"NFC": 0, "NFKC": 1, "NFD": 2, "NFKD": 3}
 _WRAP_FLAG_BITS = (1, 2, 4, 8, 16)
 
 
-def _norm_form_code(form: str) -> int:
+def norm_form_code(form: str) -> int:
     code = _NORM_FORMS.get(form) if isinstance(form, str) else None
     if code is None:
         raise ValueError(f"invalid normalization form {form!r}")
     return code
 
 
-def _translate_pairs(
+def translate_pairs(
     table: Mapping[Union[int, str], Union[str, int, None]],
 ) -> Tuple[List[str], List[Optional[str]]]:
     """The keys (one codepoint each) and the replacements (``None`` deletes) of
@@ -493,7 +174,7 @@ def _translate_pairs(
     return keys, values
 
 
-def _wrap_flag_bits(
+def wrap_flag_bits(
     expand_tabs: bool,
     replace_whitespace: bool,
     drop_whitespace: bool,
@@ -507,17 +188,6 @@ def _wrap_flag_bits(
 # Right-hand operand for a Series op: another Series or a Python scalar.
 _Scalar = Union[int, float]
 _SeriesOrScalar = Union["Series", int, float]
-_INTEGRAL = {
-    DType.INT8,
-    DType.INT16,
-    DType.INT32,
-    DType.INT64,
-    DType.UINT8,
-    DType.UINT16,
-    DType.UINT32,
-    DType.UINT64,
-    DType.BOOL,
-}
 
 
 class _OpsAccessor:
@@ -650,8 +320,6 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         values, a zoned ``datetime64`` as a zoned timestamp. An Arrow-backed
         column imports through pyarrow. The name is ``s.name`` when that is a
         ``str``; any other name (``None``, an int, a tuple) is dropped."""
-        from ._import import NeedsArrow, pandas_to_native
-
         try:
             out = pandas_to_native(s)
         except NeedsArrow:
@@ -664,8 +332,6 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
     def from_polars(cls, s: "pl.Series") -> "Series":
         """Import a ``polars.Series`` with no pyarrow. The name is ``s.name``;
         polars' default name ``""`` means no name."""
-        from ._import import NeedsArrow, polars_to_native
-
         try:
             out = polars_to_native(s)
         except NeedsArrow:
@@ -681,8 +347,6 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         numeric array borrows the array's buffer; other numbers, bools,
         ``datetime64``, ``timedelta64``, text, bytes and object arrays are
         copied. A NaN stays a NaN; a ``NaT`` or a masked value is null."""
-        from ._import import numpy_to_native
-
         if not type(a).__module__.startswith("numpy.ma"):
             try:
                 return _ext._series_from_numpy(a)
@@ -1090,14 +754,14 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         the value scaled by ``10**decimals``, rounded and scaled back. A
         negative ``decimals`` rounds to tens, hundreds and so on. An integer
         column stays integer."""
-        if decimals == 0 or (decimals > 0 and self.dtype in _INTEGERS):
+        if decimals == 0 or (decimals > 0 and self.dtype.is_integer):
             return super().round()
         scale = 10.0**decimals if decimals > 0 else 10.0 ** (-decimals)
         if decimals > 0:
             out = (self * scale).round() / scale
         else:
             out = (self / scale).round() * scale
-        return cast("Self", out.astype(self.dtype) if self.dtype in _INTEGERS else out)
+        return cast("Self", out.astype(self.dtype) if self.dtype.is_integer else out)
 
     def rank(
         self,
@@ -1175,7 +839,7 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         Series is not numeric). The constant rides the null mask (0 / 1,
         never NaN or null), so no cell of this Series leaks into it."""
         target = self.dtype
-        if isinstance(value, float) or target not in _NUMERIC_DTYPES:
+        if isinstance(value, float) or not target.is_numeric:
             target = DType.FLOAT64 if isinstance(value, float) else DType.INT64
         return self.is_null().cast(target).mul_scalar(0).add_scalar(value)
 
@@ -1421,12 +1085,6 @@ def _population(s: "Series", n: int, value: float) -> Optional[float]:
     return value
 
 
-def _indices(indices: "Union[Series, Sequence[int]]") -> List[int]:
-    if isinstance(indices, Series):
-        return [int(cast(int, i)) for i in indices.to_list()]
-    return [int(i) for i in indices]
-
-
 def _first_set(*values: "Optional[Union[int, float]]") -> "Optional[Union[int, float]]":
     for v in values:
         if v is not None:
@@ -1481,47 +1139,10 @@ class _Expanding:
         return self.var().sqrt()
 
 
-_NUMERIC_DTYPES = {
-    DType.INT8,
-    DType.INT16,
-    DType.INT32,
-    DType.INT64,
-    DType.UINT8,
-    DType.UINT16,
-    DType.UINT32,
-    DType.UINT64,
-    DType.FLOAT32,
-    DType.FLOAT64,
-}
-
-_TIME_UNITS = {"s": 0, "sec": 0, "ms": 1, "us": 2, "ns": 3}
 _Temporal = Union[datetime.datetime, datetime.date, datetime.time, datetime.timedelta]
-_FREQ_UNITS = {
-    "ns": 1,
-    "us": 1_000,
-    "ms": 1_000_000,
-    "s": 1_000_000_000,
-    "sec": 1_000_000_000,
-    "min": 60_000_000_000,
-    "t": 60_000_000_000,
-    "h": 3_600_000_000_000,
-    "d": 86_400_000_000_000,
-}
-
-
-def _dt_unit(kind: int, time_unit: int, given: Optional[str]) -> str:
-    """The unit ``.dt`` reads a column of type code ``kind`` in: ``given``, else
-    a temporal column's own unit (date64 counts milliseconds), else
-    microseconds, as an Int64 is read."""
-    if given is not None:
-        return given
-    if kind in _OWN_UNIT_TYPES:
-        return ("s", "ms", "us", "ns")[time_unit]
-    return "ms" if kind == DType.DATE64 else "us"
 
 
 _dt_accessor_new = _ext.DtAccessor.__new__
-_OWN_UNIT_TYPES = frozenset((int(DType.TIMESTAMP), int(DType.DURATION), int(DType.TIME64)))
 
 
 class _DtAccessor(_ext.DtAccessor):
@@ -1535,8 +1156,8 @@ class _DtAccessor(_ext.DtAccessor):
     def __new__(cls, series: Series, unit: Optional[str] = None) -> "_DtAccessor":
         self = _dt_accessor_new(cls, series)
         self._given = unit
-        unit = _dt_unit(series.type, series.time_unit, unit)
-        if unit not in _TIME_UNITS:
+        unit = dt_unit(series.type, series.time_unit, unit)
+        if unit not in DT_UNIT_CODES:
             raise ValueError("dt: unit must be s, ms, us or ns")
         self._unit = unit
         return self
@@ -1545,14 +1166,14 @@ class _DtAccessor(_ext.DtAccessor):
         return _DtAccessor(self._s, unit)
 
     def _part(self, code: int) -> Series:
-        return self._s.dt_part(code, _TIME_UNITS[self._unit])
+        return self._s.dt_part(code, DT_UNIT_CODES[self._unit])
 
     def strftime(self, fmt: str) -> Series:
         """Format each instant as UTC text (pandas ``strftime``) for the
         directives %Y %y %m %d %H %I %M %S %f %j %a %A %b %B %p %F %T %s %z
         %Z %%; another directive raises ValueError. Unlike pandas on a naive
         column, %z prints ``+0000`` and %Z prints ``UTC`` rather than empty."""
-        return self._s.dt_format(fmt, _TIME_UNITS[self._unit])
+        return self._s.dt_format(fmt, DT_UNIT_CODES[self._unit])
 
     def day_name(self) -> Series:
         """The English weekday name of each instant (pandas ``day_name``)."""
@@ -1670,9 +1291,10 @@ class _DtAccessor(_ext.DtAccessor):
         """Each instant as an integer count of ``time_unit`` (``"ns"``,
         ``"us"``, ``"ms"``, ``"s"`` or ``"d"``) since the epoch, from the
         column's own unit; a coarser unit floors."""
-        from ._expr_ops import _EPOCH_NS, ColumnOp, run_column_op
+        from ._expr_ops import run_column_op
+        from .expr import ColumnOp
 
-        if time_unit not in _EPOCH_NS:
+        if time_unit not in EPOCH_NS:
             raise ValueError("epoch: time_unit must be ns, us, ms, s or d")
         spec = ColumnOp(
             "dftu.series.cast", None, 0, 0, time_unit, None, "epoch", 0, None, self._given
@@ -1692,8 +1314,6 @@ class _DtAccessor(_ext.DtAccessor):
         )
 
     def _every(self, freq: "Union[int, str]") -> int:
-        from .indexing import rule_to_units
-
         return rule_to_units(freq, self._unit)
 
     def floor(self, freq: "Union[int, str]") -> Series:
@@ -1719,14 +1339,14 @@ class _DtAccessor(_ext.DtAccessor):
     def total_seconds(self) -> Series:
         """Each value as seconds (Float64), for a Duration or an Int64 read
         in the accessor's unit."""
-        per_second = 1_000_000_000 / _FREQ_UNITS[self._unit]
+        per_second = 1_000_000_000 / FREQ_NS[self._unit]
         return self._s.astype("float64") / per_second
 
     def _total(self, ns_per_result: int) -> "Series[int]":
         # Whole units, truncated toward zero as polars does, in integer
         # arithmetic from the column's ticks.
         ticks = self._s.astype("int64")
-        unit_ns = _FREQ_UNITS[self._unit]
+        unit_ns = FREQ_NS[self._unit]
         if ns_per_result <= unit_ns:
             return cast("Series[int]", ticks * (unit_ns // ns_per_result))
         step = ns_per_result // unit_ns
@@ -1960,18 +1580,14 @@ class _StrAccessor(_ext.StrAccessor):
     def encode(self, encoding: str = "utf-8", errors: str = "strict") -> Series:
         """The UTF-8 bytes of each string, as a binary column (pandas
         ``str.encode``). Only UTF-8, the engine's text encoding."""
-        from .columnar import _require_utf8
-
-        _require_utf8("encode", encoding)
+        require_utf8("encode", encoding)
         return self._s.astype("binary")
 
     def decode(self, encoding: str = "utf-8", errors: str = "strict") -> Series:
         """Each binary value read as UTF-8 text (pandas ``str.decode``). With
         ``errors="strict"`` a value that is not valid UTF-8 raises
         ``ValueError``; with ``errors="null"`` it becomes null."""
-        from .columnar import _require_utf8
-
-        _require_utf8("decode", encoding)
+        require_utf8("decode", encoding)
         if errors not in ("strict", "null"):
             raise ValueError(f"decode: errors must be 'strict' or 'null', not {errors!r}")
         out = self._s.astype("string")
@@ -2051,11 +1667,11 @@ class _StrAccessor(_ext.StrAccessor):
         """Every regex match per row, as a List<String>."""
         return self._s.str_findall(pat)
 
-    def normalize(self, form: _NormForm) -> "Series[builtins.str]":
+    def normalize(self, form: NormForm) -> "Series[builtins.str]":
         """Each string in the Unicode normalization ``form`` (``"NFC"``,
         ``"NFKC"``, ``"NFD"`` or ``"NFKD"``); a value that is not valid UTF-8
         is null."""
-        return self._s.str_normalize(_norm_form_code(form))
+        return self._s.str_normalize(norm_form_code(form))
 
     def translate(
         self, table: Mapping[Union[int, str], Union[str, int, None]]
@@ -2063,7 +1679,7 @@ class _StrAccessor(_ext.StrAccessor):
         """Each codepoint replaced by ``table`` (as ``str.translate``): a key is
         a codepoint or a one-character string, a value a string, a codepoint or
         ``None`` to delete it. A codepoint not in the table is kept."""
-        keys, values = _translate_pairs(table)
+        keys, values = translate_pairs(table)
         return self._s.str_translate(
             Series.from_list(keys, dtype=DType.STRING),
             Series.from_list(values, dtype=DType.STRING),
@@ -2083,7 +1699,7 @@ class _StrAccessor(_ext.StrAccessor):
         options, as pandas on those versions."""
         if width < 1:
             raise ValueError(f"invalid width {width!r} (must be > 0)")
-        flags = _wrap_flag_bits(
+        flags = wrap_flag_bits(
             expand_tabs, replace_whitespace, drop_whitespace, break_long_words, break_on_hyphens
         )
         return self._s.str_wrap(width, flags)
@@ -2169,17 +1785,6 @@ class _StrAccessor(_ext.StrAccessor):
         # Presence (1), not a count; an empty token is no category.
         names = [c for c in wide.columns if c != ""]
         return DataFrame({c: wide[c].gt(0).astype("int64") for c in names})
-
-
-def _like(ints: Series, template: Series) -> Series:
-    """The int64 column ``ints`` read as the type of ``template``: a timestamp,
-    duration, time or date keeps its unit and zone."""
-    dtype = DType(template.type)
-    if dtype in (DType.TIMESTAMP, DType.DURATION, DType.TIME64, DType.DATE64):
-        return _ext._series_retype(ints, int(dtype), template.time_unit, template.timezone)
-    if dtype in (DType.DATE32, DType.TIME32):
-        return _ext._series_retype(ints.astype(DType.INT32), int(dtype), template.time_unit, "")
-    return ints.astype(dtype)
 
 
 def _series_from_bytes(data: bytes) -> Series:

@@ -49,9 +49,9 @@ except ImportError:
     dd = None  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
 
 from dftracer.utils import Runtime
-from dftracer.utils._units import coerce_bytes, coerce_duration
 from dftracer.utils.dask_frame import DaskFrame
 from dftracer.utils.dataframe import DataFrame, PhaseArg, TimeUnitArg
+from dftracer.utils.enums import coerce_bytes, coerce_duration
 from dftracer.utils.trace_viewer import TraceViewer
 
 __all__ = [

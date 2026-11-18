@@ -102,7 +102,7 @@ def _expr_instance() -> object:
 def _ours(lib: str) -> Dict[str, Optional[object]]:
     import dftracer.utils as dft
 
-    columnar = importlib.import_module("dftracer.utils.columnar")
+    expr = importlib.import_module("dftracer.utils.expr")
     lazyframe = importlib.import_module("dftracer.utils.lazyframe")
     series = importlib.import_module("dftracer.utils.series")
 
@@ -116,19 +116,19 @@ def _ours(lib: str) -> Dict[str, Optional[object]]:
     if lib == "pandas":
         return {
             **common,
-            "DataFrameGroupBy": columnar.GroupBy,
-            "SeriesGroupBy": columnar.GroupBy,
+            "DataFrameGroupBy": dft.GroupBy,
+            "SeriesGroupBy": dft.GroupBy,
         }
     return {
         **common,
         "LazyFrame": dft.LazyFrame,
         "Expr": dft.Expr,
-        "GroupBy": columnar.GroupBy,
+        "GroupBy": dft.GroupBy,
         "LazyGroupBy": lazyframe.LazyGroupBy,
         "Series.list": s_list,
-        "Expr.str": columnar._ExprStr,
-        "Expr.dt": columnar._ExprDt,
-        "Expr.list": getattr(columnar, "_ExprList", None),
+        "Expr.str": expr._ExprStr,
+        "Expr.dt": expr._ExprDt,
+        "Expr.list": getattr(expr, "_ExprList", None),
     }
 
 

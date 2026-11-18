@@ -25,7 +25,7 @@ import textwrap
 import tokenize
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
-from .columnar import Expr, _Select, col, lit
+from .expr import Expr, Select, col, lit
 
 # Python 3.8 wraps a subscript's slice in ast.Index; 3.9+ stores the value
 # directly.
@@ -64,7 +64,7 @@ _STR_MAP = {
 }
 
 
-def _source_node(func: Callable[..., object]) -> ast.AST:
+def source_node(func: Callable[..., object]) -> ast.AST:
     """The ``FunctionDef`` or ``Lambda`` node of ``func``'s own source."""
     try:
         src = textwrap.dedent(inspect.getsource(func))
@@ -190,7 +190,7 @@ class _Lowering:
                 self.locals = saved
                 if then is None or otherwise is None:
                     raise TranspileError("every branch of an `if` must return")
-                return _Select(cond, then, otherwise)
+                return Select(cond, then, otherwise)
             if isinstance(s, ast.Pass):
                 continue
             raise TranspileError(f"statement {type(s).__name__} has no engine form")
@@ -233,7 +233,7 @@ class _Lowering:
         if isinstance(n, ast.Compare):
             return self.compare(n)
         if isinstance(n, ast.IfExp):
-            return _Select(self.expr(n.test), self.expr(n.body), self.expr(n.orelse))
+            return Select(self.expr(n.test), self.expr(n.body), self.expr(n.orelse))
         if isinstance(n, ast.Call):
             return self.call(n)
         raise TranspileError(f"expression {type(n).__name__} has no engine form")
@@ -403,7 +403,7 @@ class _Lowering:
         parameter bound to the argument expression (or constant)."""
         if self.depth >= _MAX_INLINE_DEPTH:
             raise TranspileError("calls nest too deep (recursion?)")
-        node = _source_node(callee)
+        node = source_node(callee)
         params = (
             [a.arg for a in node.args.args]
             if isinstance(node, (ast.FunctionDef, ast.Lambda))
@@ -495,7 +495,7 @@ class _Lowering:
                 self._bind(method, n, ("value",)).get("value") or _missing("fillna")
             )
             if isinstance(v, Expr):
-                return _Select(target.is_null(), v, target)
+                return Select(target.is_null(), v, target)
             return target.fillna(v)
         if method == "clip":
             a = self._bind(method, n, ("lower", "upper"))
@@ -507,9 +507,9 @@ class _Lowering:
                 return target.clip(lo, hi)
             # one bound: a null condition takes the else branch, so a null stays null
             if lo is not None:
-                return _Select(_cmp(target, "lt", lo), lit(lo), target)
+                return Select(_cmp(target, "lt", lo), lit(lo), target)
             if hi is not None:
-                return _Select(_cmp(target, "gt", hi), lit(hi), target)
+                return Select(_cmp(target, "gt", hi), lit(hi), target)
             raise TranspileError("clip needs a lower or an upper bound")
         if method == "round":
             digits = (
@@ -559,7 +559,7 @@ class _Lowering:
                 for v in vals[1:]:
                     ve = v if isinstance(v, Expr) else lit(v)
                     cond = _cmp(out - ve, "lt" if name == "min" else "gt", 0)
-                    out = _Select(cond, out, ve)
+                    out = Select(cond, out, ve)
                 return out
             if name == "int" and len(args) == 1:
                 return self.expr(args[0]).cast("int64")
@@ -639,7 +639,7 @@ def transpile(
     integers, so ``//`` and ``%`` come back as Int64 the way Python does.
     Raises :class:`TranspileError` naming the first unsupported construct, and
     ``KeyError`` for a field that is not a column."""
-    return _Lowering(func, _source_node(func), columns, None, 0, int_inputs).lower()
+    return _Lowering(func, source_node(func), columns, None, 0, int_inputs).lower()
 
 
 _ROW = "__row__"

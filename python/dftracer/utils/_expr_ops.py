@@ -14,72 +14,28 @@ kinds it has, an aggregate joined back on the keys otherwise."""
 
 from __future__ import annotations
 
+import copy
 import re
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
 
 from . import dftracer_utils_ext as _ext
+from ._eval import Columnar, Source, unwrap_source_columns
+from .dataframe import DataFrame
+from .enums import EPOCH_NS, DType, dt_unit, rule_to_units
+from .expr import (
+    CAST_CODES,
+    RANK_METHODS,
+    Col,
+    ColumnOp,
+    Expr,
+    has_column_op,
+    split_column_ops,
+)
+from .groupby import GroupBy
 from .series import Series
 
 if TYPE_CHECKING:
-    from .columnar import Agg, Expr
-    from .lazyframe import LazyFrame
-
-Value = Union[int, float]
-
-# The group transform behind an ``over`` for the kinds the engine has, keyed
-# by the column op's registry name.
-_TRANSFORM_KINDS: Dict[str, str] = {
-    "dftu.series.cumsum": "cumsum",
-    "dftu.series.cum_prod": "cumprod",
-    "dftu.series.cummax": "cummax",
-    "dftu.series.cummin": "cummin",
-    "dftu.series.shift": "shift",
-    "dftu.series.diff": "diff",
-    "dftu.series.pct_change": "pct_change",
-    "dftu.series.rank": "rank",
-    "dftu.series.ffill": "ffill",
-    "dftu.series.bfill": "bfill",
-}
-
-_RANK_METHODS = {"average": 0, "min": 1, "dense": 2, "ordinal": 3, "first": 3, "max": 4}
-_ROLLING_OPS = {"sum": 0, "mean": 1, "min": 2, "max": 3}
-
-
-class ColumnOp:
-    """One registered column op and its operands, as the expression language
-    carries it: ``op`` is the registry name, ``column2`` a second column
-    operand (an expression), ``a`` / ``b`` the scalar operands, ``text`` a
-    string or char operand, in the op's signature order."""
-
-    __slots__ = ("op", "column2", "a", "b", "text", "over", "kind", "n", "agg", "unit")
-
-    def __init__(
-        self,
-        op: str,
-        column2: "Optional[Expr]" = None,
-        a: Value = 0,
-        b: Value = 0,
-        text: Optional[str] = None,
-        over: Optional[List[str]] = None,
-        kind: Optional[str] = None,
-        n: int = 0,
-        agg: "Optional[Agg]" = None,
-        unit: Optional[str] = None,
-    ) -> None:
-        self.op = op
-        self.column2 = column2
-        self.a = a
-        self.b = b
-        self.text = text
-        self.over = over
-        self.kind = kind
-        self.n = n
-        # An aggregate's over: the group value broadcast back onto its rows.
-        self.agg = agg
-        # A dt_round rule kept as text in `text`, turned into a count of the
-        # column's own unit once the column is known; `unit` is the unit the
-        # caller named, None to read the column's.
-        self.unit = unit
+    from .lazyframe import LazyFrame, LazyGroupBy
 
 
 def _tokens(op: str) -> Tuple[List[str], str]:
@@ -90,8 +46,6 @@ def _tokens(op: str) -> Tuple[List[str], str]:
 
 
 def _round_every(spec: ColumnOp, unit: str) -> int:
-    from .indexing import rule_to_units
-
     assert spec.text is not None
     return rule_to_units(spec.text, unit)
 
@@ -104,9 +58,6 @@ def resolve_round(spec: ColumnOp, unit: str) -> ColumnOp:
     return ColumnOp(spec.op, spec.column2, _round_every(spec, unit), spec.b)
 
 
-_EPOCH_NS = {"ns": 1, "us": 1_000, "ms": 1_000_000, "s": 1_000_000_000, "d": 86_400_000_000_000}
-
-
 def is_epoch(spec: ColumnOp) -> bool:
     return spec.kind == "epoch"
 
@@ -115,11 +66,9 @@ def epoch_steps(spec: ColumnOp, own: str) -> "List[ColumnOp]":
     """The column ops that turn a temporal column counted in ``own`` ("d" for
     a date32) into integers of the unit ``spec.text``: a cast to Int64, then a
     multiplication or a floor division by the ratio of the two units."""
-    from .columnar import _CAST_CODES
-
     assert spec.text is not None
-    want, have = _EPOCH_NS[spec.text], _EPOCH_NS[own]
-    steps = [ColumnOp("dftu.series.cast", None, _CAST_CODES["int64"])]
+    want, have = EPOCH_NS[spec.text], EPOCH_NS[own]
+    steps = [ColumnOp("dftu.series.cast", None, CAST_CODES["int64"])]
     if have > want:
         steps.append(ColumnOp("dftu.series.mul_scalar", None, have // want))
     elif have < want:
@@ -128,12 +77,9 @@ def epoch_steps(spec: ColumnOp, own: str) -> "List[ColumnOp]":
 
 
 def _own_unit(kind: int, time_unit: int, given: Optional[str]) -> str:
-    from .enums import DType
-    from .series import _dt_unit
-
     if given is None and kind == DType.DATE32:
         return "d"
-    return _dt_unit(kind, time_unit, given)
+    return dt_unit(kind, time_unit, given)
 
 
 def _plan_column(plan: "LazyFrame", name: str) -> "Tuple[int, int]":
@@ -159,9 +105,7 @@ def run_column_op(series: Series, spec: ColumnOp, series2: Optional[Series]) -> 
     if not tokens or tokens[0] != "series" or ret != "series":
         raise TypeError(f"{spec.op}: not a column -> column op")
     if spec.op == "dftu.series.dt_round" and spec.text is not None:
-        from .series import _dt_unit
-
-        spec = resolve_round(spec, _dt_unit(series.type, series.time_unit, spec.unit))
+        spec = resolve_round(spec, dt_unit(series.type, series.time_unit, spec.unit))
     scalars = [spec.a, spec.b]
     args: List[object] = []
     used_text = False
@@ -206,73 +150,28 @@ def run_column_op(series: Series, spec: ColumnOp, series2: Optional[Series]) -> 
     return out
 
 
-def has_column_op(expr: "Expr") -> bool:
-    from .columnar import Expr, _ColumnOpNode
-
-    if isinstance(expr, _ColumnOpNode):
-        return True
-    return any(has_column_op(v) for v in vars(expr).values() if isinstance(v, Expr))
-
-
-def split_column_ops(expr: "Expr") -> "Tuple[Expr, List[Tuple[str, Expr, ColumnOp]]]":
-    """The expression with every column op replaced by a column reference
-    ``__dftu_cop_<i>__``, and the ops so named in evaluation order (an op's
-    argument has its own ops replaced first, so each entry's argument is a
-    plain expression over columns, the earlier temporaries included)."""
-    import copy
-
-    from .columnar import Expr, _Col, _ColumnOpNode, _Lit
-
-    ops: List[Tuple[str, Expr, ColumnOp]] = []
-
-    def rewrite(e: Expr) -> Expr:
-        if isinstance(e, (_Col, _Lit)):
-            return e
-        if isinstance(e, _ColumnOpNode):
-            arg = rewrite(e.arg)
-            spec = e.spec
-            column2 = spec.column2
-            if column2 is not None:
-                spec = copy.copy(spec)
-                spec.column2 = rewrite(column2)
-            name = f"__dftu_cop_{len(ops)}__"
-            ops.append((name, arg, spec))
-            return _Col(name)
-        node = copy.copy(e)
-        for key, value in list(vars(node).items()):
-            if isinstance(value, Expr):
-                setattr(node, key, rewrite(value))
-        return node
-
-    return rewrite(expr), ops
-
-
 # ---- eager -----------------------------------------------------------------
 
 
 def _as_columns(source: object) -> Dict[str, Series]:
-    from .columnar import _unwrap_source_columns
-
-    return _unwrap_source_columns(source)
+    return unwrap_source_columns(source)
 
 
 def eval_with_column_ops(expr: "Expr", source: object) -> Series:
     """``Expr.apply`` for an expression holding column ops: each op's value
     joins the source under its temporary name, then the rest evaluates."""
-    from .columnar import Columnar, _Col
-
     columns = _as_columns(source)
     rewritten, ops = split_column_ops(expr)
     for name, arg, spec in ops:
         if spec.agg is not None:
             columns[name] = _eager_agg_over(columns, spec)
             continue
-        value = columns[arg.name] if isinstance(arg, _Col) else Columnar(arg).apply(columns)
+        value = columns[arg.name] if isinstance(arg, Col) else Columnar(arg).apply(columns)
         second = None
         if spec.column2 is not None:
             second = (
                 columns[spec.column2.name]
-                if isinstance(spec.column2, _Col)
+                if isinstance(spec.column2, Col)
                 else Columnar(spec.column2).apply(columns)
             )
         columns[name] = (
@@ -280,7 +179,7 @@ def eval_with_column_ops(expr: "Expr", source: object) -> Series:
             if spec.over is None
             else _eager_over(columns, value, spec, second)
         )
-    if isinstance(rewritten, _Col):
+    if isinstance(rewritten, Col):
         return columns[rewritten.name]
     return Columnar(rewritten).apply(columns)
 
@@ -288,9 +187,6 @@ def eval_with_column_ops(expr: "Expr", source: object) -> Series:
 def _eager_over(
     columns: Dict[str, Series], value: Series, spec: ColumnOp, second: Optional[Series]
 ) -> Series:
-    from .columnar import GroupBy
-    from .dataframe import DataFrame
-
     keys = spec.over or []
     if spec.kind is None:
         raise TypeError(f"{spec.op}: over() has no group-wise form for this op")
@@ -300,9 +196,6 @@ def _eager_over(
 
 
 def _eager_agg_over(columns: Dict[str, Series], spec: ColumnOp) -> Series:
-    from .columnar import GroupBy
-    from .dataframe import DataFrame
-
     assert spec.agg is not None
     keys = spec.over or []
     frame = DataFrame({k: v for k, v in columns.items() if not k.startswith("__dftu_cop_")})
@@ -326,7 +219,7 @@ def _eager_agg_over(columns: Dict[str, Series], spec: ColumnOp) -> Series:
 def _rank_name(spec: ColumnOp) -> str:
     if spec.op != "dftu.series.rank":
         return "average"
-    return {v: k for k, v in _RANK_METHODS.items() if k != "first"}[int(spec.a)]
+    return {v: k for k, v in RANK_METHODS.items() if k != "first"}[int(spec.a)]
 
 
 def _ascending(spec: ColumnOp) -> bool:
@@ -341,8 +234,6 @@ def lower_column_ops(plan: "LazyFrame", expr: "Expr") -> "Tuple[LazyFrame, Expr,
     argument computed into a temporary column, the op run over it in
     place), the expression rewritten over those temporaries, and the
     temporaries to drop once the caller has used the expression."""
-    from .columnar import _Col
-
     rewritten, ops = split_column_ops(expr)
     temps: List[str] = []
     for name, arg, spec in ops:
@@ -354,7 +245,7 @@ def lower_column_ops(plan: "LazyFrame", expr: "Expr") -> "Tuple[LazyFrame, Expr,
         temps.append(name)
         column2 = None
         if spec.column2 is not None:
-            if isinstance(spec.column2, _Col):
+            if isinstance(spec.column2, Col):
                 column2 = spec.column2.name
             else:
                 column2 = f"{name}b"
@@ -368,10 +259,8 @@ def lower_column_ops(plan: "LazyFrame", expr: "Expr") -> "Tuple[LazyFrame, Expr,
                 )
             continue
         if spec.op == "dftu.series.dt_round" and spec.text is not None:
-            from .series import _dt_unit
-
             kind, time_unit = _plan_column(plan, name)
-            spec = resolve_round(spec, _dt_unit(kind, time_unit, spec.unit))
+            spec = resolve_round(spec, dt_unit(kind, time_unit, spec.unit))
         if spec.over is None:
             plan = _ext.LazyFrame._column_op(
                 plan, name, spec.op, column2=column2, a=spec.a, b=spec.b, text=spec.text
@@ -382,11 +271,6 @@ def lower_column_ops(plan: "LazyFrame", expr: "Expr") -> "Tuple[LazyFrame, Expr,
 
 
 def _lazy_agg_over(plan: "LazyFrame", name: str, spec: ColumnOp) -> "LazyFrame":
-    import copy
-
-    from .columnar import _Col
-    from .lazyframe import LazyGroupBy
-
     assert spec.agg is not None
     keys = spec.over or []
     if not keys:
@@ -397,19 +281,17 @@ def _lazy_agg_over(plan: "LazyFrame", name: str, spec: ColumnOp) -> "LazyFrame":
     # The streaming group-by aggregates columns by name, so a computed value
     # becomes a column first.
     value = f"{name}_value"
-    computed = agg.value is not None and not isinstance(agg.value, _Col)
+    computed = agg.value is not None and not isinstance(agg.value, Col)
     if computed:
         indexed = indexed.with_column(value, agg.value)
         agg = copy.copy(agg)
-        agg.value = _Col(value)
-    grouped = LazyGroupBy(indexed, keys, dropna=False).agg(agg.alias(name))
+        agg.value = Col(value)
+    grouped = cast("LazyGroupBy", indexed.group_by(keys, dropna=False)).agg(agg.alias(name))
     joined = indexed.join(grouped, on=keys, how="left", nulls_equal=True).sort_by(row)
     return joined.drop(row, value) if computed else joined.drop(row)
 
 
 def _lazy_over(plan: "LazyFrame", name: str, spec: ColumnOp) -> "LazyFrame":
-    from .lazyframe import LazyGroupBy
-
     if spec.kind is None:
         raise TypeError(f"{spec.op}: over() has no group-wise form for this op")
     keys = spec.over or []
@@ -417,10 +299,29 @@ def _lazy_over(plan: "LazyFrame", name: str, spec: ColumnOp) -> "LazyFrame":
     indexed = plan.with_row_index(row)
     part = indexed.select(*(keys + [row, name]))
     # Null keys stay a group: the result lines up with the input by position.
-    valued = LazyGroupBy(part.select(*(keys + [name])), keys, dropna=False)._transform(
-        spec.kind, spec.n, _rank_name(spec), _ascending(spec)
-    )
+    valued = cast(
+        "LazyGroupBy", part.select(*(keys + [name])).group_by(keys, dropna=False)
+    )._transform(spec.kind, spec.n, _rank_name(spec), _ascending(spec))
     # The transform keeps input order, so the row index lines up positionally.
     valued = valued.with_row_index(row)
     joined = indexed.drop(name).join(valued.select(row, name), on=row, how="left")
     return joined.sort_by(row).drop(row)
+
+
+def apply(self: Expr, source: Source) -> Series:
+    """Evaluate this expression on ``source`` and return a
+    :class:`~dftracer.utils.Series`.
+
+    A value expression yields a value Series; a numeric comparison yields a
+    boolean-mask Series. ``source`` is a native ``DataFrame`` (e.g. from
+    ``view.collect()``), a ``{name: Series}`` mapping, or a
+    ``pyarrow.Table``. Filter-only predicates (string match, membership,
+    string/bool comparison) raise; push those down with
+    ``TraceViewer.filter()`` instead. See also :meth:`DataFrame.apply` for
+    the frame-first spelling ``df.apply(expr)``."""
+    if has_column_op(self):
+        return eval_with_column_ops(self, source)
+    return Columnar(self).apply(source)
+
+
+setattr(Expr, "apply", apply)

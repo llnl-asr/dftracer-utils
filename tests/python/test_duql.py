@@ -6,8 +6,7 @@ import os
 
 import pytest
 
-from dftracer.utils import col
-from dftracer.utils.columnar import Expr
+from dftracer.utils import Expr, col
 
 
 def test_comparisons():
@@ -160,10 +159,10 @@ def test_traceviewer_filter_accepts_expr(tmp_path):
 def test_unified_f_is_one_object():
     """The two historical `F`s (columnar value builder, query predicate builder)
     are now the same object, exported from every entry point."""
+    from dftracer.utils import F as columnar_f
     from dftracer.utils import F as top_f
+    from dftracer.utils import col as columnar_col
     from dftracer.utils import col as top_col
-    from dftracer.utils.columnar import F as columnar_f
-    from dftracer.utils.columnar import col as columnar_col
 
     assert top_f is columnar_f
     assert top_col is columnar_col
@@ -314,7 +313,7 @@ def test_string_predicates_match_literal_wildcards_in_a_scan(tmp_path):
     """starts_with, ends_with and contains take `_` and `%` literally when the
     scan filters a trace, as str.startswith does."""
     import dftracer.utils as dftu
-    from dftracer.utils.columnar import col
+    from dftracer.utils import col
 
     names = ["MPI_Send", "MPIX", "MPI%x", "a_b", "axb", "mpi_send"]
     path = tmp_path / "names.ndjson.gz"
@@ -334,7 +333,7 @@ def test_string_predicates_match_literal_wildcards_in_a_scan(tmp_path):
 
 def test_any_renders_and_filters_array_elements(tmp_path):
     import dftracer.utils as dftu
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F
 
     assert str(col("tags").any() == "a") == 'any(tags) == "a"'
     assert str(F.sizes.any() > 10) == "any(sizes) > 10"

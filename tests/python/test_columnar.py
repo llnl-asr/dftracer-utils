@@ -739,7 +739,7 @@ def test_group_by_first_last():
     # first/last take the group's first / last value in row order; the merge is
     # order-independent (min/max global row index), so the parallel path is
     # exact. Cover both the string-spec form and the F-expression form.
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F
 
     tbl = pa.table(
         {
@@ -771,7 +771,7 @@ def test_group_by_quantile_percentile():
     # the true value; F.x.quantile and percentile are exact.
     import numpy as np
 
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F
 
     n = 5000
     cats = np.array([0, 1] * (n // 2))
@@ -810,7 +810,7 @@ def test_group_by_quantile_percentile():
 def test_group_by_hist():
     # F.x.hist() emits a per-group DDSketch histogram as a list<struct> column;
     # each group's bin counts sum to its row count.
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F
 
     tbl = pa.table(
         {
@@ -834,7 +834,7 @@ def test_group_by_hist():
 
 def test_group_by_sumsq():
     # sumsq is a straight finalize of FieldStat::sumsq: sum(x**2) per group.
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F
 
     tbl = pa.table(
         {
@@ -857,7 +857,7 @@ def test_group_by_argmax():
     # argmax(value, by) is the String repr of `value` at the row maximizing
     # `by`, matching pandas' idxmax-then-lookup.
     pd = pytest.importorskip("pandas")
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F
 
     tbl = pa.table(
         {
@@ -885,7 +885,7 @@ def test_group_by_argmax():
 def test_group_by_set_union():
     # set_union is the sorted, distinct String values of a field, joined by the
     # engine's separator (matching a sorted-unique-join reference).
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F
 
     tbl = pa.table(
         {
@@ -904,7 +904,7 @@ def test_group_by_set_union():
 def test_group_by_agg_expressions():
     # Aggregate over expressions (Polars-style), both the two-step .agg() and the
     # one-shot form, plus legacy strings - all through the CSE group_agg_expr.
-    from dftracer.utils.columnar import F, count
+    from dftracer.utils import F, count
 
     tbl = pa.table(
         {
@@ -933,7 +933,7 @@ def test_group_by_agg_expressions():
     assert set(one.keys()) == {"cat", "sum_ab", "count"}
 
     # No aggregates returns a GroupBy for chaining.
-    from dftracer.utils.columnar import GroupBy
+    from dftracer.utils import GroupBy
 
     assert isinstance(batch.group_by("cat"), GroupBy)
 
@@ -948,7 +948,7 @@ def test_group_by_multi_key_matches_pandas():
     # its own type (cat stays String, pid stays Int64), matching
     # pandas.groupby([k1, k2]).
     pd = pytest.importorskip("pandas")
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F
 
     cat = ["io", "cpu", "io", "cpu", "io", "cpu", "io"]
     pid = pa.array([1, 1, 2, 1, 1, 2, 2], pa.int64())
@@ -980,7 +980,7 @@ def test_group_by_multi_key_matches_pandas():
 def test_query_string_filter():
     # A duql string filters a VecBatch via the SIMD mask backend
     # (pandas.query-style), and where() routes strings through it.
-    from dftracer.utils.columnar import where
+    from dftracer.utils import where
     from dftracer.utils.dftracer_utils_ext import DFTUtilsDuqlError
 
     tbl = pa.table(
@@ -1473,7 +1473,7 @@ def test_columnar_expr_apply_direct_no_wrapper():
 
 
 def test_query_F_shorthand_and_callable():
-    from dftracer.utils.columnar import F, col
+    from dftracer.utils import F, col
 
     assert str(F.dur > 100) == str(col("dur") > 100)
     assert str(F("args.level") == 3) == str(col("args.level") == 3)

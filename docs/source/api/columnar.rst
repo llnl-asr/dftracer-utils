@@ -61,7 +61,7 @@ Evaluating
 
 .. autofunction:: dftracer.utils.columnar
 
-.. autoclass:: dftracer.utils.columnar.Columnar
+.. autoclass:: dftracer.utils._eval.Columnar
    :members: apply, columns
 
 ``columnar(expr)`` is optional - call ``.apply(source)`` directly on a

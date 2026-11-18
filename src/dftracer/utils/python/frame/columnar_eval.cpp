@@ -36,7 +36,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-// AST node opcodes (mirror the serializer in columnar.py).
+// AST node opcodes (mirror the serializer in expr.py).
 enum {
     AstCol = 0,
     AstLitI = 1,

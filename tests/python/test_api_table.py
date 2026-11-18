@@ -21,8 +21,8 @@ import pytest
 pytest.importorskip("dftracer.utils.dftracer_utils_ext")
 
 import dftracer.utils as dft  # noqa: E402
+from dftracer.utils import Expr, GroupBy  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as ext  # noqa: E402
-from dftracer.utils.columnar import Expr, GroupBy  # noqa: E402
 from dftracer.utils.lazyframe import LazyGroupBy  # noqa: E402
 from dftracer.utils.series import _DtAccessor, _ListAccessor, _StrAccessor  # noqa: E402
 
@@ -271,9 +271,9 @@ def _row_tokens():
 
 def _expr_node_of(method):
     """The node class that Expr.<method> builds, read from its source: the class
-    a `return Class(...)` calls, `_ColumnOpNode` for a `return self._op(...)`, else
+    a `return Class(...)` calls, `ColumnOpNode` for a `return self._op(...)`, else
     None."""
-    tree = ast.parse(Path(importlib.import_module("dftracer.utils.columnar").__file__).read_text())
+    tree = ast.parse(Path(importlib.import_module("dftracer.utils.expr").__file__).read_text())
     classes = {n.name for n in tree.body if isinstance(n, ast.ClassDef)}
     expr = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Expr")
     for fn in expr.body:
@@ -284,7 +284,7 @@ def _expr_node_of(method):
                     if isinstance(call, ast.Name) and call.id in classes:
                         return call.id
                     if isinstance(call, ast.Attribute) and call.attr == "_op":
-                        return "_ColumnOpNode"
+                        return "ColumnOpNode"
     return None
 
 
@@ -364,7 +364,7 @@ def test_the_construction_check_fails_on_a_method_that_builds_nothing(name):
         ("Series.head", "needs-token", "NONE"),
         ("Series.head", "needs-token", "I64"),
         ("Expr.cum_sum", "expr-node", "Agg"),
-        ("Expr.sum", "expr-node", "_ColumnOpNode"),
+        ("Expr.sum", "expr-node", "ColumnOpNode"),
         ("Series.head", "expr-node", "Agg"),
     ],
 )

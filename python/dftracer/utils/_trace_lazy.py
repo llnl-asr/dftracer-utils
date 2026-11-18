@@ -21,17 +21,19 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
-from .columnar import Expr
 from .dataframe import DataFrame, JoinHow, WindowSpec
+from .expr import (
+    Agg,
+    Expr,
+)
 from .runtime import TaskHandle
 from .series import Series
 
 if TYPE_CHECKING:
     from typing_extensions import Concatenate, ParamSpec
 
-    from .columnar import Agg
+    from ._loc import LazyILoc, LazyLoc, Resampler
     from .enums import DType
-    from .indexing import LazyILoc, LazyLoc, Resampler
 
     _P = ParamSpec("_P")
     _R = TypeVar("_R")

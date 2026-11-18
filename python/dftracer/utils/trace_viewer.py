@@ -38,9 +38,10 @@ from typing import (
 from . import dftracer_utils_ext as _ext
 from ._aliases import install as _install_aliases
 from ._trace_lazy import _LazyOps
-from ._units import coerce_bytes, coerce_duration
-from .columnar import Agg, Expr, _Col
+from .agg import UdafAgg
 from .dataframe import DataFrame, PhaseArg, TimeUnitArg
+from .enums import coerce_bytes, coerce_duration
+from .expr import Agg, Col, Expr, Wildcard
 from .lazyframe import BoundColumn, LazyFrame, LazyResult, collect_all
 from .schemas import RecordSchema, schema_id
 
@@ -72,7 +73,6 @@ def _agg_specs(specs: Sequence[Union[str, Agg]]) -> "tuple[List[str], List[str],
     """Trace agg spec strings, ``F.any`` reductions and the occupancy grid of
     ``specs``: spec strings pass through, a bare-field ``Agg`` becomes
     ``"op:field"``, and ``F.any.<op>()`` becomes a numeric-args reduction."""
-    from .columnar import _UdafAgg, _Wildcard
 
     strings: List[str] = []
     wildcard: List[str] = []
@@ -85,12 +85,12 @@ def _agg_specs(specs: Sequence[Union[str, Agg]]) -> "tuple[List[str], List[str],
             raise TypeError(
                 f"agg() expects a spec string or an Agg (F.dur.sum()), got {type(s).__name__}"
             )
-        if isinstance(s, _UdafAgg):
+        if isinstance(s, UdafAgg):
             raise TypeError(
                 f"TraceViewer.agg() cannot run the udaf {s.name!r}; collect first, "
                 "then DataFrame.group_by"
             )
-        if isinstance(s.value, _Wildcard):
+        if isinstance(s.value, Wildcard):
             if s.op == "count":
                 strings.append("count")
             elif s.op == "mean" or s.op in _WILDCARD_OPS:
@@ -104,7 +104,7 @@ def _agg_specs(specs: Sequence[Union[str, Agg]]) -> "tuple[List[str], List[str],
         if s.value is None:
             strings.append(s.op)
             continue
-        if not isinstance(s.value, _Col):
+        if not isinstance(s.value, Col):
             raise TypeError(
                 "TraceViewer.agg() needs a bare-field aggregate like F.dur.sum(); "
                 "aggregate a computed value with with_column() then group_by()"

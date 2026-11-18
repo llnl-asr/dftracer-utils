@@ -31,7 +31,7 @@ from .. import dftracer_utils_ext as _ext
 from ..series import Series
 
 if TYPE_CHECKING:
-    from ..columnar import Expr
+    from ..expr import Expr
 
 __all__ = ["run", "get", "list", "names", "info"]
 

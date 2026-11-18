@@ -13,7 +13,7 @@ import pytest
 pytest.importorskip("dftracer.utils.dftracer_utils_ext")
 
 import dftracer.utils as dft  # noqa: E402
-from dftracer.utils.columnar import Expr, GroupBy  # noqa: E402
+from dftracer.utils import Expr, GroupBy  # noqa: E402
 from dftracer.utils.lazyframe import LazyGroupBy  # noqa: E402
 
 pd = pytest.importorskip("pandas")
@@ -82,9 +82,9 @@ def test_a_removed_spelling_is_gone():
         (dft.Series, "_valid_mask"),
     ):
         assert not hasattr(cls, name), (cls, name)
-    import dftracer.utils.columnar as columnar
+    import dftracer.utils.expr as expr
 
-    assert not hasattr(columnar, "Field") and not hasattr(columnar, "ColumnExpr")
+    assert not hasattr(expr, "Field") and not hasattr(expr, "ColumnExpr")
 
 
 def test_series_is_null_is_a_mask_and_is_null_at_is_a_bool():

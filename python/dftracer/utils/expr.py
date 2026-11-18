@@ -27,8 +27,12 @@ comparison.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
+import copy
+import inspect
 import math
+import typing
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -40,7 +44,6 @@ from typing import (
     List,
     Literal,
     Mapping,
-    NamedTuple,
     Optional,
     Sequence,
     Tuple,
@@ -51,89 +54,83 @@ from typing import (
 
 from . import dftracer_utils_ext as _ext
 from ._aliases import install as _install_aliases
-from .dataframe import DataFrame
-from .enums import DType
+from .enums import CAST_DTYPES, DT_UNIT_CODES, EPOCH_NS, DType, coerce_duration, rule_to_units
+from .errors import DFTUtilsValueError
 from .series import (
+    NormForm,
     Series,
-    _arrow_native,
-    _norm_form_code,
-    _NormForm,
-    _translate_pairs,
-    _wrap_flag_bits,
+    norm_form_code,
+    require_utf8,
+    translate_pairs,
+    wrap_flag_bits,
 )
 
 if TYPE_CHECKING:
-    import pyarrow as pa  # ty: ignore[import-not-found]
     from typing_extensions import Concatenate, ParamSpec
 
-    from ._expr_ops import ColumnOp
-    from .lazyframe import LazyFrame, LazyGroupBy
+    from ._eval import Source
 
 _R = TypeVar("_R")
 if TYPE_CHECKING:
     _P = ParamSpec("_P")
 
-# A source of columns for in-memory evaluation: a DataFrame, a
-# {name: Series} mapping, or a pyarrow Table imported at the Arrow boundary.
-_Source = Union["DataFrame", Dict[str, "Series"], "pa.Table"]
-# where(): a frame in, the same kind of frame out.
-_Frame = Union["DataFrame", "pa.Table"]
-
 __all__ = [
     "col",
     "lit",
-    "columnar",
-    "eval_many",
     "Expr",
     "F",
     "Value",
-    "where",
     "when",
     "udf",
     "call",
     "Udf",
-    "udaf",
-    "Udaf",
     "if_else",
     "Agg",
     "Named",
-    "GroupBy",
-    "count",
 ]
 
-_Scalar = Union[int, float]
+
+# SPDX-License-Identifier: MIT
+"""The unified expression DSL: one ``F`` for both column values and row filters.
+
+``F.dur`` (or ``col("dur")`` / ``F("args.level")``) is an :class:`Expr` leaf.
+Build from it in two directions with the same object:
+
+- **Value expressions** - ``+ - * /``, scalar broadcast, and the numeric
+  primitives (``.ilog2()``, ``.bit_width()``, ``.popcount()``, ``.clz()``,
+  ``.ctz()``, ``.mix64()``). Evaluate in memory with ``.apply(source)``, which
+  runs on our native SIMD columnar engine (a ``Series``, Highway-backed) and
+  returns a native :class:`~dftracer.utils.Series`. Arrow appears only at the
+  explicit ``.to_arrow()`` / ``.to_pandas()`` edge.
+- **Filter predicates** - comparisons (``> >= < <= == !=``), string matching
+  (``.like()``, ``.ilike()``, ``.regex()``, ``.contains()``, ``.starts_with()``,
+  ``.ends_with()``), membership (``.is_in()`` / ``.not_in()``) and
+  ``& | ~``. A predicate over a bare field serializes to
+  duql (``str(expr)`` / ``.to_duql()``) that ``TraceViewer.filter()``
+  / ``.duql()`` push down to the index.
+- **String values** - ``.lower()``, ``.upper()``, ``.strip()``, ``.len_bytes()``,
+  ``.find()``, ``.replace()``, ``.slice()`` and friends.
+
+Every predicate and string op also evaluates in memory to a Series via
+``.apply()`` and runs inside a ``LazyFrame`` plan, through the engine's own
+string kernels. The two exceptions are ``iregex`` (filter-only) and a bool
+comparison.
+"""
+
+
+Scalar = Union[int, float]
+
 
 #: A scalar the filter DSL can compare a field against.
 Value = Union[str, int, float, bool]
 
-# TypeId codes the DSL requests, off DType so the ordinals live in one place.
-_INT64 = int(DType.INT64)
-_UINT64 = int(DType.UINT64)
-_FLOAT32 = int(DType.FLOAT32)
-_FLOAT64 = int(DType.FLOAT64)
-_BOOL = int(DType.BOOL)
-_STRING = int(DType.STRING)
-_BINARY = int(DType.BINARY)
-_FLOAT_TYPES = (_FLOAT32, _FLOAT64)
 
+# TypeId codes the .cast() method accepts, off DType so the ordinals live in one place.
+CAST_CODES = {name: int(dtype) for name, dtype in CAST_DTYPES.items()}
 
-# TypeId codes the .cast() method accepts.
-def _require_utf8(op: str, encoding: str) -> None:
-    if encoding.lower().replace("_", "-") not in ("utf-8", "utf8"):
-        raise ValueError(f"{op}: only utf-8 is supported, not {encoding!r}")
-
-
-_CAST_CODES = {
-    "int64": _INT64,
-    "uint64": _UINT64,
-    "float64": _FLOAT64,
-    "bool": _BOOL,
-    "string": _STRING,
-    "binary": _BINARY,
-}
 
 # vec::Prim codes (kernels/prims.h). Exposed as methods, e.g. F.dur.ilog2().
-_PRIM_CODES = {
+PRIM_CODES = {
     "ilog2": 0,
     "bit_width": 1,
     "popcount": 2,
@@ -142,23 +139,44 @@ _PRIM_CODES = {
     "mix64": 5,
 }
 
+
 # DFTU_CMP_* and DFTU_LOGICAL_* codes (dataframe/c_api.h).
-_CMP_CODES = {"gt": 0, "ge": 1, "lt": 2, "le": 3, "eq": 4, "ne": 5}
+CMP_CODES = {"gt": 0, "ge": 1, "lt": 2, "le": 3, "eq": 4, "ne": 5}
+
+
 _CMP_SYMBOL = {"gt": ">", "ge": ">=", "lt": "<", "le": "<=", "eq": "==", "ne": "!="}
-_LOGICAL_CODES = {"and": 0, "or": 1}
+
+
+LOGICAL_CODES = {"and": 0, "or": 1}
+
 
 # vec_eval opcodes (mirror the Op enum in columnar_eval.cpp).
 # Post-order AST node opcodes for vec_eval (mirror columnar_eval.cpp). This is a
 # pure structural serialization - no type logic; the C++ compiler does type
 # inference, CSE, and lowering, so C/C++ consumers get the same engine.
 _AST_COL, _AST_LIT_I, _AST_LIT_F, _AST_BIN = 0, 1, 2, 3
+
+
 _AST_PRIM, _AST_CMP, _AST_LOGICAL, _AST_NOT, _AST_CAST = 4, 5, 6, 7, 8
+
+
 _AST_UNARY, _AST_CLIP, _AST_FILLNA = 9, 10, 11
+
+
 _AST_STR_PRED, _AST_STR_MAP, _AST_STR_LEN, _AST_STR_FIND = 12, 13, 14, 15
+
+
 _AST_STR_REPLACE, _AST_STR_SLICE, _AST_IS_IN, _AST_SELECT = 16, 17, 18, 19
+
+
 _AST_STR_PRED_COL, _AST_STR_REPLACE_COL, _AST_LIT_S = 23, 24, 25
+
+
 _AST_UDF = 26
+
+
 _AST_IS_NULL, _AST_CMP_EXPR, _AST_STR_FN = 20, 21, 22
+
 
 # StrPredOp / StrMapOp codes (dataframe/types.h).
 _STR_PRED_CODES = {
@@ -169,6 +187,8 @@ _STR_PRED_CODES = {
     "fullmatch": 4,
     "regex": 5,
 }
+
+
 _STR_MAP_CODES = {
     "lower": 0,
     "upper": 1,
@@ -179,6 +199,7 @@ _STR_MAP_CODES = {
     "title": 6,
     "swapcase": 7,
 }
+
 
 # StrFn codes (dataframe/types.h); 0-8 are the character classes.
 _STR_FN_CODES = {
@@ -215,7 +236,10 @@ _STR_FN_CODES = {
     "translate": 30,
     "wrap": 31,
 }
+
+
 _STR_NO_STOP = -(1 << 63)  # slice_replace without a stop (INT64_MIN)
+
 
 # UnaryOp codes (dataframe/types.h). Exposed as F.dur.floor() etc. The is_*
 # predicates yield a Bool mask; log/sqrt/exp widen to float.
@@ -236,15 +260,22 @@ _UNARY_CODES = {
     "log1p": 13,
     "expm1": 14,
 }
+
+
 # Unary ops whose result is a Bool mask (not the input's numeric type).
-_UNARY_BOOL = frozenset({"is_nan", "is_finite", "is_infinite"})
+UNARY_BOOL = frozenset({"is_nan", "is_finite", "is_infinite"})
+
+
 # Unary ops that widen to float.
-_UNARY_FLOAT = frozenset({"log", "sqrt", "exp", "log1p", "expm1"})
+UNARY_FLOAT = frozenset({"log", "sqrt", "exp", "log1p", "expm1"})
+
+
 # BinaryOp codes (vec::BinaryOp).
 _BIN_OP_CODE = {"+": 0, "-": 1, "*": 2, "/": 3}
 
+
 # vec::AggOp codes (agg.h), mirrored by the C ABI DFTU_AGG_* and the C++ builders.
-_AGG_CODE = {
+AGG_CODE = {
     "count": 0,
     "sum": 1,
     "min": 2,
@@ -284,10 +315,11 @@ _AGG_CODE = {
     "quantile": 40,
 }
 
+
 _INTERPOLATIONS = {"linear": 0, "nearest": 1, "lower": 2, "higher": 3, "midpoint": 4}
 
 
-def _check_quantile(q: float, interpolation: str) -> int:
+def check_quantile(q: float, interpolation: str) -> int:
     """The checked level ``q`` and ``interpolation`` of the exact ``quantile``
     aggregate; the interpolation's code (``Interpolation`` in types.h)."""
     if not 0.0 <= q <= 1.0:
@@ -303,11 +335,69 @@ def _check_quantile(q: float, interpolation: str) -> int:
 _NOT_PUSHABLE = (
     "not an index-pushable predicate; compute it with .apply() or filter the materialized frame"
 )
+
+
 _PREDICATE_ONLY = (
     "a case-insensitive regex (iregex) is filter-only and has no in-memory "
     ".apply() form; push it down with TraceViewer.filter()/.duql(), or use "
     "regex() on lower()"
 )
+
+
+# The group transform behind an ``over`` for the kinds the engine has, keyed
+# by the column op's registry name.
+TRANSFORM_KINDS: Dict[str, str] = {
+    "dftu.series.cumsum": "cumsum",
+    "dftu.series.cum_prod": "cumprod",
+    "dftu.series.cummax": "cummax",
+    "dftu.series.cummin": "cummin",
+    "dftu.series.shift": "shift",
+    "dftu.series.diff": "diff",
+    "dftu.series.pct_change": "pct_change",
+    "dftu.series.rank": "rank",
+    "dftu.series.ffill": "ffill",
+    "dftu.series.bfill": "bfill",
+}
+
+RANK_METHODS = {"average": 0, "min": 1, "dense": 2, "ordinal": 3, "first": 3, "max": 4}
+ROLLING_OPS = {"sum": 0, "mean": 1, "min": 2, "max": 3}
+
+
+class ColumnOp:
+    """One registered column op and its operands, as the expression language
+    carries it: ``op`` is the registry name, ``column2`` a second column
+    operand (an expression), ``a`` / ``b`` the scalar operands, ``text`` a
+    string or char operand, in the op's signature order."""
+
+    __slots__ = ("op", "column2", "a", "b", "text", "over", "kind", "n", "agg", "unit")
+
+    def __init__(
+        self,
+        op: str,
+        column2: "Optional[Expr]" = None,
+        a: Scalar = 0,
+        b: Scalar = 0,
+        text: Optional[str] = None,
+        over: Optional[List[str]] = None,
+        kind: Optional[str] = None,
+        n: int = 0,
+        agg: "Optional[Agg]" = None,
+        unit: Optional[str] = None,
+    ) -> None:
+        self.op = op
+        self.column2 = column2
+        self.a = a
+        self.b = b
+        self.text = text
+        self.over = over
+        self.kind = kind
+        self.n = n
+        # An aggregate's over: the group value broadcast back onto its rows.
+        self.agg = agg
+        # A dt_round rule kept as text in `text`, turned into a count of the
+        # column's own unit once the column is known; `unit` is the unit the
+        # caller named, None to read the column's.
+        self.unit = unit
 
 
 class Expr:
@@ -317,40 +407,39 @@ class Expr:
     serialize a pure predicate for index pushdown with :meth:`to_duql`."""
 
     def __add__(self, other: object) -> "Expr":
-        return _Bin("+", self, _wrap(other))
+        return Bin("+", self, wrap(other))
 
     def __sub__(self, other: object) -> "Expr":
-        return _Bin("-", self, _wrap(other))
+        return Bin("-", self, wrap(other))
 
     def __mul__(self, other: object) -> "Expr":
-        return _Bin("*", self, _wrap(other))
+        return Bin("*", self, wrap(other))
 
     def __truediv__(self, other: object) -> "Expr":
-        return _Bin("/", self, _wrap(other))
+        return Bin("/", self, wrap(other))
 
     def __radd__(self, other: object) -> "Expr":
-        return _Bin("+", _wrap(other), self)
+        return Bin("+", wrap(other), self)
 
     def __rsub__(self, other: object) -> "Expr":
-        return _Bin("-", _wrap(other), self)
+        return Bin("-", wrap(other), self)
 
     def __rmul__(self, other: object) -> "Expr":
-        return _Bin("*", _wrap(other), self)
+        return Bin("*", wrap(other), self)
 
     def __rtruediv__(self, other: "Union[Expr, Agg, int, float]") -> "Expr":
-        return _Bin("/", _wrap(other), self)
+        return Bin("/", wrap(other), self)
 
     def _series_arith(self, name: str, other: object, reverse: bool = False) -> "Expr":
         """The Python-semantics ``floordiv`` / ``mod`` / ``pow`` of the Series
         kernels, as a column op: ``other`` is an expression or a number."""
-        from ._expr_ops import ColumnOp
 
         if isinstance(other, Expr):
             first, second = (other, self) if reverse else (self, other)
-            return _ColumnOpNode(first, ColumnOp(f"dftu.series.{name}", second))
+            return ColumnOpNode(first, ColumnOp(f"dftu.series.{name}", second))
         if isinstance(other, bool) or not isinstance(other, (int, float)):
             raise TypeError(f"{name}: expected a column expr or a number, got {other!r}")
-        return _ColumnOpNode(
+        return ColumnOpNode(
             self, ColumnOp(f"dftu.series.{name}_scalar", None, other, 1 if reverse else 0)
         )
 
@@ -389,78 +478,78 @@ class Expr:
     # they are filter-only. Against another column expression they compare the
     # two row by row (null where either side is null) and are not pushable.
     def __gt__(self, other: "Union[Value, Expr]") -> "Expr":
-        return _Cmp("gt", self, other)
+        return Cmp("gt", self, other)
 
     def __ge__(self, other: "Union[Value, Expr]") -> "Expr":
-        return _Cmp("ge", self, other)
+        return Cmp("ge", self, other)
 
     def __lt__(self, other: "Union[Value, Expr]") -> "Expr":
-        return _Cmp("lt", self, other)
+        return Cmp("lt", self, other)
 
     def __le__(self, other: "Union[Value, Expr]") -> "Expr":
-        return _Cmp("le", self, other)
+        return Cmp("le", self, other)
 
     def __eq__(self, other: "Union[Value, Expr]") -> "Expr":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
-        return _Cmp("eq", self, other)
+        return Cmp("eq", self, other)
 
     def __ne__(self, other: "Union[Value, Expr]") -> "Expr":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
-        return _Cmp("ne", self, other)
+        return Cmp("ne", self, other)
 
     def eq(self, other: "Union[Value, Expr]") -> "Expr":
         """Equality predicate (the method form of ``==``)."""
-        return _Cmp("eq", self, other)
+        return Cmp("eq", self, other)
 
     def ne(self, other: "Union[Value, Expr]") -> "Expr":
         """Inequality predicate (the method form of ``!=``)."""
-        return _Cmp("ne", self, other)
+        return Cmp("ne", self, other)
 
     def lt(self, other: "Union[Value, Expr]") -> "Expr":
         """Less-than predicate (the method form of ``<``)."""
-        return _Cmp("lt", self, other)
+        return Cmp("lt", self, other)
 
     def le(self, other: "Union[Value, Expr]") -> "Expr":
         """Less-or-equal predicate (the method form of ``<=``)."""
-        return _Cmp("le", self, other)
+        return Cmp("le", self, other)
 
     def gt(self, other: "Union[Value, Expr]") -> "Expr":
         """Greater-than predicate (the method form of ``>``)."""
-        return _Cmp("gt", self, other)
+        return Cmp("gt", self, other)
 
     def ge(self, other: "Union[Value, Expr]") -> "Expr":
         """Greater-or-equal predicate (the method form of ``>=``)."""
-        return _Cmp("ge", self, other)
+        return Cmp("ge", self, other)
 
     def add(self, other: "Union[Value, Expr]") -> "Expr":
         """The method form of ``+``."""
-        return _Bin("+", self, _wrap(other))
+        return Bin("+", self, wrap(other))
 
     def sub(self, other: "Union[Value, Expr]") -> "Expr":
         """The method form of ``-``."""
-        return _Bin("-", self, _wrap(other))
+        return Bin("-", self, wrap(other))
 
     def mul(self, other: "Union[Value, Expr]") -> "Expr":
         """The method form of ``*``."""
-        return _Bin("*", self, _wrap(other))
+        return Bin("*", self, wrap(other))
 
     def truediv(self, other: "Union[Value, Expr]") -> "Expr":
         """The method form of ``/``."""
-        return _Bin("/", self, _wrap(other))
+        return Bin("/", self, wrap(other))
 
     def neg(self) -> "Expr":
         """The negation of each value."""
-        return _Unary("negate", self)
+        return Unary("negate", self)
 
     def and_(self, other: "Union[Value, Expr]") -> "Expr":
         """The method form of ``&``."""
-        return _Logical("and", self, _as_expr(other))
+        return Logical("and", self, as_expr(other))
 
     def or_(self, other: "Union[Value, Expr]") -> "Expr":
         """The method form of ``|``."""
-        return _Logical("or", self, _as_expr(other))
+        return Logical("or", self, as_expr(other))
 
     def not_(self) -> "Expr":
         """The method form of ``~``."""
-        return _Logical("not", self, None)
+        return Logical("not", self, None)
 
     def radians(self) -> "Expr":
         """Each value, in degrees, as radians (Float64; polars ``radians``)."""
@@ -498,30 +587,18 @@ class Expr:
 
     # Combine predicates: &, |, ~ (Python and/or cannot be overloaded).
     def __and__(self, other: object) -> "Expr":
-        return _Logical("and", self, _as_expr(other))
+        return Logical("and", self, as_expr(other))
 
     def __or__(self, other: object) -> "Expr":
-        return _Logical("or", self, _as_expr(other))
+        return Logical("or", self, as_expr(other))
 
     def __invert__(self) -> "Expr":
-        return _Logical("not", self, None)
+        return Logical("not", self, None)
 
-    def apply(self, source: _Source) -> Series:
-        """Evaluate this expression on ``source`` and return a
-        :class:`~dftracer.utils.Series`.
-
-        A value expression yields a value Series; a numeric comparison yields a
-        boolean-mask Series. ``source`` is a native ``DataFrame`` (e.g. from
-        ``view.collect()``), a ``{name: Series}`` mapping, or a
-        ``pyarrow.Table``. Filter-only predicates (string match, membership,
-        string/bool comparison) raise; push those down with
-        ``TraceViewer.filter()`` instead. See also :meth:`DataFrame.apply` for
-        the frame-first spelling ``df.apply(expr)``."""
-        from ._expr_ops import eval_with_column_ops, has_column_op
-
-        if has_column_op(self):
-            return eval_with_column_ops(self, source)
-        return Columnar(self).apply(source)
+    if TYPE_CHECKING:
+        # Installed by ``_expr_ops``: evaluating reaches the engine and the
+        # group-by, which build on this module.
+        def apply(self, source: Source) -> Series: ...
 
     def to_duql(self) -> str:
         """Serialize this predicate to an index-pushable duql string.
@@ -547,7 +624,7 @@ class Expr:
         stays NaN, as in Polars."""
         lo = -math.inf if lower_bound is None else lower_bound
         hi = math.inf if upper_bound is None else upper_bound
-        return _Clip(self, lo, hi)
+        return Clip(self, lo, hi)
 
     def cast(
         self, dtype: "Literal['int64', 'uint64', 'float64', 'bool', 'string', 'binary']"
@@ -558,11 +635,11 @@ class Expr:
         spelling (the eager ``Series.astype`` says ``True`` / ``False``); a null
         stays null. A pair the engine cannot cast, such as string to bool, fails
         when the plan runs."""
-        return _Cast(_CAST_CODES[dtype], self)
+        return Cast(CAST_CODES[dtype], self)
 
     def fill_null(self, value: Union[int, float]) -> "Expr":
         """Replace nulls with ``value`` (elementwise)."""
-        return _Fillna(self, value)
+        return Fillna(self, value)
 
     def is_between(self, lower: Union[int, float], upper: Union[int, float]) -> "Expr":
         """Bool mask of ``lower <= x <= upper`` (desugars to two compares)."""
@@ -571,20 +648,20 @@ class Expr:
     def where(self, cond: "Expr", other: "Union[Expr, int, float]") -> "Expr":
         """Per row, this value where ``cond`` holds, else ``other`` (pandas
         ``Series.where``; a null condition takes ``other``)."""
-        return _Select(_as_expr(cond), self, _wrap(other))
+        return Select(as_expr(cond), self, wrap(other))
 
     def mask(self, cond: "Expr", other: "Union[Expr, int, float]") -> "Expr":
         """Per row, ``other`` where ``cond`` holds, else this value (pandas
         ``Series.mask``)."""
-        return _Select(_as_expr(cond), _wrap(other), self)
+        return Select(as_expr(cond), wrap(other), self)
 
     def is_null(self) -> "Expr":
         """Bool mask of the null rows."""
-        return _IsNull(self, True)
+        return IsNull(self, True)
 
     def is_not_null(self) -> "Expr":
         """Bool mask of the present rows."""
-        return _IsNull(self, False)
+        return IsNull(self, False)
 
     # -- the column ops: the whole column at once (polars spellings) ----------
     def _op(
@@ -597,9 +674,8 @@ class Expr:
         n: int = 0,
         unit: Optional[str] = None,
     ) -> "Expr":
-        from ._expr_ops import ColumnOp
 
-        return _ColumnOpNode(self, ColumnOp(op, None, a, b, text, None, kind, n, None, unit))
+        return ColumnOpNode(self, ColumnOp(op, None, a, b, text, None, kind, n, None, unit))
 
     def cum_sum(self) -> "Expr":
         """The running sum (``cum_prod`` / ``cum_max`` / ``cum_min`` /
@@ -622,11 +698,10 @@ class Expr:
         return self._op("dftu.series.shift", a=int(n), n=int(n))
 
     def rank(self, method: str = "average", descending: bool = False) -> "Expr":
-        from ._expr_ops import _RANK_METHODS
 
-        if method not in _RANK_METHODS:
+        if method not in RANK_METHODS:
             raise ValueError(f"rank: unknown method {method!r}")
-        return self._op("dftu.series.rank", a=_RANK_METHODS[method], b=1 if descending else 0)
+        return self._op("dftu.series.rank", a=RANK_METHODS[method], b=1 if descending else 0)
 
     def forward_fill(self) -> "Expr":
         return self._op("dftu.series.ffill")
@@ -650,14 +725,13 @@ class Expr:
         return self._rolling("max", window_size)
 
     def _rolling(self, op: str, window_size: int) -> "Expr":
-        from ._expr_ops import _ROLLING_OPS
 
         if window_size < 1:
             raise ValueError("rolling: window_size must be at least 1")
         return self._op(
             "dftu.series.rolling",
             a=int(window_size),
-            b=_ROLLING_OPS[op],
+            b=ROLLING_OPS[op],
             kind=f"rolling_{op}",
             n=int(window_size),
         )
@@ -701,7 +775,7 @@ class Expr:
             return self.is_duplicated()
         if keep not in ("first", "last"):
             raise ValueError(f"duplicated: keep must be 'first', 'last' or False, not {keep!r}")
-        if not isinstance(self, _Col):
+        if not isinstance(self, Col):
             raise TypeError("duplicated(keep=...): use a bare column, as col('x').duplicated()")
         one = self.is_null().cast("int64") * 0 + 1
         nth = one.cum_sum().over(self.name)
@@ -721,9 +795,8 @@ class Expr:
         ``over``): ``col("x").cum_sum().over("k")`` is the engine's group
         transform, one value per input row in input order. An aggregate's
         ``over`` is spelled ``col("x").sum().over("k")`` on the aggregate."""
-        from ._expr_ops import _TRANSFORM_KINDS
 
-        if not isinstance(self, _ColumnOpNode):
+        if not isinstance(self, ColumnOpNode):
             raise TypeError(
                 "over: only a column op (cum_sum, shift, rank, rolling_*, ...) takes over()"
             )
@@ -731,15 +804,14 @@ class Expr:
         if spec.op == "dftu.series.cum_count":
             # The running count of present values within each group.
             return self.arg.is_not_null().cast("int64").cum_sum().over(keys)
-        kind = spec.kind or _TRANSFORM_KINDS.get(spec.op)
+        kind = spec.kind or TRANSFORM_KINDS.get(spec.op)
         if kind is None:
             raise TypeError(f"over: {spec.op} has no group-wise form")
-        import copy
 
         spec = copy.copy(spec)
         spec.over = [keys] if isinstance(keys, str) else list(keys)
         spec.kind = kind
-        return _ColumnOpNode(self.arg, spec)
+        return ColumnOpNode(self.arg, spec)
 
     def alias(self, name: str) -> "Named":
         """This expression under an output name, for ``select`` /
@@ -798,13 +870,13 @@ class Expr:
     def encode(self, encoding: str = "utf-8") -> "Expr":
         """The UTF-8 bytes of each string, as a binary column (pandas
         ``str.encode``). Only UTF-8, the engine's text encoding."""
-        _require_utf8("encode", encoding)
+        require_utf8("encode", encoding)
         return self.cast("binary")
 
     def decode(self, encoding: str = "utf-8") -> "Expr":
         """Each binary value read as UTF-8 text (pandas ``str.decode``); a
         value that is not valid UTF-8 is null. Only UTF-8."""
-        _require_utf8("decode", encoding)
+        require_utf8("decode", encoding)
         return self.cast("string")
 
     def isascii(self) -> "Expr":
@@ -985,16 +1057,16 @@ class Expr:
         """Every regex match as a ``list<string>``."""
         return _StrFn("findall", self, text=pat)
 
-    def normalize(self, form: _NormForm) -> "Expr":
+    def normalize(self, form: NormForm) -> "Expr":
         """Each value in the Unicode normalization ``form``; null for a value
         that is not valid UTF-8."""
-        return _StrFn("normalize", self, i0=_norm_form_code(form))
+        return _StrFn("normalize", self, i0=norm_form_code(form))
 
     def translate(self, table: Mapping[Union[int, str], Union[str, int, None]]) -> "Expr":
         """Each codepoint replaced by ``table``, as ``str.translate``: a key is
         a codepoint or one character, a value a string, a codepoint or ``None``
         to delete it."""
-        keys, values = _translate_pairs(table)
+        keys, values = translate_pairs(table)
         if any(v is not None and len(v) + 1 >= 0xD800 for v in values):
             raise ValueError("translate value is too long")
         # StrFn::Translate: text = keys, text2 = per key chr(1 + len) + value,
@@ -1016,7 +1088,7 @@ class Expr:
         options)."""
         if width < 1:
             raise ValueError(f"invalid width {width!r} (must be > 0)")
-        flags = _wrap_flag_bits(
+        flags = wrap_flag_bits(
             expand_tabs, replace_whitespace, drop_whitespace, break_long_words, break_on_hyphens
         )
         return _StrFn("wrap", self, i0=int(width), i1=flags)
@@ -1114,7 +1186,7 @@ class Expr:
         group state keeps every present value (8 bytes each), spilled across
         groups under the memory budget; :meth:`approx_quantile` is the bounded
         memory sketch."""
-        _check_quantile(quantile, interpolation)
+        check_quantile(quantile, interpolation)
         return Agg("quantile", self, param=float(quantile), interpolation=interpolation)
 
     def median(self) -> "Agg":
@@ -1133,7 +1205,7 @@ class Expr:
 
     def null_count(self) -> "Agg":
         """The number of null values per group (an :class:`Agg`)."""
-        name = f"null_count_{self.name}" if isinstance(self, _Col) else "null_count"
+        name = f"null_count_{self.name}" if isinstance(self, Col) else "null_count"
         return Agg("sum", self.is_null().cast("int64"), name)
 
     def approx_quantile(self, q: float) -> "Agg":
@@ -1164,7 +1236,7 @@ class Expr:
         ``F.dur.quantile(0.99, "linear")``."""
         if not 0.0 <= p <= 100.0:
             raise ValueError(f"percentile: p must be in [0, 100], not {p!r}")
-        _check_quantile(p / 100.0, interpolation)
+        check_quantile(p / 100.0, interpolation)
         return Agg("quantile", self, param=p / 100.0, interpolation=interpolation)
 
     def busy(self, resolution: "Union[int, float, str, None]" = None) -> "Agg":
@@ -1326,10 +1398,10 @@ class Expr:
         def __getattr__(self, name):
             # F.dur.ilog2()/F.hhash.mix64() - int bit primitive; F.dur.floor()/
             # .log()/... - FP unary math. Both are unary methods.
-            if name in _PRIM_CODES:
-                return lambda: _Prim(name, self)
+            if name in PRIM_CODES:
+                return lambda: Prim(name, self)
             if name in _UNARY_CODES:
-                return lambda: _Unary(name, self)
+                return lambda: Unary(name, self)
             raise AttributeError(name)
 
     # BEGIN GENERATED aliases from _aliases.py by scripts/gen_pyi.py
@@ -1374,20 +1446,22 @@ def _install_api_methods() -> None:
 
 
 _install_api_methods()
+
+
 _install_aliases("Expr", Expr)
 
 
-def _wrap(x: object) -> Expr:
+def wrap(x: object) -> Expr:
     if isinstance(x, Expr):
         return x
     if isinstance(x, Agg):
-        return _AggLeaf(x)
+        return AggLeaf(x)
     if isinstance(x, bool) or not isinstance(x, (int, float)):
         raise TypeError(f"expected a column expr or a number, got {x!r}")
-    return _Lit(x)
+    return Lit(x)
 
 
-class _Col(Expr):
+class Col(Expr):
     """A field / column reference. Its name drives both column lookup for
     :meth:`Expr.apply` and the field name in a pushed-down predicate."""
 
@@ -1401,7 +1475,7 @@ class _Col(Expr):
         return _AnyCol(f"any({self.name})")
 
 
-class _AnyCol(_Col):
+class _AnyCol(Col):
     """``any(name)``: renders to duql; no column to evaluate."""
 
 
@@ -1421,24 +1495,6 @@ class Named:
 Selector = Union[str, "Expr", Named]
 
 
-def select_aggs(items: Sequence[object]) -> "List[Agg]":
-    """The aggregates of a ``select(col("a").sum(), ...)``, named as polars
-    names them: an unaliased aggregate of a bare column is output under that
-    column's name; two outputs under one name are refused."""
-    out: List[Agg] = []
-    seen: set = set()
-    for item in items:
-        if not isinstance(item, Agg):
-            raise TypeError("select: mix of aggregates and columns")
-        if item._out is None and isinstance(item.value, _Col):
-            item = item.alias(item.value.name)
-        if item.out in seen:
-            raise ValueError(f"select: two outputs named {item.out!r}; use .alias(name)")
-        seen.add(item.out)
-        out.append(item)
-    return out
-
-
 def resolve_selectors(items: Sequence[object]) -> "List[Tuple[str, Optional[Expr]]]":
     """Flatten ``select`` arguments to ``(output name, expression or None)``
     pairs: a name or a bare column keeps itself (no expression to compute), a
@@ -1450,7 +1506,7 @@ def resolve_selectors(items: Sequence[object]) -> "List[Tuple[str, Optional[Expr
             out.append((item, None))
         elif isinstance(item, Named):
             out.append((item.name, item.expr))
-        elif isinstance(item, _Col):
+        elif isinstance(item, Col):
             out.append((item.name, None))
         elif isinstance(item, Expr):
             raise TypeError("select: a computed expression needs .alias(name)")
@@ -1461,64 +1517,64 @@ def resolve_selectors(items: Sequence[object]) -> "List[Tuple[str, Optional[Expr
     return out
 
 
-class _Lit(Expr):
-    def __init__(self, value: Union[_Scalar, str]) -> None:
+class Lit(Expr):
+    def __init__(self, value: Union[Scalar, str]) -> None:
         self.value = value
 
 
-class _Bin(Expr):
+class Bin(Expr):
     def __init__(self, op: str, left: Expr, right: Expr) -> None:
         self.op = op
         self.left = left
         self.right = right
 
 
-class _Prim(Expr):
+class Prim(Expr):
     def __init__(self, name: str, arg: Expr) -> None:
         self.name = name
         self.arg = arg
 
 
-class _Unary(Expr):
+class Unary(Expr):
     def __init__(self, name: str, arg: Expr) -> None:
         self.name = name
         self.arg = arg
 
 
-class _Clip(Expr):
+class Clip(Expr):
     def __init__(self, arg: Expr, lo: "Union[int, float]", hi: "Union[int, float]") -> None:
         self.arg = arg
         self.lo = lo
         self.hi = hi
 
 
-class _Cast(Expr):
+class Cast(Expr):
     def __init__(self, type_id: int, arg: Expr) -> None:
         self.type_id = type_id
         self.arg = arg
 
 
-class _Fillna(Expr):
+class Fillna(Expr):
     def __init__(self, arg: Expr, fill: "Union[int, float]") -> None:
         self.arg = arg
         self.fill = fill
 
 
-class _Cmp(Expr):
+class Cmp(Expr):
     def __init__(self, op: str, left: Expr, rhs: object) -> None:
-        if isinstance(rhs, _Lit):
+        if isinstance(rhs, Lit):
             rhs = rhs.value
         self.op = op
         self.left = left
         self.rhs = rhs
 
     def _dsl(self) -> str:
-        if not isinstance(self.left, _Col) or isinstance(self.rhs, Expr):
+        if not isinstance(self.left, Col) or isinstance(self.rhs, Expr):
             raise TypeError(_NOT_PUSHABLE)
         return f"{self.left.name} {_CMP_SYMBOL[self.op]} {_format_value(self.rhs)}"
 
 
-class _Logical(Expr):
+class Logical(Expr):
     def __init__(self, op: str, left: Expr, right: "Expr | None") -> None:
         self.op = op
         self.left = left
@@ -1531,15 +1587,15 @@ class _Logical(Expr):
 
 
 def _field_name(arg: Expr) -> str:
-    if not isinstance(arg, _Col):
+    if not isinstance(arg, Col):
         raise TypeError(_NOT_PUSHABLE)
     return arg.name
 
 
 def _operand(arg: Expr) -> str:
-    if isinstance(arg, _Col):
+    if isinstance(arg, Col):
         return arg.name
-    if isinstance(arg, _Lit):
+    if isinstance(arg, Lit):
         return _format_value(arg.value)
     raise TypeError(_NOT_PUSHABLE)
 
@@ -1727,7 +1783,7 @@ class _StrSlice(Expr):
         self.length = length
 
 
-def _as_expr(x: object) -> Expr:
+def as_expr(x: object) -> Expr:
     if isinstance(x, Expr):
         return x
     raise TypeError("& / | combine expressions, not plain values")
@@ -1736,7 +1792,7 @@ def _as_expr(x: object) -> Expr:
 _DUQL_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\t": "\\t", "\r": "\\r"}
 
 
-def _duql_string(v: str) -> str:
+def duql_string(v: str) -> str:
     r"""``v`` as a duql string literal that reads back as exactly ``v``: double
     quotes, with ``\\``, ``\"``, ``\n``, ``\t``, ``\r`` and ``\u00XX`` for the
     other control characters."""
@@ -1754,32 +1810,23 @@ def _duql_string(v: str) -> str:
 
 def _format_value(v: object) -> str:
     if isinstance(v, str):
-        return _duql_string(v)
+        return duql_string(v)
     if isinstance(v, bool):
         return "true" if v else "false"
     return str(v)
 
 
-# Import Arrow data into the native columnar engine (the boundary for the DSL).
-def _series_from_arrow(array: "pa.Array") -> "Series":
-    return _arrow_native("_series_from_arrow")(array)
-
-
-def _dataframe_from_arrow(table: "pa.Table") -> "_ext.DataFrame":
-    return _arrow_native("_dataframe_from_arrow")(table)
-
-
 def col(name: str) -> Expr:
     """A column / field reference by name."""
-    return _Col(name)
+    return Col(name)
 
 
-def lit(value: Union[_Scalar, str]) -> Expr:
+def lit(value: Union[Scalar, str]) -> Expr:
     """A scalar literal (kept distinct from a column name, Polars-style)."""
-    return _Lit(value)
+    return Lit(value)
 
 
-class _AggLeaf(Expr):
+class AggLeaf(Expr):
     """An aggregate standing in a row or group expression (``g["v"] -
     g["v"].mean()``, ``g["v"].sum() > 10``): the group-by evaluates the
     aggregate first, then :func:`split_aggs` rewrites the leaf into a column
@@ -1789,35 +1836,7 @@ class _AggLeaf(Expr):
         self.agg = agg
 
 
-def split_aggs(expr: Expr) -> "Tuple[Expr, List[Agg]]":
-    """The expression with every aggregate leaf replaced by a column
-    reference ``__dftu_agg_<i>__``, and the aggregates so aliased, in order."""
-    import copy
-
-    aggs: List[Agg] = []
-
-    def rewrite(e: Expr) -> Expr:
-        if isinstance(e, _AggLeaf):
-            aggs.append(e.agg.alias(f"__dftu_agg_{len(aggs)}__"))
-            return _Col(aggs[-1].out)
-        if isinstance(e, _Col) or isinstance(e, _Lit):
-            return e
-        node = copy.copy(e)
-        for key, value in list(vars(node).items()):
-            if isinstance(value, Expr):
-                setattr(node, key, rewrite(value))
-        return node
-
-    return rewrite(expr), aggs
-
-
-def has_agg_leaf(expr: Expr) -> bool:
-    if isinstance(expr, _AggLeaf):
-        return True
-    return any(has_agg_leaf(v) for v in vars(expr).values() if isinstance(v, Expr))
-
-
-class _ColumnOpNode(Expr):
+class ColumnOpNode(Expr):
     """A registered column op over ``arg`` (see ``_expr_ops``)."""
 
     def __init__(self, arg: Expr, spec: "ColumnOp") -> None:
@@ -1996,7 +2015,7 @@ class _ExprStr:
     def findall(self, pat: str) -> Expr:
         return self._e.findall(pat)
 
-    def normalize(self, form: _NormForm) -> Expr:
+    def normalize(self, form: NormForm) -> Expr:
         return self._e.normalize(form)
 
     def translate(self, table: Mapping[Union[int, str], Union[str, int, None]]) -> Expr:
@@ -2149,14 +2168,10 @@ class _ExprDt:
         return _ExprDt(self._e, unit)
 
     def _part(self, code: int) -> Expr:
-        from .series import _TIME_UNITS
-
-        return self._e._op("dftu.series.dt_part", a=code, b=_TIME_UNITS[self._unit])
+        return self._e._op("dftu.series.dt_part", a=code, b=DT_UNIT_CODES[self._unit])
 
     def strftime(self, fmt: str) -> Expr:
-        from .series import _TIME_UNITS
-
-        return self._e._op("dftu.series.dt_format", a=_TIME_UNITS[self._unit], text=fmt)
+        return self._e._op("dftu.series.dt_format", a=DT_UNIT_CODES[self._unit], text=fmt)
 
     def year(self) -> Expr:
         return self._part(0)
@@ -2246,9 +2261,8 @@ class _ExprDt:
         """Each instant as an integer count of ``time_unit`` (``"ns"``, ``"us"``,
         ``"ms"``, ``"s"`` or ``"d"``) since the epoch, from the column's own
         unit; a coarser unit floors."""
-        from ._expr_ops import _EPOCH_NS
 
-        if time_unit not in _EPOCH_NS:
+        if time_unit not in EPOCH_NS:
             raise ValueError("epoch: time_unit must be ns, us, ms, s or d")
         return self._e._op("dftu.series.cast", text=time_unit, kind="epoch", unit=self._given)
 
@@ -2309,7 +2323,6 @@ class _ExprDt:
         return self._e._op("dftu.series.with_timezone", text=tz or "")
 
     def _round(self, every: "Union[int, str]", mode: int) -> Expr:
-        from .indexing import rule_to_units
 
         # A rule is a count of the unit of the column it runs on, known only
         # then; reject a rule that no unit could read now.
@@ -2322,13 +2335,15 @@ class _ExprDt:
 # The namespaces, bound after the class body so the names `str` and `dt` do
 # not shadow the builtin type inside it.
 Expr.str = property(lambda self: _ExprStr(self), doc="The string namespace (polars ``col.str.*``).")  # type: ignore[attr-defined]
+
+
 Expr.dt = property(  # type: ignore[attr-defined]
     lambda self: _ExprDt(self),
     doc="The temporal namespace (polars ``col.dt.*``); the parts read the column's own unit, an Int64 as microseconds.",
 )
 
 
-class _IsNull(Expr):
+class IsNull(Expr):
     """The Bool mask of the null (or the present) rows of ``arg``."""
 
     def __init__(self, arg: Expr, null: bool) -> None:
@@ -2336,7 +2351,7 @@ class _IsNull(Expr):
         self.null = null
 
 
-class _Select(Expr):
+class Select(Expr):
     """``cond ? a : b`` per row; a null condition takes ``b``."""
 
     def __init__(self, cond: Expr, a: Expr, b: Expr) -> None:
@@ -2423,7 +2438,7 @@ class Udf:
     def __call__(self, *args: Any) -> Expr:
         if self._closed:
             raise RuntimeError(f"udf {self._name!r} is closed")
-        return _Udf(self._name, self._handle, tuple(_wrap(a) for a in args))
+        return _Udf(self._name, self._handle, tuple(wrap(a) for a in args))
 
     def __repr__(self) -> str:
         return f"Udf({self._name!r})"
@@ -2432,24 +2447,15 @@ class Udf:
 # The UDFs that @dft.udf registered and not yet closed, by name. They are held
 # strongly: only close() or the end of a scope removes one.
 _OWNED_UDFS: "Dict[str, Udf]" = {}
+
+
 _UDF_SCOPES: "List[List[Udf]]" = []
+
+
 _UDF_EXIT_HOOK = False
 
-_BATCH_DTYPES = frozenset(
-    (
-        "bool",
-        "int8",
-        "int16",
-        "int32",
-        "int64",
-        "uint8",
-        "uint16",
-        "uint32",
-        "uint64",
-        "float32",
-        "float64",
-    )
-)
+
+_BATCH_DTYPES = frozenset(d.name.lower() for d in DType if d.is_numeric) | {"bool"}
 
 
 def _close_udfs_at_exit() -> None:
@@ -2468,8 +2474,6 @@ def _udf_origin(fn: Callable[..., Any]) -> str:
 def _batch_result_dtype(fn: Callable[..., Any], returns: object) -> str:
     """The result dtype name of a batch UDF from ``returns=`` or the return
     annotation (``np.ndarray`` needs ``returns=``; ``npt.NDArray[np.float64]`` names it)."""
-    import typing
-
     try:
         import numpy as np
     except ImportError as exc:  # pragma: no cover - numpy is a hard need here
@@ -2598,8 +2602,6 @@ class _UdfRegistry(Mapping[str, Udf]):
                 f"already registered ({where}); close it first or choose another name"
             )
         if batch:
-            import inspect
-
             params = list(inspect.signature(fn).parameters.values())
             if not params or any(
                 p.kind not in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
@@ -2611,8 +2613,6 @@ class _UdfRegistry(Mapping[str, Udf]):
                 )
             dtype = _batch_result_dtype(fn, returns)
             if not _UDF_EXIT_HOOK:
-                import atexit
-
                 atexit.register(_close_udfs_at_exit)
                 _UDF_EXIT_HOOK = True
             _ext.udf_register_batch(udf_name, fn, len(params), dtype, volatile)
@@ -2661,81 +2661,6 @@ def call(name: str, *args: Expr) -> Expr:
     return udf[name](*args)
 
 
-class Udaf:
-    """A registered user-defined aggregate, called over expressions inside
-    ``group_by(...).agg``: ``udaf["p50"](col("dur"))`` is the :class:`Agg` that
-    runs ``p50`` per group. The engine looks the name up when the group-by runs,
-    so the plugin that registered it must still be loaded then."""
-
-    __slots__ = ("_name", "_handle", "_min_args", "_max_args", "_flags")
-
-    def __init__(
-        self, name: str, handle: "_ext._UdafHandle", min_args: int, max_args: int, flags: int
-    ) -> None:
-        self._name = name
-        self._handle = handle
-        self._min_args = min_args
-        self._max_args = max_args
-        self._flags = flags
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def min_args(self) -> int:
-        return self._min_args
-
-    @property
-    def max_args(self) -> int:
-        return self._max_args
-
-    @property
-    def flags(self) -> int:
-        """The ``DFTU_AGG_*`` flag bits the UDAF registered with."""
-        return self._flags
-
-    def __call__(self, *args: Expr) -> "Agg":
-        if not self._min_args <= len(args) <= self._max_args:
-            want = (
-                str(self._min_args)
-                if self._min_args == self._max_args
-                else f"{self._min_args} to {self._max_args}"
-            )
-            raise TypeError(f"udaf {self._name!r} takes {want} arguments, got {len(args)}")
-        return _UdafAgg(self._name, self._handle, tuple(_wrap(a) for a in args))
-
-    def __repr__(self) -> str:
-        return f"Udaf({self._name!r})"
-
-
-class _UdafRegistry(Mapping[str, Udaf]):
-    """The registered user-defined aggregates by name, read only:
-    ``udaf[name]``, ``udaf.get(name)``, ``name in udaf``, iteration and ``len``.
-    An unknown name raises ``KeyError`` here, not when an aggregate runs."""
-
-    def __getitem__(self, name: str) -> Udaf:
-        if not isinstance(name, str):
-            raise KeyError(name)
-        try:
-            handle, min_args, max_args, flags = _ext.udaf_lookup(name)
-        except LookupError:
-            raise KeyError(name) from None
-        return Udaf(name, handle, min_args, max_args, flags)
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(_ext.udaf_names())
-
-    def __len__(self) -> int:
-        return len(_ext.udaf_names())
-
-    def __repr__(self) -> str:
-        return f"udaf({list(self)!r})"
-
-
-udaf: Mapping[str, Udaf] = _UdafRegistry()
-
-
 class _When:
     """``when(cond).then(a).otherwise(b)``, the polars spelling of a select."""
 
@@ -2745,7 +2670,7 @@ class _When:
         self._cond = cond
 
     def then(self, value: "Union[Expr, int, float]") -> "_Then":
-        return _Then(self._cond, _wrap(value))
+        return _Then(self._cond, wrap(value))
 
 
 class _Then:
@@ -2756,18 +2681,18 @@ class _Then:
         self._value = value
 
     def otherwise(self, value: "Union[Expr, int, float]") -> Expr:
-        return _Select(self._cond, self._value, _wrap(value))
+        return Select(self._cond, self._value, wrap(value))
 
 
 def when(cond: Expr) -> _When:
     """Start a conditional: ``when(F.dur > 10).then(1).otherwise(0)``."""
-    return _When(_as_expr(cond))
+    return _When(as_expr(cond))
 
 
 def if_else(cond: Expr, a: "Union[Expr, int, float]", b: "Union[Expr, int, float]") -> Expr:
     """``a`` where ``cond`` holds, else ``b``, per row (numpy ``where`` over
     expressions; the frame filter keeps the name ``where``)."""
-    return _Select(_as_expr(cond), _wrap(a), _wrap(b))
+    return Select(as_expr(cond), wrap(a), wrap(b))
 
 
 class _FAccessor:
@@ -2776,16 +2701,16 @@ class _FAccessor:
     nested or non-identifier field name."""
 
     def __call__(self, name: str) -> Expr:
-        return _Col(name)
+        return Col(name)
 
     def __getattr__(self, name: str) -> Expr:
-        return _Col(name)
+        return Col(name)
 
     def __getitem__(self, name: str) -> Expr:
-        return _Col(name)
+        return Col(name)
 
 
-class _Wildcard(Expr):
+class Wildcard(Expr):
     """``F.any``: the numeric-args wildcard for ``TraceViewer.agg``. ``.mean()``
     aggregates every numeric ``args.*`` field as a per-group mean (fields
     discovered at scan time); ``.count()`` is the group row count. The engine's
@@ -2797,258 +2722,95 @@ class _Wildcard(Expr):
 
 
 F = _FAccessor()
-#: ``F.any`` - the numeric-args wildcard (see :class:`_Wildcard`).
-F.any = _Wildcard()  # type: ignore[attr-defined]
 
 
-def columnar(expr: Expr) -> "Columnar":
-    """Wrap a value expression; call ``apply(source)`` to evaluate it on the
-    DataFrame engine and get a native ``Series``."""
-    if not isinstance(expr, Expr):
-        raise TypeError("columnar() expects an expression (col()/F./lit())")
-    return Columnar(expr)
-
-
-def where(table: _Frame, pred: "Expr | str") -> _Frame:
-    """Keep the rows where ``pred`` is true.
-
-    ``pred`` is either an expression (numeric comparisons / ``& | ~``),
-    evaluated on the DataFrame engine to a boolean mask, or a duql
-    **string** (e.g. ``"dur > 100 and cat == 'io'"``), parsed by the duql
-    library and evaluated as a SIMD mask. A native ``DataFrame`` in stays fully
-    columnar (returns a filtered ``DataFrame``); a ``pyarrow.Table`` in returns
-    a filtered ``pyarrow.Table``."""
-    native = table
-    if isinstance(pred, str):
-        if isinstance(native, _ext.DataFrame):
-            return _ext.DataFrame.query(native, pred)
-        import pyarrow as pa
-
-        return pa.table(_arrow_native("_dataframe_from_arrow")(native).query(pred))
-    mask = columnar(pred).apply(native)  # a wrapped Series
-    if isinstance(native, _ext.DataFrame):
-        return _ext.DataFrame.filter(native, mask)
-    import pyarrow as pa
-
-    return native.filter(pa.array(mask))
-
-
-class Columnar:
-    """A value expression ready to evaluate on the DataFrame engine."""
-
-    def __init__(self, expr: Expr) -> None:
-        self._expr = expr
-        self._columns = _collect_columns(expr)
-
-    @property
-    def columns(self) -> List[str]:
-        """Input column names this expression reads."""
-        return list(self._columns)
-
-    def apply(self, source: _Source) -> Series:
-        """Evaluate on the DataFrame engine and return a native ``Series``.
-
-        ``source`` is either a native ``DataFrame`` (e.g. ``view.collect()``) or
-        a ``{name: Series}`` mapping - kept entirely columnar with no input
-        Arrow; or a ``pyarrow.Table``, whose columns are imported into the engine
-        at the boundary. The result is a ``Series``; call ``.to_arrow()`` /
-        ``.to_pandas()`` only if you want Arrow.
-
-        Python serializes the expression tree to a post-order AST and hands it
-        to the native engine (``_ext.vec_eval``), which does all the compilation
-        - type inference, CSE, lowering - and fused chunked + parallel
-        evaluation. A pure-constant expression (no columns) broadcasts on the
-        per-node path."""
-        cols = self._to_vec_columns(source)
-        if self._columns:
-            ast: List[tuple] = []
-            self._serialize(self._expr, ast)
-            inputs = [cols[name] for name in self._columns]
-            return _ext.vec_eval(ast, inputs)
-        # Constant expression (no columns): broadcast to the row count.
-        out_float = _is_float(self._expr, cols)
-        result = _eval(self._expr, cols, out_float)
-        if isinstance(result, _ScalarVal):
-            sized = cols or _first_column(source)
-            return _broadcast_scalar(result.value, out_float, sized)
-        return result.value
-
-    # Serialize `expr` to a post-order AST (a list of (op, args...) tuples) that
-    # the C++ engine rebuilds and compiles. Structural only - no type logic.
-    def _serialize(self, expr: Expr, ast: List[tuple]) -> None:
-        _emit_ast(expr, self._columns.index, ast)
-
-    def _to_vec_columns(self, source: _Source) -> Dict[str, "Series"]:
-        return _import_vec_columns(self._columns, source)
-
-
-def _unwrap_source_columns(source: object) -> Dict[str, Series]:
-    """Every column of ``source`` (a frame, a native batch, a ``{name:
-    Series}`` mapping or a pyarrow Table) as wrapped Series, by name."""
-    native = source
-    if isinstance(native, dict):
-        return dict(native)
-    if isinstance(native, _ext.DataFrame):
-        return {name: _ext.DataFrame.__getitem__(native, name) for name in native.column_names}
-    import pyarrow as pa
-
-    out: Dict[str, Series] = {}
-    for name in native.column_names:
-        arr = native.column(name)
-        if isinstance(arr, pa.ChunkedArray):
-            arr = arr.combine_chunks()
-        out[name] = _arrow_native("_series_from_arrow")(arr)
-    return out
-
-
-def _first_column(source: _Source) -> Dict[str, "Series"]:
-    """One column of ``source`` to give a constant expression its length (empty
-    when the source has no column)."""
-    native = source
-    names = list(native)[:1] if isinstance(native, dict) else list(native.column_names)[:1]
-    return _import_vec_columns(names, source) if names else {}
-
-
-def _import_vec_columns(names: List[str], source: _Source) -> Dict[str, "Series"]:
-    """Resolve `names` to native vec columns from `source` (a native batch or a
-    pyarrow Table), importing at the Arrow boundary only when needed."""
-    # A native batch (a DataFrame or a {name: Series} dict) is used directly.
-    if isinstance(source, dict):
-        return {name: source[name] for name in names}
-    if isinstance(source, _ext.DataFrame):
-        return {name: _ext.DataFrame.__getitem__(source, name) for name in names}
-    # A pyarrow Table: import each needed column into vec at the boundary.
-    import pyarrow as pa
-
-    cols: Dict[str, "Series"] = {}
-    for name in names:
-        arr = source.column(name)
-        if isinstance(arr, pa.ChunkedArray):
-            arr = arr.combine_chunks()
-        cols[name] = _arrow_native("_series_from_arrow")(arr)
-    return cols
-
-
-def eval_many(exprs: "List[Expr | Columnar]", source: _Source) -> "List[Series]":
-    """Evaluate several value expressions in ONE compiled pass over `source`.
-
-    CSE spans all of them, so a subexpression shared across outputs is computed
-    once. Returns one :class:`Series` per input expression, aligned to `exprs`.
-    `source` is a native vec batch or a pyarrow Table, as for :meth:`Columnar.apply`."""
-    cs = [e if isinstance(e, Columnar) else columnar(e) for e in exprs]
-    union: List[str] = []
-    seen = set()
-    for c in cs:
-        for name in c.columns:
-            if name not in seen:
-                seen.add(name)
-                union.append(name)
-    if not union:  # all-constant expressions: no shared program to build
-        return [c.apply(source) for c in cs]
-    cols = _import_vec_columns(union, source)
-    inputs = [cols[name] for name in union]
-    index = {name: i for i, name in enumerate(union)}
-    asts: List[List[tuple]] = []
-    for c in cs:
-        ast: List[tuple] = []
-        _emit_ast(c._expr, index.__getitem__, ast)
-        asts.append(ast)
-    return list(_ext.vec_eval_many(asts, inputs))
-
-
-def _broadcast_scalar(value: _Scalar, out_float: bool, cols: Dict[str, "Series"]) -> "Series":
-    # Only the length of an input column is used, never its values: a null,
-    # NaN or infinity in that column must not reach the constant. An all-null
-    # column of the target type, filled with the value, has no other source.
-    if not cols:
-        raise ValueError("a constant columnar expression needs at least one column")
-    n = len(next(iter(cols.values())))
-    return _ext._series_nulls(int(_FLOAT64 if out_float else _INT64), n).fillna(value)
+#: ``F.any`` - the numeric-args wildcard (see :class:`Wildcard`).
+F.any = Wildcard()  # type: ignore[attr-defined]
 
 
 # Serialize `expr` to a post-order AST, resolving column names to input indices
 # via `resolve` (a name -> int callable). Structural only - the C++ compiler does
 # type inference, CSE, and lowering, so every consumer gets the same engine.
-def _emit_ast(expr: Expr, resolve: Callable[[str], int], ast: List[tuple]) -> None:
-    if isinstance(expr, _Lit):
+def emit_ast(expr: Expr, resolve: Callable[[str], int], ast: List[tuple]) -> None:
+    if isinstance(expr, Lit):
         if isinstance(expr.value, str):
             ast.append((_AST_LIT_S, expr.value))
         elif isinstance(expr.value, float):
             ast.append((_AST_LIT_F, float(expr.value)))
         else:
             ast.append((_AST_LIT_I, int(expr.value)))
-    elif isinstance(expr, _Col):
+    elif isinstance(expr, Col):
         ast.append((_AST_COL, resolve(expr.name)))
-    elif isinstance(expr, _Bin):
-        _emit_ast(expr.left, resolve, ast)
-        _emit_ast(expr.right, resolve, ast)
+    elif isinstance(expr, Bin):
+        emit_ast(expr.left, resolve, ast)
+        emit_ast(expr.right, resolve, ast)
         ast.append((_AST_BIN, _BIN_OP_CODE[expr.op]))
-    elif isinstance(expr, _Prim):
-        _emit_ast(expr.arg, resolve, ast)
-        ast.append((_AST_PRIM, _PRIM_CODES[expr.name]))
-    elif isinstance(expr, _Unary):
-        _emit_ast(expr.arg, resolve, ast)
+    elif isinstance(expr, Prim):
+        emit_ast(expr.arg, resolve, ast)
+        ast.append((_AST_PRIM, PRIM_CODES[expr.name]))
+    elif isinstance(expr, Unary):
+        emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_UNARY, _UNARY_CODES[expr.name]))
-    elif isinstance(expr, _Clip):
-        _emit_ast(expr.arg, resolve, ast)
+    elif isinstance(expr, Clip):
+        emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_CLIP, expr.lo, expr.hi))
-    elif isinstance(expr, _Cast):
-        _emit_ast(expr.arg, resolve, ast)
+    elif isinstance(expr, Cast):
+        emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_CAST, expr.type_id))
-    elif isinstance(expr, _Fillna):
-        _emit_ast(expr.arg, resolve, ast)
+    elif isinstance(expr, Fillna):
+        emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_FILLNA, expr.fill))
-    elif isinstance(expr, _Cmp) and isinstance(expr.rhs, Expr):
+    elif isinstance(expr, Cmp) and isinstance(expr.rhs, Expr):
         # Column against column: the engine compares the two row by row, null
         # where either side is null.
-        _emit_ast(expr.left, resolve, ast)
-        _emit_ast(expr.rhs, resolve, ast)
-        ast.append((_AST_CMP_EXPR, _CMP_CODES[expr.op]))
-    elif isinstance(expr, _Cmp):
+        emit_ast(expr.left, resolve, ast)
+        emit_ast(expr.rhs, resolve, ast)
+        ast.append((_AST_CMP_EXPR, CMP_CODES[expr.op]))
+    elif isinstance(expr, Cmp):
         if isinstance(expr.rhs, bool) or not isinstance(expr.rhs, (int, float, str)):
             raise TypeError(
                 "in-memory comparison needs a number or a string; a bool "
                 "comparison is filter-only (push it down with .filter()/.duql())"
             )
-        _emit_ast(expr.left, resolve, ast)
-        ast.append((_AST_CMP, _CMP_CODES[expr.op], expr.rhs))
-    elif isinstance(expr, _Logical):
-        _emit_ast(expr.left, resolve, ast)
+        emit_ast(expr.left, resolve, ast)
+        ast.append((_AST_CMP, CMP_CODES[expr.op], expr.rhs))
+    elif isinstance(expr, Logical):
+        emit_ast(expr.left, resolve, ast)
         if expr.op == "not" or expr.right is None:
             ast.append((_AST_NOT,))
         else:
-            _emit_ast(expr.right, resolve, ast)
-            ast.append((_AST_LOGICAL, _LOGICAL_CODES[expr.op]))
+            emit_ast(expr.right, resolve, ast)
+            ast.append((_AST_LOGICAL, LOGICAL_CODES[expr.op]))
     elif isinstance(expr, _StrPred):
-        _emit_ast(expr.arg, resolve, ast)
+        emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_STR_PRED, _STR_PRED_CODES[expr.op], expr.pattern))
     elif isinstance(expr, _StrPredCol):
-        _emit_ast(expr.arg, resolve, ast)
-        _emit_ast(expr.needle, resolve, ast)
+        emit_ast(expr.arg, resolve, ast)
+        emit_ast(expr.needle, resolve, ast)
         ast.append((_AST_STR_PRED_COL, _STR_PRED_CODES[expr.op]))
     elif isinstance(expr, _StrReplaceCol):
-        _emit_ast(expr.arg, resolve, ast)
-        _emit_ast(expr.old, resolve, ast)
-        _emit_ast(expr.new, resolve, ast)
+        emit_ast(expr.arg, resolve, ast)
+        emit_ast(expr.old, resolve, ast)
+        emit_ast(expr.new, resolve, ast)
         ast.append((_AST_STR_REPLACE_COL,))
     elif isinstance(expr, (_IContains, _ILike)):
-        _emit_ast(expr._lowered(), resolve, ast)
+        emit_ast(expr._lowered(), resolve, ast)
     elif isinstance(expr, _IsIn):
-        _emit_ast(expr.arg, resolve, ast)
+        emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_IS_IN, list(expr.values)))
         if expr.negated:
             ast.append((_AST_NOT,))
     elif isinstance(expr, _Udf):
         for arg in expr.args:
-            _emit_ast(arg, resolve, ast)
+            emit_ast(arg, resolve, ast)
         ast.append((_AST_UDF, expr.handle, len(expr.args)))
     elif isinstance(expr, _StrMap):
-        _emit_ast(expr.arg, resolve, ast)
+        emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_STR_MAP, _STR_MAP_CODES[expr.op]))
     elif isinstance(expr, _StrFn):
-        _emit_ast(expr.arg, resolve, ast)
+        emit_ast(expr.arg, resolve, ast)
         if expr.other is not None:
-            _emit_ast(expr.other, resolve, ast)
+            emit_ast(expr.other, resolve, ast)
         ast.append(
             (
                 _AST_STR_FN,
@@ -3061,33 +2823,33 @@ def _emit_ast(expr: Expr, resolve: Callable[[str], int], ast: List[tuple]) -> No
             )
         )
     elif isinstance(expr, _StrLen):
-        _emit_ast(expr.arg, resolve, ast)
+        emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_STR_LEN, 1 if expr.chars else 0))
     elif isinstance(expr, _StrFind):
-        _emit_ast(expr.arg, resolve, ast)
+        emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_STR_FIND, expr.needle, 1 if expr.null_on_miss else 0))
     elif isinstance(expr, _StrReplace):
-        _emit_ast(expr.arg, resolve, ast)
+        emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_STR_REPLACE, expr.old, expr.new, 1 if expr.all else 0))
     elif isinstance(expr, _StrSlice):
-        _emit_ast(expr.arg, resolve, ast)
+        emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_STR_SLICE, expr.start, expr.length))
-    elif isinstance(expr, _Select):
-        _emit_ast(expr.cond, resolve, ast)
-        _emit_ast(expr.a, resolve, ast)
-        _emit_ast(expr.b, resolve, ast)
+    elif isinstance(expr, Select):
+        emit_ast(expr.cond, resolve, ast)
+        emit_ast(expr.a, resolve, ast)
+        emit_ast(expr.b, resolve, ast)
         ast.append((_AST_SELECT,))
-    elif isinstance(expr, _IsNull):
-        _emit_ast(expr.arg, resolve, ast)
+    elif isinstance(expr, IsNull):
+        emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_IS_NULL, 1 if expr.null else 0))
     elif isinstance(expr, _IRegex):
         raise TypeError(_PREDICATE_ONLY)
-    elif isinstance(expr, _ColumnOpNode):
+    elif isinstance(expr, ColumnOpNode):
         raise TypeError(
             f"{expr.spec.op}: a column op reads the whole column and is not an "
             "evaluator node; Expr.apply and the plan lower it first"
         )
-    elif isinstance(expr, _AggLeaf):
+    elif isinstance(expr, AggLeaf):
         raise TypeError(
             "an aggregate inside a row expression evaluates through "
             "GroupBy.apply / filter, which aggregates first"
@@ -3124,46 +2886,45 @@ class Agg:
         """This aggregate per group of ``keys``, broadcast back onto every
         row of its group (polars ``col("x").sum().over("k")``, the pandas
         ``transform``): a group-by joined back on the keys, in input order."""
-        from ._expr_ops import ColumnOp
 
         spec = ColumnOp(
             "__agg_over__", over=[keys] if isinstance(keys, str) else list(keys), agg=self
         )
-        return _ColumnOpNode(_Lit(0), spec)
+        return ColumnOpNode(Lit(0), spec)
 
     # Arithmetic and comparisons over aggregates build an Expr whose leaves
     # are the aggregates (GroupBy.apply / filter evaluate it per group).
     def __add__(self, other: object) -> Expr:
-        return _AggLeaf(self) + other
+        return AggLeaf(self) + other
 
     def __radd__(self, other: object) -> Expr:
-        return _wrap(other) + _AggLeaf(self)
+        return wrap(other) + AggLeaf(self)
 
     def __sub__(self, other: object) -> Expr:
-        return _AggLeaf(self) - other
+        return AggLeaf(self) - other
 
     def __rsub__(self, other: object) -> Expr:
-        return _wrap(other) - _AggLeaf(self)
+        return wrap(other) - AggLeaf(self)
 
     def __mul__(self, other: object) -> Expr:
-        return _AggLeaf(self) * other
+        return AggLeaf(self) * other
 
     def __rmul__(self, other: object) -> Expr:
-        return _wrap(other) * _AggLeaf(self)
+        return wrap(other) * AggLeaf(self)
 
     def __truediv__(self, other: object) -> Expr:
-        return _AggLeaf(self) / other
+        return AggLeaf(self) / other
 
     def __rtruediv__(self, other: object) -> Expr:
-        return _wrap(other) / _AggLeaf(self)
+        return wrap(other) / AggLeaf(self)
 
     def _cmp(self, op: str, other: object) -> Expr:
         # Against another aggregate or an expression: (self - other) <op> 0.
         if isinstance(other, (Agg, Expr)):
-            return _Cmp(op, _AggLeaf(self) - other, 0)
+            return Cmp(op, AggLeaf(self) - other, 0)
         if isinstance(other, bool) or not isinstance(other, (int, float)):
             raise TypeError(f"an aggregate compares with a number or an aggregate, not {other!r}")
-        return _Cmp(op, _AggLeaf(self), other)
+        return Cmp(op, AggLeaf(self), other)
 
     def __gt__(self, other: object) -> Expr:
         return self._cmp("gt", other)
@@ -3191,7 +2952,7 @@ class Agg:
             return self._out
         if self.value is None:
             return "count"
-        if isinstance(self.value, _Col):
+        if isinstance(self.value, Col):
             if self.op == "pct":
                 return f"p{int(round(self.param * 100))}_{self.value.name}"
             if self.op == "quantile":
@@ -3201,11 +2962,11 @@ class Agg:
         return self.op
 
     def _spec(self, names: List[str]) -> tuple:
-        code = _AGG_CODE[self.op]
+        code = AGG_CODE[self.op]
         if self.value is None:
             return (code, None, self.out, self.param)
         ast: List[tuple] = []
-        _emit_ast(self.value, names.index, ast)
+        emit_ast(self.value, names.index, ast)
         if self.op == "quantile":
             return (
                 code,
@@ -3214,68 +2975,18 @@ class Agg:
                 self.param,
                 None,
                 None,
-                _check_quantile(self.param, self.interpolation),
+                check_quantile(self.param, self.interpolation),
             )
         if self.by is None:
             return (code, ast, self.out, self.param)
         by_ast: List[tuple] = []
-        _emit_ast(self.by, names.index, by_ast)
+        emit_ast(self.by, names.index, by_ast)
         return (code, ast, self.out, self.param, by_ast)
 
 
-class _UdafAgg(Agg):
-    """A call of a registered UDAF over ``args``; the group-by finds the UDAF
-    again by ``name``."""
-
-    def __init__(
-        self,
-        name: str,
-        handle: "_ext._UdafHandle",
-        args: Tuple[Expr, ...],
-        out: "Optional[str]" = None,
-    ) -> None:
-        super().__init__("udaf", args[0] if args else None, out)
-        self.name = name
-        self.handle = handle
-        self.args = args
-
-    def alias(self, name: str) -> "Agg":
-        return _UdafAgg(self.name, self.handle, self.args, name)
-
-    @property
-    def out(self) -> str:
-        if self._out is not None:
-            return self._out
-        if self.args and isinstance(self.args[0], _Col):
-            return f"{self.name}_{self.args[0].name}"
-        return self.name
-
-    def _spec(self, names: List[str]) -> tuple:
-        asts: List[List[tuple]] = []
-        for arg in self.args:
-            ast: List[tuple] = []
-            _emit_ast(arg, names.index, ast)
-            asts.append(ast)
-        return (
-            _AGG_CODE["udaf"],
-            asts[0] if asts else None,
-            self.out,
-            0.0,
-            None,
-            (self.name, asts[1:]),
-        )
-
-
 def _occupancy(op: str, value: Expr, resolution: "Union[int, float, str, None]") -> Agg:
-    from ._units import coerce_duration
-
     grid = 0 if resolution is None else int(round(coerce_duration(resolution, 1e6, "resolution")))
     return Agg(op, value, param=float(grid))
-
-
-def count() -> Agg:
-    """The group row count (``count()`` -> column ``count``)."""
-    return Agg("count", None)
 
 
 def _make_agg_method(op: str) -> "Callable[[Expr], Agg]":
@@ -3318,990 +3029,29 @@ def _expr_kurt(self: Expr, bias: bool = True) -> Agg:
 
 
 Expr.skew = _expr_skew  # type: ignore[assignment,method-assign]
+
+
 Expr.kurt = _expr_kurt  # type: ignore[assignment,method-assign]
 
 
-def _to_agg(spec: object) -> Agg:
-    if isinstance(spec, Agg):
-        return spec
-    if isinstance(spec, str):
-        if ":" in spec:
-            op, column = spec.split(":", 1)
-            if ":" in column:
-                column, out = column.split(":", 1)
-                return Agg(op, _Col(column), out)
-            return Agg(op, _Col(column), f"{op}_{column}")
-        return Agg(spec, None, spec)  # e.g. "count"
-    raise TypeError(f"agg spec must be an Agg or string, got {type(spec).__name__}")
-
-
-# The pandas aliases for the engine's one-column aggregates, as ``agg("x")``,
-# ``agg(["x", ...])``, ``agg({"col": "x"})`` and ``agg(out=("col", "x"))``
-# name them. The pandas names whose engine aggregate is a sketch (median,
-# quantile -> pct; nunique -> distinct) are NOT aliased: pandas gives the exact
-# value and the sketch an approximate one, so those are spelled out as
-# ``col("x").quantile(0.5)`` / ``.distinct()`` by the caller who accepts that,
-# or taken exactly through ``GroupBy.median() / quantile(q) / nunique()``.
-_PANDAS_AGG_NAMES = {
-    "count": "count_valid",
-    "size": "count",
-    "skew": "skew_unbiased",
-    "kurt": "kurt_unbiased",
-}
-_PANDAS_AGG_APPROXIMATE = {
-    "median": "quantile(0.5, 'linear')",
-    "quantile": "quantile(q, 'linear')",
-    "nunique": "distinct()",
-}
-
-
-def _agg_op_name(name: str) -> str:
-    if name in ("median", "quantile"):
-        raise ValueError(
-            f"agg({name!r}): a quantile needs its level; spell it "
-            f"col(...).{_PANDAS_AGG_APPROXIMATE[name]}, or use the group-by method .{name}()"
-        )
-    if name in _PANDAS_AGG_APPROXIMATE:
-        raise ValueError(
-            f"agg({name!r}): the engine's {_PANDAS_AGG_APPROXIMATE[name]} is a sketch "
-            f"(approximate), not the exact pandas value; call col(...).{_PANDAS_AGG_APPROXIMATE[name]} "
-            f"to use it knowingly, or the exact group-by method .{name}()"
-        )
-    return _PANDAS_AGG_NAMES.get(name, name)
-
-
-def _named_agg(column: str, name: str, out: str) -> Agg:
-    """``(column, name)`` as an :class:`Agg` under ``out``, pandas dict / tuple
-    style: ``name`` is an engine aggregate or one of its pandas aliases."""
-    op = _agg_op_name(name)
-    if op == "count":
-        return Agg("count", None, out)
-    return Agg(op, _Col(column), out)
-
-
-def _reduce_specs(frame: "Union[DataFrame, LazyFrame]", agg: str, keys: Sequence[str]) -> List[str]:
-    """The group-by spec strings of the engine aggregate ``agg`` over the
-    non-key columns of ``frame``, a frame or a plan."""
-    if isinstance(frame, _ext.LazyFrame):
-        return _ext.LazyFrame._reduce_specs(frame, agg, list(keys))
-    return _ext.DataFrame._reduce_specs(frame, agg, list(keys))
-
-
-def _agg_specs_from_pandas_forms(
-    frame: "Union[DataFrame, LazyFrame]",
-    keys: Sequence[str],
-    func: object,
-    named: "Dict[str, object]",
-) -> "List[Union[str, Agg]]":
-    """Lower the pandas ``agg`` argument forms to engine specs, flat names.
-    ``frame`` is a DataFrame or LazyFrame;
-    only its ``reduce_specs`` is used.
-
-    - a string: broadcast over every eligible non-key column, each under its
-      own name (``agg("sum")``);
-    - a list of strings: every (column, name) pair as ``<column>_<name>``;
-    - a dict ``{column: name | [names]}`` as ``<column>_<name>`` (a single
-      name keeps the column's own name, as pandas does);
-    - keywords ``out=("column", name)`` (also ``pd.NamedAgg``);
-    - :class:`Agg` expressions and ``"op:column"`` strings pass through.
-    """
-    if func is None and not named:
-        raise TypeError("agg() needs at least one aggregate")
-    specs: "List[Union[str, Agg]]" = []
-    if isinstance(func, str):
-        specs.extend(_reduce_specs(frame, _agg_op_name(func), keys))
-    elif isinstance(func, Agg):
-        specs.append(func)
-    elif isinstance(func, dict):
-        for column, names in func.items():
-            if isinstance(names, (str, Agg)):
-                if isinstance(names, Agg):
-                    specs.append(names)
-                else:
-                    specs.append(_named_agg(column, names, column))
-            else:
-                for name in names:
-                    specs.append(_named_agg(column, name, f"{column}_{name}"))
-    elif isinstance(func, (list, tuple)):
-        for item in func:
-            if isinstance(item, Agg) or (isinstance(item, str) and ":" in item):
-                specs.append(item)
-                continue
-            if not isinstance(item, str):
-                raise TypeError(f"agg() list items must be names or Agg, got {type(item).__name__}")
-            for spec in _reduce_specs(frame, _agg_op_name(item), keys):
-                column = spec.split(":")[1]
-                specs.append(_named_agg(column, item, f"{column}_{item}"))
-    elif func is not None:
-        raise TypeError(f"agg() takes a name, a list, a dict or an Agg, got {type(func).__name__}")
-    for out, spec in named.items():
-        if isinstance(spec, Agg):
-            specs.append(spec.alias(out))
-        elif isinstance(spec, tuple) and len(spec) == 2 and isinstance(spec[1], str):
-            specs.append(_named_agg(str(spec[0]), spec[1], out))
-        elif hasattr(spec, "column") and hasattr(spec, "aggfunc"):
-            specs.append(_named_agg(str(spec.column), str(spec.aggfunc), out))
-        else:
-            raise TypeError(f"agg() keyword {out!r} must be (column, name) or an Agg")
-    return specs
-
-
-class GroupBy:
-    """A lazy group-by over a native ``DataFrame`` (zero or more key columns;
-    none makes the whole frame one group). ``.agg(...)`` takes aggregate
-    expressions (``col("x").sum()``, ``count()``), ``"op:column"`` strings, or
-    the pandas forms (a name, a list of names, a ``{column: name}`` dict,
-    ``out=("column", name)`` keywords); ``.sum()`` and its family broadcast one
-    aggregate over every eligible non-key column."""
-
-    def __init__(
-        self,
-        batch: "DataFrame",
-        keys: "Union[str, Sequence[str], None]" = None,
-    ) -> None:
-        self._batch = batch
-        self._keys: List[str] = (
-            [] if keys is None else [keys] if isinstance(keys, str) else list(keys)
-        )
-
-    @property
-    def keys(self) -> List[str]:
-        return list(self._keys)
-
-    def __getitem__(self, columns: "Union[str, Sequence[str]]") -> "GroupBy":
-        """``groupby(k)["v"]`` / ``groupby(k)[["v", "w"]]``: the same groups
-        over only those value columns (the pandas column selection). With
-        one column, a list of aggregate names labels the outputs by name
-        alone, as pandas does."""
-        frame = self._batch
-        picked = [columns] if isinstance(columns, str) else list(columns)
-        for c in picked:
-            if c not in frame:
-                raise KeyError(f"groupby: no column named {c!r}")
-        out = GroupBy(
-            frame.select(self._keys + [c for c in picked if c not in self._keys]), self._keys
-        )
-        out._single = picked[0] if len(picked) == 1 else None
-        out._sort = self._sort
-        return out
-
-    _single: "Optional[str]" = None
-    _sort: bool = False
-
-    def _sorted(self, out: DataFrame) -> DataFrame:
-        if self._sort and self._keys:
-            return out.sort_by_multi(self._keys)
-        return out
-
-    def agg(self, *specs: object, **named: object) -> DataFrame:
-        frame = self._batch
-        flat: "List[Union[str, Agg]]" = []
-        for spec in specs:
-            if isinstance(spec, Agg) or (isinstance(spec, str) and ":" in spec):
-                flat.append(spec)
-            else:
-                flat.extend(_agg_specs_from_pandas_forms(frame, self._keys, spec, {}))
-        if named:
-            flat.extend(_agg_specs_from_pandas_forms(frame, self._keys, None, named))
-        if not flat:
-            raise TypeError("agg() needs at least one aggregate")
-        native = self._batch
-        aggs = [_to_agg(s) for s in flat]
-        # Plain aggregates over plain columns take the engine's group_by
-        # directly; anything with an expression goes through the
-        # expression group-by.
-        plain = bool(self._keys) and all(
-            type(a) is Agg
-            and a.by is None
-            and a.param == 0.0
-            and (a.value is None or type(a.value) is _Col)
-            for a in aggs
-        )
-        if plain:
-            legacy = ["count" if a.value is None else f"{a.op}:{a.value.name}" for a in aggs]
-            out = _ext.DataFrame.group_by(native, *self._keys, *legacy)
-            engine_names = ["count" if a.value is None else f"{a.op}_{a.value.name}" for a in aggs]
-            if engine_names != [a.out for a in aggs]:
-                out = DataFrame(
-                    {
-                        **{k: out[k] for k in self._keys},
-                        **{a.out: out[name] for a, name in zip(aggs, engine_names)},
-                    }
-                )
-        else:
-            names = list(native.column_names)
-            out = _ext.DataFrame._group_agg_expr(native, self._keys, [a._spec(names) for a in aggs])
-        if self._single is not None and any(isinstance(sp, (list, tuple)) for sp in specs):
-            prefix = f"{self._single}_"
-            out = out.rename({c: c[len(prefix) :] for c in out.columns if c.startswith(prefix)})
-        return self._sorted(out)
-
-    def reduce(self, agg: str) -> DataFrame:
-        """One engine aggregate by name over every eligible non-key column,
-        each under its own name (the ``.sum()`` family's engine)."""
-        native = self._batch
-        if not self._keys:
-            return _ext.DataFrame.reduce(native, agg)
-        return self._sorted(
-            _ext.DataFrame.group_by(
-                native, *self._keys, *_ext.DataFrame._reduce_specs(native, agg, self._keys)
-            )
-        )
-
-    # The pandas ``groupby(...).sum()`` family.
-    def sum(self) -> DataFrame:
-        return self.reduce("sum")
-
-    def mean(self) -> DataFrame:
-        return self.reduce("mean")
-
-    def min(self) -> DataFrame:
-        return self.reduce("min")
-
-    def max(self) -> DataFrame:
-        return self.reduce("max")
-
-    def count(self) -> DataFrame:
-        return self.reduce("count_valid")
-
-    def var(self) -> DataFrame:
-        return self.reduce("var")
-
-    def std(self) -> DataFrame:
-        return self.reduce("std")
-
-    def skew(self) -> DataFrame:
-        """The pandas unbiased skewness per group and column (NaN below three
-        values and for a constant column, as pandas 3)."""
-        return self.reduce("skew_unbiased")
-
-    def kurt(self) -> DataFrame:
-        """The pandas unbiased excess kurtosis per group and column (NaN below
-        four values and for a constant column, as pandas 3)."""
-        return self.reduce("kurt_unbiased")
-
-    def first(self) -> DataFrame:
-        return self.reduce("first")
-
-    def last(self) -> DataFrame:
-        return self.reduce("last")
-
-    def size(self) -> DataFrame:
-        """The row count per group, as one Int64 column ``size``."""
-        return self.agg(Agg("count", None, "size"))
-
-    # The group-wise transforms (cumsum, shift, rank, head, ...): the engine's
-    # GroupBy::transform (dftu_dataframe_group_transform), one value per input
-    # row in input order; the lazy group-by builds the same plan.
-    def _transform(
-        self, kind: str, n: int = 0, method: str = "average", ascending: bool = True
-    ) -> DataFrame:
-        return _ext.DataFrame._group_transform(
-            self._batch, self._keys, kind, int(n), method, bool(ascending)
-        )
-
-    def cumsum(self) -> DataFrame:
-        return self._transform("cumsum")
-
-    def cummax(self) -> DataFrame:
-        return self._transform("cummax")
-
-    def cummin(self) -> DataFrame:
-        return self._transform("cummin")
-
-    def cumcount(self) -> DataFrame:
-        return self._transform("cumcount")
-
-    def shift(self, periods: int = 1) -> DataFrame:
-        return self._transform("shift", periods)
-
-    def diff(self) -> DataFrame:
-        return self._transform("diff")
-
-    def pct_change(self) -> DataFrame:
-        return self._transform("pct_change")
-
-    def rank(self, method: str = "average", ascending: bool = True) -> DataFrame:
-        return self._transform("rank", 0, method, ascending)
-
-    def ngroup(self) -> DataFrame:
-        return self._transform("ngroup")
-
-    def head(self, n: int = 5) -> DataFrame:
-        return self._transform("head", n)
-
-    def tail(self, n: int = 5) -> DataFrame:
-        return self._transform("tail", n)
-
-    def nth(self, n: "Union[int, Sequence[int]]") -> DataFrame:
-        """The ``n``-th row of each group (0-based; negative from the end), or
-        of each position in a list, in input order."""
-        if isinstance(n, int):
-            return self._transform("nth", n)
-        return self.take(n)
-
-    def cumprod(self) -> DataFrame:
-        """Each numeric column's running product within its group (Float64)."""
-        return self._transform("cumprod")
-
-    def prod(self) -> DataFrame:
-        return self.reduce("prod")
-
-    def median(self) -> DataFrame:
-        """The exact median of each numeric column per group (pandas
-        ``GroupBy.median``): the plan of :func:`lazyframe.group_quantile`
-        over this frame, collected."""
-        return self.quantile(0.5)
-
-    def quantile(self, q: float = 0.5, interpolation: str = "linear") -> DataFrame:
-        """The exact ``q`` quantile of each numeric column per group; the
-        interpolation (``linear``, ``nearest``, ``lower``, ``higher`` or
-        ``midpoint``) is linear by default (pandas ``GroupBy.quantile``)."""
-        from .lazyframe import group_quantile
-
-        frame = self._frame()
-        columns = self._value_columns()
-        if frame.num_rows == 0:
-            _check_quantile(q, interpolation)
-            picked = frame[self._keys + columns]
-            return picked.astype({c: "float64" for c in columns})
-        out = group_quantile(frame.lazy(), self._keys, columns, float(q), interpolation).collect()
-        return self._sorted(out)
-
-    def ffill(self) -> DataFrame:
-        """Each non-key column's nulls filled from the nearest present value
-        before them within the group (pandas ``GroupBy.ffill``); ``bfill``
-        from after."""
-        return self._transform("ffill")
-
-    def bfill(self) -> DataFrame:
-        return self._transform("bfill")
-
-    def rolling(self, window: int) -> "_GroupRolling":
-        """A trailing window of ``window`` rows within each group (pandas
-        ``GroupBy.rolling``): ``.sum() .mean() .min() .max()`` are one engine
-        transform each, null until the window holds ``window`` present values;
-        ``.var() .std() .median() .quantile(q)`` run the Series rolling kernel
-        over the group-sorted frame. One value per input row, in input
-        order."""
-        return _GroupRolling(self, int(window))
-
-    def expanding(self) -> "_GroupSeriesWindow":
-        """The expanding window within each group (pandas
-        ``GroupBy.expanding``): ``.sum() .mean() .min() .max() .count() .var()
-        .std()``, the Series kernel per group, one value per input row in
-        input order."""
-        return _GroupSeriesWindow(self, lambda s: s.expanding())
-
-    def ewm(
-        self,
-        alpha: Optional[float] = None,
-        *,
-        span: Optional[float] = None,
-        com: Optional[float] = None,
-        halflife: Optional[float] = None,
-    ) -> "_GroupSeriesWindow":
-        """The exponentially weighted window within each group (pandas
-        ``GroupBy.ewm``): ``.mean() .std()``, the Series kernel per group."""
-        a = _ext._ewm_alpha(alpha, span=span, com=com, halflife=halflife)
-        return _GroupSeriesWindow(self, lambda s: s.ewm(a))
-
-    def corr(self) -> DataFrame:
-        """Per group, the Pearson correlation of every numeric column pair
-        (pandas ``GroupBy.corr``, long form): the keys, ``a``, ``b`` and
-        ``value``, one ``corr`` aggregate per pair."""
-        return self._pairwise("corr")
-
-    def cov(self) -> DataFrame:
-        """Per group, the sample covariance of every numeric column pair
-        (pandas ``GroupBy.cov``, long form as :meth:`corr`)."""
-        return self._pairwise("covar_samp")
-
-    def _pairwise(self, agg: str) -> DataFrame:
-        cols = self._value_columns()
-        specs = [Agg(agg, _Col(b), f"__dftu_{a}__{b}__", by=_Col(a)) for a in cols for b in cols]
-        wide = self.agg(*specs)
-        parts: List[DataFrame] = []
-        for a in cols:
-            for b in cols:
-                one = wide.select(*self._keys, f"__dftu_{a}__{b}__").rename(
-                    {f"__dftu_{a}__{b}__": "value"}
-                )
-                n = len(one)
-                one = one.with_columns(a=Series.from_list([a] * n), b=Series.from_list([b] * n))
-                parts.append(one.select(*self._keys, "a", "b", "value"))
-        out = parts[0].concat(*parts[1:]) if len(parts) > 1 else parts[0]
-        return out.sort_by_multi(self._keys + ["a", "b"]) if self._keys else out
-
-    def take(self, indices: Sequence[int]) -> DataFrame:
-        """The rows at ``indices`` within each group (0-based; negative from
-        the end), in input order (pandas ``GroupBy.take``)."""
-        frame = self._frame()
-        row = "__dftu_group_row__"
-        indexed = frame.with_row_index(row)
-        picked = [GroupBy(indexed, self._keys).nth(int(i)) for i in indices]
-        if not picked:
-            return frame.head(0)
-        out = picked[0].concat(*picked[1:]) if len(picked) > 1 else picked[0]
-        return out.unique(row).sort_by(row).select(*frame.columns)
-
-    def sample(self, n: int, seed: int = 0, *, random_state: Optional[int] = None) -> DataFrame:
-        """A deterministic sample of ``n`` rows per group (fewer for a smaller
-        group), in input order: the rows whose salted row hash ranks lowest
-        within the group (pandas ``GroupBy.sample``; ``random_state`` is the
-        pandas spelling of ``seed``)."""
-        if random_state is not None:
-            seed = random_state
-        frame = self._frame()
-        row, key = "__dftu_group_row__", "__dftu_hash__"
-        indexed = frame.with_row_index(row)
-        hashed = indexed.with_column(key, (_Col(row) + int(seed)).mix64().apply(indexed))
-        ordered = hashed.sort_by_multi(self._keys + [key])
-        picked = GroupBy(ordered, self._keys).head(int(n))
-        return picked.sort_by(row).select(*frame.columns)
-
-    def resample(
-        self, rule: "Union[int, str]", on: Optional[str] = None, unit: str = "us"
-    ) -> "_GroupResample":
-        """Tumbling time windows of ``rule`` within each group (pandas
-        ``GroupBy.resample``): the time column (the index column or ``on``)
-        floored to its bucket joins the keys, and the aggregate family
-        (``.sum()``, ``.agg(...)``, ``.size()``, ...) is one ``group_by`` over
-        keys + bucket, rows by key then time."""
-        from .dataframe import _single_index
-        from .indexing import rule_to_units
-        from .series import _DtAccessor
-
-        frame = self._frame()
-        time = on if on is not None else _single_index(frame._index, "resample")
-        if time not in frame:
-            raise KeyError(f"resample: no column named {time!r}")
-        if time in self._keys:
-            raise ValueError(f"resample: {time!r} is a group key")
-        dt = _DtAccessor(self._col(frame, time), unit if unit != "us" else None)
-        bucket = dt.floor(rule_to_units(rule, dt._unit))
-        grouped = GroupBy(frame.with_column(time, bucket), self._keys + [time])
-        return _GroupResample(grouped, self._keys + [time])
-
-    # -- the rest of the pandas GroupBy surface, as compositions of group_by --
-    def _frame(self) -> DataFrame:
-        return self._batch
-
-    def _value_columns(self, agg: str = "sum") -> List[str]:
-        return [s.split(":")[1] for s in _reduce_specs(self._batch, agg, self._keys)]
-
-    @staticmethod
-    def _col(frame: DataFrame, name: str) -> Series:
-        return _ext.DataFrame.__getitem__(frame, name)
-
-    @property
-    def ngroups(self) -> int:
-        return len(self.size())
-
-    def get_group(self, key: object) -> DataFrame:
-        """The rows of one group, by its key value (a tuple for several
-        keys), in input order."""
-        if not self._keys:
-            raise ValueError("get_group: the group-by has no keys")
-        out = self._frame().set_index(self._keys).loc[key, :]
-        assert isinstance(out, DataFrame)
-        return out
-
-    @property
-    def groups(self) -> Dict[object, List[int]]:
-        """``{key: [row positions]}`` (``indices`` likewise)."""
-        frame = self._frame()
-        if not self._keys:
-            return {(): list(range(len(frame)))}
-        cols = [self._col(frame, k).to_list() for k in self._keys]
-        out: Dict[object, List[int]] = {}
-        for i in range(len(frame)):
-            label = cols[0][i] if len(cols) == 1 else tuple(c[i] for c in cols)
-            out.setdefault(label, []).append(i)
-        return out
-
-    indices = groups
-
-    def pipe(self, func: Callable[..., object], *args: object, **kwargs: object) -> object:
-        return func(self, *args, **kwargs)
-
-    def nunique(self) -> DataFrame:
-        """Distinct present values per group and non-key column, exact: a
-        group-by over the keys plus the column, then a count per key."""
-        frame = self._frame()
-        out: Optional[DataFrame] = None
-        for c in [n for n in frame.columns if n not in self._keys]:
-            present = frame.filter(self._col(frame, c).notna())
-            pairs = GroupBy(present, self._keys + [c]).size()
-            counts = GroupBy(pairs, self._keys).agg(Agg("count", None, c))
-            out = counts if out is None else out.join(counts, on=self._keys)
-        if out is None:
-            raise ValueError("nunique: no columns besides the keys")
-        return self._sorted(out)
-
-    def sem(self) -> DataFrame:
-        """Standard error of the mean per group: ``std / sqrt(count)``."""
-        cols = self._value_columns("std")
-        specs = [Agg("std", _Col(c), c) for c in cols]
-        specs += [Agg("count_valid", _Col(c), f"__dftu_n_{c}__") for c in cols]
-        out = self.agg(*specs)
-        for c in cols:
-            n = self._col(out, f"__dftu_n_{c}__").astype("float64").sqrt()
-            out = out.with_column(c, self._col(out, c) / n)
-        return out.select(*(self._keys + cols))
-
-    def any(self) -> DataFrame:
-        """Per group and numeric column: whether any value is non-zero
-        (``all`` likewise)."""
-        return self._truth("max")
-
-    def all(self) -> DataFrame:
-        return self._truth("min")
-
-    def _truth(self, agg: str) -> DataFrame:
-        frame = self._frame()
-        cols = self._value_columns("sum")
-        for c in cols:
-            nonzero = self._col(frame, c).astype("float64").ne(0).astype("int64")
-            frame = frame.with_column(c, nonzero)
-        out = GroupBy(frame, self._keys).reduce(agg)
-        for c in cols:
-            out = out.with_column(c, self._col(out, c).ne(0))
-        return self._sorted(out)
-
-    def idxmax(self) -> DataFrame:
-        """Per group and numeric column: the row position of the maximum
-        (``idxmin`` likewise); the index label when one index column is set."""
-        return self._arg("argmax")
-
-    def idxmin(self) -> DataFrame:
-        return self._arg("argmin")
-
-    def _arg(self, op: str) -> DataFrame:
-        frame = self._frame()
-        label = "__dftu_pos__"
-        index = getattr(frame, "_index", None)
-        if index is not None and len(index) == 1:
-            label = index[0]
-        else:
-            frame = frame.with_row_index(label)
-        cols = self._value_columns("sum")
-        specs = [Agg(op, _Col(label), c, by=_Col(c)) for c in cols]
-        out = GroupBy(frame, self._keys).agg(*specs)
-        # The arg aggregates report the label's repr (a string); a numeric
-        # label is parsed back to its type.
-        dtype = self._col(frame, label).dtype
-        if dtype != DType.STRING:
-            for c in cols:
-                out = out.with_column(c, self._col(out, c).astype(dtype))
-        return self._sorted(out)
-
-    def ohlc(self) -> DataFrame:
-        """Per group and numeric column: ``<c>_open`` / ``_high`` / ``_low`` /
-        ``_close`` (first, max, min, last)."""
-        specs = []
-        for c in self._value_columns("sum"):
-            specs += [
-                Agg("first", _Col(c), f"{c}_open"),
-                Agg("max", _Col(c), f"{c}_high"),
-                Agg("min", _Col(c), f"{c}_low"),
-                Agg("last", _Col(c), f"{c}_close"),
-            ]
-        return self.agg(*specs)
-
-    def describe(self) -> DataFrame:
-        """Per group and numeric column: ``<c>_count`` / ``_mean`` / ``_std``
-        / ``_min`` / ``_25%`` / ``_50%`` / ``_75%`` / ``_max`` (the quantiles
-        exact, through :meth:`quantile`)."""
-        specs = []
-        cols = self._value_columns("sum")
-        for c in cols:
-            for name in ("count_valid", "mean", "std", "min", "max"):
-                out = f"{c}_{'count' if name == 'count_valid' else name}"
-                specs.append(Agg(name, _Col(c), out))
-        out = self.agg(*specs)
-        for q in (0.25, 0.5, 0.75):
-            quant = self.quantile(q)
-            names = {c: f"{c}_{int(q * 100)}%" for c in cols}
-            if self._keys:
-                out = out.join(quant.rename(names), on=self._keys)
-            else:
-                out = out.with_columns(**{names[c]: self._col(quant, c) for c in cols})
-        order = [*self._keys]
-        for c in cols:
-            order += [
-                f"{c}_{s}" for s in ("count", "mean", "std", "min", "25%", "50%", "75%", "max")
-            ]
-        return self._sorted(out.select(*order))
-
-    def value_counts(self, ascending: bool = False) -> DataFrame:
-        """Distinct rows of the non-key columns within each group with their
-        count, most frequent first."""
-        frame = self._frame()
-        cols = [c for c in frame.columns if c not in self._keys]
-        for c in cols:  # pandas drops a row with a null value (dropna=True)
-            frame = frame.filter(self._col(frame, c).notna())
-        out = GroupBy(frame, self._keys + cols).size().rename({"size": "count"})
-        return out.sort_values(
-            self._keys + ["count"], ascending=[True] * len(self._keys) + [ascending]
-        )
-
-    def transform(self, func: str) -> DataFrame:
-        """A group aggregate (``"mean"``, ``"sum"``, ...) broadcast back to
-        every row of its group, one column per numeric non-key column, rows
-        in input order."""
-        frame = self._frame()
-        agg = _PANDAS_AGG_NAMES.get(func, func)
-        cols = self._value_columns(agg)
-        row = "__dftu_row__"
-        indexed = frame.with_row_index(row)
-        specs = [Agg(agg, _Col(c), f"__dftu_t_{c}__") for c in cols]
-        grouped = GroupBy(indexed, self._keys).agg(*specs)
-        if not self._keys:
-            out = indexed
-            for c in cols:
-                v = self._col(grouped, f"__dftu_t_{c}__")[0]
-                assert isinstance(v, (int, float))
-                broadcast = self._col(frame, c).full_like(v)
-                out = out.with_column(c, broadcast)
-            return out.select(*cols)
-        joined = indexed.join(grouped, on=self._keys).sort_values(row)
-        for c in cols:
-            joined = joined.with_column(c, self._col(joined, f"__dftu_t_{c}__"))
-        return joined.select(*cols)
-
-    # -- user functions: traced into the engine, else run per group -----------
-    def apply(self, func: "Callable[[Any], object]") -> "Union[DataFrame, Series]":
-        """``func`` over each group (pandas ``GroupBy.apply``). It is first
-        run once on a symbolic group whose columns are expressions, so a body
-        like ``lambda g: g["v"].sum() / g["n"].sum()`` lowers to one group-by
-        (a frame of the keys and ``value``), and ``lambda g: g["v"] -
-        g["v"].mean()`` to a group-by joined back on the rows (a Series in
-        input order). A body the trace cannot follow runs in Python per group
-        with a warning: a scalar result per group gives the keys + ``value``
-        frame, a Series or frame result the concatenation."""
-        traced = _trace_group(func, self._frame().columns)
-        if traced is not None:
-            return self._lower_apply(traced)
-        return self._apply_python(func)
-
-    def filter(self, func: "Callable[[Any], object]") -> DataFrame:
-        """The rows of the groups for which ``func`` holds (pandas
-        ``GroupBy.filter``): ``lambda g: g["v"].sum() > 10`` lowers to one
-        group-by and a join; a body the trace cannot follow runs in Python per
-        group with a warning. Rows come back in input order."""
-        traced = _trace_group(func, self._frame().columns, "GroupBy.filter")
-        if traced is not None:
-            return self._lower_filter(traced)
-        return self._filter_python(func)
-
-    def _group_values(self, expr: Expr) -> "Tuple[DataFrame, Expr]":
-        """The per-group frame holding every aggregate leaf of ``expr`` (keys
-        plus ``__dftu_agg_<i>__`` columns) and the expression rewritten over
-        it."""
-        rewritten, aggs = split_aggs(expr)
-        if not aggs:
-            raise TypeError("the group function must reduce (sum, mean, ...) at least once")
-        return self.agg(*aggs), rewritten
-
-    def _lower_apply(self, traced: object) -> "Union[DataFrame, Series]":
-        frame = self._frame()
-        if isinstance(traced, Agg):
-            return self.agg(traced.alias("value"))
-        if not isinstance(traced, Expr):
-            raise TypeError(
-                f"the group function returned {type(traced).__name__}; expected an "
-                "aggregate or an expression over the group"
-            )
-        if not has_agg_leaf(traced):
-            # A row expression with no aggregate: one value per row.
-            return traced.apply(frame)
-        grouped, rewritten = self._group_values(traced)
-        row_cols = [c for c in _collect_columns(traced) if c in frame]
-        if not row_cols:
-            value = rewritten.apply(grouped)
-            return grouped.with_column("value", value).select(*(self._keys + ["value"]))
-        # Row leaves too: the aggregates broadcast back onto the rows.
-        row = "__dftu_row__"
-        indexed = frame.with_row_index(row)
-        joined = indexed.join(grouped, on=self._keys).sort_values(row) if self._keys else indexed
-        if not self._keys:
-            for name in grouped.columns:
-                v = self._col(grouped, name)[0]
-                assert isinstance(v, (int, float))
-                joined = joined.with_column(name, self._col(frame, row_cols[0]).full_like(v))
-        return rewritten.apply(joined)
-
-    def _lower_filter(self, traced: object) -> DataFrame:
-        frame = self._frame()
-        if isinstance(traced, Agg):
-            traced = _AggLeaf(traced) != 0
-        if not isinstance(traced, Expr) or not has_agg_leaf(traced):
-            raise TypeError("filter: the group function must return a condition over aggregates")
-        if [c for c in _collect_columns(traced) if c in frame]:
-            raise TypeError("filter: the group function must reduce every column it reads")
-        grouped, rewritten = self._group_values(traced)
-        keep = grouped.filter(rewritten.apply(grouped))
-        if not self._keys:
-            return frame if len(keep) else frame.head(0)
-        row = "__dftu_row__"
-        indexed = frame.with_row_index(row)
-        out = indexed.join(keep.select(*self._keys), on=self._keys).sort_values(row)
-        return out.select(*frame.columns)
-
-    def _groups_in_order(self) -> "List[Tuple[object, List[int]]]":
-        return list(self.groups.items())
-
-    def _apply_python(self, func: "Callable[[Any], object]") -> "Union[DataFrame, Series]":
-        frame = self._frame()
-        results: List[Tuple[object, object]] = []
-        for label, rows in self._groups_in_order():
-            results.append((label, func(frame.take(rows))))
-        if not results:
-            return frame.head(0)
-        first = results[0][1]
-        if isinstance(first, DataFrame):
-            out = results[0][1]
-            assert isinstance(out, DataFrame)
-            for _, r in results[1:]:
-                assert isinstance(r, DataFrame)
-                out = out.concat(r)
-            return out
-        if isinstance(first, Series):
-            values: List[object] = []
-            for _, r in results:
-                assert isinstance(r, Series)
-                values.extend(r.to_list())
-            return Series.from_list(values)
-        keys: Dict[str, List[object]] = {k: [] for k in self._keys}
-        for label, _ in results:
-            parts = label if isinstance(label, tuple) else (label,)
-            for k, v in zip(self._keys, parts):
-                keys[k].append(v)
-        return DataFrame({**keys, "value": [r for _, r in results]})
-
-    def _filter_python(self, func: "Callable[[Any], object]") -> DataFrame:
-        frame = self._frame()
-        keep: List[int] = []
-        for _, rows in self._groups_in_order():
-            if func(frame.take(rows)):
-                keep.extend(rows)
-        return frame.take(sorted(keep))
-
-
-class _GroupRolling:
-    """``GroupBy.rolling(window)``: the pandas window object over a group-by,
-    eager or lazy."""
-
-    __slots__ = ("_grouped", "_window")
-
-    def __init__(self, grouped: "Union[GroupBy, LazyGroupBy]", window: int) -> None:
-        if window < 1:
-            raise ValueError("rolling: the window must be at least 1")
-        self._grouped = grouped
-        self._window = window
-
-    def sum(self) -> "Union[DataFrame, LazyFrame]":
-        return self._grouped._transform("rolling_sum", self._window)
-
-    def mean(self) -> "Union[DataFrame, LazyFrame]":
-        return self._grouped._transform("rolling_mean", self._window)
-
-    def min(self) -> "Union[DataFrame, LazyFrame]":
-        return self._grouped._transform("rolling_min", self._window)
-
-    def max(self) -> "Union[DataFrame, LazyFrame]":
-        return self._grouped._transform("rolling_max", self._window)
-
-    def var(self) -> DataFrame:
-        return self._series_kernel(lambda s: s.rolling_var(self._window))
-
-    def std(self) -> DataFrame:
-        return self._series_kernel(lambda s: s.rolling_std(self._window))
-
-    def median(self) -> DataFrame:
-        return self._series_kernel(lambda s: s.rolling_median(self._window))
-
-    def quantile(self, q: float) -> DataFrame:
-        return self._series_kernel(lambda s: s.rolling_quantile(self._window, q))
-
-    def _series_kernel(self, kernel: "Callable[[Series], Series]") -> DataFrame:
-        # The Series rolling kernel over the frame sorted by group (stable, so
-        # each group keeps its input order), then the rows back in input order.
-        if not isinstance(self._grouped, GroupBy):
-            raise TypeError("rolling: var / std / median / quantile need an eager group-by")
-        g = self._grouped
-        frame = g._frame()
-        cols = g._value_columns()
-        row = "__dftu_group_row__"
-        ordered = frame.with_row_index(row).sort_by_multi(g._keys + [row])
-        # The engine's rolling sum is null exactly where the window is short
-        # of present values, so it masks the kernel's value.
-        mask = GroupBy(ordered, g._keys)._transform("rolling_sum", self._window)
-        out = ordered
-        for c in cols:
-            m = g._col(mask, c)
-            out = out.with_column(c, kernel(g._col(ordered, c)) + (m - m))
-        return out.sort_by(row).select(*cols)
-
-
-class _GroupSeriesWindow:
-    """``GroupBy.expanding()`` / ``ewm(alpha)``: the Series window per group
-    (a stateful scan, so each group runs on its own rows), the values back
-    in input order."""
-
-    __slots__ = ("_grouped", "_window")
-
-    def __init__(self, grouped: GroupBy, window: "Callable[[Series], object]") -> None:
-        self._grouped = grouped
-        self._window = window
-
-    def _reduce(self, name: str) -> DataFrame:
-        g = self._grouped
-        frame = g._frame()
-        cols = g._value_columns()
-        row = "__dftu_group_row__"
-        parts: List[DataFrame] = []
-        for _, rows in g._groups_in_order():
-            part = frame.take(rows).with_column(row, Series.from_list(rows))
-            for c in cols:
-                part = part.with_column(c, getattr(self._window(g._col(part, c)), name)())
-            parts.append(part.select(row, *cols))
-        if not parts:
-            return frame.select(*cols)
-        out = parts[0].concat(*parts[1:]) if len(parts) > 1 else parts[0]
-        return out.sort_by(row).select(*cols)
-
-    def sum(self) -> DataFrame:
-        return self._reduce("sum")
-
-    def mean(self) -> DataFrame:
-        return self._reduce("mean")
-
-    def min(self) -> DataFrame:
-        return self._reduce("min")
-
-    def max(self) -> DataFrame:
-        return self._reduce("max")
-
-    def count(self) -> DataFrame:
-        return self._reduce("count")
-
-    def var(self) -> DataFrame:
-        return self._reduce("var")
-
-    def std(self) -> DataFrame:
-        return self._reduce("std")
-
-
-class _GroupResample:
-    """``GroupBy.resample(rule)``: the group-by over keys + time bucket, every
-    result sorted by key then bucket and indexed by them (the pandas
-    ``(key, time)`` index)."""
-
-    __slots__ = ("_grouped", "_order")
-
-    def __init__(self, grouped: "Union[GroupBy, LazyGroupBy]", order: List[str]) -> None:
-        self._grouped = grouped
-        self._order = order
-
-    def __getattr__(self, name: str) -> object:
-        attr = getattr(self._grouped, name)
-        if not callable(attr):
-            return attr
-
-        def call(*args: object, **kwargs: object) -> object:
-            out = attr(*args, **kwargs)
-            names = out.columns if hasattr(out, "columns") else None
-            if names is not None and all(c in names for c in self._order):
-                out = out.sort_by_multi(self._order)
-                out._index = list(self._order)
-            return out
-
-        return call
-
-
-class _MissingColumn(KeyError):
-    """A column the group function reads that the frame lacks: an error in
-    the function, not a body the trace cannot follow."""
-
-
-class _GroupTrace:
-    """The symbolic group a traced group function runs on: a column read is
-    the column expression, so reductions become aggregates."""
-
-    __slots__ = ("_columns",)
-
-    def __init__(self, columns: Sequence[str]) -> None:
-        self._columns = list(columns)
-
-    def __getitem__(self, name: str) -> Expr:
-        if name not in self._columns:
-            raise _MissingColumn(f"no column named {name!r}")
-        return _Col(name)
-
-    def __getattr__(self, name: str) -> Expr:
-        if name.startswith("_") or name not in self._columns:
-            raise AttributeError(name)
-        return _Col(name)
-
-    @property
-    def columns(self) -> List[str]:
-        return list(self._columns)
-
-    def size(self) -> Agg:
-        return Agg("count", None)
-
-    def __len__(self) -> int:
-        raise TypeError("len(group) is a Python value; use group.size() for the aggregate")
-
-
-def _trace_group(
-    func: "Callable[[Any], object]", columns: Sequence[str], what: str = "GroupBy.apply"
-) -> Optional[object]:
-    """Run ``func`` on a symbolic group; the aggregate / expression it built,
-    or None (with the fallback warning logged) when the body cannot be
-    followed."""
-    from ._apply import _trace_errors, _uses_identity_test, _warn_fallback
-
-    if _uses_identity_test(func):
-        _warn_fallback(what, func, "`is` cannot be traced")
-        return None
-    try:
-        traced = func(_GroupTrace(columns))
-    except _MissingColumn:
-        raise
-    except _trace_errors() as e:
-        _warn_fallback(what, func, f"{type(e).__name__}: {e}")
-        return None
-    if not isinstance(traced, (Agg, Expr)):
-        _warn_fallback(
-            what,
-            func,
-            f"returned {type(traced).__name__}, not an aggregate or expression",
-        )
-        return None
-    return traced
-
-
-def _collect_columns(expr: Expr) -> List[str]:
+def collect_columns(expr: Expr) -> List[str]:
     seen: List[str] = []
 
     def walk(e: Expr) -> None:
-        if isinstance(e, _AggLeaf):
+        if isinstance(e, AggLeaf):
             return
         if isinstance(e, _AnyCol):
-            raise _ext.DFTUtilsValueError(
+            raise DFTUtilsValueError(
                 f"{e.name} filters in the trace scan (TraceViewer.duql); "
                 "apply cannot evaluate any()"
             )
-        if isinstance(e, _Col):
+        if isinstance(e, Col):
             if e.name not in seen:
                 seen.append(e.name)
-        elif isinstance(e, _Bin):
+        elif isinstance(e, Bin):
             walk(e.left)
             walk(e.right)
-        elif isinstance(e, _STRING_NODES + (_Prim, _Unary, _Clip, _Cast, _Fillna, _IsNull)):
+        elif isinstance(e, STRING_NODES + (Prim, Unary, Clip, Cast, Fillna, IsNull)):
             walk(e.arg)
             if isinstance(e, _StrFn) and e.other is not None:
                 walk(e.other)
@@ -4310,22 +3060,22 @@ def _collect_columns(expr: Expr) -> List[str]:
             elif isinstance(e, _StrReplaceCol):
                 walk(e.old)
                 walk(e.new)
-        elif isinstance(e, _Cmp):
+        elif isinstance(e, Cmp):
             walk(e.left)
             if isinstance(e.rhs, Expr):
                 walk(e.rhs)
-        elif isinstance(e, _Logical):
+        elif isinstance(e, Logical):
             walk(e.left)
             if e.right is not None:
                 walk(e.right)
-        elif isinstance(e, _Select):
+        elif isinstance(e, Select):
             walk(e.cond)
             walk(e.a)
             walk(e.b)
         elif isinstance(e, _Udf):
             for arg in e.args:
                 walk(arg)
-        elif isinstance(e, _ColumnOpNode):
+        elif isinstance(e, ColumnOpNode):
             walk(e.arg)
             if e.spec.column2 is not None:
                 walk(e.spec.column2)
@@ -4340,7 +3090,7 @@ def _collect_columns(expr: Expr) -> List[str]:
 
 
 # Every node with a single `arg` operand that the engine's string kernels run.
-_STRING_NODES = (
+STRING_NODES = (
     _StrPred,
     _StrPredCol,
     _StrReplaceCol,
@@ -4356,117 +3106,36 @@ _STRING_NODES = (
 )
 
 
-def _is_float(expr: Expr, cols: Dict[str, "Series"]) -> bool:
-    if isinstance(expr, _Lit):
-        return isinstance(expr.value, float)
-    if isinstance(expr, _Col):
-        return cols[expr.name].type in _FLOAT_TYPES
-    if isinstance(expr, _Bin):
-        if expr.op == "/":
-            return True
-        return _is_float(expr.left, cols) or _is_float(expr.right, cols)
-    if isinstance(expr, _Unary):
-        # log/sqrt/exp widen to float; is_* yield bool; the rest keep the input.
-        if expr.name in _UNARY_BOOL:
-            return False
-        return expr.name in _UNARY_FLOAT or _is_float(expr.arg, cols)
-    if isinstance(expr, (_Clip, _Fillna)):
-        return _is_float(expr.arg, cols)
-    if isinstance(expr, _Cast):
-        return expr.type_id in _FLOAT_TYPES
-    if isinstance(expr, _Select):
-        return _is_float(expr.a, cols) or _is_float(expr.b, cols)
-    if isinstance(expr, _STRING_NODES + (_Prim, _Cmp, _Logical, _IsNull)):
-        return False  # primitives -> int64; comparisons/logical/string -> not float
-    raise TypeError(f"unsupported column expression node {type(expr).__name__}")
+def has_column_op(expr: "Expr") -> bool:
+    if isinstance(expr, ColumnOpNode):
+        return True
+    return any(has_column_op(v) for v in vars(expr).values() if isinstance(v, Expr))
 
 
-# Discriminated result (isinstance-narrowable): a scalar or a native _Series.
-class _ScalarVal(NamedTuple):
-    value: _Scalar
+def split_column_ops(expr: "Expr") -> "Tuple[Expr, List[Tuple[str, Expr, ColumnOp]]]":
+    """The expression with every column op replaced by a column reference
+    ``__dftu_cop_<i>__``, and the ops so named in evaluation order (an op's
+    argument has its own ops replaced first, so each entry's argument is a
+    plain expression over columns, the earlier temporaries included)."""
+    ops: List[Tuple[str, Expr, ColumnOp]] = []
 
+    def rewrite(e: Expr) -> Expr:
+        if isinstance(e, (Col, Lit)):
+            return e
+        if isinstance(e, ColumnOpNode):
+            arg = rewrite(e.arg)
+            spec = e.spec
+            column2 = spec.column2
+            if column2 is not None:
+                spec = copy.copy(spec)
+                spec.column2 = rewrite(column2)
+            name = f"__dftu_cop_{len(ops)}__"
+            ops.append((name, arg, spec))
+            return Col(name)
+        node = copy.copy(e)
+        for key, value in list(vars(node).items()):
+            if isinstance(value, Expr):
+                setattr(node, key, rewrite(value))
+        return node
 
-class _ColVal(NamedTuple):
-    value: "Series"
-
-
-_EvalResult = Union[_ScalarVal, _ColVal]
-
-
-def _need_col(r: _EvalResult, message: str) -> "Series":
-    if isinstance(r, _ColVal):
-        return r.value
-    raise TypeError(message)
-
-
-def _eval(expr: Expr, cols: Dict[str, "Series"], out_float: bool) -> _EvalResult:
-    if isinstance(expr, _Lit):
-        return _ScalarVal(float(expr.value) if out_float else int(expr.value))
-    if isinstance(expr, _Col):
-        vc = cols[expr.name]
-        if out_float and vc.type not in _FLOAT_TYPES:
-            vc = vc.cast(_FLOAT64)
-        return _ColVal(vc)
-    if isinstance(expr, _Bin):
-        left = _eval(expr.left, cols, out_float)
-        right = _eval(expr.right, cols, out_float)
-        if isinstance(left, _ScalarVal) and isinstance(right, _ScalarVal):
-            return _ScalarVal(_fold(expr.op, left.value, right.value))
-        return _ColVal(_binop(expr.op, left, right))
-    if isinstance(expr, _Prim):
-        # Primitives run on a 64-bit integer column; evaluate the argument as an
-        # int expression and cast if it is not already i64/u64.
-        v = _need_col(
-            _eval(expr.arg, cols, out_float=False),
-            f"columnar {expr.name}() needs a column argument",
-        )
-        if v.type not in (_INT64, _UINT64):
-            v = v.cast(_INT64)
-        return _ColVal(v.prim(_PRIM_CODES[expr.name]))
-    if isinstance(expr, _Cmp):
-        if isinstance(expr.rhs, Expr):
-            raise TypeError("a comparison of two expressions needs at least one column")
-        if isinstance(expr.rhs, bool) or not isinstance(expr.rhs, (int, float)):
-            raise TypeError(
-                "in-memory comparison needs a numeric value; a string/bool "
-                "comparison is filter-only (push it down with .filter()/.duql())"
-            )
-        v = _need_col(
-            _eval(expr.left, cols, out_float=_is_float(expr.left, cols)),
-            "columnar comparison needs a column on the left",
-        )
-        return _ColVal(_ext.Series.compare(v, _CMP_CODES[expr.op], expr.rhs))
-    if isinstance(expr, _Logical):
-        lv = _need_col(_eval(expr.left, cols, out_float=False), "columnar logical needs a column")
-        if expr.op == "not" or expr.right is None:
-            return _ColVal(lv.logical_not())
-        rv = _need_col(_eval(expr.right, cols, out_float=False), "columnar logical needs a column")
-        return _ColVal(lv.logical(_LOGICAL_CODES[expr.op], rv))
-    raise TypeError(f"unsupported column expression node {type(expr).__name__}")
-
-
-def _fold(op: str, a: _Scalar, b: _Scalar) -> _Scalar:
-    if op == "+":
-        return a + b
-    if op == "-":
-        return a - b
-    if op == "*":
-        return a * b
-    return a / b
-
-
-_COL_OP = {"+": "add", "-": "sub", "*": "mul", "/": "div"}
-_SCALAR_OP = {"+": "add_scalar", "-": "sub_scalar", "*": "mul_scalar", "/": "div_scalar"}
-
-
-def _binop(op: str, left: _EvalResult, right: _EvalResult) -> "Series":
-    if isinstance(left, _ColVal) and isinstance(right, _ColVal):
-        return getattr(_ext.Series, _COL_OP[op])(left.value, right.value)
-    if isinstance(left, _ColVal):  # col op scalar
-        return getattr(_ext.Series, _SCALAR_OP[op])(left.value, right.value)
-    if isinstance(right, _ColVal) and op in ("+", "*"):  # scalar op col (commutes)
-        return getattr(_ext.Series, _SCALAR_OP[op])(right.value, left.value)
-    raise NotImplementedError(f"scalar {op} column needs a vec kernel (not yet available)")
-
-
-_install_aliases("GroupBy", GroupBy)
+    return rewrite(expr), ops

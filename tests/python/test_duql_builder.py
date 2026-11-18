@@ -8,7 +8,7 @@ import re
 import pytest
 
 import dftracer.utils as dftu
-from dftracer.utils.columnar import F
+from dftracer.utils import F
 from dftracer.utils.dftracer_utils_ext import duql_canonical
 from dftracer.utils.duql import (
     Pipe,

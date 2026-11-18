@@ -123,7 +123,7 @@ PyObject* run_lazy_op(Fn&& fn) {
     });
 }
 
-// filter(ast) -> LazyFrame. `ast` is the columnar.py post-order Expr AST; the
+// filter(ast) -> LazyFrame. `ast` is the expr.py post-order Expr AST; the
 // engine rebuilds a dataframe::Expr referencing columns by position.
 PyObject* LazyFrame_filter(PyObject* self, PyObject* ast) {
     LazyFrameObject* b = as_native<LazyFrameObject>(self);

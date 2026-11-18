@@ -9,8 +9,7 @@ import pytest
 pa = pytest.importorskip("pyarrow")
 
 import dftracer.utils as dft  # noqa: E402
-from dftracer.utils import TraceViewer  # noqa: E402
-from dftracer.utils.columnar import F  # noqa: E402
+from dftracer.utils import F, TraceViewer  # noqa: E402
 
 from .common import Environment  # noqa: E402
 

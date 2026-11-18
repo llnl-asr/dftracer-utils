@@ -217,64 +217,64 @@ Series.where | needs-token:SERIES | -
 Series.with_timezone | needs-token:STR_ARG | -
 Series.xs | python-semantics | pandas container API on the Series, not an op
 Expr.active | python-semantics | Python logic that does not build one node
-Expr.add | expr-node:_Bin | -
+Expr.add | expr-node:Bin | -
 Expr.alias | expr-node:Named | -
-Expr.and_ | expr-node:_Logical | -
+Expr.and_ | expr-node:Logical | -
 Expr.apply | python-semantics | Python logic that does not build one node
 Expr.approx_quantile | expr-node:Agg | -
 Expr.approx_topk | expr-node:Agg | -
-Expr.arg_sort | expr-node:_ColumnOpNode | -
+Expr.arg_sort | expr-node:ColumnOpNode | -
 Expr.argmax | expr-node:Agg | -
 Expr.argmin | expr-node:Agg | -
-Expr.backward_fill | expr-node:_ColumnOpNode | -
+Expr.backward_fill | expr-node:ColumnOpNode | -
 Expr.bit_or | python-semantics | Python logic that does not build one node
 Expr.bottomk | expr-node:Agg | -
 Expr.busy | python-semantics | Python logic that does not build one node
 Expr.capitalize | expr-node:_StrMap | -
 Expr.casefold | expr-node:_StrMap | -
-Expr.cast | expr-node:_Cast | -
+Expr.cast | expr-node:Cast | -
 Expr.cat | expr-node:_StrFn | -
 Expr.center | expr-node:_StrFn | -
-Expr.clip | expr-node:_Clip | -
+Expr.clip | expr-node:Clip | -
 Expr.concurrency | python-semantics | Python logic that does not build one node
 Expr.contains | expr-node:_IContains | -
 Expr.corr | expr-node:Agg | -
 Expr.count | expr-node:Agg | -
 Expr.covar_pop | expr-node:Agg | -
 Expr.covar_samp | expr-node:Agg | -
-Expr.cum_max | expr-node:_ColumnOpNode | -
-Expr.cum_min | expr-node:_ColumnOpNode | -
-Expr.cum_sum | expr-node:_ColumnOpNode | -
+Expr.cum_max | expr-node:ColumnOpNode | -
+Expr.cum_min | expr-node:ColumnOpNode | -
+Expr.cum_sum | expr-node:ColumnOpNode | -
 Expr.decode | python-semantics | built from other Expr methods (cast)
 Expr.distinct | expr-node:Agg | -
 Expr.dt | python-semantics | Python logic that does not build one node
 Expr.duplicated | python-semantics | built from other Expr methods (is_duplicated)
 Expr.encode | python-semantics | built from other Expr methods (cast)
 Expr.ends_with | expr-node:_StrPred | -
-Expr.eq | expr-node:_Cmp | -
-Expr.ewm_mean | expr-node:_ColumnOpNode | -
-Expr.ewm_std | expr-node:_ColumnOpNode | -
+Expr.eq | expr-node:Cmp | -
+Expr.ewm_mean | expr-node:ColumnOpNode | -
+Expr.ewm_std | expr-node:ColumnOpNode | -
 Expr.extract | expr-node:_StrFn | -
 Expr.fill_null | python-semantics | built from other Expr methods (fillna)
 Expr.find | expr-node:_StrFind | -
 Expr.findall | expr-node:_StrFn | -
 Expr.first | python-semantics | Python logic that does not build one node
 Expr.floordiv | python-semantics | built from other Expr methods (_series_arith)
-Expr.forward_fill | expr-node:_ColumnOpNode | -
+Expr.forward_fill | expr-node:ColumnOpNode | -
 Expr.fullmatch | expr-node:_StrPred | -
-Expr.ge | expr-node:_Cmp | -
+Expr.ge | expr-node:Cmp | -
 Expr.get | expr-node:_StrFn | -
 Expr.get_dummies | python-semantics | Python logic that does not build one node
-Expr.gt | expr-node:_Cmp | -
-Expr.hash | expr-node:_ColumnOpNode | -
+Expr.gt | expr-node:Cmp | -
+Expr.hash | expr-node:ColumnOpNode | -
 Expr.hist | expr-node:Agg | -
 Expr.ilike | expr-node:_ILike | -
 Expr.index | expr-node:_StrFn | -
 Expr.iregex | expr-node:_IRegex | -
 Expr.is_between | python-semantics | Python logic that does not build one node
 Expr.is_in | expr-node:_IsIn | -
-Expr.is_not_null | expr-node:_IsNull | -
-Expr.is_null | expr-node:_IsNull | -
+Expr.is_not_null | expr-node:IsNull | -
+Expr.is_null | expr-node:IsNull | -
 Expr.isalnum | expr-node:_StrFn | -
 Expr.isalpha | expr-node:_StrFn | -
 Expr.isascii | python-semantics | built from other Expr methods (fullmatch)
@@ -288,7 +288,7 @@ Expr.isupper | expr-node:_StrFn | -
 Expr.join | expr-node:_StrFn | -
 Expr.kurt | python-semantics | Python logic that does not build one node
 Expr.last | python-semantics | Python logic that does not build one node
-Expr.le | expr-node:_Cmp | -
+Expr.le | expr-node:Cmp | -
 Expr.len | expr-node:Agg | -
 Expr.len_bytes | expr-node:_StrLen | -
 Expr.len_chars | expr-node:_StrLen | -
@@ -298,24 +298,24 @@ Expr.ljust | python-semantics | built from other Expr methods (pad_end)
 Expr.log10 | python-semantics | Python logic that does not build one node
 Expr.lower | expr-node:_StrMap | -
 Expr.lstrip | expr-node:_StrMap | -
-Expr.lt | expr-node:_Cmp | -
-Expr.mask | expr-node:_Select | -
+Expr.lt | expr-node:Cmp | -
+Expr.mask | expr-node:Select | -
 Expr.match | expr-node:_StrPred | -
 Expr.max | python-semantics | Python logic that does not build one node
 Expr.mean | python-semantics | Python logic that does not build one node
 Expr.median | python-semantics | built from other Expr methods (quantile)
 Expr.min | python-semantics | Python logic that does not build one node
 Expr.mod | python-semantics | built from other Expr methods (_series_arith)
-Expr.mul | expr-node:_Bin | -
+Expr.mul | expr-node:Bin | -
 Expr.n_unique | python-semantics | built from other Expr methods (distinct)
-Expr.ne | expr-node:_Cmp | -
-Expr.neg | expr-node:_Unary | -
+Expr.ne | expr-node:Cmp | -
+Expr.neg | expr-node:Unary | -
 Expr.normalize | expr-node:_StrFn | -
-Expr.not_ | expr-node:_Logical | -
+Expr.not_ | expr-node:Logical | -
 Expr.not_in | expr-node:_IsIn | -
 Expr.null_count | expr-node:Agg | -
-Expr.or_ | expr-node:_Logical | -
-Expr.over | expr-node:_ColumnOpNode | -
+Expr.or_ | expr-node:Logical | -
+Expr.over | expr-node:ColumnOpNode | -
 Expr.pad | python-semantics | built from other Expr methods (pad_end, pad_start)
 Expr.pad_end | expr-node:_StrFn | -
 Expr.pad_start | expr-node:_StrFn | -
@@ -324,7 +324,7 @@ Expr.percentile | expr-node:Agg | -
 Expr.pow | python-semantics | built from other Expr methods (_series_arith)
 Expr.prod | python-semantics | Python logic that does not build one node
 Expr.quantile | expr-node:Agg | -
-Expr.rank | expr-node:_ColumnOpNode | -
+Expr.rank | expr-node:ColumnOpNode | -
 Expr.regex | expr-node:_StrPred | -
 Expr.regex_replace | expr-node:_StrFn | -
 Expr.regr_intercept | expr-node:Agg | -
@@ -340,29 +340,29 @@ Expr.rindex | expr-node:_StrFn | -
 Expr.rjust | python-semantics | built from other Expr methods (pad_start)
 Expr.rolling_max | python-semantics | built from other Expr methods (_rolling)
 Expr.rolling_mean | python-semantics | built from other Expr methods (_rolling)
-Expr.rolling_median | expr-node:_ColumnOpNode | -
+Expr.rolling_median | expr-node:ColumnOpNode | -
 Expr.rolling_min | python-semantics | built from other Expr methods (_rolling)
-Expr.rolling_quantile | expr-node:_ColumnOpNode | -
-Expr.rolling_std | expr-node:_ColumnOpNode | -
+Expr.rolling_quantile | expr-node:ColumnOpNode | -
+Expr.rolling_std | expr-node:ColumnOpNode | -
 Expr.rolling_sum | python-semantics | built from other Expr methods (_rolling)
-Expr.rolling_var | expr-node:_ColumnOpNode | -
+Expr.rolling_var | expr-node:ColumnOpNode | -
 Expr.rpartition | expr-node:_StrFn | -
 Expr.rsplit | expr-node:_StrFn | -
 Expr.rstrip | expr-node:_StrMap | -
 Expr.sample | expr-node:Agg | -
 Expr.set_union | expr-node:Agg | -
-Expr.shift | expr-node:_ColumnOpNode | -
+Expr.shift | expr-node:ColumnOpNode | -
 Expr.sketch_quantile | expr-node:Agg | -
 Expr.skew | python-semantics | Python logic that does not build one node
 Expr.slice | expr-node:_StrSlice | -
 Expr.slice_replace | expr-node:_StrFn | -
-Expr.sort | expr-node:_ColumnOpNode | -
+Expr.sort | expr-node:ColumnOpNode | -
 Expr.split | expr-node:_StrFn | -
 Expr.starts_with | expr-node:_StrPred | -
 Expr.std | python-semantics | Python logic that does not build one node
 Expr.str | python-semantics | Python logic that does not build one node
 Expr.strip | expr-node:_StrMap | -
-Expr.sub | expr-node:_Bin | -
+Expr.sub | expr-node:Bin | -
 Expr.sum | python-semantics | Python logic that does not build one node
 Expr.sumsq | python-semantics | Python logic that does not build one node
 Expr.swapcase | expr-node:_StrMap | -
@@ -370,11 +370,11 @@ Expr.title | expr-node:_StrMap | -
 Expr.to_duql | python-semantics | built from other Expr methods (_dsl)
 Expr.topk | expr-node:Agg | -
 Expr.translate | expr-node:_StrFn | -
-Expr.truediv | expr-node:_Bin | -
+Expr.truediv | expr-node:Bin | -
 Expr.upper | expr-node:_StrMap | -
 Expr.utilization | python-semantics | Python logic that does not build one node
 Expr.var | python-semantics | Python logic that does not build one node
-Expr.where | expr-node:_Select | -
+Expr.where | expr-node:Select | -
 Expr.wrap | expr-node:_StrFn | -
 Expr.zfill | expr-node:_StrFn | -
 

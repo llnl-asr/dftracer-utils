@@ -403,7 +403,7 @@ def test_lazy_concat_and_union_match_eager():
     assert _dict(a.lazy().union(b.lazy()).collect()) == _dict(a.union(b))
     assert _dict(a.lazy().concat(b.lazy(), a.lazy()).collect()) == _dict(a.concat(b, a))
     # A filter after the concat applies to both sides.
-    from dftracer.utils.columnar import col
+    from dftracer.utils import col
 
     filtered = plan.filter(col("k") > 1).collect()
     assert _dict(filtered) == {"k": [2, 2, 4], "s": ["y", "y", "w"]}
@@ -573,7 +573,7 @@ def test_lazy_relational_ops_match_eager():
         nested.unnest("tk", keep_empty=True)
     )
     # The flattened field is addressable by name in a later filter.
-    from dftracer.utils.columnar import col
+    from dftracer.utils import col
 
     assert _dict(un.filter(col("count") > 6).collect()) == {
         "pid": [1],

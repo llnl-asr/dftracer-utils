@@ -14,17 +14,18 @@ handle, the pandas 3 copy-on-write behaviour. A handle taken earlier
 from __future__ import annotations
 
 import builtins
-import re
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple, Union
 
 from . import dftracer_utils_ext as _ext
 from ._apply import Row
+from .agg import reduce_specs
 from .enums import DType
+from .expr import Expr, col, collect_columns, lit, when
 from .series import Series
 
 if TYPE_CHECKING:
-    from .columnar import Expr
     from .dataframe import DataFrame
+    from .expr import Expr
     from .lazyframe import LazyFrame
 
 _ROW = "__dftu_loc_row__"
@@ -175,7 +176,6 @@ def rows_by_label(levels: List[Series], key: object) -> Rows:
     ends of a slice, as pandas). One level takes a value, a slice or a list;
     several take a tuple (or a list of tuples) matching the leading levels,
     or a bare value for the first level."""
-    from .columnar import Expr
 
     index = levels[0]
     if _is_all(key):
@@ -263,7 +263,6 @@ def _split(key: object, levels: int = 1, names: Sequence[str] = ()) -> Tuple[obj
 
 
 def _eager_mask(df: "DataFrame", mask: object) -> Series:
-    from .columnar import Expr
 
     if isinstance(mask, Expr):
         return mask.apply(df)
@@ -298,22 +297,11 @@ def _mask_of(df: "DataFrame", rows: Rows) -> Optional[Series]:
     return mask
 
 
-_INT_RANGE = {
-    DType.INT8: (-(2**7), 2**7 - 1),
-    DType.INT16: (-(2**15), 2**15 - 1),
-    DType.INT32: (-(2**31), 2**31 - 1),
-    DType.INT64: (-(2**63), 2**63 - 1),
-    DType.UINT8: (0, 2**8 - 1),
-    DType.UINT16: (0, 2**16 - 1),
-    DType.UINT32: (0, 2**32 - 1),
-    DType.UINT64: (0, 2**64 - 1),
-}
-_FLOATS = frozenset({DType.FLOAT32, DType.FLOAT64})
 _SAME_KIND = {
     DType.STRING: frozenset({DType.STRING, DType.LARGE_STRING}),
     DType.BINARY: frozenset({DType.BINARY, DType.LARGE_BINARY}),
     DType.BOOL: frozenset({DType.BOOL}),
-    DType.FLOAT64: _FLOATS,
+    DType.FLOAT64: frozenset({DType.FLOAT32, DType.FLOAT64}),
     DType.DATE32: frozenset({DType.DATE32, DType.DATE64}),
 }
 
@@ -321,9 +309,9 @@ _SAME_KIND = {
 def _fits(value: object, own: DType, column: DType) -> bool:
     """Whether a value of type ``own`` converts to ``column`` without loss."""
     if own in (DType.INT64, DType.UINT64) and isinstance(value, int):
-        if column in _FLOATS:
+        if column.is_float:
             return True
-        bounds = _INT_RANGE.get(column)
+        bounds = column.int_range
         return bounds is not None and bounds[0] <= value <= bounds[1]
     return column in _SAME_KIND.get(own, frozenset())
 
@@ -334,8 +322,8 @@ def _fill(value: object, n: int, like: Series) -> Series:
     goes through its Arrow type."""
     column = like.dtype
     if (
-        column not in _INT_RANGE
-        and column not in _FLOATS
+        column.int_range is None
+        and not column.is_float
         and not any(column in kinds for kinds in _SAME_KIND.values())
     ):
         return Series.from_list([value] * n, dtype=like.to_arrow().type)
@@ -544,7 +532,6 @@ class At:
 
 
 def _lazy_rows(lf: "LazyFrame", rows: Rows) -> "LazyFrame":
-    from .columnar import Expr
 
     if rows.kind == "all":
         return lf
@@ -560,7 +547,6 @@ def _lazy_rows(lf: "LazyFrame", rows: Rows) -> "LazyFrame":
 
 def lazy_rows_by_label(lf: "LazyFrame", key: object) -> Rows:
     """``loc`` rows on a plan: an Expr mask over the index column."""
-    from .columnar import Expr, col
 
     if _is_all(key):
         return Rows.all()
@@ -620,15 +606,13 @@ def lazy_rows_by_label(lf: "LazyFrame", key: object) -> Rows:
 
 def _reads_row(mask: object) -> bool:
     """Whether a label mask is over the row position (no index column set)."""
-    from .columnar import Expr, _collect_columns
 
-    return isinstance(mask, Expr) and _ROW in _collect_columns(mask)
+    return isinstance(mask, Expr) and _ROW in collect_columns(mask)
 
 
 def _lazy_mask_expr(lf: "LazyFrame", rows: Rows) -> "Tuple[LazyFrame, Optional[Expr]]":
     """The plan (with a row index when the selection is positional) and the
     Expr mask the selection names; None for every row."""
-    from .columnar import Expr, col
 
     if rows.kind == "all":
         return lf, None
@@ -645,7 +629,6 @@ def _lazy_mask_expr(lf: "LazyFrame", rows: Rows) -> "Tuple[LazyFrame, Optional[E
 def lazy_assign_rows(lf: "LazyFrame", rows: Rows, columns: List[str], value: object) -> None:
     """``lf.loc[rows, columns] = value`` as ``with_column`` plan steps, the
     handle rebound to the longer plan."""
-    from .columnar import Expr, col, lit, when
 
     if isinstance(value, dict):
         for name, v in value.items():
@@ -755,46 +738,6 @@ class LazyLoc:
 
 # ---- resample -----------------------------------------------------------------
 
-_UNIT_NS: Dict[str, int] = {
-    "ns": 1,
-    "us": 1_000,
-    "µs": 1_000,
-    "ms": 1_000_000,
-    "s": 1_000_000_000,
-    "sec": 1_000_000_000,
-    "min": 60_000_000_000,
-    "m": 60_000_000_000,
-    "t": 60_000_000_000,
-    "h": 3_600_000_000_000,
-    "d": 86_400_000_000_000,
-}
-
-_RULE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([a-zA-Zµ]+)\s*$")
-
-
-def rule_to_units(rule: Union[int, str], unit: str) -> int:
-    """A pandas offset string (``"5s"``, ``"100ms"``, ``"1min"``, ``"2h"``)
-    or an int of the column's own units, as a count of ``unit``."""
-    if isinstance(rule, bool):
-        raise TypeError("resample: rule must be a str or an int")
-    if isinstance(rule, int):
-        if rule <= 0:
-            raise ValueError("resample: rule must be positive")
-        return rule
-    m = _RULE.match(rule)
-    if not m:
-        raise ValueError(f"resample: cannot parse rule {rule!r}")
-    amount, name = float(m.group(1)), m.group(2).lower()
-    if name not in _UNIT_NS:
-        raise ValueError(f"resample: unknown unit {m.group(2)!r} in {rule!r}")
-    per = _UNIT_NS.get(unit.lower())
-    if per is None:
-        raise ValueError(f"resample: unknown column unit {unit!r}")
-    every = amount * _UNIT_NS[name] / per
-    if every < 1 or every != int(every):
-        raise ValueError(f"resample: {rule!r} is not a whole number of {unit}")
-    return int(every)
-
 
 class Resampler:
     """``df.resample(rule, on=...)``: a tumbling time window over the index
@@ -823,9 +766,8 @@ class Resampler:
     aggregate = agg
 
     def reduce(self, agg: str) -> "Union[DataFrame, LazyFrame]":
-        from .columnar import _reduce_specs
 
-        return self._run(_reduce_specs(self._frame, agg, [self._time]))
+        return self._run(reduce_specs(self._frame, agg, [self._time]))
 
     def sum(self) -> "Union[DataFrame, LazyFrame]":
         return self.reduce("sum")
@@ -858,4 +800,4 @@ class Resampler:
         return self._run(["count::size"])
 
 
-__all__ = ["ILoc", "Loc", "At", "LazyILoc", "LazyLoc", "Resampler", "Rows", "rule_to_units"]
+__all__ = ["ILoc", "Loc", "At", "LazyILoc", "LazyLoc", "Resampler", "Rows"]

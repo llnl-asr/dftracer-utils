@@ -103,14 +103,13 @@ def _replace_in(
 ) -> "Series":
     """``s`` with every pair applied together. ``column`` names a frame column in
     errors; ``strict`` False leaves a column of an unsupported type alone."""
-    from ._pandas_frame import _STRING, _is_numeric
     from .enums import DType
     from .series import Series
 
     dtype = s.dtype
-    if dtype in _STRING:
+    if dtype == DType.STRING:
         is_str = True
-    elif dtype != DType.BOOL and _is_numeric(s):
+    elif dtype.is_numeric:
         is_str = False
     elif strict:
         raise TypeError(f"replace: a {dtype.name.lower()} column is not supported")
@@ -429,8 +428,9 @@ class _SeriesPandasMixin:
         return self._pair(other, "covar_samp")
 
     def _pair(self, other: "Series", agg: str) -> float:
-        from .columnar import Agg, GroupBy, _Col
         from .dataframe import DataFrame
+        from .expr import Agg, Col
+        from .groupby import GroupBy
 
         s = self._s()
         # pandas gives NaN below two complete pairs; the engine's readout 0.
@@ -443,7 +443,7 @@ class _SeriesPandasMixin:
             # pairs; the aggregate's readout is 0.
             if s.filter(pairs).var() == 0 or other.filter(pairs).var() == 0:
                 return float("nan")
-        out = GroupBy(frame, []).agg(Agg(agg, _Col("y"), "r", by=_Col("x")))
+        out = GroupBy(frame, []).agg(Agg(agg, Col("y"), "r", by=Col("x")))
         value = out["r"][0]
         assert isinstance(value, float)
         return value
@@ -551,7 +551,7 @@ class _SeriesILoc:
         self._s = s
 
     def __getitem__(self, key: object) -> object:
-        from .indexing import rows_by_position
+        from ._loc import rows_by_position
         from .series import Series
 
         s = self._s

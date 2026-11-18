@@ -69,7 +69,7 @@ Three pieces cover the package, checked by one tool:
   ``dftracer_utils_ext.pyi`` declares the signatures the rest of the package and
   its callers see.
 - **Inline annotations on the wrappers.** The pure-Python layer (such as
-  ``series.py``, ``dataframe.py``, ``columnar.py``, ``duql.py`` and
+  ``series.py``, ``dataframe.py``, ``expr.py``, ``duql.py`` and
   ``runtime.py``) is annotated in place, so the wrapper source is both the
   implementation and its own type declaration.
 

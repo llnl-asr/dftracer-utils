@@ -39,8 +39,9 @@ from typing import (
     Union,
 )
 
-from .columnar import Expr, _duql_string
 from .dftracer_utils_ext import duql_canonical, duql_load_path
+from .enums import DUQL_DURATION_UNITS
+from .expr import Expr, duql_string
 
 if TYPE_CHECKING:
     from .dataframe import DataFrame
@@ -66,7 +67,6 @@ __all__ = [
 ]
 
 ParamValue = Union[bool, int, float, str, Sequence[Union[bool, int, float, str]]]
-_UNITS = ("ns", "us", "ms", "s", "m", "h", "d")
 
 
 def _value_text(v: object) -> str:
@@ -83,7 +83,7 @@ def _value_text(v: object) -> str:
             raise ValueError("a duql number must be finite")
         return repr(v)
     if isinstance(v, str):
-        return _duql_string(v)
+        return duql_string(v)
     if isinstance(v, (list, tuple)):
         return "[" + ", ".join(_value_text(x) for x in v) + "]"
     raise TypeError(f"no duql literal for {type(v).__name__}")
@@ -250,9 +250,9 @@ class Col:
         return self._like("not ilike", pattern, escape)
 
     def _like(self, op: str, pattern: "Union[str, Col]", escape: Optional[str]) -> "Col":
-        text = f"{self._text} {op} {pattern._text if isinstance(pattern, Col) else _duql_string(pattern)}"
+        text = f"{self._text} {op} {pattern._text if isinstance(pattern, Col) else duql_string(pattern)}"
         if escape is not None:
-            text += " escape " + _duql_string(escape)
+            text += " escape " + duql_string(escape)
         return _wrap(text)
 
     def regex(self, pattern: object) -> "Col":
@@ -289,7 +289,7 @@ class Col:
 
     def _contains(self, op: str, text: str, any: bool) -> "Col":
         target = f"any({self._text})" if any else self._text
-        return _wrap(f"{_duql_string(text)} {op} {target}")
+        return _wrap(f"{duql_string(text)} {op} {target}")
 
     def ref(self, rowset: str, path: str, key: Optional[str] = None) -> "Col":
         """``self -> rowset.path``, or ``self -> rowset(key).path``."""
@@ -422,8 +422,10 @@ def param(name: str) -> Col:
 def duration(amount: Union[int, float], unit: str) -> Col:
     """``amount`` in ``unit`` (``ns``, ``us``, ``ms``, ``s``, ``m``, ``h``,
     ``d``): ``duration(250, "ms")`` is ``250ms``."""
-    if unit not in _UNITS:
-        raise ValueError(f"unknown duration unit {unit!r}; use one of {', '.join(_UNITS)}")
+    if unit not in DUQL_DURATION_UNITS:
+        raise ValueError(
+            f"unknown duration unit {unit!r}; use one of {', '.join(DUQL_DURATION_UNITS)}"
+        )
     if isinstance(amount, bool) or not isinstance(amount, (int, float)) or amount < 0:
         raise ValueError("a duration amount is a non-negative number")
     return Col(_value_text(amount) + unit)
@@ -740,11 +742,11 @@ class Pipe:
         after it does not parse."""
         if not isinstance(name, str):
             raise TypeError(f"a sink name must be a str, not {type(name).__name__}")
-        text = "sink " + _duql_string(name)
+        text = "sink " + duql_string(name)
         for key, value in options.items():
             if not isinstance(value, str):
                 raise TypeError(f"sink option {key!r} must be a str, not {type(value).__name__}")
-            text += f" {key} {_duql_string(value)}"
+            text += f" {key} {duql_string(value)}"
         return self._stage(text)
 
     def time_range(self, low: object = None, high: object = None, overlap: bool = False) -> "Pipe":
@@ -900,7 +902,7 @@ def source(*files: Union[str, Col]) -> Pipe:
     if not files:
         raise ValueError("source() needs a file")
     p = Pipe()
-    p._from = "from " + ", ".join(f._text if isinstance(f, Col) else _duql_string(f) for f in files)
+    p._from = "from " + ", ".join(f._text if isinstance(f, Col) else duql_string(f) for f in files)
     p._file = files[0]
     return p
 

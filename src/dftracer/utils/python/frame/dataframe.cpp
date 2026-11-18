@@ -931,7 +931,7 @@ PyObject* DataFrame_group_agg_expr(PyObject* self, PyObject* args) {
 // each spec and calls _group_agg_expr. `args[0:nk]` are the key names (a tuple,
 // even for one key); `args[nk:]` are the specs.
 PyObject* delegate_groupby(PyObject* self, PyObject* args, Py_ssize_t nk) {
-    PyObject* mod = PyImport_ImportModule("dftracer.utils.columnar");
+    PyObject* mod = PyImport_ImportModule("dftracer.utils.groupby");
     if (!mod) return nullptr;
     PyObject* gb_type = PyObject_GetAttrString(mod, "GroupBy");
     Py_DECREF(mod);

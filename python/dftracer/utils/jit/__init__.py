@@ -86,6 +86,7 @@ from .._jit_errors import NotFound as NotFound
 from .._jit_errors import ParseError as ParseError
 from .._jit_errors import SkipRest as SkipRest
 from .._jit_errors import _class_error, _Source
+from ..expr import Expr, col
 from ..jit_op import Op, compile_op, op, run_op
 from . import _channels, _flow
 from . import ops as ops
@@ -115,7 +116,7 @@ from ._flow import task as task
 from ._flow import yaml as yaml
 
 if TYPE_CHECKING:
-    from ..columnar import Expr
+    from ..expr import Expr
     from ..plugins import JSONValue
     from ._batch import BatchHook
     from .ops import Result
@@ -1274,7 +1275,7 @@ class Store(Generic[SK, SV]):
     wrote also replaces it (last writer wins), so keep per-scan totals in plain
     state and use a ``Store`` to carry a value to the next run. The store is
     lent only inside a fold, to the one index root of the scan. A
-    :class:`~dftracer.utils.columnar.Series` or any other batch value cannot be a
+    :class:`~dftracer.utils.Series` or any other batch value cannot be a
     stored value."""
 
     def get(self, key: SK, default: SV) -> SV:
@@ -7220,7 +7221,6 @@ def _series_module(
 def _series_impl(
     fn: Callable[..., Expr], module: "str | None", package: "JitPackage | None" = None
 ) -> Callable[..., Result]:
-    from ..columnar import Expr, col
     from . import ops as _ops
 
     fname = getattr(fn, "__name__", None)

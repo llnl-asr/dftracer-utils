@@ -175,6 +175,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Move the Python modules to one table per fact. The deep import paths change; the names in `dftracer.utils.__all__` and their imports from `dftracer.utils` stay.
+  - `dftracer.utils.columnar` is gone: the expression nodes, `Expr`, `Agg`, `Udf`, `when`, `F` and `ColumnOp` are in `dftracer.utils.expr`; `udaf`, `Udaf`, `count` and the aggregate helpers in `dftracer.utils.agg`; `GroupBy` in `dftracer.utils.groupby`; `Columnar`, `columnar`, `where` and `eval_many` in `dftracer.utils._eval`.
+  - Helpers that other modules import lost their leading underscore (`Col`, `Lit`, `Bin`, `emit_ast`, `collect_columns`, `AGG_CODE`, `single_index`, `as_names` and the like).
+  - `dftracer.utils.time_unit` and `dftracer.utils._units` are in `dftracer.utils.enums`, which now holds the time-unit and dtype tables (`UNIT_NS`, `UNIT_CODES`, `FREQ_NS`, `EPOCH_NS`, `CAST_DTYPES`) and the `DType` properties `is_integer`, `is_float`, `is_numeric` and `int_range`.
+  - `dftracer.utils._import` and the conversion helpers of `dftracer.utils.series` are in `dftracer.utils._convert`.
+  - The `DFTUtils*Error` classes are in `dftracer.utils.errors`; `get_default_runtime` and `peek_default_runtime` are in `dftracer.utils.runtime`.
+  - `dftracer.utils.indexing` is `dftracer.utils._loc`.
 - `TraceViewer(files)` and `Indexer(files)` take one input form: a `str` or `os.PathLike`, or a list or tuple of them. One directory is scanned; a directory inside a list is a `ValueError`; a path given twice is read once.
 - Name the index location `index_dir` everywhere: `TraceViewer(files, index_dir=)`, `LiveTraceViewer(files, index_dir=)`, `CheckpointIndexer(gz_path, index_dir=)` and its `index_dir` property, `Index(index_dir)`, `write_shard_set(index_dir, ...)`, `consolidate_shard_set(index_dir)`, `distributed_index(index_dir=)`, `build_index_distributed(index_dir=)`, the dfanalyzer helpers (`index_dir_for`, `view_typed_frames`, `count_index_files`), `IndexStatus.index_dir`, the `index_dir` key of the Indexer status dict, of the manifest entries and of the `distributed_index` result, and the `index_dir` field of the `dftracer_stats` JSON.
   In C++ and C, the `index_dir` parameter of `View::from_directory`, `LiveView` and `dftu_view_from_directory`, and the `index_dir` field of `TraceWriteOptions`.

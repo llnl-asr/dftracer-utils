@@ -4,7 +4,7 @@
 
 class TestUtilityImports:
     def test_import_query_col(self):
-        from dftracer.utils.columnar import Expr, col
+        from dftracer.utils import Expr, col
 
         cat = col("cat")
         q = cat == "POSIX"

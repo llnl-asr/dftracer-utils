@@ -6,9 +6,9 @@ import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Set, Type, Union
 
-from ._units import coerce_bytes, coerce_duration
 from .dftracer_utils_ext import CheckpointIndexer as _NativeCheckpointIndexer
 from .dftracer_utils_ext import Indexer as _NativeIndexer
+from .enums import coerce_bytes, coerce_duration
 from .runtime import Runtime, TaskHandle
 from .schemas import RecordSchema, schema_id
 

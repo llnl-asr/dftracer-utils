@@ -8,7 +8,7 @@ Each region lies between `# BEGIN GENERATED` and `# END GENERATED` lines:
   in python/dftracer/utils/dftracer_utils_ext.pyi, one per PY_METHOD row of the
   class Series, Str, Dt or List, typed from its `args` and `result` tokens;
 * the Expr methods declared under `if TYPE_CHECKING:` in
-  python/dftracer/utils/columnar.py, one per row with on_expr YES;
+  python/dftracer/utils/expr.py, one per row with on_expr YES;
 * the aliases of python/dftracer/utils/_aliases.py in the class bodies of
   Series, Expr, DataFrame and LazyFrame, between
   `# BEGIN GENERATED aliases` and `# END GENERATED aliases`, so a type checker
@@ -209,7 +209,7 @@ TARGETS: List[Tuple[str, Callable, Callable, str, str, str]] = [
         BEGIN,
         END,
     ),
-    ("columnar.py", expr_lines, lambda r: r.on_expr, "class Expr:", BEGIN, END),
+    ("expr.py", expr_lines, lambda r: r.on_expr, "class Expr:", BEGIN, END),
     (
         "series.py",
         alias_lines("Series", "series.py"),
@@ -219,8 +219,8 @@ TARGETS: List[Tuple[str, Callable, Callable, str, str, str]] = [
         ALIAS_END,
     ),
     (
-        "columnar.py",
-        alias_lines("Expr", "columnar.py"),
+        "expr.py",
+        alias_lines("Expr", "expr.py"),
         lambda r: False,
         "class Expr:",
         ALIAS_BEGIN,

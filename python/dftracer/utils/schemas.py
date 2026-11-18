@@ -30,7 +30,8 @@ import typing
 from typing import Any, ClassVar, Dict, FrozenSet, List, NewType, Optional, Type, Union
 
 from . import dftracer_utils_ext as _ext
-from .dftracer_utils_ext import DFTUtilsValueError
+from .enums import UNIT_CODES
+from .errors import DFTUtilsValueError
 
 if sys.version_info >= (3, 11):
     from typing import dataclass_transform
@@ -57,7 +58,7 @@ JSON text (no whitespace, keys sorted); filters compare it as that text."""
 
 _TYPES: Dict[Any, str] = {bool: "bool", int: "int", float: "float", str: "string", Json: "json"}
 _ROLES = ("time", "duration", "entity", "lane", "name")
-_UNITS = ("ns", "us", "ms", "s")
+_UNITS = tuple(reversed(UNIT_CODES))
 
 
 class _Field:

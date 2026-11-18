@@ -26,46 +26,34 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
+from ._convert import _like
 from ._pandas_series import _OMITTED, _replace_in, _replace_pairs
-from .enums import DType
-from .series import Series, _like
+from .enums import DType, rule_to_units
+from .series import Series
 
 if TYPE_CHECKING:
     from typing_extensions import Concatenate, ParamSpec, Self
 
     from ._pandas_series import ReplaceKey, ReplaceValue, _Omitted
-    from .columnar import GroupBy
     from .dataframe import DataFrame
     from .dftracer_utils_ext import Scalar
+    from .groupby import GroupBy
 
 _R = TypeVar("_R")
 if TYPE_CHECKING:
     _P = ParamSpec("_P")
 
-_NUMERIC = {
-    DType.INT8,
-    DType.INT16,
-    DType.INT32,
-    DType.INT64,
-    DType.UINT8,
-    DType.UINT16,
-    DType.UINT32,
-    DType.UINT64,
-    DType.FLOAT32,
-    DType.FLOAT64,
-    DType.BOOL,
-}
 _STRING = {DType.STRING}
 
 Operand = Union[int, float, Series, "DataFrame"]
 
 
 def _is_numeric(s: Series) -> bool:
-    return s.dtype in _NUMERIC
+    return s.dtype.is_numeric or s.dtype == DType.BOOL
 
 
 def _group(frame: "DataFrame", keys: Sequence[str]) -> "GroupBy":
-    from .columnar import GroupBy
+    from .groupby import GroupBy
 
     return GroupBy(frame, list(keys))
 
@@ -502,11 +490,11 @@ class _FramePandasMixin(_ext.DataFrame):
         return self._pairwise("covar_samp")
 
     def _pairwise(self, agg: str) -> "DataFrame":
-        from .columnar import Agg, _Col
         from .dataframe import DataFrame
+        from .expr import Agg, Col
 
         names = [c for c in self.columns if _is_numeric(self._col(c))]
-        specs = [Agg(agg, _Col(b), f"{a}__{b}", by=_Col(a)) for a in names for b in names]
+        specs = [Agg(agg, Col(b), f"{a}__{b}", by=Col(a)) for a in names for b in names]
         if not specs:
             return DataFrame({"column": []})
         row = _group(self._frame(), []).agg(*specs).to_dict()
@@ -680,10 +668,10 @@ class _FramePandasMixin(_ext.DataFrame):
 
     def insert(self, loc: int, column: str, value: Union[Series, int, float, str]) -> None:
         """Put ``column`` at position ``loc`` (this handle is rebound)."""
-        from .indexing import Rows, assign_rows
-
         if column in self._frame():
             raise ValueError(f"insert: column {column!r} already exists")
+        from ._loc import Rows, assign_rows
+
         assign_rows(self._frame(), Rows.all(), [column], value)
         order = [c for c in self.columns if c != column]
         order.insert(loc, column)
@@ -780,7 +768,7 @@ class _FramePandasMixin(_ext.DataFrame):
         def group(spec: object) -> set:
             if isinstance(spec, str):
                 if spec in ("number", "numeric"):
-                    return set(_NUMERIC) - {DType.BOOL}
+                    return {d for d in DType if d.is_numeric}
                 if spec in ("string", "object", "str"):
                     return set(_STRING)
                 if spec == "bool":
@@ -907,9 +895,9 @@ class _FramePandasMixin(_ext.DataFrame):
     def rename_axis(self, name: str) -> "DataFrame":
         """The single index column renamed to ``name`` (pandas
         ``rename_axis``); needs ``set_index`` first."""
-        from .dataframe import _single_index
+        from .dataframe import single_index
 
-        current = _single_index(self._index, "rename_axis")
+        current = single_index(self._index, "rename_axis")
         out = self._frame().rename({current: name})
         out._index = [name]
         return out
@@ -981,9 +969,9 @@ class _FramePandasMixin(_ext.DataFrame):
 
     # -- the datetime-index methods, over the one index column (or `on`) ------
     def _time_column(self, on: Optional[str], op: str) -> Tuple[str, Series]:
-        from .dataframe import _single_index
+        from .dataframe import single_index
 
-        name = on if on is not None else _single_index(self._index, op)
+        name = on if on is not None else single_index(self._index, op)
         if name not in self._frame():
             raise KeyError(f"{op}: no column named {name!r}")
         return name, self._col(name)
@@ -1002,32 +990,24 @@ class _FramePandasMixin(_ext.DataFrame):
 
     @staticmethod
     def _seconds_of_day(s: Series) -> Series:
-        from .series import _DtAccessor
-
-        dt = _DtAccessor(s)
+        dt = s.dt
         return dt.hour * 3600 + dt.minute * 60 + dt.second
 
     @staticmethod
     def _unit_of(s: Series) -> str:
-        from .series import _DtAccessor
-
-        return _DtAccessor(s)._unit
+        return s.dt._unit
 
     def tz_localize(self, tz: Optional[str], on: Optional[str] = None) -> "DataFrame":
         """The index column (or ``on``) marked as zone ``tz`` (pandas
         ``DataFrame.tz_localize``; UTC only, see ``Series.dt.tz_localize``)."""
-        from .series import _DtAccessor
-
         name, s = self._time_column(on, "tz_localize")
-        return self._frame().with_column(name, _DtAccessor(s).tz_localize(tz))
+        return self._frame().with_column(name, s.dt.tz_localize(tz))
 
     def tz_convert(self, tz: Optional[str], on: Optional[str] = None) -> "DataFrame":
         """The index column (or ``on``) shown in zone ``tz`` (pandas
         ``DataFrame.tz_convert``); the instants stay."""
-        from .series import _DtAccessor
-
         name, s = self._time_column(on, "tz_convert")
-        return self._frame().with_column(name, _DtAccessor(s).tz_convert(tz))
+        return self._frame().with_column(name, s.dt.tz_convert(tz))
 
     def at_time(self, time: str, on: Optional[str] = None) -> "DataFrame":
         """The rows whose time of day is exactly ``time`` (``"HH:MM[:SS]"``),
@@ -1059,16 +1039,12 @@ class _FramePandasMixin(_ext.DataFrame):
         """The rows within ``offset`` (``"3s"``, ``"1min"``, or a count of the
         column's units) of the earliest time (pandas ``first``); ``last``
         takes the latest."""
-        from .indexing import rule_to_units
-
         _, s = self._time_column(on, "first")
         span = rule_to_units(offset, self._unit_of(s))
         ticks = s.astype("int64")
         return self._frame().filter(ticks < int(cast(int, ticks.min())) + span)
 
     def last(self, offset: Union[int, str], on: Optional[str] = None) -> "DataFrame":
-        from .indexing import rule_to_units
-
         _, s = self._time_column(on, "last")
         span = rule_to_units(offset, self._unit_of(s))
         ticks = s.astype("int64")
@@ -1087,7 +1063,6 @@ class _FramePandasMixin(_ext.DataFrame):
         ``"bfill"``, or with ``fill_value`` (pandas ``asfreq``). The time
         column must hold each instant once."""
         from .dataframe import DataFrame
-        from .indexing import rule_to_units
 
         name, s = self._time_column(on, "asfreq")
         frame = self._frame()

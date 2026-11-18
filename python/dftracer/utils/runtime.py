@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import os
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -22,9 +23,12 @@ from typing import (
     overload,
 )
 
-from ._units import coerce_duration
 from .dftracer_utils_ext import Runtime as _NativeRuntime
 from .dftracer_utils_ext import TaskHandle as _NativeTaskHandle
+from .dftracer_utils_ext import _close_task_callbacks
+from .dftracer_utils_ext import get_default_runtime as _get_default_native_runtime
+from .dftracer_utils_ext import peek_default_runtime as _peek_default_native_runtime
+from .enums import coerce_duration
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -538,3 +542,51 @@ class Runtime:
         exc_tb: Optional[TracebackType],
     ) -> None:
         self.shutdown()
+
+
+_default_wrapper: Optional[Runtime] = None
+
+
+def get_default_runtime() -> Runtime:
+    """Return the process runtime (made on first use)."""
+    global _default_wrapper
+    if _default_wrapper is None:
+        native = _get_default_native_runtime()
+        _default_wrapper = Runtime._from_native(native)
+    return _default_wrapper
+
+
+def peek_default_runtime() -> Optional[Runtime]:
+    """Return the process runtime, or None before its first use.
+
+    Never makes one, so a caller that only looks does not start a
+    full-machine-sized pool.
+    """
+    global _default_wrapper
+    if _default_wrapper is not None:
+        return _default_wrapper
+    native = _peek_default_native_runtime()
+    if native is None:
+        return None
+    _default_wrapper = Runtime._from_native(native)
+    return _default_wrapper
+
+
+@atexit.register
+def _shutdown_default_runtime() -> None:
+    # Wait for this handle's tasks and stop its Python threads while the
+    # interpreter is still alive. The native exit handler stops the runtime.
+    global _default_wrapper
+    wrapper = _default_wrapper
+    if wrapper is None:
+        return
+    _default_wrapper = None
+    try:
+        wrapper.shutdown(wait=True)
+    except Exception:
+        pass
+
+
+# Registered after the shutdown above, so it runs first: done callbacks of
+# native tasks that have not started are dropped before the interpreter ends.
+atexit.register(_close_task_callbacks)

@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence, cast, overload
 
-from .columnar import Expr, col, lit
 from .dataframe import DataFrame
+from .expr import Expr, col, lit
 from .lazyframe import LazyFrame
 from .series import Series
 

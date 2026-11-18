@@ -12,8 +12,7 @@ from typing import Callable, DefaultDict, Dict, List, Optional, Set, Tuple, Unio
 
 from typing_extensions import assert_type
 
-from dftracer.utils import DataFrame, jit
-from dftracer.utils.columnar import Expr
+from dftracer.utils import DataFrame, Expr, jit
 from dftracer.utils.jit import (
     ApproxTopK,
     ArgMax,

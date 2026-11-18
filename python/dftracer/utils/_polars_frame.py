@@ -18,13 +18,14 @@ from typing import (
     Union,
 )
 
+from ._convert import _require_pyarrow
 from ._pandas_frame import _is_numeric, _series
-from .series import Series, _require_pyarrow
+from .series import Series
 
 if TYPE_CHECKING:
-    from .columnar import Expr
     from .dataframe import DataFrame
     from .enums import DType
+    from .expr import Expr
 
 
 class _FramePolarsMixin:
@@ -161,7 +162,7 @@ class _FramePolarsMixin:
         """One frame per distinct key (polars ``partition_by``), in first-seen
         key order; ``as_dict`` keys them by the key value (a tuple for several
         columns)."""
-        from .columnar import GroupBy
+        from .groupby import GroupBy
 
         f = self._frame()
         keys = [by] if isinstance(by, str) else list(by)

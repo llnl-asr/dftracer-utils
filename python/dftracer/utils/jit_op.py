@@ -99,7 +99,7 @@ _CMP = {
 # (equal iff the underlying strings are), never an ordering.
 _STR_CMP = {ast.Eq: "==", ast.NotEq: "!="}
 
-# columnar.py's post-order AST opcodes for _ext.vec_eval (mirror columnar_eval.cpp).
+# expr.py's post-order AST opcodes for _ext.vec_eval (mirror columnar_eval.cpp).
 _AST_COL, _AST_LIT_I, _AST_LIT_F, _AST_BIN = 0, 1, 2, 3
 _AST_CAST, _AST_UNARY = 8, 9
 _EXPR_BIN = {ast.Add: 0, ast.Sub: 1, ast.Mult: 2, ast.Div: 3}  # no Mod
@@ -488,7 +488,7 @@ def emit_inline(op_obj: Op, c_name: str) -> str:
 
 def lower_to_expr(op_obj: Op) -> Optional[List[tuple]]:
     """Try to lower every stage of `op_obj` to one columnar Expr AST (the post-
-    order form columnar.py serializes for ``_ext.vec_eval``), casting between
+    order form expr.py serializes for ``_ext.vec_eval``), casting between
     stages where the scalar leaf would cast too. None if a stage's type is
     outside ``_FUSABLE_TYPE_ID`` or has no Expr equivalent (see
     :func:`_lower_expr`); the caller then falls back. See :func:`can_fuse`

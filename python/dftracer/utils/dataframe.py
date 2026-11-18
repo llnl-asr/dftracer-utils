@@ -31,11 +31,7 @@ from typing import (
 
 from . import dftracer_utils_ext as _ext
 from ._aliases import install as _install_aliases
-from ._pandas_frame import _FramePandasMixin
-from ._polars_frame import _FramePolarsMixin
-from .enums import DType
-from .series import (
-    Series,
+from ._convert import (
     _apply_index,
     _arrow_native,
     _indices,
@@ -44,7 +40,15 @@ from .series import (
     _polars_via_arrow,
     _require_pyarrow,
     _to_pandas,
+    index_columns,
 )
+from ._eval import Columnar
+from ._pandas_frame import _FramePandasMixin
+from ._polars_frame import _FramePolarsMixin
+from .agg import select_aggs
+from .enums import DType, rule_to_units
+from .expr import Agg, Expr, Lit, Named, col, resolve_selectors, when
+from .series import Series
 
 if TYPE_CHECKING:
     import numpy as np  # ty: ignore[import-not-found]
@@ -54,8 +58,8 @@ if TYPE_CHECKING:
     from pandas.api.extensions import ExtensionArray  # ty: ignore[import-not-found]
     from typing_extensions import Self
 
-    from .columnar import Agg, Expr, GroupBy, Named
-    from .indexing import At, ILoc, Loc, Resampler
+    from ._loc import At, ILoc, Loc, Resampler
+    from .groupby import GroupBy
     from .lazyframe import LazyFrame
 
 # Matches WINDOW_UNBOUNDED (int64 max): a frame bound of None means that side of
@@ -229,7 +233,7 @@ PivotTableAgg = Literal[
 ]
 
 
-def _names(cols: Optional[Union[str, Sequence[str]]]) -> List[str]:
+def as_names(cols: Optional[Union[str, Sequence[str]]]) -> List[str]:
     if cols is None:
         return []
     if isinstance(cols, str):
@@ -250,7 +254,7 @@ def _window_arity(spec: Sequence[object], n: int) -> None:
 
 # A spec is a heterogeneous positional tuple (str, col names, ints, None) read
 # by index, so its elements are genuinely Any; the output 9-tuple is mixed too.
-def _single_index(index: Optional[List[str]], op: str) -> str:
+def single_index(index: Optional[List[str]], op: str) -> str:
     """The one index column an op reads its time from."""
     if index is None:
         raise ValueError(f"{op}: set_index(time) first, or pass on=")
@@ -259,7 +263,7 @@ def _single_index(index: Optional[List[str]], op: str) -> str:
     return index[0]
 
 
-def _norm_window_spec(spec: Sequence[Any]) -> Tuple[object, ...]:
+def norm_window_spec(spec: Sequence[Any]) -> Tuple[object, ...]:
     # Normalize to the fixed 12-tuple the native kernel reads: (func,
     # value|None, offset, name, time|None, threshold, counter, frame_pre,
     # frame_post, end|None, span, range_frame).
@@ -418,7 +422,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
     def iloc(self) -> "ILoc":
         """Rows and columns by position: ``df.iloc[3]``, ``df.iloc[2:5]``,
         ``df.iloc[[0, 4], "c"]``; assignment rebuilds the touched columns."""
-        from .indexing import ILoc
+        from ._loc import ILoc
 
         return ILoc(self)
 
@@ -427,21 +431,21 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         """Rows by index label (a value, an inclusive slice, a list, a Bool
         mask or an expression), columns by name; assignment rebuilds the
         touched columns (``df.loc[df["a"] > 1, "c"] = 0``)."""
-        from .indexing import Loc
+        from ._loc import Loc
 
         return Loc(self)
 
     @property
     def at(self) -> "At":
         """One value by index label and column name."""
-        from .indexing import At
+        from ._loc import At
 
         return At(self, by_position=False)
 
     @property
     def iat(self) -> "At":
         """One value by row position and column position."""
-        from .indexing import At
+        from ._loc import At
 
         return At(self, by_position=True)
 
@@ -450,7 +454,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         ``df[mask] = value`` writes every column where the mask holds. The
         frame's columns are immutable: the handle is rebound to a new frame
         that shares every untouched column."""
-        from .indexing import Rows, assign_rows, rows_by_label
+        from ._loc import Rows, assign_rows, rows_by_label
 
         if isinstance(key, str):
             assign_rows(self, Rows.all(), [key], value)
@@ -469,9 +473,9 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         with the aggregate family (``.sum()``, ``.agg(...)``, ``.size()``);
         ``unit`` is the time column's unit (dftracer timestamps are ``us``).
         Each call is one ``group_by_dynamic`` over the time-sorted frame."""
-        from .indexing import Resampler, rule_to_units
+        from ._loc import Resampler
 
-        time = on if on is not None else _single_index(self._index, "resample")
+        time = on if on is not None else single_index(self._index, "resample")
         if time not in self:
             raise KeyError(f"resample: no column named {time!r}")
         return Resampler(self, time, rule_to_units(rule, unit))
@@ -487,8 +491,6 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         """Import a ``pandas.DataFrame`` through NumPy, with no pyarrow (see
         :meth:`Series.from_pandas`). A non-default index becomes columns after the
         data columns, named by its levels or ``__index_level_<i>__``."""
-        from ._import import index_columns
-
         columns = [(str(name), df[name]) for name in df.columns]
         if len({n for n, _ in columns}) != len(columns):
             raise ValueError("from_pandas: column names are not unique")
@@ -713,9 +715,9 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
                 f"drop: axis must be None, 1 or 'columns', not {axis!r} "
                 "(dropping rows by label needs the row index; use filter)"
             )
-        dropped = set(_names(columns))
+        dropped = set(as_names(columns))
         for n in names:
-            dropped.update(_names(n))
+            dropped.update(as_names(n))
         missing = [n for n in dropped if n not in self]
         if missing:
             raise KeyError(f"drop: no column named {missing[0]!r}")
@@ -750,11 +752,10 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         scalars (pandas ``assign``; polars ``with_columns``). A scalar, or
         ``lit(value)``, gives a column of the frame's row count holding it;
         ``None`` (or ``lit(None)``) gives an all-null String column."""
-        from .columnar import _Lit
 
         out = self
         for name, value in columns.items():
-            if isinstance(value, _Lit) and value.value is None:
+            if isinstance(value, Lit) and value.value is None:
                 value = None  # lit(None) is the null constant, as a bare None is
             if value is None or isinstance(value, (bool, int, float, str)):
                 value = out._constant_column(value)
@@ -767,7 +768,6 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
     ) -> "DataFrame":
         """:meth:`assign`, also taking named expressions positionally
         (``with_columns((col("a") * 2).alias("b"))``, the polars spelling)."""
-        from .columnar import Named
 
         out = self
         for item in named:
@@ -806,7 +806,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         ``keep="first"`` leaves the first of equal rows unmarked, ``"last"``
         the last, and ``False`` marks every one of them. Nulls compare
         equal."""
-        cols = list(self.columns) if subset is None else _names(subset)
+        cols = list(self.columns) if subset is None else as_names(subset)
         frame = self[cols]
         if keep is False:
             return _ext.DataFrame.is_duplicated(frame)
@@ -860,7 +860,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         order, and one column for each value of ``columns``. ``index`` may name
         several keys and ``aggfunc`` may be any group-by reduction, such as
         ``"median"``."""
-        keys = _names(index)
+        keys = as_names(index)
         if len(keys) == 1 and aggfunc in get_args(PivotAgg):
             return self.pivot(keys[0], columns, values, cast("PivotAgg", aggfunc))
         picked = self[keys + [columns, values]]
@@ -903,7 +903,6 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         thing runs fused in the engine. Otherwise it runs in Python per row,
         with a warning naming why. See ``_apply``."""
         from ._apply import apply_rows
-        from .columnar import Expr
 
         if isinstance(func, Expr):
             return func.apply(self)
@@ -981,8 +980,10 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
 
         All input columns pass through, then one column per spec, in sorted
         (partition, order) row order."""
-        norm = [_norm_window_spec(s) for s in (specs or [])]
-        return self._like(_ext.DataFrame.window(self, _names(partition_by), _names(order_by), norm))
+        norm = [norm_window_spec(s) for s in (specs or [])]
+        return self._like(
+            _ext.DataFrame.window(self, as_names(partition_by), as_names(order_by), norm)
+        )
 
     def gap_fill(
         self,
@@ -1006,10 +1007,10 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
             raise ValueError("gap_fill: pass both start and end, or neither")
         return _ext.DataFrame.gap_fill(
             self,
-            _names(partition_by),
+            as_names(partition_by),
             time,
             int(bucket),
-            _names(values),
+            as_names(values),
             mode,
             start,
             end,
@@ -1090,8 +1091,8 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
                     "merge(): no common columns to join on; pass on= or left_on=/right_on="
                 )
             on = shared
-        lkeys = _names(on) if on is not None else _names(left_on)
-        rkeys = _names(on) if on is not None else _names(right_on)
+        lkeys = as_names(on) if on is not None else as_names(left_on)
+        rkeys = as_names(on) if on is not None else as_names(right_on)
         collide = [c for c in self.columns if c in right and c not in lkeys and c not in rkeys]
         left = self
         if collide:
@@ -1128,7 +1129,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
                 )
             n_key = on
         else:
-            keys = _names(on)
+            keys = as_names(on)
             if not keys:
                 raise ValueError("compare_agg: 'on' must name at least one key column")
             n_key = len(keys)
@@ -1149,7 +1150,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         (smallest ts >= self.ts), or ``"nearest"``. ``tolerance`` (if given)
         bounds the allowed time distance. Output is all left columns then the
         right value columns; unmatched left rows get null right values."""
-        return self._like(_ext.DataFrame.asof(self, other, on, _names(by), direction, tolerance))
+        return self._like(_ext.DataFrame.asof(self, other, on, as_names(by), direction, tolerance))
 
     def interval(
         self,
@@ -1168,7 +1169,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         unmatched left row once with null right values. Output is all left
         columns then the right value columns."""
         return self._like(
-            _ext.DataFrame.interval(self, other, point, lo, hi, _names(by), bool(outer))
+            _ext.DataFrame.interval(self, other, point, lo, hi, as_names(by), bool(outer))
         )
 
     def unnest(self, column: str, keep_empty: bool = False) -> "DataFrame":
@@ -1284,7 +1285,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         set of aggregate expressions (``col("a").sum()``) gives the one-row
         frame ``group_by().agg(...)`` does, each unaliased aggregate of a
         column named after that column (the polars ``select``)."""
-        from .columnar import Agg, GroupBy, resolve_selectors, select_aggs
+        from .groupby import GroupBy
 
         if items and all(isinstance(i, Agg) for i in items):
             return GroupBy(self, []).agg(*select_aggs(items))
@@ -1408,7 +1409,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         vals = value_vars if value_vars is not None else on
         if vals is None:
             raise TypeError("unpivot() needs value_vars (polars: on=)")
-        return self._like(_ext.DataFrame.unpivot(self, _names(ids), _names(vals)))
+        return self._like(_ext.DataFrame.unpivot(self, as_names(ids), as_names(vals)))
 
     def melt(
         self,
@@ -1496,7 +1497,6 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         ``TranspileError`` naming the first unsupported construct (``@name``,
         attribute access, ...)."""
         from ._transpile import NULL_COLUMN, TranspileError, eval_statements, transpile_expr
-        from .columnar import Columnar
 
         statements = eval_statements(expr)
         if not statements:
@@ -1539,7 +1539,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         included) and ``.sum()`` / ``.mean()`` / ... broadcast one. A row
         whose key is null is left out, as pandas; ``dropna=False`` keeps the
         null keys as their own group (polars), the key null in the result."""
-        from .columnar import GroupBy
+        from .groupby import GroupBy
 
         given = [] if key is None else [key] if isinstance(key, (str, Series)) else list(key)
         if not given:
@@ -1592,7 +1592,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
             return self._reduce_rows(func)
         if axis not in (0, "index"):
             raise ValueError(f"agg: axis must be 0/'index' or 1/'columns', got {axis!r}")
-        from .columnar import GroupBy
+        from .groupby import GroupBy
 
         return GroupBy(self, []).agg(*([] if func is None else [func]), **named)
 
@@ -1600,20 +1600,8 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         """One value per row across the numeric columns, nulls skipped: the
         pandas ``axis=1`` reductions, as engine column ops (fill, add, the
         select kernel) and no per-row Python."""
-        numeric = {
-            DType.INT8,
-            DType.INT16,
-            DType.INT32,
-            DType.INT64,
-            DType.UINT8,
-            DType.UINT16,
-            DType.UINT32,
-            DType.UINT64,
-            DType.FLOAT32,
-            DType.FLOAT64,
-        }
         cols: List[Series] = [_ext.DataFrame.__getitem__(self, name) for name in self.columns]
-        cols = [c for c in cols if c.dtype in numeric]
+        cols = [c for c in cols if c.dtype.is_numeric]
         if not cols:
             raise ValueError("agg(axis=1): no numeric columns")
         if func == "count":
@@ -1629,8 +1617,6 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
                 return total
             return total.astype("float64") / self._reduce_rows("count").astype("float64")
         if func in ("min", "max"):
-            from .columnar import col, when
-
             if len({c.dtype for c in cols}) > 1:
                 cols = [c.astype("float64") for c in cols]
             best: Series = cols[0]

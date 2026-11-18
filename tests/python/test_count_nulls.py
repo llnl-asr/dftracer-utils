@@ -74,8 +74,7 @@ def test_matches_pandas_on_random_data_with_nulls():
 def test_trace_view_counted_field_counts_present_rows(tmp_path):
     pytest.importorskip("pyarrow")
     import dftracer.utils as dft
-    from dftracer.utils import TraceViewer
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F, TraceViewer
 
     path = tmp_path / "t.pfw.gz"
     with gzip.open(path, "wt") as f:

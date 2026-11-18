@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -253,6 +254,8 @@ Series AggState::udaf_column(std::size_t spec) const {
 
 bool agg_specs_serial(dstd::Span<const AggSpec> specs) {
     for (const AggSpec& sp : specs) {
+        // A position within the group counts rows in input order.
+        if (sp.op == AggOp::ArgMaxPos || sp.op == AggOp::ArgMinPos) return true;
         if (sp.op != AggOp::Udaf) continue;
         const dstd::SharedPtr<const UdafRecord> record = find_udaf(sp.fn);
         if (!record || !record->is_parallel_safe()) return true;
@@ -264,6 +267,11 @@ bool agg_serial_only(const AggState& state) { return state.udaf_serial; }
 
 dstd::Result<void> agg_check(const AggState& state) {
     if (state.udaf_error) return dstd::Unexpected(*state.udaf_error);
+    if (state.apos_unordered)
+        return common::make_error<
+            "agg_merge: an arg_max/arg_min position needs the states merged "
+            "in row order, and a partial starts before the one it joins">(
+            common::ErrorCode::InvalidArgument);
     return {};
 }
 

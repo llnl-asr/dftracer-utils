@@ -38,6 +38,7 @@ Series.divmod | python-semantics | Python logic around native calls
 Series.dot | needs-token:SERIES | -
 Series.drop | python-semantics | pandas container API on the Series, not an op
 Series.dt | python-semantics | accessor or shape property of the column, not an op
+Series.dt_as_unit | needs-token:I64_ARG | -
 Series.dt_format | needs-token:STR_ARG | -
 Series.dt_part | needs-token:STR_ARG | -
 Series.dt_round | needs-token:STR_ARG | -
@@ -223,6 +224,8 @@ Expr.and_ | expr-node:Logical | -
 Expr.apply | python-semantics | Python logic that does not build one node
 Expr.approx_quantile | expr-node:Agg | -
 Expr.approx_topk | expr-node:Agg | -
+Expr.arg_max | expr-node:Agg | -
+Expr.arg_min | expr-node:Agg | -
 Expr.arg_sort | expr-node:ColumnOpNode | -
 Expr.argmax | expr-node:Agg | -
 Expr.argmin | expr-node:Agg | -
@@ -432,6 +435,11 @@ Dt.day_name | python-semantics | reads the unit of the accessor, which a row can
 Dt.month_name | python-semantics | reads the unit of the accessor, which a row cannot hold
 Dt.strftime | python-semantics | reads the unit of the accessor, which a row cannot hold
 Dt.total_seconds | python-semantics | reads the unit of the accessor, which a row cannot hold
+Dt.as_unit | python-semantics | checks the unit name in Python before the Series method
+Dt.cast_time_unit | python-semantics | checks the unit name in Python before the Series method
+Dt.date | python-semantics | a property of the accessor over the dt_date row
+Dt.time | python-semantics | a property of the accessor over the dt_time row
+Dt.timetz | python-semantics | a property of the accessor over the dt_time row
 Dt.tz_convert | python-semantics | reads the unit of the accessor, which a row cannot hold
 Dt.tz_localize | python-semantics | reads the unit of the accessor, which a row cannot hold
 Dt.isocalendar | python-semantics | reads the unit of the accessor, which a row cannot hold
@@ -793,6 +801,12 @@ GroupBy.all | python-semantics | group-wise method written in Python over native
 GroupBy.any | python-semantics | group-wise method written in Python over native calls
 GroupBy.apply | python-semantics | group-wise method written in Python over native calls
 GroupBy.bfill | python-semantics | group-wise method written in Python over native calls
+GroupBy.corrwith | python-semantics | group-wise method written in Python over native calls
+GroupBy.is_monotonic_decreasing | python-semantics | group-wise method written in Python over native calls
+GroupBy.is_monotonic_increasing | python-semantics | group-wise method written in Python over native calls
+GroupBy.nlargest | python-semantics | group-wise method written in Python over native calls
+GroupBy.nsmallest | python-semantics | group-wise method written in Python over native calls
+GroupBy.unique | python-semantics | group-wise method written in Python over native calls
 GroupBy.corr | python-semantics | group-wise method written in Python over native calls
 GroupBy.count | python-semantics | group-wise method written in Python over native calls
 GroupBy.cov | python-semantics | group-wise method written in Python over native calls

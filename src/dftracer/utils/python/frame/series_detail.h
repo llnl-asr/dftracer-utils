@@ -270,6 +270,7 @@ PyObject* Series_str_wrap(PyObject* self, PyObject* args);
 PyObject* Series_dt_part(PyObject* self, PyObject* args);
 PyObject* Series_dt_format(PyObject* self, PyObject* args);
 PyObject* Series_dt_round(PyObject* self, PyObject* args);
+PyObject* Series_dt_as_unit(PyObject* self, PyObject* args);
 PyObject* Series_with_timezone(PyObject* self, PyObject* arg);
 
 // series/arrow.cpp
@@ -296,6 +297,7 @@ PyObject* Series_physical(PyObject* self, PyObject*);
 PyObject* Series_get_nbytes(PyObject* self, void*);
 PyObject* Series_to_bytes(PyObject* self, PyObject*);
 PyObject* series_retype(PyObject* self, PyObject* args);
+PyObject* series_list_of(PyObject* self, PyObject* args);
 PyObject* series_from_bytes(PyObject* self, PyObject* obj);
 PyObject* series_nulls(PyObject* self, PyObject* args);
 

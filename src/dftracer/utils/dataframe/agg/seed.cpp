@@ -71,6 +71,11 @@ void agg_permute_groups(AggState& st, dstd::Span<const std::int64_t> perm) {
         permute_blocks(st.arg_has, perm, st.n_arg);
         permute_blocks(st.arg_repr, perm, st.n_arg_repr);
     }
+    if (st.has_apos) {
+        permute_blocks(st.apos_bits, perm, st.n_apos);
+        permute_blocks(st.apos_rank, perm, st.n_apos);
+        permute_blocks(st.apos_dom, perm, st.n_apos);
+    }
     if (st.has_bitor) permute_blocks(st.bitor_acc, perm, st.n_bitor);
     if (st.has_prod) permute_blocks(st.prod_acc, perm, st.n_prod);
     if (st.has_qv) permute_blocks(st.qv, perm, st.n_qv);
@@ -190,6 +195,16 @@ AggStatePtr agg_extract_groups(const AggState& st_in,
             for (std::size_t ri = 0; ri < st.n_arg_repr; ++ri)
                 out->arg_repr[o * st.n_arg_repr + ri] = st.arg_repr[rbase + ri];
         }
+        if (st.has_apos) {
+            const std::size_t pbase = static_cast<std::size_t>(g) * st.n_apos;
+            for (std::size_t slot = 0; slot < st.n_apos; ++slot) {
+                out->apos_bits[o * st.n_apos + slot] =
+                    st.apos_bits[pbase + slot];
+                out->apos_rank[o * st.n_apos + slot] =
+                    st.apos_rank[pbase + slot];
+                out->apos_dom[o * st.n_apos + slot] = st.apos_dom[pbase + slot];
+            }
+        }
         if (st.has_bitor) {
             const std::size_t bbase = static_cast<std::size_t>(g) * st.n_bitor;
             for (std::size_t slot = 0; slot < st.n_bitor; ++slot)
@@ -291,6 +306,8 @@ static bool agg_op_seedable(AggOp op) {
         case AggOp::Last:
         case AggOp::ArgMax:
         case AggOp::ArgMin:
+        case AggOp::ArgMaxPos:
+        case AggOp::ArgMinPos:
         case AggOp::SetUnion:
         case AggOp::BitOr:
         case AggOp::Distinct:

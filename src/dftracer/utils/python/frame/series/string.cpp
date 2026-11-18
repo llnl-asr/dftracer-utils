@@ -555,6 +555,41 @@ PyObject* Series_dt_round(PyObject* self, PyObject* args) {
     return make_series(std::move(out));
 }
 
+PyObject* Series_dt_as_unit(PyObject* self, PyObject* args) {
+    Held held_a(self);
+    Series* a = held_a.get();
+    if (!a) return nullptr;
+    int unit = 0;
+    int mode = DFTU_DT_UNIT_FLOOR;
+    if (!PyArg_ParseTuple(args, "i|i", &unit, &mode)) return nullptr;
+    if (unit < DFTU_TIME_UNIT_SECOND || unit > DFTU_TIME_UNIT_NANO) {
+        PyErr_SetString(PyExc_ValueError, "dt_as_unit: unit must be 0..3");
+        return nullptr;
+    }
+    if (mode < DFTU_DT_UNIT_FLOOR || mode > DFTU_DT_UNIT_POLARS) {
+        PyErr_SetString(PyExc_ValueError,
+                        "dt_as_unit: mode must be 0 (floor) or 1 (polars)");
+        return nullptr;
+    }
+    const dataframe::TypeId id = a->type();
+    if (id != dataframe::TypeId::Timestamp &&
+        id != dataframe::TypeId::Duration) {
+        PyErr_SetString(core::g_dft_value_error,
+                        "dt_as_unit: not a Timestamp or Duration column");
+        return nullptr;
+    }
+    Series out = kernel(*a, [&] {
+        return a->dt_as_unit(static_cast<dataframe::TimeUnit>(unit), mode);
+    });
+    if (!out.valid()) {
+        PyErr_SetString(core::g_dft_value_error,
+                        "dt_as_unit: a value does not fit 64 bits in the "
+                        "finer unit");
+        return nullptr;
+    }
+    return make_series(std::move(out));
+}
+
 PyObject* Series_with_timezone(PyObject* self, PyObject* arg) {
     Held held_a(self);
     Series* a = held_a.get();

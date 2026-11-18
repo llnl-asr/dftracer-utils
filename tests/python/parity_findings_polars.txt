@@ -191,13 +191,13 @@ expr.round#1[F] | keyword | [error] ours raised TypeError: Expr.__getattr__.<loc
 expr.round#1[Z] | keyword | [error] ours raised TypeError: Expr.__getattr__.<locals>.<lambda>() takes 0 positional arguments but 1 was given
 expr.var#1[I] | keyword | [error] ours raised TypeError: _make_agg_method.<locals>.method() got an unexpected keyword argument 'ddof'
 expr.var#1[F] | keyword | [error] ours raised TypeError: _make_agg_method.<locals>.method() got an unexpected keyword argument 'ddof'
+expr.arg_max#1[I] | semantics | [dtype] r: int64 vs uint32
+expr.arg_max#1[F] | semantics | [dtype] r: int64 vs uint32
+expr.arg_min#1[I] | semantics | [dtype] r: int64 vs uint32
+expr.arg_min#1[F] | semantics | [dtype] r: int64 vs uint32
 expr.count#1[I] | semantics | [dtype] r: int64 vs uint32
 expr.count#1[F] | semantics | [dtype] r: int64 vs uint32
 expr.count#1[S] | semantics | [dtype] r: int64 vs uint32
-expr.arg_max#1[I] | missing | [error] ours raised AttributeError: arg_max
-expr.arg_max#1[F] | missing | [error] ours raised AttributeError: arg_max
-expr.arg_min#1[I] | missing | [error] ours raised AttributeError: arg_min
-expr.arg_min#1[F] | missing | [error] ours raised AttributeError: arg_min
 expr.cum_count#1[I] | semantics | [dtype] r: int64 vs uint32
 expr.cum_count#1[F] | semantics | [dtype] r: int64 vs uint32
 expr.rank#1[F] | semantics | [values] r: [3.0, None, None, 1.0, 4.0, 2.0] vs [3.0, None, 5.0, 1.0, 4.0, 2.0]

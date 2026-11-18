@@ -751,7 +751,9 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
         // the order the morsels reach a partition.
         AggStatePtr probe =
             agg_new(dstd::Vector<AggSpec>(specs.begin(), specs.end()));
-        if (probe->has_arg || probe->has_lst || probe->has_ss) return none();
+        if (probe->has_arg || probe->has_apos || probe->has_lst ||
+            probe->has_ss)
+            return none();
     }
     dstd::Vector<Series> owned;
     owned.reserve(in_keys.size() + in_values.size());

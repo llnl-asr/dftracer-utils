@@ -80,7 +80,6 @@ pandas Series.unstack | needs-index | labels and (multi-)index alignment; waits 
 pandas Series.view | deprecated-upstream | removed or deprecated in pandas 3 (still present in pandas 2)
 pandas DataFrameGroupBy.a | python-semantics | a column read as an attribute of the group-by (g.a); use g['a']
 pandas DataFrameGroupBy.boxplot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
-pandas DataFrameGroupBy.corrwith | needs-kernel | per-group correlation of each column with another frame; the engine has the corr aggregate against one column only
 pandas DataFrameGroupBy.dtypes | needs-index | a frame of the column dtypes per group, indexed by the group keys
 pandas DataFrameGroupBy.fillna | deprecated-upstream | deprecated in pandas 2 and removed in pandas 3; use groupby().ffill() or transform
 pandas DataFrameGroupBy.hist | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
@@ -89,18 +88,9 @@ pandas DataFrameGroupBy.plot | out-of-scope | plotting (D3b out-of-scope); call 
 pandas SeriesGroupBy.dtype | python-semantics | the dtype of the grouped column; read it from the Series
 pandas SeriesGroupBy.fillna | deprecated-upstream | deprecated in pandas 2 and removed in pandas 3; use groupby().ffill() or transform
 pandas SeriesGroupBy.hist | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
-pandas SeriesGroupBy.is_monotonic_decreasing | needs-kernel | per-group monotonic check; Series.is_sorted is the whole-column kernel
-pandas SeriesGroupBy.is_monotonic_increasing | needs-kernel | per-group monotonic check; Series.is_sorted is the whole-column kernel
 pandas SeriesGroupBy.ndim | python-semantics | constant 1 of the pandas object model
-pandas SeriesGroupBy.nlargest | needs-kernel | per-group top-k of one column; the engine has the topk aggregate by another column, not top-k of the column itself
-pandas SeriesGroupBy.nsmallest | needs-kernel | per-group top-k of one column; the engine has the topk aggregate by another column, not top-k of the column itself
 pandas SeriesGroupBy.plot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
-pandas SeriesGroupBy.unique | needs-kernel | per-group distinct values as a list column; the engine has the bounded distinct aggregate
-pandas Series.dt.as_unit | needs-kernel | timestamp unit conversion (s/ms/us/ns) keeping the instant; no cast between time units
-pandas Series.dt.date | needs-kernel | timestamp to date32 or to a time-of-day column; no such cast kernel
 pandas Series.dt.freq | python-semantics | frequency of a DatetimeIndex, or the unit of the dtype as text; read s.time_unit
-pandas Series.dt.time | needs-kernel | timestamp to date32 or to a time-of-day column; no such cast kernel
-pandas Series.dt.timetz | needs-kernel | timestamp to date32 or to a time-of-day column; no such cast kernel
 pandas Series.dt.to_period | needs-index | Period dtype; waits for the row index step
 pandas Series.dt.to_pydatetime | python-semantics | an object array of datetime values; use s.to_list()
 pandas Series.dt.unit | python-semantics | frequency of a DatetimeIndex, or the unit of the dtype as text; read s.time_unit
@@ -298,8 +288,6 @@ polars Expr.arcsin | needs-kernel | elementwise math kernel; the unary table has
 polars Expr.arcsinh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Expr.arctan | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
 polars Expr.arctanh | needs-kernel | elementwise math kernel; the unary table has abs, round, floor, ceil, log, sqrt, exp, sign, negate, trunc only
-polars Expr.arg_max | needs-kernel | aggregate or distinct op with no Expr form (Series and DataFrame have it); the Agg table lacks the row
-polars Expr.arg_min | needs-kernel | aggregate or distinct op with no Expr form (Series and DataFrame have it); the Agg table lacks the row
 polars Expr.arg_true | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
 polars Expr.arg_unique | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
 polars Expr.arr | needs-kernel | no expression form: Series kernel missing or not exposed as a column op node (see the Series entry)
@@ -451,11 +439,9 @@ polars Series.str.to_integer | needs-kernel | parse text with a radix or as a de
 polars Series.str.to_time | needs-kernel | parse text to a temporal column; the engine casts numeric and string to numeric, not text to timestamp
 polars Series.dt.add_business_days | needs-kernel | business-day calendar kernels; no calendar table
 polars Series.dt.base_utc_offset | needs-kernel | time zone offset rules; the engine keeps UTC with tz_localize and tz_convert by fixed rule
-polars Series.dt.cast_time_unit | needs-kernel | timestamp unit conversion keeping the instant; no cast between time units
 polars Series.dt.century | needs-kernel | calendar part not in the date-part table (year to nanosecond, quarter, week, weekday, ordinal_day)
 polars Series.dt.combine | needs-kernel | build or split date and time of day columns; no date32/time cast kernel
 polars Series.dt.convert_time_zone | needs-kernel | named time zone conversion; tz_localize and tz_convert take the engine's fixed rules
-polars Series.dt.date | needs-kernel | build or split date and time of day columns; no date32/time cast kernel
 polars Series.dt.dst_offset | needs-kernel | time zone offset rules; the engine keeps UTC with tz_localize and tz_convert by fixed rule
 polars Series.dt.is_business_day | needs-kernel | business-day calendar kernels; no calendar table
 polars Series.dt.millennium | needs-kernel | calendar part not in the date-part table (year to nanosecond, quarter, week, weekday, ordinal_day)
@@ -464,7 +450,6 @@ polars Series.dt.month_start | needs-kernel | calendar offset and component repl
 polars Series.dt.offset_by | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
 polars Series.dt.replace | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
 polars Series.dt.replace_time_zone | needs-kernel | named time zone conversion; tz_localize and tz_convert take the engine's fixed rules
-polars Series.dt.time | needs-kernel | build or split date and time of day columns; no date32/time cast kernel
 polars Series.list.agg | needs-kernel | list namespace kernel; the list accessor has first, get, last and len only
 polars Series.list.all | needs-kernel | list namespace kernel; the list accessor has first, get, last and len only
 polars Series.list.any | needs-kernel | list namespace kernel; the list accessor has first, get, last and len only
@@ -525,11 +510,9 @@ polars Expr.str.to_integer | needs-kernel | parse text with a radix or as a deci
 polars Expr.str.to_time | needs-kernel | parse text to a temporal column; the engine casts numeric and string to numeric, not text to timestamp
 polars Expr.dt.add_business_days | needs-kernel | business-day calendar kernels; no calendar table
 polars Expr.dt.base_utc_offset | needs-kernel | time zone offset rules; the engine keeps UTC with tz_localize and tz_convert by fixed rule
-polars Expr.dt.cast_time_unit | needs-kernel | timestamp unit conversion keeping the instant; no cast between time units
 polars Expr.dt.century | needs-kernel | calendar part not in the date-part table (year to nanosecond, quarter, week, weekday, ordinal_day)
 polars Expr.dt.combine | needs-kernel | build or split date and time of day columns; no date32/time cast kernel
 polars Expr.dt.convert_time_zone | needs-kernel | named time zone conversion; tz_localize and tz_convert take the engine's fixed rules
-polars Expr.dt.date | needs-kernel | build or split date and time of day columns; no date32/time cast kernel
 polars Expr.dt.dst_offset | needs-kernel | time zone offset rules; the engine keeps UTC with tz_localize and tz_convert by fixed rule
 polars Expr.dt.is_business_day | needs-kernel | business-day calendar kernels; no calendar table
 polars Expr.dt.millennium | needs-kernel | calendar part not in the date-part table (year to nanosecond, quarter, week, weekday, ordinal_day)
@@ -538,7 +521,6 @@ polars Expr.dt.month_start | needs-kernel | calendar offset and component replac
 polars Expr.dt.offset_by | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
 polars Expr.dt.replace | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
 polars Expr.dt.replace_time_zone | needs-kernel | named time zone conversion; tz_localize and tz_convert take the engine's fixed rules
-polars Expr.dt.time | needs-kernel | build or split date and time of day columns; no date32/time cast kernel
 polars Expr.dt.total_days | needs-kernel | duration totals in whole units need an integer division expression node, which the engine has not; the Series form divides in integer arithmetic
 polars Expr.dt.total_hours | needs-kernel | duration totals in whole units need an integer division expression node, which the engine has not; the Series form divides in integer arithmetic
 polars Expr.dt.total_microseconds | needs-kernel | duration totals in whole units need an integer division expression node, which the engine has not; the Series form divides in integer arithmetic

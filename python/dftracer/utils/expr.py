@@ -51,7 +51,15 @@ from typing import (
 
 from . import dftracer_utils_ext as _ext
 from ._aliases import install as _install_aliases
-from .enums import CAST_DTYPES, DT_UNIT_CODES, EPOCH_NS, DType, coerce_duration, rule_to_units
+from .enums import (
+    CAST_DTYPES,
+    DT_UNIT_CODES,
+    EPOCH_NS,
+    UNIT_CODES,
+    DType,
+    coerce_duration,
+    rule_to_units,
+)
 from .errors import DFTUtilsValueError
 from .series import (
     NormForm,
@@ -310,6 +318,8 @@ AGG_CODE = {
     "sketch_quantile": 36,
     "udaf": 37,
     "quantile": 40,
+    "arg_max": 41,
+    "arg_min": 42,
 }
 
 
@@ -1301,6 +1311,20 @@ class Expr(_Namespaces):
         per group. Several ``argmin``/``argmax`` aggregates naming the same
         ``by`` all report the same winning row."""
         return Agg("argmin", self, by=by)
+
+    def arg_max(self) -> Agg:
+        """The position within its group (from 0, in input order) of the
+        first greatest present value, per group (an :class:`Agg`): null for a
+        group with no present value, a NaN wins only in a group with no number
+        (then the first NaN), and a tie keeps the first row, as polars. Integers and floats are compared exactly in
+        their own type; a text column raises. Over the whole frame (no group)
+        it is the row position. ``argmax(by)`` is the other form: the repr of
+        this expression at the row maximizing ``by``."""
+        return Agg("arg_max", self)
+
+    def arg_min(self) -> Agg:
+        """As :meth:`arg_max` for the least present value."""
+        return Agg("arg_min", self)
 
     def distinct(self, k: int = 0) -> Agg:
         """Approximate distinct count per group (a KMV sketch of ``k`` hashes,
@@ -2310,6 +2334,25 @@ class _ExprDt:
     def normalize(self) -> Expr:
         """Each instant at midnight of its day."""
         return self._round("1d", 0)
+
+    def cast_time_unit(self, time_unit: str) -> Expr:
+        """The column in ``time_unit`` (``"ms"``, ``"us"`` or ``"ns"``; polars
+        has no second unit), the instant kept: a coarser unit floors a Timestamp toward
+        negative infinity and truncates a Duration toward zero, as polars. A
+        value that does not fit 64 bits in a finer unit raises when the plan
+        runs, where polars wraps."""
+        if time_unit not in ("ns", "us", "ms"):
+            raise ValueError(f"`time_unit` must be one of {{'ns', 'us', 'ms'}}, got {time_unit}")
+        return self._e._op("dftu.series.dt_as_unit", a=UNIT_CODES[time_unit], b=1)
+
+    def date(self) -> Expr:
+        """The UTC calendar day of each Timestamp as a Date32 column."""
+        return self._e._op("dftu.series.dt_date")
+
+    def time(self) -> Expr:
+        """The UTC time of day of each Timestamp, in the column's unit (Time32
+        for s and ms, Time64 for us and ns)."""
+        return self._e._op("dftu.series.dt_time")
 
     def total_seconds(self) -> Expr:
         """Each value as seconds (Float64), for a Duration or an Int64 read

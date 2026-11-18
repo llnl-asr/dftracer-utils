@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
+#include <dftracer/utils/dataframe/internal/op_failure.h>
 #include <dftracer/utils/dataframe/lazy/common.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -428,6 +429,9 @@ inline constexpr dstd::StringView ELEMENTWISE_COLUMN_OPS[] = {
     "dftu.series.dt_part",
     "dftu.series.dt_round",
     "dftu.series.dt_format",
+    "dftu.series.dt_as_unit",
+    "dftu.series.dt_date",
+    "dftu.series.dt_time",
     "dftu.series.with_timezone"};
 
 inline bool column_op_elementwise(dstd::StringView series_op) {
@@ -482,10 +486,17 @@ inline coro::CoroTask<dstd::Result<DataFrame>> run_frame_op(
     } else {
         dftu_dataframe* result = dftu_op_run_frame(
             op, frames.data(), static_cast<std::uint32_t>(frames.size()), &bag);
-        if (!result)
+        if (!result) {
+            const char* why = dataframe::op_failure_reason(
+                name == COLUMN_OP ? dstd::StringView(args.strings_at(2).front())
+                                  : dstd::StringView(name));
+            if (why)
+                co_return common::make_error<"lazy frame op '{}' failed: {}">(
+                    common::ErrorCode::Internal, name.c_str(), why);
             co_return common::make_error<
                 "lazy frame op '{}' failed: the op returned no frame">(
                 common::ErrorCode::Internal, name.c_str());
+        }
         out = dataframe_handle_take(result);
     }
     if (has_rest(sch)) {

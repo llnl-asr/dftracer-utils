@@ -130,6 +130,24 @@ the same name (``pat``, ``case``, ``regex``, ``n``, ``errors``, ``expand``,
 ``decode(errors="strict")``. A method on a column of the wrong type raises
 ``DFTUtilsValueError``, on a ``Series`` and when an ``Expr`` runs.
 
+``dt.as_unit(unit)`` (pandas) and ``dt.cast_time_unit(time_unit)`` (polars)
+change the unit of a Timestamp or Duration and keep the instant. A coarser unit
+floors toward negative infinity, except that ``cast_time_unit`` truncates a
+Duration toward zero, as polars does. A value that does not fit 64 bits in a
+finer unit raises ``DFTUtilsValueError``; polars wraps it. ``dt.date`` gives a
+Date32 column and ``dt.time`` the time of day in the column's own unit (Time32
+for seconds and milliseconds, Time64 for microseconds and nanoseconds), both in
+UTC like every ``.dt`` part. ``dt.timetz`` is ``dt.time``: a time-of-day column
+has no zone to carry. ``col("v").arg_max()`` and ``arg_min()`` give the position
+within the group of the first extreme present value (null for a group with
+none); they need the rows in input order, so ``TraceViewer.agg`` refuses them.
+``groupby(k)["v"].nlargest(n)`` and ``nsmallest(n)`` give the keys, the row
+position as ``index`` and the value (``keep="first"`` only); ``unique()`` gives
+a List column of the first-seen distinct values, ``is_monotonic_increasing`` and
+``is_monotonic_decreasing`` a Bool column, all in key order. ``groupby(k)
+.corrwith(other)`` correlates each column with the paired column of ``other``
+(rows pair by position, ``method="pearson"`` only).
+
 Removed: ``ColumnExpr`` and ``Field`` (use ``Expr`` and ``col``),
 ``TraceViewer.query`` and ``explain_query`` (use ``duql`` and ``explain_duql``),
 ``TraceViewer.limit`` (use ``head``; ``DataFrame.limit`` and

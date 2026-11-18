@@ -29,6 +29,10 @@ static_assert(code(Agg::SkewUnbiased) == DFTU_AGG_SKEW_UNBIASED);
 static_assert(code(Agg::KurtUnbiased) == DFTU_AGG_KURT_UNBIASED);
 static_assert(code(AggOp::Quantile) == DFTU_AGG_QUANTILE);
 static_assert(code(Agg::Quantile) == DFTU_AGG_QUANTILE);
+static_assert(code(AggOp::ArgMaxPos) == DFTU_AGG_ARGMAX_POS);
+static_assert(code(AggOp::ArgMinPos) == DFTU_AGG_ARGMIN_POS);
+static_assert(code(Agg::ArgMaxPos) == DFTU_AGG_ARGMAX_POS);
+static_assert(code(Agg::ArgMinPos) == DFTU_AGG_ARGMIN_POS);
 static_assert(code(Encoding::View) == 4);
 static_assert(code(Encoding::Chunked) == 5);
 

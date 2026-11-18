@@ -34,6 +34,36 @@ namespace dftracer::utils::dataframe {
 // overload runs (keeping integers exact) and the finalized Sum/Min/Max column
 // type. Derived once from the column type, never per row, so a group with no
 // present rows still lands in the same output column as its populated peers.
+// The column types ArgMaxPos/ArgMinPos order: the fixed-width numbers, bools
+// and temporal types, each read exactly in its own domain.
+namespace {
+bool apos_supported(TypeId t) {
+    switch (t) {
+        case TypeId::Bool:
+        case TypeId::Int8:
+        case TypeId::Int16:
+        case TypeId::Int32:
+        case TypeId::Int64:
+        case TypeId::Uint8:
+        case TypeId::Uint16:
+        case TypeId::Uint32:
+        case TypeId::Uint64:
+        case TypeId::Float16:
+        case TypeId::Float32:
+        case TypeId::Float64:
+        case TypeId::Date32:
+        case TypeId::Date64:
+        case TypeId::Time32:
+        case TypeId::Time64:
+        case TypeId::Timestamp:
+        case TypeId::Duration:
+            return true;
+        default:
+            return false;
+    }
+}
+}  // namespace
+
 FieldStatDomain col_domain(TypeId t) {
     switch (t) {
         case TypeId::Uint8:
@@ -420,9 +450,9 @@ bool plain_key(const Series& c, PlainKey& out) {
 bool plain_shape(const AggState& st, dstd::Span<const Series* const> keys,
                  dstd::Span<const Series* const> values,
                  dstd::Vector<PlainKey>& k, dstd::Vector<Plain8>& v) {
-    if (st.has_fl || st.has_arg || st.has_bitor || st.has_prod || st.has_qv ||
-        st.has_msk || st.has_kmv || st.has_lst || st.has_ss || st.has_co ||
-        st.has_set || st.has_occ || st.has_dyn || st.has_udaf)
+    if (st.has_fl || st.has_arg || st.has_apos || st.has_bitor || st.has_prod ||
+        st.has_qv || st.has_msk || st.has_kmv || st.has_lst || st.has_ss ||
+        st.has_co || st.has_set || st.has_occ || st.has_dyn || st.has_udaf)
         return false;
     k.resize(keys.size());
     for (std::size_t j = 0; j < keys.size(); ++j)
@@ -1485,6 +1515,36 @@ dstd::Result<void> agg_accumulate(AggState& st,
                 for (int ri : reprs)
                     st.arg_repr[rbase + static_cast<std::size_t>(ri)] =
                         repr_of(ri);
+            }
+        }
+        if (st.has_apos) {
+            const std::size_t pbase = static_cast<std::size_t>(g) * st.n_apos;
+            for (std::size_t slot = 0; slot < st.n_apos; ++slot) {
+                const Series* vc =
+                    values[static_cast<std::size_t>(st.apos_col[slot])];
+                if (vc->is_null(i)) continue;
+                if (!apos_supported(vc->type())) {
+                    st.udaf_note(
+                        common::make_error<
+                            "arg_max/arg_min: the column must be a number, a "
+                            "bool or a temporal type">(
+                            common::ErrorCode::InvalidArgument)
+                            .error());
+                    continue;
+                }
+                const FieldStatDomain d = col_domain(vc->type());
+                const std::uint64_t bits = read_bits(*vc, i, d);
+                const auto dom =
+                    static_cast<std::uint8_t>(static_cast<int>(d) + 1);
+                const std::size_t ps = pbase + slot;
+                if (st.apos_dom[ps] != 0 &&
+                    !(st.apos_dom[ps] == dom &&
+                      apos_better(st.apos_dir[slot], dom, bits,
+                                  st.apos_bits[ps])))
+                    continue;
+                st.apos_dom[ps] = dom;
+                st.apos_bits[ps] = bits;
+                st.apos_rank[ps] = st.counts[static_cast<std::size_t>(g)] - 1;
             }
         }
         if (st.has_bitor) {

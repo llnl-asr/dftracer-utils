@@ -511,6 +511,12 @@ Series Series::dt_format(dstd::StringView fmt, TimeUnit unit) const {
     return derived(dftu_series_dt_format(handle_, fmt.data(), sv_size(fmt),
                                          static_cast<std::int32_t>(unit)));
 }
+Series Series::dt_as_unit(TimeUnit unit, std::int32_t mode) const {
+    return derived(
+        dftu_series_dt_as_unit(handle_, static_cast<std::int32_t>(unit), mode));
+}
+Series Series::dt_date() const { return derived(dftu_series_dt_date(handle_)); }
+Series Series::dt_time() const { return derived(dftu_series_dt_time(handle_)); }
 Series Series::with_timezone(dstd::StringView tz) const {
     return derived(dftu_series_with_timezone(
         handle_, tz.data(), static_cast<std::int32_t>(tz.size())));

@@ -122,12 +122,28 @@ enum class AggOp {
     /// the aggregation engine bounds it across groups, but one group's values
     /// must fit in memory when it is finalized. For a bounded-memory estimate
     /// use Pct.
-    Quantile = 40
+    Quantile = 40,
+    /// The position within its group, from 0 and in input order, of the first
+    /// row holding the greatest present value of `value_col`, Int64 (null for
+    /// a group with no present value). A NaN counts only while the group has no
+    /// number: then the first NaN is the winner, as Polars. The
+    /// column is read exactly in its own domain (signed, unsigned or float);
+    /// a String or Binary column is refused by agg_accumulate. The state
+    /// holds the winner's value and position, so it is fixed size, but the
+    /// position counts the rows an accumulator saw before the winner: states
+    /// are merged in row order (`other` holds the rows after `into`), which a
+    /// serial accumulation, the batches of a streamed group-by and the spill
+    /// of one stream satisfy; merging a state that starts before `into` for a
+    /// shared group is refused by agg_check. Not available to the trace-view
+    /// aggregation, whose files have no common row order.
+    ArgMaxPos = 41,
+    /// As ArgMaxPos for the least present value; a tie keeps the first row.
+    ArgMinPos = 42
 };
 
 /// The last row of agg_ops.def, which bounds every serialized op code. A row
 /// appended to the table moves it (c_api_enum_lockstep.cpp checks).
-inline constexpr AggOp AGG_OP_LAST = AggOp::Quantile;
+inline constexpr AggOp AGG_OP_LAST = AggOp::ArgMinPos;
 
 /// Ops taking a second input through `by_col`: the extremum ArgMax/ArgMin
 /// maximize/minimize, the ordered list/top-k ops order by, the co-moment ops

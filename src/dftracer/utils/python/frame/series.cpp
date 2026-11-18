@@ -687,6 +687,14 @@ PyMethodDef Series_methods[] = {
      METH_VARARGS | METH_KEYWORDS,
      "dt_round(every, mode) -> each instant rounded to a multiple of every "
      "(the column's unit) by mode 0 floor, 1 ceil, 2 round (half to even)."},
+    {"dt_as_unit",
+     DFTU_PYCFUNCTION(
+         (core::kw_pair<"dt_as_unit", Series_dt_as_unit, "unit", "mode">)),
+     METH_VARARGS | METH_KEYWORDS,
+     "dt_as_unit(unit, mode=0) -> this Timestamp or Duration column in unit "
+     "(0 s, 1 ms, 2 us, 3 ns), the instant kept, a coarser unit floored "
+     "(mode 0) or, for a Duration, truncated toward zero as polars (mode 1). "
+     "Raises ValueError on overflow."},
     {"with_timezone",
      DFTU_PYCFUNCTION(
          (core::kw_one<"with_timezone", "tz", Series_with_timezone>)),
@@ -853,6 +861,17 @@ int init_series(PyObject* m) {
     if (!retype_fn) return -1;
     if (PyModule_AddObject(m, "_series_retype", retype_fn) < 0) {
         Py_DECREF(retype_fn);
+        return -1;
+    }
+    static PyMethodDef list_of_def = {
+        "_series_list_of", series_list_of, METH_VARARGS,
+        "_series_list_of(values, ends) -> a List Series whose row i is "
+        "values[ends[i - 1]:ends[i]] (the first row starts at 0); ends is a "
+        "non-decreasing Int64 column."};
+    PyObject* list_of_fn = PyCFunction_NewEx(&list_of_def, nullptr, nullptr);
+    if (!list_of_fn) return -1;
+    if (PyModule_AddObject(m, "_series_list_of", list_of_fn) < 0) {
+        Py_DECREF(list_of_fn);
         return -1;
     }
     static PyMethodDef from_bytes_def = {

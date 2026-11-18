@@ -36,6 +36,10 @@ _T = TypeVar("_T")
 GroupKey = Union["Scalar", None, Tuple[Union["Scalar", None], ...]]
 
 
+_CMP_GT = 0  # DFTU_CMP_GT, dataframe/c_api.h
+_CMP_LT = 2  # DFTU_CMP_LT
+
+
 class GroupBy:
     """A lazy group-by over a native ``DataFrame`` (zero or more key columns;
     none makes the whole frame one group). ``.agg(...)`` takes aggregate
@@ -295,6 +299,164 @@ class GroupBy:
         (pandas ``GroupBy.corr``, long form): the keys, ``a``, ``b`` and
         ``value``, one ``corr`` aggregate per pair."""
         return self._pairwise("corr")
+
+    def _one_column(self, what: str) -> str:
+        if self._single is None:
+            raise TypeError(f"{what}: select one column, groupby(keys)['column'].{what}(...)")
+        return self._single
+
+    def nlargest(self, n: int = 5, keep: str = "first") -> DataFrame:
+        """Per group, the ``n`` largest present values of the selected column
+        (pandas ``SeriesGroupBy.nlargest``): the keys, the original row position
+        as ``index`` (the frame has no row labels) and the value, groups in key order and each group descending. A null or NaN ranks
+        last, so it only appears in a group with fewer than ``n`` numbers. A tie
+        keeps the earlier row first; ``keep`` takes only ``"first"``, because
+        pandas orders ``keep="last"`` ties by a rule that depends on the group
+        size."""
+        return self._top(n, keep, True)
+
+    def nsmallest(self, n: int = 5, keep: str = "first") -> DataFrame:
+        """As :meth:`nlargest` for the smallest values, ascending."""
+        return self._top(n, keep, False)
+
+    def _top(self, n: int, keep: str, largest: bool) -> DataFrame:
+        name = "nlargest" if largest else "nsmallest"
+        col = self._one_column(name)
+        if keep != "first":
+            raise NotImplementedError(f"{name}: keep={keep!r}; only 'first'")
+        frame = self._frame()
+        label = "index"
+        if label in frame.columns:
+            raise ValueError(f"{name}: a column is already named {label!r}")
+        frame = frame.with_row_index(label)
+        if n <= 0:
+            return frame.head(0).select(*self._keys, label, col)
+        # A null or NaN ranks last, so it fills a group that has fewer than
+        # ``n`` numbers, as pandas.
+        rank = "__dftu_rank__"
+        value = self._col(frame, col)
+        if value.dtype in (DType.FLOAT32, DType.FLOAT64):
+            value = value.where(value.is_nan().logical_not())
+        frame = frame.with_column(rank, value)
+        ranked = frame.sort_by_multi(
+            [*self._keys, rank], [False] * len(self._keys) + [largest], nulls_last=True
+        )
+        return GroupBy(ranked, self._keys).head(n).select(*self._keys, label, col)
+
+    def unique(self) -> DataFrame:
+        """Per group, the distinct values of the selected column in first-seen
+        order (pandas ``SeriesGroupBy.unique``): the keys, in key order, and a
+        List column of the column's own type. A null and a NaN each appear once,
+        as pandas."""
+        col = self._one_column("unique")
+        frame = self._frame().select(*self._keys, col)
+        distinct = frame.unique([*self._keys, col])
+        ordered = distinct.sort_by_multi(self._keys, nulls_last=True) if self._keys else distinct
+        counts = GroupBy(ordered, self._keys).agg(Agg("count", None, "__dftu_n__"))
+        counts = counts.sort_by_multi(self._keys, nulls_last=True) if self._keys else counts
+        sizes = self._col(counts, "__dftu_n__")
+        lists = _ext._series_list_of(self._col(ordered, col), cast("Series[int]", sizes.cumsum()))
+        return counts.select(*self._keys).with_column(col, lists)
+
+    @property
+    def is_monotonic_increasing(self) -> DataFrame:
+        """Per group, whether the selected column never decreases (pandas
+        ``SeriesGroupBy.is_monotonic_increasing``): the keys and a Bool column
+        in key order. A null or NaN in a group makes it False, equal neighbours
+        are allowed, and a one-row group is True."""
+        return self._monotonic(True)
+
+    @property
+    def is_monotonic_decreasing(self) -> DataFrame:
+        """As :attr:`is_monotonic_increasing` for a column that never increases."""
+        return self._monotonic(False)
+
+    def _monotonic(self, increasing: bool) -> DataFrame:
+        what = "is_monotonic_increasing" if increasing else "is_monotonic_decreasing"
+        col = self._one_column(what)
+        frame = self._frame()
+        value = self._col(frame, col)
+        if value.dtype in (DType.FLOAT32, DType.FLOAT64):
+            value = value.where(value.is_nan().logical_not())
+        helper = "__dftu_mono_v__"
+        framed = frame.select(*self._keys).with_column(helper, value)
+        previous = self._col(GroupBy(framed, self._keys).shift(1), helper)
+        step = value.compare_series(previous, _CMP_LT if increasing else _CMP_GT)
+        framed = framed.with_column("__dftu_mono_bad__", step.astype("int64"))
+        out = GroupBy(framed, self._keys).agg(
+            Agg("count", None, "__dftu_rows__"),
+            Agg("count_valid", Col(helper), "__dftu_present__"),
+            Agg("max", Col("__dftu_mono_bad__"), "__dftu_bad__"),
+        )
+        rows, present, bad = (self._col(out, f"__dftu_{p}__") for p in ("rows", "present", "bad"))
+        ok = (rows - present).eq(0).logical(0, bad.fill_null(0).eq(0))
+        result = out.select(*self._keys).with_column(col, ok)
+        return result.sort_by_multi(self._keys) if self._keys else result
+
+    def corrwith(
+        self,
+        other: DataFrame | Series,
+        drop: bool = False,
+        method: str = "pearson",
+        numeric_only: bool = False,
+    ) -> DataFrame:
+        """Per group, the Pearson correlation of each numeric column with the
+        column of ``other`` of the same name, or with ``other`` when it is a
+        Series (pandas ``GroupBy.corrwith``; wide, the keys then one Float64
+        column per column). Rows pair by position and ``other`` must have as many
+        rows as this frame, where pandas pairs by row label. A column ``other``
+        lacks is a NaN column, or is dropped with ``drop=True``; a group with
+        fewer than two pairs or a constant side is NaN. It is one ``corr``
+        aggregate per column, so it streams and spills like any group-by."""
+        if method != "pearson":
+            raise NotImplementedError(f"corrwith: method {method!r}; only 'pearson'")
+        frame = self._frame()
+        if len(other) != len(frame):
+            raise ValueError(
+                f"corrwith: other has {len(other)} rows and the frame {len(frame)}; "
+                "rows pair by position"
+            )
+        value_cols = self._value_columns()
+        names = [c for c in frame.columns if c not in self._keys]
+        if numeric_only:
+            names = [c for c in names if c in value_cols]
+        if isinstance(other, Series):
+            pairs = {c: other for c in value_cols}
+        else:
+            have = set(other.columns)
+            pairs = {c: self._col(other, c) for c in value_cols if c in have}
+        if not pairs:
+            raise ValueError("corrwith: no column in common with other")
+        # The engine's corr is 0 for a group with fewer than two pairs or a
+        # constant side; pandas gives NaN, so the pair count and both variances
+        # (over the rows where both sides are present) come along.
+        specs = []
+        for c, s in pairs.items():
+            y_name, xm, ym = f"__dftu_with_{c}__", f"__dftu_x_{c}__", f"__dftu_y_{c}__"
+            frame = frame.with_column(y_name, s)
+            x = self._col(frame, c).astype("float64")
+            y = self._col(frame, y_name).astype("float64")
+            frame = frame.with_column(xm, x + (y - y)).with_column(ym, y + (x - x))
+            specs += [
+                Agg("corr", Col(xm), c, by=Col(ym)),
+                Agg("var", Col(xm), f"__dftu_vx_{c}__"),
+                Agg("var", Col(ym), f"__dftu_vy_{c}__"),
+                Agg("count_valid", Col(xm), f"__dftu_n_{c}__"),
+            ]
+        out = self._sorted(GroupBy(frame, self._keys).agg(*specs))
+        nan = Series.from_list([float("nan")] * len(out))
+        for c in pairs:
+            n, vx, vy = (self._col(out, f"__dftu_{p}_{c}__") for p in ("n", "vx", "vy"))
+            ok = n.ge(2).logical(0, vx.gt(0)).logical(0, vy.gt(0))
+            out = out.with_column(c, self._col(out, c).where(ok, nan))
+        out = out.select(*self._keys, *pairs)
+        if not drop:
+            rows = len(out)
+            for c in names:
+                if c not in pairs:
+                    out = out.with_column(c, Series.from_list([float("nan")] * rows))
+            out = out.select(*self._keys, *names)
+        return out
 
     def cov(self) -> DataFrame:
         """Per group, the sample covariance of every numeric column pair

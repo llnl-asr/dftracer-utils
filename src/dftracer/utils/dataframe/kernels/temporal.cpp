@@ -252,6 +252,144 @@ dftu_series* dftu_series_dt_round(const dftu_series* in, std::int64_t every,
     return out;
 }
 
+dftu_series* dftu_series_dt_as_unit(const dftu_series* in, std::int32_t unit,
+                                    std::int32_t mode) {
+    DFTU_FLAT_OPERAND(in, flat_in, dftu_series_dt_as_unit(flat_in, unit, mode));
+
+    using namespace dftracer::utils::dataframe;
+    if (!in ||
+        (in->type != TypeId::Timestamp && in->type != TypeId::Duration) ||
+        unit < DFTU_TIME_UNIT_SECOND || unit > DFTU_TIME_UNIT_NANO ||
+        mode < DFTU_DT_UNIT_FLOOR || mode > DFTU_DT_UNIT_POLARS)
+        return nullptr;
+    dftu_series* v = dftu_series_materialize(in);
+    if (!v) return nullptr;
+    const bool truncate =
+        mode == DFTU_DT_UNIT_POLARS && v->type == TypeId::Duration;
+    const TimeUnit from = v->time_unit();
+    const TimeUnit to = static_cast<TimeUnit>(unit);
+    const std::int64_t per_from = unit_per_second(from);
+    const std::int64_t per_to = unit_per_second(to);
+    auto* out = new dftu_series();
+    adopt_type_from(*out, *v);
+    out->set_time_unit(to);
+    out->encoding = Encoding::Flat;
+    out->length = v->length;
+    out->null_count = v->null_count;
+    out->validity = v->validity;
+    out->data = new_buffer(buffer_bytes(TypeId::Int64, v->length));
+    const auto* pi = reinterpret_cast<const std::int64_t*>(v->data.data());
+    auto* po = reinterpret_cast<std::int64_t*>(writable(out->data));
+    const bool up = per_to > per_from;
+    const std::int64_t ratio = up ? per_to / per_from : per_from / per_to;
+    const std::int64_t hi = std::numeric_limits<std::int64_t>::max() / ratio;
+    const std::int64_t lo = std::numeric_limits<std::int64_t>::min() / ratio;
+    const bool has_nulls = static_cast<bool>(v->validity.block());
+    for (std::int64_t i = 0; i < v->length; ++i) {
+        const bool valid =
+            !has_nulls || ((v->validity.data()[i >> 3] >> (i & 7)) & 1);
+        if (!valid) {
+            po[i] = 0;
+        } else if (!up) {
+            po[i] = truncate ? pi[i] / ratio
+                             : dftracer::utils::common::floor_div(pi[i], ratio);
+        } else if (pi[i] > hi || pi[i] < lo) {
+            dftu_series_free(v);
+            dftu_series_free(out);
+            return nullptr;
+        } else {
+            po[i] = pi[i] * ratio;
+        }
+    }
+    dftu_series_free(v);
+    return out;
+}
+
+dftu_series* dftu_series_dt_date(const dftu_series* in) {
+    DFTU_FLAT_OPERAND(in, flat_in, dftu_series_dt_date(flat_in));
+
+    using namespace dftracer::utils::dataframe;
+    if (!in || (in->type != TypeId::Timestamp && in->type != TypeId::Date64))
+        return nullptr;
+    dftu_series* v = dftu_series_materialize(in);
+    if (!v) return nullptr;
+    const std::int64_t per_day =
+        unit_per_second(v->type == TypeId::Date64 ? TimeUnit::Milli
+                                                  : v->time_unit()) *
+        86400;
+    auto* out = new dftu_series();
+    out->type = TypeId::Date32;
+    out->encoding = Encoding::Flat;
+    out->length = v->length;
+    out->null_count = v->null_count;
+    out->validity = v->validity;
+    out->data = new_buffer(buffer_bytes(TypeId::Date32, v->length));
+    const auto* pi = reinterpret_cast<const std::int64_t*>(v->data.data());
+    auto* po = reinterpret_cast<std::int32_t*>(writable(out->data));
+    const bool has_nulls = static_cast<bool>(v->validity.block());
+    for (std::int64_t i = 0; i < v->length; ++i) {
+        const bool valid =
+            !has_nulls || ((v->validity.data()[i >> 3] >> (i & 7)) & 1);
+        if (!valid) {
+            po[i] = 0;
+            continue;
+        }
+        const std::int64_t day =
+            dftracer::utils::common::floor_div(pi[i], per_day);
+        if (day < std::numeric_limits<std::int32_t>::min() ||
+            day > std::numeric_limits<std::int32_t>::max()) {
+            dftu_series_free(v);
+            dftu_series_free(out);
+            return nullptr;
+        }
+        po[i] = static_cast<std::int32_t>(day);
+    }
+    dftu_series_free(v);
+    return out;
+}
+
+dftu_series* dftu_series_dt_time(const dftu_series* in) {
+    DFTU_FLAT_OPERAND(in, flat_in, dftu_series_dt_time(flat_in));
+
+    using namespace dftracer::utils::dataframe;
+    if (!in || in->type != TypeId::Timestamp) return nullptr;
+    dftu_series* v = dftu_series_materialize(in);
+    if (!v) return nullptr;
+    const TimeUnit unit = v->time_unit();
+    const std::int64_t per_day = unit_per_second(unit) * 86400;
+    const bool narrow = unit == TimeUnit::Second || unit == TimeUnit::Milli;
+    auto* out = new dftu_series();
+    out->type = narrow ? TypeId::Time32 : TypeId::Time64;
+    out->set_time_unit(unit);
+    out->encoding = Encoding::Flat;
+    out->length = v->length;
+    out->null_count = v->null_count;
+    out->validity = v->validity;
+    out->data = new_buffer(buffer_bytes(out->type, v->length));
+    const auto* pi = reinterpret_cast<const std::int64_t*>(v->data.data());
+    const bool has_nulls = static_cast<bool>(v->validity.block());
+    auto valid_at = [&](std::int64_t i) {
+        return !has_nulls || ((v->validity.data()[i >> 3] >> (i & 7)) & 1);
+    };
+    if (narrow) {
+        auto* po = reinterpret_cast<std::int32_t*>(writable(out->data));
+        for (std::int64_t i = 0; i < v->length; ++i)
+            po[i] =
+                valid_at(i)
+                    ? static_cast<std::int32_t>(
+                          dftracer::utils::common::floor_mod(pi[i], per_day))
+                    : 0;
+    } else {
+        auto* po = reinterpret_cast<std::int64_t*>(writable(out->data));
+        for (std::int64_t i = 0; i < v->length; ++i)
+            po[i] = valid_at(i)
+                        ? dftracer::utils::common::floor_mod(pi[i], per_day)
+                        : 0;
+    }
+    dftu_series_free(v);
+    return out;
+}
+
 dftu_series* dftu_series_with_timezone(const dftu_series* v, const char* tz,
                                        std::int32_t tz_size) {
     DFTU_FLAT_OPERAND(v, flat_v,

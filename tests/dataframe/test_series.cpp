@@ -593,6 +593,109 @@ TEST_SUITE("vec") {
         CHECK_FALSE(s.dt_round(hour, 7).valid());
     }
 
+    TEST_CASE("dt_as_unit: units keep the instant, floor and refuse overflow") {
+        // Row 2 is null with garbage under it, which must not count as an
+        // overflow.
+        const std::int64_t us[5] = {1'700'000'000'123'456, -1'500,
+                                    std::numeric_limits<std::int64_t>::max(),
+                                    1'500, -1};
+        const std::uint8_t valid = 0b11011;
+        auto stamp = [&](TimeUnit unit, TypeId type) {
+            Series s = Series::flat(TypeId::Int64, us, 5, &valid);
+            s.handle()->type = type;
+            s.handle()->set_time_unit(unit);
+            if (type == TypeId::Timestamp) s.handle()->set_timezone("UTC");
+            return s;
+        };
+        Series ts = stamp(TimeUnit::Micro, TypeId::Timestamp);
+        Series ms = ts.dt_as_unit(TimeUnit::Milli);
+        REQUIRE(ms.valid());
+        CHECK(ms.type() == TypeId::Timestamp);
+        CHECK(ms.handle()->time_unit() == TimeUnit::Milli);
+        CHECK(ms.handle()->timezone() == "UTC");
+        CHECK(ms.is_null(2));
+        CHECK(ms.data<std::int64_t>()[0] == 1'700'000'000'123);
+        CHECK(ms.data<std::int64_t>()[1] == -2);  // floors, not truncates
+        CHECK(ms.data<std::int64_t>()[3] == 1);
+        CHECK(ms.data<std::int64_t>()[4] == -1);
+        Series sec = ts.dt_as_unit(TimeUnit::Second);
+        CHECK(sec.data<std::int64_t>()[0] == 1'700'000'000);
+        CHECK(sec.data<std::int64_t>()[4] == -1);
+        Series ns = ts.dt_as_unit(TimeUnit::Nano);
+        REQUIRE(ns.valid());  // the null row's garbage is not scaled
+        CHECK(ns.data<std::int64_t>()[0] == 1'700'000'000'123'456'000);
+        CHECK(ns.data<std::int64_t>()[1] == -1'500'000);
+        Series all_valid = Series::flat(TypeId::Int64, us, 5);
+        all_valid.handle()->type = TypeId::Timestamp;
+        all_valid.handle()->set_time_unit(TimeUnit::Micro);
+        CHECK_FALSE(all_valid.dt_as_unit(TimeUnit::Nano).valid());
+        const std::int64_t small[2] = {-1'500, 7};
+        Series sm = Series::flat(TypeId::Int64, small, 2);
+        sm.handle()->type = TypeId::Timestamp;
+        sm.handle()->set_time_unit(TimeUnit::Micro);
+        Series sn = sm.dt_as_unit(TimeUnit::Nano);
+        REQUIRE(sn.valid());
+        CHECK(sn.data<std::int64_t>()[0] == -1'500'000);
+        CHECK(sm.dt_as_unit(TimeUnit::Micro).data<std::int64_t>()[1] == 7);
+        // A Duration floors by default and truncates in polars mode.
+        Series du = stamp(TimeUnit::Micro, TypeId::Duration);
+        CHECK(du.dt_as_unit(TimeUnit::Milli).data<std::int64_t>()[1] == -2);
+        Series tr = du.dt_as_unit(TimeUnit::Milli, DFTU_DT_UNIT_POLARS);
+        CHECK(tr.data<std::int64_t>()[1] == -1);
+        CHECK(tr.data<std::int64_t>()[4] == 0);
+        Series tp = ts.dt_as_unit(TimeUnit::Milli, DFTU_DT_UNIT_POLARS);
+        CHECK(tp.data<std::int64_t>()[1] == -2);  // a Timestamp still floors
+        CHECK_FALSE(ts.dt_as_unit(TimeUnit::Milli, 9).valid());
+        CHECK_FALSE(
+            Series::flat_i64(small, 2).dt_as_unit(TimeUnit::Milli).valid());
+    }
+
+    TEST_CASE("dt_date and dt_time: the UTC day and the time of day") {
+        // 2023-11-14 22:13:20.123456, one microsecond before the epoch, a
+        // null, the epoch.
+        const std::int64_t us[4] = {1'700'000'000'123'456, -1, 0, 0};
+        const std::uint8_t valid = 0b1011;
+        Series ts = Series::flat(TypeId::Int64, us, 4, &valid);
+        ts.handle()->type = TypeId::Timestamp;
+        ts.handle()->set_time_unit(TimeUnit::Micro);
+        Series d = ts.dt_date();
+        REQUIRE(d.valid());
+        CHECK(d.type() == TypeId::Date32);
+        CHECK(d.is_null(2));
+        CHECK(d.data<std::int32_t>()[0] == 19675);
+        CHECK(d.data<std::int32_t>()[1] == -1);  // floors before the epoch
+        CHECK(d.data<std::int32_t>()[3] == 0);
+        Series t = ts.dt_time();
+        REQUIRE(t.valid());
+        CHECK(t.type() == TypeId::Time64);
+        CHECK(t.handle()->time_unit() == TimeUnit::Micro);
+        CHECK(t.is_null(2));
+        CHECK(t.data<std::int64_t>()[0] == 80'000'123'456);
+        CHECK(t.data<std::int64_t>()[1] == 86'399'999'999);
+        // Seconds and milliseconds give the 32-bit Time32.
+        Series ms = ts.dt_as_unit(TimeUnit::Milli).dt_time();
+        REQUIRE(ms.valid());
+        CHECK(ms.type() == TypeId::Time32);
+        CHECK(ms.handle()->time_unit() == TimeUnit::Milli);
+        CHECK(ms.data<std::int32_t>()[0] == 80'000'123);
+        CHECK(ms.data<std::int32_t>()[1] == 86'399'999);
+        // A Date64 has a day, and no time of day; other columns have neither.
+        const std::int64_t ms64[2] = {86'400'000 * 3 + 5, -1};
+        Series d64 = Series::flat(TypeId::Int64, ms64, 2);
+        d64.handle()->type = TypeId::Date64;
+        CHECK(d64.dt_date().data<std::int32_t>()[0] == 3);
+        CHECK(d64.dt_date().data<std::int32_t>()[1] == -1);
+        CHECK_FALSE(d64.dt_time().valid());
+        CHECK_FALSE(Series::flat_i64(ms64, 2).dt_date().valid());
+        // A day outside Int32 is an error, not a wrap.
+        const std::int64_t far[1] = {std::numeric_limits<std::int64_t>::max()};
+        Series big = Series::flat(TypeId::Int64, far, 1);
+        big.handle()->type = TypeId::Timestamp;
+        big.handle()->set_time_unit(TimeUnit::Second);
+        CHECK_FALSE(big.dt_date().valid());
+        CHECK(big.dt_time().valid());
+    }
+
     TEST_CASE("dt_format: every directive on fixed instants") {
         // 2023-11-14 22:13:20.123456, the epoch, one microsecond before it,
         // 2024-02-29 12:34:56.789012, 2021-01-03 (ISO week 53 of 2020),

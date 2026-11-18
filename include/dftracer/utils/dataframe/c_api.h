@@ -820,6 +820,30 @@ enum { DFTU_DT_FLOOR = 0, DFTU_DT_CEIL = 1, DFTU_DT_ROUND = 2 };
  * date column, another non-instant type, `every` <= 0 or a bad code. */
 DFTU_EXPORT dftu_series* dftu_series_dt_round(const dftu_series* v,
                                               int64_t every, int32_t mode);
+/** How dftu_series_dt_as_unit rounds to a coarser unit. */
+typedef int32_t dftu_dt_unit_rounding;
+enum {
+    /** Floor toward -infinity, as pandas `as_unit`. */
+    DFTU_DT_UNIT_FLOOR = 0,
+    /** As Polars `cast_time_unit`: a Timestamp floors, a Duration truncates
+     * toward zero. */
+    DFTU_DT_UNIT_POLARS = 1
+};
+/** A Timestamp or Duration column in another `unit` (a dftu_time_unit),
+ * keeping the instant, with the zone kept; a coarser unit rounds by `mode` (a
+ * dftu_dt_unit_rounding). NULL for another type, a bad `unit` or `mode`, or
+ * when a valid row does not fit Int64 in the finer unit (an error, never a
+ * wrap). */
+DFTU_EXPORT dftu_series* dftu_series_dt_as_unit(const dftu_series* v,
+                                                int32_t unit, int32_t mode);
+/** The calendar day of each Timestamp (its own unit, zone ignored: UTC) or
+ * Date64 row as Date32, floored toward -infinity. NULL for another type or a
+ * day outside Int32. */
+DFTU_EXPORT dftu_series* dftu_series_dt_date(const dftu_series* v);
+/** The UTC time of day of each Timestamp row, since midnight in the column's
+ * own unit: Time32 for seconds and milliseconds, Time64 for microseconds and
+ * nanoseconds. NULL for another type. */
+DFTU_EXPORT dftu_series* dftu_series_dt_time(const dftu_series* v);
 /** The same instants under the timezone `tz` (a zone name such as "UTC" or
  * "Asia/Tokyo"; `tz_len` bytes, 0 for naive): the Timestamp type's zone is
  * replaced and no tick moves, as pandas `tz_convert`, or `tz_localize` on a

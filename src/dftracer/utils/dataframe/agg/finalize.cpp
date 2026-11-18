@@ -602,6 +602,25 @@ static DataFrame finalize_impl(const AggState& st_in,
             for (std::int64_t g = 0; g < ng; ++g)
                 v[static_cast<std::size_t>(g)] = fs_at(g).sumsq();
             out.columns.push_back(Series::flat_f64(v.data(), ng));
+        } else if (sp.op == AggOp::ArgMaxPos || sp.op == AggOp::ArgMinPos) {
+            const int slot = st.spec_apos[s];
+            dstd::Vector<std::int64_t> v(static_cast<std::size_t>(ng), 0);
+            dstd::Vector<std::uint8_t> valid(
+                static_cast<std::size_t>((ng + 7) / 8), 0);
+            bool any_null = false;
+            for (std::int64_t g = 0; g < ng; ++g) {
+                const std::size_t at = static_cast<std::size_t>(g) * st.n_apos +
+                                       static_cast<std::size_t>(slot);
+                if (slot >= 0 && st.apos_dom[at] != 0) {
+                    v[static_cast<std::size_t>(g)] = st.apos_rank[at];
+                    valid[static_cast<std::size_t>(g >> 3)] |=
+                        static_cast<std::uint8_t>(1u << (g & 7));
+                } else {
+                    any_null = true;
+                }
+            }
+            out.columns.push_back(Series::flat_i64(
+                v.data(), ng, any_null ? valid.data() : nullptr));
         } else if (sp.op == AggOp::ArgMax || sp.op == AggOp::ArgMin) {
             const int slot = st.spec_arg[s];
             const int ri = st.spec_arg_repr[s];

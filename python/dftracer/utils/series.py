@@ -53,6 +53,7 @@ from .enums import (
     DTYPE_BY_NAME,
     EPOCH_NS,
     FREQ_NS,
+    UNIT_CODES,
     DType,
     dt_unit,
     rule_to_units,
@@ -1310,6 +1311,50 @@ class _DtAccessor(_ext.DtAccessor):
     def normalize(self) -> Series:
         """Each instant at midnight of its day."""
         return self.floor("1d")
+
+    @staticmethod
+    def _unit_code(name: str, unit: object) -> int:
+        code = UNIT_CODES.get(unit) if isinstance(unit, str) else None
+        if code is None:
+            raise ValueError(f"{name}: unit must be one of s, ms, us or ns, not {unit!r}")
+        return code
+
+    def as_unit(self, unit: str) -> Series:
+        """The column in ``unit`` (``"s"``, ``"ms"``, ``"us"`` or ``"ns"``),
+        the instant kept: a coarser unit floors toward negative infinity, as
+        pandas ``as_unit``. A Timestamp keeps its zone; a Duration works too.
+        A value that does not fit 64 bits in a finer unit raises
+        ``DFTUtilsValueError`` (pandas ``OutOfBoundsDatetime``), never wraps."""
+        return self._s.dt_as_unit(self._unit_code("as_unit", unit), 0)
+
+    def cast_time_unit(self, time_unit: str) -> Series:
+        """:meth:`as_unit` under the polars name and rule: a Timestamp floors
+        and a Duration truncates toward zero, where ``as_unit`` floors both.
+        Polars has no second unit, so only ``"ns"``, ``"us"`` and ``"ms"`` are
+        accepted."""
+        if time_unit not in ("ns", "us", "ms"):
+            raise ValueError(f"`time_unit` must be one of {{'ns', 'us', 'ms'}}, got {time_unit}")
+        return self._s.dt_as_unit(self._unit_code("cast_time_unit", time_unit), 1)
+
+    @property
+    def date(self) -> Series:
+        """The calendar day of each Timestamp as a Date32 column (pandas
+        ``dt.date``); the day is UTC, as every ``.dt`` part."""
+        return self._s.dt_date()
+
+    @property
+    def time(self) -> Series:
+        """The time of day of each Timestamp, in the column's unit: a Time32
+        column for seconds and milliseconds, a Time64 column for microseconds
+        and nanoseconds (pandas ``dt.time``); UTC, as every ``.dt`` part."""
+        return self._s.dt_time()
+
+    @property
+    def timetz(self) -> Series:
+        """As :meth:`time`. The column types carry no zone for a time of day,
+        so the result is the UTC time of day without the tzinfo pandas
+        attaches."""
+        return self._s.dt_time()
 
     def total_seconds(self) -> Series:
         """Each value as seconds (Float64), for a Duration or an Int64 read

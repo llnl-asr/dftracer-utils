@@ -581,3 +581,142 @@ TEST_CASE("agg_deserialize survives mutated and truncated blobs") {
     CHECK(decoded + refused == 2000);
     CHECK(refused > 0);
 }
+
+namespace {
+
+// Finalize the ArgMaxPos and ArgMinPos of one value column over the keys
+// `k`, as the Int64 columns and their validity (-1 for a null).
+struct PosResult {
+    dstd::Vector<std::int64_t> max_pos, min_pos;
+};
+
+PosResult positions(const Series& k, const Series& v, std::int64_t groups) {
+    dstd::Vector<AggSpec> specs{AggSpec{AggOp::ArgMaxPos, 0, "mx"},
+                                AggSpec{AggOp::ArgMinPos, 0, "mn"}};
+    auto st = dataframe::agg_new(specs);
+    dstd::Vector<const Series*> keys{&k};
+    dstd::Vector<const Series*> values{&v};
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st, keys, values));
+    dftu_utils_test::ok(dataframe::agg_check(*st));
+    const DataFrame out = dataframe::agg_finalize(*st, "k");
+    REQUIRE(out.num_rows() == groups);
+    PosResult r;
+    const Series mx = out.column("mx");
+    const Series mn = out.column("mn");
+    CHECK(mx.type() == TypeId::Int64);
+    for (std::int64_t g = 0; g < groups; ++g) {
+        const std::int64_t at = row_of(out, "k", g);
+        REQUIRE(at >= 0);
+        r.max_pos.push_back(mx.is_null(at) ? -1 : mx.data<std::int64_t>()[at]);
+        r.min_pos.push_back(mn.is_null(at) ? -1 : mn.data<std::int64_t>()[at]);
+    }
+    return r;
+}
+
+}  // namespace
+
+TEST_CASE(
+    "ArgMaxPos and ArgMinPos give the first extreme's position in its group") {
+    // Group 0: 3 9 9 (the tie keeps the first 9); group 1: 5 5; group 2 holds
+    // only nulls; group 3 interleaves with the others, so its positions count
+    // its own rows.
+    const std::int64_t k[10] = {0, 3, 0, 0, 1, 3, 1, 2, 2, 3};
+    const std::int64_t v[10] = {3, -2, 9, 9, 5, -7, 5, 0, 0, -7};
+    // Rows 7 and 8 (group 2) are null.
+    const std::uint8_t bits[2] = {0x7F, 0xFE};
+    const Series sk = Series::flat_i64(k, 10);
+    const Series sv = Series::flat_i64(v, 10, bits);
+    const PosResult r = positions(sk, sv, 4);
+    CHECK(r.max_pos[0] == 1);
+    CHECK(r.min_pos[0] == 0);
+    CHECK(r.max_pos[1] == 0);
+    CHECK(r.min_pos[1] == 0);
+    CHECK(r.max_pos[2] == -1);
+    CHECK(r.min_pos[2] == -1);
+    CHECK(r.max_pos[3] == 0);  // -2, -7, -7: the max is the first row
+    CHECK(r.min_pos[3] == 1);  // the first -7 (its own second row)
+}
+
+TEST_CASE(
+    "ArgMaxPos and ArgMinPos rank a NaN last and compare big integers "
+    "exactly") {
+    const std::int64_t k[8] = {0, 0, 0, 0, 1, 2, 2, 2};
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double f[8] = {nan, 2.0, nan, 1.0, nan, 4.0, 4.0, -1.0};
+    const PosResult r =
+        positions(Series::flat_i64(k, 8), Series::flat_f64(f, 8), 3);
+    CHECK(r.max_pos[0] == 1);
+    CHECK(r.min_pos[0] == 3);
+    CHECK(r.max_pos[1] == 0);  // only a NaN: it wins
+    CHECK(r.min_pos[1] == 0);
+    CHECK(r.max_pos[2] == 0);
+    CHECK(r.min_pos[2] == 2);
+
+    // 2^62 and 2^62 + 1 are equal as doubles.
+    const std::int64_t big_k[4] = {0, 0, 1, 1};
+    const std::int64_t big[4] = {4611686018427387904, 4611686018427387905,
+                                 4611686018427387905, 4611686018427387904};
+    const PosResult b =
+        positions(Series::flat_i64(big_k, 4), Series::flat_i64(big, 4), 2);
+    CHECK(b.max_pos[0] == 1);
+    CHECK(b.min_pos[0] == 0);
+    CHECK(b.max_pos[1] == 0);
+    CHECK(b.min_pos[1] == 1);
+
+    // Unsigned values above the signed range order as unsigned.
+    const std::uint64_t u[3] = {1, 9223372036854775809ULL,
+                                9223372036854775808ULL};
+    const std::int64_t uk[3] = {0, 0, 0};
+    const PosResult ur = positions(Series::flat_i64(uk, 3),
+                                   Series::flat(TypeId::Uint64, u, 3), 1);
+    CHECK(ur.max_pos[0] == 1);
+    CHECK(ur.min_pos[0] == 0);
+}
+
+TEST_CASE("ArgMaxPos and ArgMinPos round-trip and merge in row order") {
+    const std::int64_t k[8] = {0, 1, 0, 1, 0, 1, 0, 1};
+    const std::int64_t v[8] = {1, 4, 7, 4, 7, 9, 2, 0};
+    const Series sk = Series::flat_i64(k, 8);
+    const Series sv = Series::flat_i64(v, 8);
+    dstd::Vector<const Series*> keys{&sk};
+    dstd::Vector<const Series*> values{&sv};
+    auto specs = [] {
+        return dstd::Vector<AggSpec>{AggSpec{AggOp::ArgMaxPos, 0, "mx"},
+                                     AggSpec{AggOp::ArgMinPos, 0, "mn"}};
+    };
+    auto whole = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*whole, keys, values));
+    const DataFrame want = dataframe::agg_finalize(*whole, "k");
+
+    auto back = dftu_utils_test::ok(
+        dataframe::agg_deserialize(dataframe::agg_serialize(*whole)));
+    check_same(want, dataframe::agg_finalize(*back, "k"));
+
+    auto lo = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*lo, keys, values, 0, 5));
+    auto hi = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*hi, keys, values, 5, 8));
+    dataframe::agg_merge(*lo, *hi);
+    dftu_utils_test::ok(dataframe::agg_check(*lo));
+    check_same(want, dataframe::agg_finalize(*lo, "k"));
+
+    // A partial that starts before the one it joins cannot be shifted.
+    auto lo2 = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*lo2, keys, values, 0, 5));
+    auto hi2 = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*hi2, keys, values, 5, 8));
+    dataframe::agg_merge(*hi2, *lo2);
+    CHECK_FALSE(dataframe::agg_check(*hi2).has_value());
+}
+
+TEST_CASE("ArgMaxPos refuses a text column") {
+    const std::int64_t k[2] = {0, 0};
+    dstd::Vector<dstd::String> s{"a", "b"};
+    const Series sk = Series::flat_i64(k, 2);
+    const Series sv = Series::strings(s);
+    dstd::Vector<const Series*> keys{&sk};
+    dstd::Vector<const Series*> values{&sv};
+    auto st = dataframe::agg_new({AggSpec{AggOp::ArgMaxPos, 0, "mx"}});
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st, keys, values));
+    CHECK_FALSE(dataframe::agg_check(*st).has_value());
+}

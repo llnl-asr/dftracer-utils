@@ -1814,6 +1814,8 @@ bool reduce_broadcasts(Agg agg) noexcept {
         case Agg::Last:
         case Agg::BitOr:
         case Agg::Prod:
+        case Agg::ArgMaxPos:
+        case Agg::ArgMinPos:
             return true;
         case Agg::Count:
         case Agg::Pct:

@@ -154,6 +154,29 @@ inline std::size_t agg_param_k(double param, std::size_t fallback) {
 /// Which extremum an ArgMax/ArgMin slot tracks over its `by` column.
 enum class ArgDir { Min = 0, Max = 1 };
 
+/// Whether `cand` beats `cur` for an ArgMaxPos/ArgMinPos slot: the bits are in
+/// the domain `dom` (1 signed, 2 unsigned, 3 float: a FieldStatDomain + 1). A
+/// float NaN holds the slot only until a number arrives, and a tie never
+/// replaces the first row.
+inline bool apos_better(ArgDir dir, std::uint8_t dom, std::uint64_t cand,
+                        std::uint64_t cur) {
+    switch (dom) {
+        case 1: {
+            const auto a = std::bit_cast<std::int64_t>(cand);
+            const auto b = std::bit_cast<std::int64_t>(cur);
+            return dir == ArgDir::Max ? a > b : a < b;
+        }
+        case 2:
+            return dir == ArgDir::Max ? cand > cur : cand < cur;
+        default: {
+            const auto a = std::bit_cast<double>(cand);
+            const auto b = std::bit_cast<double>(cur);
+            if (std::isnan(b)) return !std::isnan(a);
+            return dir == ArgDir::Max ? a > b : a < b;
+        }
+    }
+}
+
 /// A bounded ordered-list slot's readout order: ascending `by` (Sorted,
 /// Bottom) or descending `by` (Top), the repr breaking ties either way.
 enum class ListKind { Sorted = 0, Top = 1, Bottom = 2 };
@@ -523,6 +546,23 @@ class AggState : public dstd::HeapObject {
     dstd::Vector<double> arg_by;                     // groups * n_arg
     dstd::Vector<char> arg_has;                      // groups * n_arg
     dstd::Vector<dstd::String> arg_repr;             // groups * n_arg_repr
+
+    // ArgMaxPos/ArgMinPos: a slot per spec. Per group and slot, `apos_dom` is 0
+    // until a present value is seen, then the domain (a FieldStatDomain + 1) of
+    // the winning value held in `apos_bits`, and `apos_rank` the winner's
+    // position among the group's rows. States merge in row order: the rank of
+    // the other side's winner is shifted by the rows this side holds, and a
+    // tie keeps this side's winner. `apos_unordered` marks a merge whose other
+    // side starts before this one (agg_check reports it).
+    bool has_apos = false;
+    std::size_t n_apos = 0;
+    dstd::Vector<int> spec_apos;            // spec -> slot, or -1
+    dstd::Vector<std::int32_t> apos_col;    // slot -> value_col
+    dstd::Vector<ArgDir> apos_dir;          // slot -> direction
+    dstd::Vector<std::uint64_t> apos_bits;  // groups * n_apos
+    dstd::Vector<std::int64_t> apos_rank;   // groups * n_apos
+    dstd::Vector<std::uint8_t> apos_dom;    // groups * n_apos
+    bool apos_unordered = false;
 
     // BitOr: one slot per distinct value column; the accumulator is the u64 OR
     // (identity 0), so merge is an OR.
@@ -1049,6 +1089,7 @@ class AggState : public dstd::HeapObject {
             const AggSpec& sp = specs[s];
             if (sp.op == AggOp::Count || sp.op == AggOp::BitOr ||
                 sp.op == AggOp::Prod || sp.op == AggOp::Udaf ||
+                sp.op == AggOp::ArgMaxPos || sp.op == AggOp::ArgMinPos ||
                 agg_uses_raw_value(sp.op) || agg_uses_by_col(sp.op) ||
                 sp.value_col < 0)
                 continue;
@@ -1121,6 +1162,21 @@ class AggState : public dstd::HeapObject {
             arg_slot_reprs[static_cast<std::size_t>(slot)].push_back(ri);
         }
         has_arg = n_arg > 0;
+
+        spec_apos.assign(specs.size(), -1);
+        apos_col.clear();
+        apos_dir.clear();
+        n_apos = 0;
+        for (std::size_t s = 0; s < specs.size(); ++s) {
+            const AggSpec& sp = specs[s];
+            if (sp.op != AggOp::ArgMaxPos && sp.op != AggOp::ArgMinPos)
+                continue;
+            spec_apos[s] = static_cast<int>(n_apos++);
+            apos_col.push_back(sp.value_col);
+            apos_dir.push_back(sp.op == AggOp::ArgMaxPos ? ArgDir::Max
+                                                         : ArgDir::Min);
+        }
+        has_apos = n_apos > 0;
 
         spec_bitor.assign(specs.size(), -1);
         bitor_val_col.clear();
@@ -1409,6 +1465,11 @@ class AggState : public dstd::HeapObject {
             arg_has.resize(arg_has.size() + n_arg, 0);
             arg_repr.resize(arg_repr.size() + n_arg_repr);
         }
+        if (has_apos) {
+            apos_bits.resize(apos_bits.size() + n_apos, 0);
+            apos_rank.resize(apos_rank.size() + n_apos, 0);
+            apos_dom.resize(apos_dom.size() + n_apos, 0);
+        }
         if (has_bitor) bitor_acc.resize(bitor_acc.size() + n_bitor, 0);
         if (has_prod) prod_acc.resize(prod_acc.size() + n_prod, 1.0);
         if (has_qv) qv.resize(qv.size() + n_qv);
@@ -1680,6 +1741,13 @@ class AggState : public dstd::HeapObject {
     /// states share one name table.
     void merge_group(std::int64_t g, const AggState& other, std::int64_t j,
                      const dstd::Vector<std::uint32_t>* dyn_map = nullptr) {
+        const std::int64_t rows_before = counts[static_cast<std::size_t>(g)];
+        if (has_apos && rows_before > 0 &&
+            static_cast<std::size_t>(j) < other.group_first_row.size() &&
+            static_cast<std::size_t>(g) < group_first_row.size() &&
+            other.group_first_row[static_cast<std::size_t>(j)] <
+                group_first_row[static_cast<std::size_t>(g)])
+            apos_unordered = true;
         counts[static_cast<std::size_t>(g)] +=
             other.counts[static_cast<std::size_t>(j)];
         if (static_cast<std::size_t>(j) < other.group_first_row.size()) {
@@ -1742,6 +1810,23 @@ class AggState : public dstd::HeapObject {
                 for (int ri : reprs)
                     arg_repr[dr + static_cast<std::size_t>(ri)] =
                         other.arg_repr[sr + static_cast<std::size_t>(ri)];
+            }
+        }
+        if (has_apos) {
+            const std::size_t da = static_cast<std::size_t>(g) * n_apos;
+            const std::size_t sa = static_cast<std::size_t>(j) * n_apos;
+            for (std::size_t slot = 0; slot < n_apos; ++slot) {
+                const std::uint8_t dom = other.apos_dom[sa + slot];
+                if (dom == 0) continue;
+                const bool adopt = apos_dom[da + slot] == 0 ||
+                                   (apos_dom[da + slot] == dom &&
+                                    apos_better(apos_dir[slot], dom,
+                                                other.apos_bits[sa + slot],
+                                                apos_bits[da + slot]));
+                if (!adopt) continue;
+                apos_dom[da + slot] = dom;
+                apos_bits[da + slot] = other.apos_bits[sa + slot];
+                apos_rank[da + slot] = other.apos_rank[sa + slot] + rows_before;
             }
         }
         if (has_bitor) {
@@ -1877,6 +1962,11 @@ class AggState : public dstd::HeapObject {
         arg_dir = other.arg_dir;
         arg_slot_reprs = other.arg_slot_reprs;
         arg_val_col = other.arg_val_col;
+        has_apos = other.has_apos;
+        n_apos = other.n_apos;
+        spec_apos = other.spec_apos;
+        apos_col = other.apos_col;
+        apos_dir = other.apos_dir;
         has_bitor = other.has_bitor;
         n_bitor = other.n_bitor;
         spec_bitor = other.spec_bitor;

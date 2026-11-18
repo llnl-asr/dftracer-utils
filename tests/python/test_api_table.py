@@ -23,6 +23,7 @@ pytest.importorskip("dftracer.utils.dftracer_utils_ext")
 import dftracer.utils as dft  # noqa: E402
 from dftracer.utils import Expr, GroupBy  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as ext  # noqa: E402
+from dftracer.utils.enums import DType  # noqa: E402
 from dftracer.utils.lazyframe import LazyGroupBy  # noqa: E402
 from dftracer.utils.series import _DtAccessor, _ListAccessor, _StrAccessor  # noqa: E402
 
@@ -90,6 +91,10 @@ def _input_for(row):
         s = dft.Series(["a", " b ", None])
     elif row.name == "hex64_format":
         s = dft.Series([1, 255, None])
+    elif row.name in {"dt_date", "dt_time"}:
+        s = ext._series_retype(
+            dft.Series([0, 86_400_000_001, None]).astype("int64"), int(DType.TIMESTAMP), 2, ""
+        )
     else:
         s = dft.Series([1.5, -2.0, None, 4.0, -0.5])
     s.name = "x"

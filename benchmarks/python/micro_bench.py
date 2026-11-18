@@ -105,6 +105,37 @@ def _case_groups() -> float:
     return _timed(lambda: gb.groups)
 
 
+def _timestamps():
+    from dftracer.utils import Series
+    from dftracer.utils import dftracer_utils_ext as ext
+    from dftracer.utils.enums import DType
+
+    ticks = Series([1_700_000_000_000_000 + v * 997 for v in range(ROWS)]).astype("int64")
+    return ext._series_retype(ticks, int(DType.TIMESTAMP), 2, "")
+
+
+def _case_dt_as_unit() -> float:
+    ts = _timestamps()
+    return _timed(lambda: ts.dt.as_unit("ms"))
+
+
+def _case_dt_date_time() -> float:
+    ts = _timestamps()
+    return _timed(lambda: (ts.dt.date, ts.dt.time))
+
+
+def _case_group_arg_max() -> float:
+    from dftracer.utils import DataFrame, col
+
+    df = DataFrame(
+        {
+            "k": [(v * 7919) % 1000 for v in range(ROWS)],
+            "v": [(v * 104729) % 100_003 for v in range(ROWS)],
+        }
+    )
+    return _timed(lambda: df.group_by("k").agg(col("v").arg_max().alias("r")))
+
+
 def _double_op():
     from dftracer.utils import jit
 
@@ -144,6 +175,9 @@ CASES = {
     "groupby_groups_1M_rows": _case_groups,
     "jit_run_op_200_warm_calls": _case_run_op,
     "to_pandas_1M_rows": _case_to_pandas,
+    "dt_as_unit_1M_rows": _case_dt_as_unit,
+    "dt_date_time_1M_rows": _case_dt_date_time,
+    "group_arg_max_1M_rows": _case_group_arg_max,
 }
 
 

@@ -216,6 +216,10 @@ PY_METHOD(Str, strip_prefix, "dftu.series.str_remove_prefix", STR, STR, KEEP, NO
           "strip_prefix(prefix) -> String Series without a leading prefix.")
 PY_METHOD(Str, strip_suffix, "dftu.series.str_remove_suffix", STR, STR, KEEP, NO, "suffix", "", "str_remove_suffix: not a String column",
           "strip_suffix(suffix) -> String Series without a trailing suffix.")
+PY_METHOD(Series, dt_date, "dftu.series.dt_date", NONE, ANY, KEEP, NO, "", "", "dt_date: not a Timestamp or Date64 column, or a day outside Int32",
+          "dt_date() -> Date32 Series of each Timestamp or Date64 row's UTC calendar day.")
+PY_METHOD(Series, dt_time, "dftu.series.dt_time", NONE, ANY, KEEP, NO, "", "", "dt_time: not a Timestamp column",
+          "dt_time() -> Time Series of each Timestamp row's UTC time of day, in the column's unit.")
 PY_METHOD(List, len, "dftu.series.list_len", NONE, INT, KEEP, NO, "", "", "list_len: not a List column",
           "len() -> Int64 Series of each row's list length.")
 PY_METHOD(List, get, "dftu.series.list_get", INT, ANY, KEEP, NO, "index", "", "list_get: not a List column",

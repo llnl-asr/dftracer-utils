@@ -3,10 +3,12 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/frame/series_detail.h>
 
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <utility>
 
 namespace dftracer::utils::python::frame::series_detail {
@@ -112,6 +114,43 @@ PyObject* series_retype(PyObject*, PyObject* args) {
         return nullptr;
     }
     return make_series(std::move(out));
+}
+
+// _series_list_of(values, ends): a List column whose row i holds
+// values[ends[i - 1]:ends[i]], the first row starting at 0.
+PyObject* series_list_of(PyObject*, PyObject* args) {
+    PyObject* values_obj = nullptr;
+    PyObject* offsets_obj = nullptr;
+    if (!PyArg_ParseTuple(args, "OO", &values_obj, &offsets_obj))
+        return nullptr;
+    Series* values = as_native_or_null<Series>(values_obj);
+    Series* ends = as_native_or_null<Series>(offsets_obj);
+    if (!values || !ends) {
+        PyErr_SetString(PyExc_TypeError, "list_of: expected two Series");
+        return nullptr;
+    }
+    const Series flat_ends = ends->materialize();
+    if (flat_ends.type() != TypeId::Int64 || flat_ends.null_count() != 0) {
+        PyErr_SetString(PyExc_ValueError,
+                        "list_of: ends must be an Int64 column without nulls");
+        return nullptr;
+    }
+    const std::int64_t n = flat_ends.length();
+    const auto* src = flat_ends.data<std::int64_t>();
+    dftracer::utils::dstd::Vector<std::int32_t> narrow(
+        static_cast<std::size_t>(n) + 1, 0);
+    for (std::int64_t i = 0; i < n; ++i) {
+        const std::int64_t at = src[i];
+        if (at < 0 || at > values->length() || (i > 0 && at < src[i - 1]) ||
+            at > std::numeric_limits<std::int32_t>::max()) {
+            PyErr_SetString(PyExc_ValueError,
+                            "list_of: ends must not decrease and must stay "
+                            "within the values");
+            return nullptr;
+        }
+        narrow[static_cast<std::size_t>(i) + 1] = static_cast<std::int32_t>(at);
+    }
+    return make_series(Series::list(narrow, values->materialize()));
 }
 
 PyObject* Series_get_nbytes(PyObject* self, void*) {

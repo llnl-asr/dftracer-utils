@@ -260,6 +260,9 @@ DataType agg_output_type(AggOp op, const DataType& value, double param) {
         case AggOp::ArgMax:
         case AggOp::ArgMin:
             return scalar(TypeId::String);
+        case AggOp::ArgMaxPos:
+        case AggOp::ArgMinPos:
+            return scalar(TypeId::Int64);
         case AggOp::BitOr:
             return scalar(TypeId::Uint64);
         case AggOp::Hist:

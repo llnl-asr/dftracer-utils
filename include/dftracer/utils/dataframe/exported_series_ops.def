@@ -273,4 +273,9 @@ DFTU_SERIES_OP(dftu.series.quantile_interp, dftu_series_quantile_interp, F64, SE
 DFTU_SERIES_OP(dftu.series.log1p, dftu_series_log1p, SERIES, SERIES, NONE, NONE)
 DFTU_SERIES_OP(dftu.series.expm1, dftu_series_expm1, SERIES, SERIES, NONE, NONE)
 
+/* Timestamp unit conversion, the calendar day and the time of day. */
+DFTU_SERIES_OP(dftu.series.dt_as_unit, dftu_series_dt_as_unit, SERIES, SERIES, I32, I32)
+DFTU_SERIES_OP(dftu.series.dt_date, dftu_series_dt_date, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.dt_time, dftu_series_dt_time, SERIES, SERIES, NONE, NONE)
+
 #undef DFTU_SERIES_OP

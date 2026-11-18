@@ -25,7 +25,9 @@ const DFTU_WINDOW_UNBOUNDED 9223372036854775807
 enum DFTU_AGG_ACTIVE 19
 enum DFTU_AGG_APPROX_TOPK 27
 enum DFTU_AGG_ARGMAX 13
+enum DFTU_AGG_ARGMAX_POS 41
 enum DFTU_AGG_ARGMIN 21
+enum DFTU_AGG_ARGMIN_POS 42
 enum DFTU_AGG_BIT_OR 22
 enum DFTU_AGG_BOTTOMK 26
 enum DFTU_AGG_BUSY 16
@@ -116,6 +118,8 @@ enum DFTU_DT_NANOSECOND 8
 enum DFTU_DT_QUARTER 11
 enum DFTU_DT_ROUND 2
 enum DFTU_DT_SECOND 5
+enum DFTU_DT_UNIT_FLOOR 0
+enum DFTU_DT_UNIT_POLARS 1
 enum DFTU_DT_YEAR 0
 enum DFTU_DUQL_CMP_EQ 0
 enum DFTU_DUQL_CMP_GE 4
@@ -1386,6 +1390,7 @@ typedef dftu_dataframe struct dftu_dataframe
 typedef dftu_doc struct dftu_doc
 typedef dftu_dt_part int32_t
 typedef dftu_dt_round_mode int32_t
+typedef dftu_dt_unit_rounding int32_t
 typedef dftu_dtype int32_t
 typedef dftu_duql struct dftu_duql
 typedef dftu_expr struct dftu_expr

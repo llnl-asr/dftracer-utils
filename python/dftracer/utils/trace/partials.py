@@ -56,6 +56,11 @@ def agg_specs(specs: Sequence[str | Agg]) -> tuple[list[str], list[str], int | N
                 "TraceViewer.agg() needs a bare-field aggregate like F.dur.sum(); "
                 "aggregate a computed value with with_column() then group_by()"
             )
+        if s.op in ("arg_max", "arg_min"):
+            raise ValueError(
+                f"{s.op}: a position within a group has no meaning across trace files; "
+                "collect the rows into a DataFrame first"
+            )
         # The index keeps DDSketches, so a quantile here is the sketch's.
         op = "pct" if s.op == "quantile" else s.op
         spec = f"{'count' if s.op == 'count_valid' else op}:{s.value.name}"

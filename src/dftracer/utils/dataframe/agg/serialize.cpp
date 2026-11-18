@@ -404,6 +404,13 @@ dstd::String agg_serialize(const AggState& st_in, bool compact) {
             }
         }
     }
+    // Which specs have a position slot follows from the specs, so a state
+    // without one keeps its bytes.
+    if (st.has_apos) {
+        for (std::uint64_t b : st.apos_bits) put(s, b);
+        for (std::int64_t k : st.apos_rank) put(s, k);
+        for (std::uint8_t d : st.apos_dom) put(s, d);
+    }
     put(s, static_cast<std::uint8_t>(st.has_bitor ? 1 : 0));
     if (st.has_bitor)
         for (std::uint64_t b : st.bitor_acc) put(s, b);
@@ -885,6 +892,21 @@ dstd::Result<AggStatePtr> agg_deserialize(dstd::StringView blob, bool compact,
                     cells.push_back(DynSketchCell{std::move(sk), id});
                 }
             }
+        }
+    }
+    if (st->has_apos) {
+        const std::size_t sz = static_cast<std::size_t>(ng) * st->n_apos;
+        if (!r.count(sz * 17)) return corrupt_blob();
+        st->apos_bits.resize(sz);
+        st->apos_rank.resize(sz);
+        st->apos_dom.resize(sz);
+        for (std::size_t i = 0; i < sz; ++i)
+            st->apos_bits[i] = r.get<std::uint64_t>();
+        for (std::size_t i = 0; i < sz; ++i)
+            st->apos_rank[i] = r.get<std::int64_t>();
+        for (std::size_t i = 0; i < sz; ++i) {
+            st->apos_dom[i] = r.get<std::uint8_t>();
+            if (st->apos_dom[i] > 3) return corrupt_blob();
         }
     }
     if (st->has_bitor != (r.get<std::uint8_t>() != 0)) return corrupt_blob();

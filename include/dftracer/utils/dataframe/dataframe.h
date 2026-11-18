@@ -70,9 +70,13 @@ enum class Agg {
                    ///< three values and for a constant column)
     KurtUnbiased,  ///< pandas sample excess kurtosis of `column`, Float64 (NaN
                    ///< below four values and for a constant column)
-    Quantile       ///< the exact quantile of `column`, Float64: `param` is
+    Quantile,      ///< the exact quantile of `column`, Float64: `param` is
                    ///< the level and GroupAgg::interp the interpolation; the
                    ///< state keeps every value (see AggOp::Quantile)
+    ArgMaxPos,     ///< position in its group of the first greatest value of
+                   ///< `column`, Int64 (see AggOp::ArgMaxPos)
+    ArgMinPos      ///< position in its group of the first least value of
+                   ///< `column`, Int64
 };
 
 /// Canonical lowercase name of `agg` (the string the C ABI accepts).

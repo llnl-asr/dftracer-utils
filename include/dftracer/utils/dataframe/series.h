@@ -662,6 +662,17 @@ class Series {
     /// trailing '%' or an input that is not a time or Int64 column.
     Series dt_format(dstd::StringView fmt,
                      TimeUnit unit = TimeUnit::Micro) const;
+    /// dftu_series_dt_as_unit: a Timestamp or Duration column in `unit`,
+    /// the instant kept, a coarser unit rounded by `mode`
+    /// (dftu_dt_unit_rounding). Invalid (not valid()) for another type or
+    /// when a value overflows Int64 in the finer unit.
+    Series dt_as_unit(TimeUnit unit,
+                      std::int32_t mode = DFTU_DT_UNIT_FLOOR) const;
+    /// dftu_series_dt_date: each Timestamp (UTC) or Date64 row as Date32.
+    Series dt_date() const;
+    /// dftu_series_dt_time: each Timestamp row's UTC time of day, in the
+    /// column's own unit (Time32 for s and ms, Time64 for us and ns).
+    Series dt_time() const;
     /// dftu_series_with_timezone: this Timestamp column under zone `tz`
     /// (empty for naive), buffers shared.
     Series with_timezone(dstd::StringView tz) const;

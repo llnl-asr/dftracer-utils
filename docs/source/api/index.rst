@@ -21,6 +21,7 @@ This section contains the Python API documentation for dftracer utilities.
    schemas
    dfanalyzer
    jit
+   plugins
 
 Module Overview
 ---------------
@@ -38,6 +39,7 @@ The dftracer utilities Python package provides the following main modules:
   ``TimeUnit`` scaling target for the builder API
 - :doc:`runtime` - Coroutine runtime and Dask integration
 - :doc:`errors` - The ``DFTUtilsError`` hierarchy every call raises
+- :doc:`plugins` - ``load_plugin`` and ``PluginHandle``, which load a compiled plugin for a block of code
 - :doc:`indexer` - Indexing and searching capabilities
 - :doc:`schemas` - Record schemas: declare, register, detect and explain record formats
 - :doc:`dfanalyzer` - dfanalyzer bridge: View-based HLM, Arrow IPC, index build

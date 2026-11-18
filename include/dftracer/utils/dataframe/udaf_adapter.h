@@ -12,6 +12,7 @@
 #include <dftracer/utils/dataframe/c_api_udaf.h>
 #include <dftracer/utils/dataframe/plugin_error.h>
 #include <dftracer/utils/dataframe/udf_adapter.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
@@ -113,12 +114,13 @@ concept NamedUdafType = UdafType<A> && requires {
 namespace detail {
 
 template <UdafType A>
-dftu_udaf_desc udaf_desc_of(const char* name, UdafOptions options) noexcept {
+dftu_udaf_desc udaf_desc_of(dstd::CStringView name,
+                            UdafOptions options) noexcept {
     using State = typename A::State;
     constexpr bool IS_POD = std::is_trivially_copyable_v<State>;
     dftu_udaf_desc d{};
     d.struct_size = sizeof(dftu_udaf_desc);
-    d.name = name;
+    d.name = name.c_str();
     d.flags = static_cast<std::uint32_t>(options.flags) |
               (IS_POD ? static_cast<std::uint32_t>(DFTU_AGG_STATE_POD) : 0u);
     d.min_args = options.min_args;

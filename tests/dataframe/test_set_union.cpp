@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -32,24 +33,27 @@ dstd::String refusal(const dstd::Result<DataFrame>& r) {
 }
 
 // Group a (rows 0..1) and b (row 2) over the key column `keys`.
-dstd::Result<DataFrame> set_union_of(
-    const Series& values, const dstd::Vector<dstd::StringView>& keys) {
+dstd::Result<DataFrame> set_union_of(const Series& values,
+                                     dstd::Vector<dstd::StringView> keys) {
     Series g = Series::strings(dstd::Span<const dstd::StringView>(keys));
     dstd::Vector<const Series*> inputs = {&g, &values};
     return dataframe::group_agg_expr(
         dataframe::expr_col(0),
-        {dataframe::agg_set_union(dataframe::expr_col(1), "u")}, inputs, "g");
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggExprSpec>(
+            {dataframe::agg_set_union(dataframe::expr_col(1), "u")}),
+        inputs, "g");
 }
 
 // The typed form over `values`: groups a (rows 0..1) and b (row 2).
 dstd::Result<DataFrame> typed_of(const Series& values,
-                                 const dstd::Vector<dstd::StringView>& keys) {
+                                 dstd::Vector<dstd::StringView> keys) {
     Series g = Series::strings(dstd::Span<const dstd::StringView>(keys));
     dstd::Vector<const Series*> inputs = {&g, &values};
     return dataframe::group_agg_expr(
         dataframe::expr_col(0),
-        {dataframe::agg_set_union(dataframe::expr_col(1), "u", true)}, inputs,
-        "g");
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggExprSpec>(
+            {dataframe::agg_set_union(dataframe::expr_col(1), "u", true)}),
+        inputs, "g");
 }
 
 // The elements of row `row` of a list column, via its offsets.
@@ -71,7 +75,9 @@ dstd::String cell(const DataFrame& r, std::int64_t row) {
 
 TEST_CASE("set_union of a list of integers is the union of the elements") {
     dstd::Vector<std::int64_t> elems{1, 2, 2, 3, 9};
-    Series v = Series::list({0, 2, 4, 5}, Series::flat_i64(elems.data(), 5));
+    Series v =
+        Series::list(dftu_utils_test::span_of<std::int32_t>({0, 2, 4, 5}),
+                     Series::flat_i64(elems.data(), 5));
     DataFrame r = dftu_utils_test::ok(set_union_of(v, {"a", "a", "b"}));
     REQUIRE(r.num_rows() == 2);
     CHECK(cell(r, 0) == dstd::fmt<"1{}2{}3">(SEP, SEP));
@@ -80,7 +86,7 @@ TEST_CASE("set_union of a list of integers is the union of the elements") {
 
 TEST_CASE("set_union of a list of strings is the union of the elements") {
     Series v = Series::list(
-        {0, 2, 3, 4},
+        dftu_utils_test::span_of<std::int32_t>({0, 2, 3, 4}),
         Series::strings(dstd::Vector<dstd::String>{"p", "q", "q", "r"}));
     DataFrame r = dftu_utils_test::ok(set_union_of(v, {"a", "a", "b"}));
     REQUIRE(r.num_rows() == 2);
@@ -92,8 +98,8 @@ TEST_CASE("null elements and empty lists contribute nothing") {
     // rows: [1, null], []; one group. A null list is covered in Python.
     dstd::Vector<std::int64_t> elems{1, 0};
     std::uint8_t elem_valid[1] = {0x01};
-    Series v =
-        Series::list({0, 2, 2}, Series::flat_i64(elems.data(), 2, elem_valid));
+    Series v = Series::list(dftu_utils_test::span_of<std::int32_t>({0, 2, 2}),
+                            Series::flat_i64(elems.data(), 2, elem_valid));
     DataFrame r = dftu_utils_test::ok(set_union_of(v, {"a", "a"}));
     REQUIRE(r.num_rows() == 1);
     CHECK(cell(r, 0) == "1");
@@ -114,8 +120,11 @@ TEST_CASE("a column of an unsupported type is refused with its type named") {
 
 TEST_CASE("a list of lists is refused with the element type named") {
     dstd::Vector<std::int64_t> leaf{1, 2, 3};
-    Series inner = Series::list({0, 1, 3}, Series::flat_i64(leaf.data(), 3));
-    Series outer = Series::list({0, 1, 2}, std::move(inner));
+    Series inner =
+        Series::list(dftu_utils_test::span_of<std::int32_t>({0, 1, 3}),
+                     Series::flat_i64(leaf.data(), 3));
+    Series outer = Series::list(
+        dftu_utils_test::span_of<std::int32_t>({0, 1, 2}), std::move(inner));
     CHECK(refusal(set_union_of(outer, {"a", "b"})).find("list") !=
           dstd::String::npos);
 }
@@ -147,15 +156,18 @@ TEST_CASE("a string holding the separator is refused") {
 TEST_CASE(
     "the other text aggregates refuse a list column instead of reading 0") {
     dstd::Vector<std::int64_t> elems{1, 2, 3};
-    Series v = Series::list({0, 1, 3}, Series::flat_i64(elems.data(), 3));
+    Series v = Series::list(dftu_utils_test::span_of<std::int32_t>({0, 1, 3}),
+                            Series::flat_i64(elems.data(), 3));
     Series g = Series::strings(dstd::Vector<dstd::String>{"a", "b"});
     dstd::Vector<std::int64_t> by{5, 6};
     Series b = Series::flat_i64(by.data(), 2);
     dstd::Vector<const Series*> inputs = {&g, &v, &b};
     CHECK(refusal(dataframe::group_agg_expr(
                       dataframe::expr_col(0),
-                      {dataframe::agg_argmax(dataframe::expr_col(1),
-                                             dataframe::expr_col(2), "m")},
+                      dftu_utils_test::span_of<
+                          dftracer::utils::dataframe::AggExprSpec>(
+                          {dataframe::agg_argmax(dataframe::expr_col(1),
+                                                 dataframe::expr_col(2), "m")}),
                       inputs, "g"))
               .find("list") != dstd::String::npos);
 }
@@ -227,7 +239,9 @@ TEST_CASE("typed set_union gives an empty list for a group of nulls") {
 
 TEST_CASE("typed set_union over a list column lists the elements") {
     dstd::Vector<std::int64_t> elems{1, 2, 2, 3, 9};
-    Series v = Series::list({0, 2, 4, 5}, Series::flat_i64(elems.data(), 5));
+    Series v =
+        Series::list(dftu_utils_test::span_of<std::int32_t>({0, 2, 4, 5}),
+                     Series::flat_i64(elems.data(), 5));
     DataFrame r = dftu_utils_test::ok(typed_of(v, {"a", "a", "b"}));
     CHECK(list_cell<std::int64_t>(r, 0) == dstd::Vector<std::int64_t>{1, 2, 3});
     CHECK(list_cell<std::int64_t>(r, 1) == dstd::Vector<std::int64_t>{9});

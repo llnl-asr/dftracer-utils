@@ -91,7 +91,7 @@ bool is_well_formed(const DataType& dt) {
 // returns nullopt so the caller falls back to Unknown for every column, the
 // same as a provider that declared nothing.
 dstd::Optional<Schema> to_schema(const ::dftu_schema& built,
-                                 const dstd::Vector<dstd::String>& names) {
+                                 dstd::Span<const dstd::String> names) {
     if (built.top.size() != names.size()) return dftracer::utils::dstd::nullopt;
     Schema s;
     s.fields.reserve(built.top.size());

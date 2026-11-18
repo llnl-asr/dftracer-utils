@@ -411,7 +411,7 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
              const std::int32_t descending[] = {1, 0};
              const std::int32_t last[] = {1};
              OpArgs args;
-             args.strlist(1, by, 2).i32list(2, descending).i32list(3, last);
+             args.strlist(1, {by, 2}).i32list(2, descending).i32list(3, last);
              return b.frame_op("dftu.frame.sort_by_multi_per_col", args);
          }},
         // One partition far past the budget, with the functions that used to
@@ -442,7 +442,7 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
              const dstd::Vector<dftu_window_spec> specs{var, run, first, last};
              const char* order[] = {"t"};
              OpArgs args;
-             args.strlist(1, nullptr, 0).strlist(2, order, 1).winlist(3, specs);
+             args.strlist(1, {}).strlist(2, {order, 1}).winlist(3, specs);
              dstd::Vector<dstd::String> names = b.schema();
              for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
              return b.frame_op("dftu.frame.window", args, {}, names);
@@ -470,7 +470,7 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
                  frame(DFTU_WINDOW_FRAME_MIN, "s", "lo", ALL, 0)};
              const char* order[] = {"t"};
              OpArgs args;
-             args.strlist(1, nullptr, 0).strlist(2, order, 1).winlist(3, specs);
+             args.strlist(1, {}).strlist(2, {order, 1}).winlist(3, specs);
              dstd::Vector<dstd::String> names = b.schema();
              for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
              return b.frame_op("dftu.frame.window", args, {}, names);
@@ -507,7 +507,7 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
                  frame(DFTU_WINDOW_FRAME_MAX, "s", "ahead", ALL, 2)};
              const char* order[] = {"t"};
              OpArgs args;
-             args.strlist(1, nullptr, 0).strlist(2, order, 1).winlist(3, specs);
+             args.strlist(1, {}).strlist(2, {order, 1}).winlist(3, specs);
              dstd::Vector<dstd::String> names = b.schema();
              for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
              return b.frame_op("dftu.frame.window", args, {}, names);

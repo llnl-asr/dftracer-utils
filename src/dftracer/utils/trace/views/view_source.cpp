@@ -718,7 +718,7 @@ dstd::Optional<dataframe::SourceApplication> ViewSource::apply_filter(
 }
 
 dstd::Optional<dataframe::SourceApplication> ViewSource::apply_projection(
-    const dstd::Vector<dataframe::NamedExpr>& exprs) const {
+    dstd::Span<const dataframe::NamedExpr> exprs) const {
     if (distinct_ || !can_stream_rows()) return dstd::nullopt;
     const dstd::Vector<dstd::String> current = trace_names(names());
     dstd::Vector<dstd::String> cols;
@@ -846,7 +846,7 @@ dstd::Optional<dataframe::SourceApplication> ViewSource::apply_aggregation(
 }
 
 dstd::Optional<dataframe::SourceApplication> ViewSource::apply_distinct(
-    const dstd::Vector<dstd::String>& subset) const {
+    dstd::Span<const dstd::String> subset) const {
     const detail::ViewPlan& p = *plan_;
     if (distinct_ || emit_dyn_ || !absorb_aggregation_ ||
         output_ != TraceOutput::Events || !can_stream_rows() ||

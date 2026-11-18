@@ -220,8 +220,8 @@ coro::CoroTask<dstd::Result<DataFrame>> drain_stream(
 // once. An input with no morsel is typed from `fields`, the plan's schema at
 // this point, matched by name.
 coro::CoroTask<dstd::Result<DataFrame>> drain_cursor(
-    Cursor& c, dstd::Vector<dstd::String> sch,
-    const dstd::Vector<Field>& fields, std::int64_t max_rows, const char* who,
+    Cursor& c, dstd::Vector<dstd::String> sch, dstd::Vector<Field> fields,
+    std::int64_t max_rows, dstd::String who,
     std::uint64_t budget = memory::NO_SPILL_BUDGET) {
     PartHolder holder(budget);
     const dstd::Vector<dstd::SharedString> shared_sch =
@@ -286,8 +286,7 @@ dstd::Result<void> unpack_rest(DataFrame& f, NameCache& cache) {
 // own schema (streaming, self-describing), else the cursor's data-dependent
 // out_names(), else the static plan schema.
 dstd::Result<DataFrame> frame_from_morsel(
-    Morsel&& m, NameCache& cache,
-    const dstd::Vector<dstd::String>& static_names,
+    Morsel&& m, NameCache& cache, dstd::Span<const dstd::String> static_names,
     const dstd::Optional<dstd::Vector<dstd::String>>& out_names) {
     DataFrame out;
     out.columns = std::move(m.columns);
@@ -1130,10 +1129,10 @@ class NullCountCursor : public Cursor {
 // Wrap a morsel's columns in a DataFrame with real `names`, apply `fn`, return
 // the result materialized FLAT.
 template <class Fn>
-MorselResult frame_op(Morsel&& m, const dstd::Vector<dstd::SharedString>& names,
+MorselResult frame_op(Morsel&& m, dstd::Span<const dstd::SharedString> names,
                       Fn&& fn) {
     DataFrame tmp;
-    tmp.names = names;
+    tmp.names.assign(names.begin(), names.end());
     for (Series& c : m.columns) tmp.columns.push_back(std::move(c));
     auto r = fn(std::move(tmp));
     if (!r) return r.error();
@@ -1394,7 +1393,8 @@ class TopkCursor : public Cursor {
                 if (has) {
                     DataFrame cur =
                         frame_of(std::move(first.columns), sch_names_);
-                    auto joined = concat({&best, &cur});
+                    const DataFrame* const pair[] = {&best, &cur};
+                    auto joined = concat(pair);
                     if (!joined) co_return joined.error();
                     first = morsel_of(std::move(*joined));
                     best = DataFrame{};
@@ -1420,7 +1420,8 @@ class TopkCursor : public Cursor {
                 best = std::move(*top);
                 has = true;
             } else {
-                auto joined = concat({&best, &cur});
+                const DataFrame* const pair[] = {&best, &cur};
+                auto joined = concat(pair);
                 if (!joined) co_return joined.error();
                 auto top = joined->topk(name_, k_, largest_);
                 if (!top) co_return top.error();
@@ -1499,7 +1500,8 @@ class SampleCursor : public Cursor {
             if (best.num_rows() == 0) {
                 combined = std::move(mf);
             } else {
-                auto joined = concat({&best, &mf}, ConcatHow::Vertical);
+                const DataFrame* const pair[] = {&best, &mf};
+                auto joined = concat(pair, ConcatHow::Vertical);
                 if (!joined) co_return joined.error();
                 combined = std::move(*joined);
             }
@@ -1601,8 +1603,9 @@ class DescribeCursor : public Cursor {
         }
         DataFrame out;
         out.names.push_back(dstd::SharedString{"statistic"});
-        out.columns.push_back(Series::strings(
-            {"count", "null_count", "mean", "std", "min", "max"}));
+        const dstd::String stat_names[] = {"count", "null_count", "mean",
+                                           "std",   "min",        "max"};
+        out.columns.push_back(Series::strings(stat_names));
         for (std::size_t j = 0; j < num_idx.size(); ++j) {
             const FieldStat& fs = acc[j];
             const double vals[6] = {
@@ -1649,7 +1652,7 @@ class NodeCursor final : public Cursor {
     // Opens the node over `in`, or says why it did not.
     static dstd::Result<dstd::UniquePtr<Cursor>> make(
         const NodeOp& node, dstd::UniquePtr<Cursor> in,
-        const dstd::Vector<dstd::String>& in_schema, Schema declared_out,
+        dstd::Span<const dstd::String> in_schema, Schema declared_out,
         std::uint64_t budget) {
         auto opened =
             node.impl->open(std::move(in), in_schema, node.args, budget);
@@ -1912,7 +1915,7 @@ class IsDupCursor : public Cursor {
                 return {};
             },
             [&] { return !spilled_; },
-            [&](const dstd::Vector<Morsel>& batch) {
+            [&](dstd::Span<const Morsel> batch) {
                 if (!has_cap(budget_)) return false;
                 if (batch.size() == 1) batch_bytes = 0;
                 batch_bytes += spill::columns_bytes(batch.back().columns);
@@ -2902,16 +2905,16 @@ class FrameOpCursor : public Cursor {
                 shared = cache_.schema(names);
             }
             DataFrame in = frame_of(std::move(m->columns), std::move(shared));
-            auto running =
-                run_frame_op(op_.get(), *args_, std::move(in), name_, names);
+            auto running = run_frame_op(op_.get(), *args_, std::move(in), name_,
+                                        std::move(names));
             DataFrame out = co_await std::move(running).or_fail();
             out_names_ = dstd::to_strings(out.names);
             co_return MorselResult(morsel_of(std::move(out)));
         }
         if (!done_) {
             done_ = true;
-            auto draining = drain_cursor(*in_, sch_, in_fields_, max_rows,
-                                         name_.c_str(), hold_);
+            auto draining =
+                drain_cursor(*in_, sch_, in_fields_, max_rows, name_, hold_);
             DataFrame primary = co_await std::move(draining).or_fail();
             // A plan whose columns are only known once it runs has no static
             // schema; its cursor names them.
@@ -2922,7 +2925,7 @@ class FrameOpCursor : public Cursor {
             in_.reset();
             primary.names = dstd::make_shared_strings(names);
             auto running = run_frame_op(op_.get(), *args_, std::move(primary),
-                                        name_, names);
+                                        name_, std::move(names));
             DataFrame out = co_await std::move(running).or_fail();
             out_names_ = dstd::to_strings(out.names);
             chunks_.set(morsel_of(std::move(out)));
@@ -3194,7 +3197,7 @@ dstd::Result<Schema> call_node_output_schema(const NodeOp& node,
 // through LazyFrame::output_schema() instead, which always calls it with the
 // typed Schema.
 dstd::Result<Schema> call_node_output_schema(
-    const NodeOp& node, const dstd::Vector<dstd::String>& names) {
+    const NodeOp& node, dstd::Span<const dstd::String> names) {
     Schema in;
     in.fields.reserve(names.size());
     for (const dstd::String& n : names)
@@ -3238,8 +3241,7 @@ const char* join_how_name(JoinHow how) {
 }
 
 dstd::HashMap<dstd::String, dstd::String> rename_map(
-    const dstd::Vector<dstd::String>& from,
-    const dstd::Vector<dstd::String>& to) {
+    dstd::Span<const dstd::String> from, dstd::Span<const dstd::String> to) {
     dstd::HashMap<dstd::String, dstd::String> map;
     for (std::size_t i = 0; i < from.size(); ++i) map.emplace(from[i], to[i]);
     return map;
@@ -3272,10 +3274,10 @@ dstd::Vector<dstd::String> renamed_names_or_same(
     return renamed ? std::move(*renamed) : std::move(in);
 }
 
-dstd::Vector<dstd::String> dropped_names(
-    dstd::Vector<dstd::String> in, const dstd::Vector<dstd::String>& drop) {
+dstd::Vector<dstd::String> dropped_names(dstd::Vector<dstd::String> in,
+                                         dstd::Span<const dstd::String> drop) {
     in.erase(std::remove_if(in.begin(), in.end(),
-                            [&](const dstd::String& n) {
+                            [&](dstd::StringView n) {
                                 return std::find(drop.begin(), drop.end(), n) !=
                                        drop.end();
                             }),
@@ -3356,8 +3358,9 @@ dstd::Vector<dstd::String> out_schema(const LazyOp& op,
             [&](const FilterMaskOp&) { return in; },
             [&](const SortByMultiOp&) { return in; },
             [&](const JoinOp& o) {
-                auto joined = join_out_names(in, o.other.schema(), o.left_on,
-                                             o.right_on, o.how, o.suffix);
+                auto joined = join_out_names<dstd::String>(
+                    in, o.other.schema(), o.left_on, o.right_on, o.how,
+                    o.suffix);
                 return joined ? std::move(*joined) : in;
             },
             [&](const ConcatOp&) { return in; },
@@ -3374,13 +3377,13 @@ dstd::Vector<dstd::String> out_schema(const LazyOp& op,
         op.node);
 }
 
-const Field* find_field(const Schema& s, const dstd::String& name) {
+const Field* find_field(const Schema& s, dstd::StringView name) {
     for (const Field& f : s.fields)
         if (f.name == name) return &f;
     return nullptr;
 }
 
-TypeId field_type_or_unknown(const Schema& s, const dstd::String& name) {
+TypeId field_type_or_unknown(const Schema& s, dstd::StringView name) {
     const Field* f = find_field(s, name);
     return f ? f->type.id : TypeId::Unknown;
 }
@@ -3389,7 +3392,7 @@ TypeId field_type_or_unknown(const Schema& s, const dstd::String& name) {
 // value column type feeds agg_output_type (shared with agg_finalize's own
 // dispatch, so this can never disagree with collect()).
 dstd::Vector<Field> group_agg_fields(const Schema& in,
-                                     const dstd::Vector<GroupAgg>& aggs) {
+                                     dstd::Span<const GroupAgg> aggs) {
     dstd::Vector<Field> out;
     out.reserve(aggs.size());
     for (const GroupAgg& a : aggs) {
@@ -3423,7 +3426,7 @@ dstd::Vector<Field> group_agg_fields(const Schema& in,
 // if every value_var is numeric, the common type is Int64 unless any is a
 // float, else the plan is invalid and collect() will fail (report Unknown).
 DataType unpivot_value_type(const Schema& in,
-                            const dstd::Vector<dstd::String>& value_vars) {
+                            dstd::Span<const dstd::String> value_vars) {
     if (value_vars.empty()) return scalar(TypeId::Unknown);
     const Field* first = find_field(in, value_vars.front());
     if (!first) return scalar(TypeId::Unknown);
@@ -3725,7 +3728,7 @@ dstd::String describe_op(const LazyOp& op) {
 // plan that carries the rest column always has an answer.
 enum class RestRule : std::uint8_t { Moves, Keys, Omits };
 
-RestRule rest_rule(const LazyOp& op, const dstd::Vector<dstd::String>& in) {
+RestRule rest_rule(const LazyOp& op, dstd::Span<const dstd::String> in) {
     return std::visit(
         Overloaded{[](const FilterOp&) { return RestRule::Moves; },
                    [](const SelectOp& o) {
@@ -3814,8 +3817,8 @@ const LazyFrame* rest_partner(const LazyOp& op) {
 // The names after `op` over `in`, which ends in the rest column: the op's
 // own output, then the rest column unless the op outputs one column per row
 // (is_duplicated) or names its output only when it runs.
-dstd::Vector<dstd::String> rest_out_schema(
-    const LazyOp& op, const dstd::Vector<dstd::String>& in) {
+dstd::Vector<dstd::String> rest_out_schema(const LazyOp& op,
+                                           dstd::Span<const dstd::String> in) {
     dstd::Vector<dstd::String> out =
         out_schema(op, dstd::Vector<dstd::String>(in.begin(), in.end() - 1));
     if (!out.empty() && !std::holds_alternative<IsDupOp>(op.node))
@@ -3823,8 +3826,11 @@ dstd::Vector<dstd::String> rest_out_schema(
     return out;
 }
 
-template <class Name>
-int col_index(const dstd::Vector<Name>& sch, dstd::StringView name) {
+int col_index(dstd::Span<const dstd::String> sch, dstd::StringView name) {
+    return column_index_of(sch, name);
+}
+
+int col_index(dstd::Span<const dstd::SharedString> sch, dstd::StringView name) {
     return column_index_of(sch, name);
 }
 
@@ -3833,15 +3839,15 @@ int col_index(const dstd::Vector<Name>& sch, dstd::StringView name) {
 // on column indices because WithColumn appends or replaces in place; filters do
 // not cross other ops (Select/Rename reindex, Slice/Tail change row counts).
 dstd::Vector<dstd::SharedPtr<const LazyOp>> pushdown_predicates(
-    const dstd::Vector<dstd::String>& source_names,
-    const dstd::Vector<dstd::SharedPtr<const LazyOp>>& ops) {
+    dstd::Span<const dstd::String> source_names,
+    dstd::Span<const dstd::SharedPtr<const LazyOp>> ops) {
     struct Node {
         dstd::SharedPtr<const LazyOp> op;
         int write_idx;  // WithColumn output column index; -1 otherwise
     };
     dstd::Vector<Node> nodes;
     nodes.reserve(ops.size());
-    dstd::Vector<dstd::String> sch = source_names;
+    dstd::Vector<dstd::String> sch(source_names.begin(), source_names.end());
     for (const auto& op : ops) {
         int w = -1;
         if (const auto* wc = std::get_if<WithColumnOp>(&op->node)) {
@@ -3901,8 +3907,12 @@ dstd::Vector<dstd::SharedPtr<const LazyOp>> pushdown_predicates(
 // is an optimization, so bailing is always correct. Biggest payoff is a scan
 // source that then reads only the kept columns.
 dstd::Vector<dstd::SharedPtr<const LazyOp>> pushdown_projections(
-    const dstd::Vector<dstd::String>& source_names,
-    const dstd::Vector<dstd::SharedPtr<const LazyOp>>& ops) {
+    dstd::Span<const dstd::String> source_names,
+    dstd::Span<const dstd::SharedPtr<const LazyOp>> ops) {
+    const auto unchanged = [&] {
+        return dstd::Vector<dstd::SharedPtr<const LazyOp>>(ops.begin(),
+                                                           ops.end());
+    };
     // The first op that names what it reads: a select, or a group-by (its
     // keys and the aggregates' columns; a dyn aggregate reads every arg
     // column, so it keeps the whole row). Whatever follows it reads its
@@ -3914,11 +3924,12 @@ dstd::Vector<dstd::SharedPtr<const LazyOp>> pushdown_projections(
             last = i;
             break;
         }
-    if (last == ops.size()) return ops;
+    if (last == ops.size()) return unchanged();
     const auto* sel = std::get_if<SelectOp>(&ops[last]->node);
     const auto* gb = std::get_if<GroupByOp>(&ops[last]->node);
-    if (sel && last == 0) return ops;  // a leading select is the projection
-    if (gb && !gb->dyn.empty()) return ops;
+    if (sel && last == 0)
+        return unchanged();  // a leading select is the projection
+    if (gb && !gb->dyn.empty()) return unchanged();
     for (std::size_t i = 0; i < last; ++i) {
         const auto& n = ops[i]->node;
         if (!(std::holds_alternative<FilterOp>(n) ||
@@ -3931,7 +3942,7 @@ dstd::Vector<dstd::SharedPtr<const LazyOp>> pushdown_projections(
               std::holds_alternative<TakeOp>(n) ||
               std::holds_alternative<FilterMaskOp>(n) ||
               std::holds_alternative<SortByMultiOp>(n)))
-            return ops;  // changes the schema or reads whole rows: bail
+            return unchanged();  // changes the schema or reads whole rows: bail
     }
 
     const int nsrc = static_cast<int>(source_names.size());
@@ -3949,7 +3960,7 @@ dstd::Vector<dstd::SharedPtr<const LazyOp>> pushdown_projections(
     }
     for (const dstd::String& nm : wanted) {
         int c = col_index(source_names, nm);
-        if (c < 0) return ops;
+        if (c < 0) return unchanged();
         need[static_cast<std::size_t>(c)] = 1;
     }
     // These ops preserve the source schema by position, so predicate indices
@@ -3983,7 +3994,8 @@ dstd::Vector<dstd::SharedPtr<const LazyOp>> pushdown_projections(
                 static_cast<std::int32_t>(live.size());
             live.push_back(source_names[static_cast<std::size_t>(c)]);
         }
-    if (static_cast<int>(live.size()) == nsrc) return ops;  // nothing to prune
+    if (static_cast<int>(live.size()) == nsrc)
+        return unchanged();  // nothing to prune
 
     dstd::Vector<dstd::SharedPtr<const LazyOp>> out;
     out.reserve(ops.size() + 1);
@@ -4014,10 +4026,10 @@ PlanParts optimize_parts(dstd::SharedPtr<const Source> source,
 // `g` as an AggregateSpec: each named column is the expression `by` gives it
 // (`names[i]` is `by[i]`), positional against the offering source.
 dstd::Optional<AggregateSpec> aggregate_spec(
-    const GroupByOp& g, const dstd::Vector<dstd::String>& names,
-    const dstd::Vector<Expr>& by) {
+    const GroupByOp& g, dstd::Span<const dstd::String> names,
+    dstd::Span<const Expr> by) {
     if (!g.dyn.empty()) return dstd::nullopt;
-    auto expr_of = [&](const dstd::String& name) -> dstd::Optional<Expr> {
+    auto expr_of = [&](dstd::StringView name) -> dstd::Optional<Expr> {
         const int c = col_index(names, name);
         if (c < 0) return dstd::nullopt;
         return by[static_cast<std::size_t>(c)];
@@ -4056,10 +4068,10 @@ dstd::Optional<AggregateSpec> aggregate_spec(
 // group-by, offered as one aggregation whose keys and inputs are their
 // expressions over the source columns. The number of ops it covers, or 0.
 std::size_t offer_merged_aggregation(
-    const Source& source, const dstd::Vector<dstd::String>& source_names,
-    const dstd::Vector<dstd::SharedPtr<const LazyOp>>& ops, std::size_t at,
+    const Source& source, dstd::Span<const dstd::String> source_names,
+    dstd::Span<const dstd::SharedPtr<const LazyOp>> ops, std::size_t at,
     dstd::Optional<SourceApplication>& app) {
-    dstd::Vector<dstd::String> names = source_names;
+    dstd::Vector<dstd::String> names(source_names.begin(), source_names.end());
     dstd::Vector<Expr> by;
     by.reserve(names.size());
     for (std::size_t i = 0; i < names.size(); ++i)
@@ -4088,9 +4100,10 @@ std::size_t offer_merged_aggregation(
 
 // Offer `op` to the matching planning hook. `schema_changing` reports whether
 // an accepted answer replaces the source schema.
-dstd::Optional<SourceApplication> offer_op(
-    const Source& source, const dstd::Vector<dstd::String>& names,
-    const LazyOp& op, bool& schema_changing) {
+dstd::Optional<SourceApplication> offer_op(const Source& source,
+                                           dstd::Span<const dstd::String> names,
+                                           const LazyOp& op,
+                                           bool& schema_changing) {
     schema_changing = false;
     if (const auto* f = std::get_if<FilterOp>(&op.node))
         return source.apply_filter(f->pred);
@@ -4157,10 +4170,10 @@ dstd::Optional<SourceApplication> offer_op(
 // Inexact one keeps it above the derived source, after which only filters
 // (which commute with it) are still offered. The first refused op ends the
 // walk.
-PlanParts absorb_into_source(const dstd::Vector<dstd::String>& source_names,
+PlanParts absorb_into_source(dstd::Span<const dstd::String> source_names,
                              PlanParts plan) {
     dstd::SharedPtr<const Source> source = std::move(plan.source);
-    dstd::Vector<dstd::String> names = source_names;
+    dstd::Vector<dstd::String> names(source_names.begin(), source_names.end());
     dstd::Vector<dstd::SharedPtr<const LazyOp>> kept;
     kept.reserve(plan.ops.size());
     bool offering = true;
@@ -4218,7 +4231,7 @@ PlanParts absorb_into_source(const dstd::Vector<dstd::String>& source_names,
 }
 
 PlanParts run_plan_rule(detail::PlanRule rule,
-                        const dstd::Vector<dstd::String>& source_names,
+                        dstd::Span<const dstd::String> source_names,
                         PlanParts plan) {
     switch (rule) {
         case detail::PlanRule::PredicatePushdown:
@@ -4248,8 +4261,7 @@ PlanParts optimize_parts(dstd::SharedPtr<const Source> source,
 // frame. nullopt for any other shape, or a with_column that replaces a column
 // or reads another with_column; the caller then runs op-by-op.
 dstd::Result<dstd::Optional<DataFrame>> try_fuse_map(
-    const DataFrame& src,
-    const dstd::Vector<dstd::SharedPtr<const LazyOp>>& ops) {
+    const DataFrame& src, dstd::Span<const dstd::SharedPtr<const LazyOp>> ops) {
     dstd::Vector<const FilterOp*> filters;
     dstd::Vector<const WithColumnOp*> withs;
     const SelectOp* sel = nullptr;
@@ -4389,8 +4401,11 @@ dstd::Result<dstd::Optional<DataFrame>> try_fuse_map(
 // `own_rest`: the rest column of `sch` comes from the input, not from a
 // partner plan of `op`.
 CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
-                         const dstd::Vector<dstd::String>& sch,
+                         dstd::Span<const dstd::String> sch,
                          std::uint64_t budget, bool own_rest) {
+    const auto own_sch = [&] {
+        return dstd::Vector<dstd::String>(sch.begin(), sch.end());
+    };
     return std::visit(
         Overloaded{
             [&](const FilterOp& o) -> CursorResult {
@@ -4463,30 +4478,30 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                 return dstd::make_unique<NullCountCursor>(std::move(in));
             },
             [&](const ExplodeOp& o) -> CursorResult {
-                return dstd::make_unique<ExplodeCursor>(std::move(in), sch,
-                                                        o.column, budget);
+                return dstd::make_unique<ExplodeCursor>(
+                    std::move(in), own_sch(), o.column, budget);
             },
             [&](const UnpivotOp& o) -> CursorResult {
                 return dstd::make_unique<UnpivotCursor>(
-                    std::move(in), sch, o.id_vars, o.value_vars, budget);
+                    std::move(in), own_sch(), o.id_vars, o.value_vars, budget);
             },
             [&](const TopkOp& o) -> CursorResult {
-                return dstd::make_unique<TopkCursor>(std::move(in), sch, o.name,
-                                                     o.k, o.largest, budget);
+                return dstd::make_unique<TopkCursor>(
+                    std::move(in), own_sch(), o.name, o.k, o.largest, budget);
             },
             [&](const GroupByOp& o) -> CursorResult {
-                return make_group_by(std::move(in), sch, o.keys, o.aggs, budget,
-                                     o.dyn, o.dyn_prefix);
+                return make_group_by(std::move(in), own_sch(), o.keys, o.aggs,
+                                     budget, o.dyn, o.dyn_prefix);
             },
             [&](const SortByOp& o) -> CursorResult {
-                return make_sort_merge(std::move(in), sch,
+                return make_sort_merge(std::move(in), own_sch(),
                                        dstd::Vector<dstd::String>{o.name},
                                        dstd::Vector<bool>{o.descending}, budget,
                                        dstd::Vector<bool>{o.nulls_last});
             },
             [&](const SortByMultiOp& o) -> CursorResult {
-                return make_sort_merge(std::move(in), sch, o.by, o.descending,
-                                       budget, o.nulls_last);
+                return make_sort_merge(std::move(in), own_sch(), o.by,
+                                       o.descending, budget, o.nulls_last);
             },
             [&](const ReverseOp&) -> CursorResult {
                 dstd::Vector<dstd::String> numbered{"row_index"};
@@ -4518,7 +4533,7 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                     detail::PlanAccess::memory_budget(other) == 0)
                     other = other.memory_budget(budget);
                 return dstd::make_unique<JoinCursor>(
-                    std::move(in), sch, o.left_fields, std::move(other),
+                    std::move(in), own_sch(), o.left_fields, std::move(other),
                     o.left_on, o.right_on, o.how, o.suffix, budget,
                     o.nulls_equal, own_rest);
             },
@@ -4527,10 +4542,11 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                                                        has_rest(sch));
             },
             [&](const TapOp& o) -> CursorResult {
-                return dstd::make_unique<TapCursor>(std::move(in), sch, o.tap);
+                return dstd::make_unique<TapCursor>(std::move(in), own_sch(),
+                                                    o.tap);
             },
             [&](const UnnestOp& o) -> CursorResult {
-                return dstd::make_unique<UnnestCursor>(std::move(in), sch,
+                return dstd::make_unique<UnnestCursor>(std::move(in), own_sch(),
                                                        o.column, o.keep_empty);
             },
             [&](const FrameOp& o) -> CursorResult {
@@ -4548,7 +4564,7 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                     LazyFrame other = o.args->frames().front();
                     if (detail::PlanAccess::memory_budget(other) == 0)
                         other = other.memory_budget(budget);
-                    return make_compare_agg(std::move(in), sch,
+                    return make_compare_agg(std::move(in), own_sch(),
                                             std::move(other), o.args->i64_at(2),
                                             budget);
                 }
@@ -4576,7 +4592,7 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                     o.name == COLUMN_OP &&
                     column_op_elementwise(o.args->strings_at(2).front());
                 return dstd::make_unique<FrameOpCursor>(
-                    std::move(in), sch, o.in_fields, o.name, o.op, o.args,
+                    std::move(in), own_sch(), o.in_fields, o.name, o.op, o.args,
                     budget, elementwise);
             },
             [&](const UniqueOp& o) -> CursorResult {
@@ -4586,12 +4602,12 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                     if (!at) return at.error();
                     key_idx.push_back(*at);
                 }
-                return make_unique_rows(std::move(in), sch, std::move(key_idx),
-                                        budget);
+                return make_unique_rows(std::move(in), own_sch(),
+                                        std::move(key_idx), budget);
             },
             [&](const SampleOp& o) -> CursorResult {
-                return dstd::make_unique<SampleCursor>(std::move(in), sch, o.n,
-                                                       o.seed);
+                return dstd::make_unique<SampleCursor>(std::move(in), own_sch(),
+                                                       o.n, o.seed);
             },
             [&](const HeadByOp& o) -> CursorResult {
                 dstd::Vector<std::int64_t> key_idx;
@@ -4609,20 +4625,21 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                                                       o.unique);
             },
             [&](const GroupByDynamicOp& o) -> CursorResult {
-                return make_group_by_dynamic(std::move(in), sch, o.time_col,
-                                             o.every, o.period, o.aggs,
-                                             o.origin, o.origin_min, budget);
+                return make_group_by_dynamic(
+                    std::move(in), own_sch(), o.time_col, o.every, o.period,
+                    o.aggs, o.origin, o.origin_min, budget);
             },
             [&](const PivotOp& o) -> CursorResult {
-                return make_pivot(std::move(in), budget, sch, o.index, o.on,
-                                  o.values, o.agg);
+                return make_pivot(std::move(in), budget, own_sch(), o.index,
+                                  o.on, o.values, o.agg);
             },
             [&](const ToDummiesOp& o) -> CursorResult {
                 return dstd::make_unique<ToDummiesCursor>(std::move(in), budget,
-                                                          sch, o.column);
+                                                          own_sch(), o.column);
             },
             [&](const DescribeOp&) -> CursorResult {
-                return dstd::make_unique<DescribeCursor>(std::move(in), sch);
+                return dstd::make_unique<DescribeCursor>(std::move(in),
+                                                         own_sch());
             },
             [&](const NodeOp& o) -> CursorResult {
                 auto declared = call_node_output_schema(o, sch);
@@ -4974,7 +4991,7 @@ LazyFrame LazyFrame::group_by(dstd::Vector<dstd::String> keys,
 }
 
 dstd::Result<dstd::Vector<GroupAgg>> LazyFrame::reduce_specs(
-    Agg agg, const dstd::Vector<dstd::String>& keys) const {
+    Agg agg, dstd::Span<const dstd::String> keys) const {
     const Schema in = output_schema();
     dstd::Vector<dstd::String> names;
     dstd::Vector<TypeId> types;
@@ -5038,7 +5055,8 @@ LazyFrame desugar_expr_group_by(const LazyFrame& self, dstd::Vector<Expr> keys,
     LazyFrame lf = self;
     dstd::Vector<dstd::String> sch = lf.schema();
     int tmp = 0;
-    auto resolve_val = [&](const Expr& e, const char* prefix) -> dstd::String {
+    auto resolve_val = [&](const Expr& e,
+                           dstd::StringView prefix) -> dstd::String {
         const std::int32_t idx = expr_col_index(e);
         if (idx >= 0 && static_cast<std::size_t>(idx) < sch.size())
             return sch[static_cast<std::size_t>(idx)];
@@ -5216,8 +5234,8 @@ LazyFrame LazyFrame::join(LazyFrame other, dstd::Vector<dstd::String> left_on,
         const dstd::Vector<dstd::String> left_names = schema();
         const dstd::Vector<dstd::String> right_names = other.schema();
         if (!left_names.empty() && !right_names.empty())
-            if (auto names = join_out_names(left_names, right_names, left_on,
-                                            right_on, how, suffix);
+            if (auto names = join_out_names<dstd::String>(
+                    left_names, right_names, left_on, right_on, how, suffix);
                 !names)
                 return failed(names.error());
     }
@@ -5296,8 +5314,8 @@ constexpr dstd::StringView NATIVE_TWINS[] = {
     "unnest",      "unique_by",     "reduce"};
 
 // The lazy op that does the work of frame op `name`, or null.
-const dftu_op_desc* native_twin(const dstd::String& name,
-                                const dftu_op_desc& op, std::size_t others) {
+const dftu_op_desc* native_twin(dstd::StringView name, const dftu_op_desc& op,
+                                std::size_t others) {
     constexpr dstd::StringView PREFIX = "dftu.frame.";
     if (name.compare(0, PREFIX.size(), PREFIX) != 0) return nullptr;
     const dstd::StringView base = dstd::StringView(name).substr(PREFIX.size());
@@ -5413,7 +5431,7 @@ static TypeId native_out_type(GroupwiseOp kind, TypeId in, NumClass cls) {
 }
 
 dstd::Optional<LazyFrame> native_group_transform(
-    const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
+    const LazyFrame& plan, dstd::Span<const dstd::String> keys,
     GroupwiseOp kind, std::int64_t n, const Schema& typed) {
     switch (kind) {
         case GroupwiseOp::CumSum:
@@ -5456,7 +5474,7 @@ dstd::Optional<LazyFrame> native_group_transform(
     dstd::Vector<const char*> key_ptrs;
     for (const dstd::String& k : keys) key_ptrs.push_back(k.c_str());
     OpArgs args;
-    args.strlist(1, key_ptrs.data(), static_cast<std::int32_t>(key_ptrs.size()))
+    args.strlist(1, key_ptrs)
         .i32(2, static_cast<std::int32_t>(kind))
         .i64(3, n)
         .i32(4, 0)
@@ -5482,7 +5500,7 @@ LazyFrame LazyFrame::compare_agg(LazyFrame variant, std::int64_t n_key) const {
     const dstd::Vector<Field> lhs = output_schema().fields;
     const dstd::Vector<Field> rhs = variant.output_schema().fields;
     const auto nk = static_cast<std::size_t>(n_key);
-    auto typed = [](const dstd::Vector<Field>& fs) {
+    auto typed = [](dstd::Span<const Field> fs) {
         return !fs.empty() &&
                std::none_of(fs.begin(), fs.end(), [](const Field& f) {
                    return f.type.id == TypeId::Unknown;
@@ -5639,8 +5657,7 @@ LazyFrame LazyFrame::op(dstd::String name, OpArgs args) const {
 }
 
 dstd::Result<DataFrame> morsel_to_frame(
-    Morsel&& m, NameCache& cache,
-    const dstd::Vector<dstd::String>& static_names,
+    Morsel&& m, NameCache& cache, dstd::Span<const dstd::String> static_names,
     const dstd::Optional<dstd::Vector<dstd::String>>& out_names) {
     return frame_from_morsel(std::move(m), cache, static_names, out_names);
 }
@@ -5716,8 +5733,7 @@ class GuardCursor final : public Cursor {
 // apply exactly. This is the plan's lowering (b); the driver below runs it.
 dstd::Result<CursorChain> lower_cursor_chain(
     dstd::SharedPtr<const Source> source_ptr,
-    const dstd::Vector<dstd::SharedPtr<const LazyOp>>& ops,
-    std::uint64_t budget) {
+    dstd::Span<const dstd::SharedPtr<const LazyOp>> ops, std::uint64_t budget) {
     const Source& source = *source_ptr;
     const dstd::Vector<dstd::String> names = source.names();
 
@@ -6211,11 +6227,11 @@ coro::CoroTask<dstd::Result<void>> batch_leaves(
         if (!s) return true;
         const dstd::Vector<dstd::String> all = m->parts.source->names();
         return std::all_of(
-            s->names.begin(), s->names.end(), [&](const dstd::String& n) {
+            s->names.begin(), s->names.end(), [&](dstd::StringView n) {
                 return std::find(all.begin(), all.end(), n) != all.end();
             });
     };
-    auto sources_of = [](const dstd::Vector<PlannedTree*>& members) {
+    auto sources_of = [](dstd::Span<PlannedTree* const> members) {
         dstd::Vector<dstd::SharedPtr<const Source>> out;
         out.reserve(members.size());
         for (PlannedTree* m : members) out.push_back(m->parts.source);
@@ -6384,15 +6400,15 @@ coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_all(
     co_return frames;
 }
 
-LoweredGroupAggs lower_group_aggs(const dstd::Vector<GroupAgg>& aggs) {
+LoweredGroupAggs lower_group_aggs(dstd::Span<const GroupAgg> aggs) {
     LoweredGroupAggs out;
     dstd::HashMap<dstd::String, std::int32_t> dedup;
-    auto resolve = [&](const dstd::String& name) -> std::int32_t {
+    auto resolve = [&](dstd::StringView name) -> std::int32_t {
         auto it = dedup.find(name);
         if (it != dedup.end()) return it->second;
         const std::int32_t idx =
             static_cast<std::int32_t>(out.value_names.size());
-        out.value_names.push_back(name);
+        out.value_names.emplace_back(name);
         dedup.emplace(name, idx);
         return idx;
     };
@@ -6404,9 +6420,8 @@ LoweredGroupAggs lower_group_aggs(const dstd::Vector<GroupAgg>& aggs) {
 
 dstd::Result<void> agg_accumulate_chunk(
     AggState& state, const DataFrame& frame,
-    const dstd::Vector<dstd::String>& keys,
-    const dstd::Vector<dstd::String>& value_names,
-    const dstd::String& dyn_prefix) {
+    dstd::Span<const dstd::String> keys,
+    dstd::Span<const dstd::String> value_names, dstd::StringView dyn_prefix) {
     dstd::Vector<const Series*> kcols;
     kcols.reserve(keys.size());
     for (const dstd::String& k : keys) {
@@ -6508,8 +6523,7 @@ LazyFrame optimize_plan(const LazyFrame& lf) {
 
 namespace {
 
-void fingerprint_group_aggs(Fingerprint& fp,
-                            const dstd::Vector<GroupAgg>& aggs) {
+void fingerprint_group_aggs(Fingerprint& fp, dstd::Span<const GroupAgg> aggs) {
     fp.pod(static_cast<std::uint64_t>(aggs.size()));
     for (const GroupAgg& a : aggs) {
         fp.pod(a.op);

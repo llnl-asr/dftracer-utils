@@ -346,7 +346,7 @@ Status Applier::asof_lookup(
     for (const auto& e : equi) by.push_back(e.c_str());
     dataframe::OpArgs args;
     args.str(2, time.c_str())
-        .strlist(3, by.data(), static_cast<std::int32_t>(by.size()))
+        .strlist(3, by)
         .i32(4, static_cast<std::int32_t>(a.direction))
         .f64(5, a.tolerance.value_or(-1));
     static constexpr const char* DIRECTIONS[] = {"backward", "forward",
@@ -364,12 +364,13 @@ Status Applier::asof_lookup(
     v_ = v_.with_lazy(v_.lazy().frame_op("dftu.frame.asof", args,
                                          {std::move(side)}, std_strs(out)));
     for (auto& c : values.columns) cols_.push_back(std::move(c));
-    for (const auto& [name, tmp] : values.fills)
-        if (auto done = with_column(
-                name, dataframe::expr_coalesce({col(name), col(tmp)}),
-                dstd::fmt<"{} ?? {}">(name, tmp));
+    for (const auto& [name, tmp] : values.fills) {
+        const dataframe::Expr parts[] = {col(name), col(tmp)};
+        if (auto done = with_column(name, dataframe::expr_coalesce(parts),
+                                    dstd::fmt<"{} ?? {}">(name, tmp));
             !done)
             return done;
+    }
     lines.push_back(dstd::fmt<"sort_by {}">(pos));
     v_ = v_.with_lazy(v_.lazy().sort_by(std_str(pos)));
     dstd::Vector<dstd::String> keep_names = before;
@@ -550,12 +551,13 @@ Status Applier::overlap_lookup(
             nest ? dstd::fmt<" into {}">(o.into) : dstd::String(), l.name),
         std::move(schema));
     cols_ = std::move(next);
-    for (const auto& [name, tmp] : values.fills)
-        if (auto done = with_column(
-                name, dataframe::expr_coalesce({col(name), col(tmp)}),
-                dstd::fmt<"{} ?? {}">(name, tmp));
+    for (const auto& [name, tmp] : values.fills) {
+        const dataframe::Expr parts[] = {col(name), col(tmp)};
+        if (auto done = with_column(name, dataframe::expr_coalesce(parts),
+                                    dstd::fmt<"{} ?? {}">(name, tmp));
             !done)
             return done;
+    }
     dstd::Vector<dstd::String> keep_names = before;
     for (const auto& n : values.added) keep_names.push_back(n);
     return keep(std::move(keep_names));

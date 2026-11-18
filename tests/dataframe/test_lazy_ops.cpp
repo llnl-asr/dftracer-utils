@@ -443,7 +443,7 @@ TEST_SUITE("lazy_ops") {
             dftu_lazyframe* lf2 = dftu_dataframe_lazy(df);
             const char* names[1] = {"v"};
             OpArgs a;
-            a.strlist(1, names, 1);
+            a.strlist(1, {names, 1});
             dftu_dataframe* via_registry =
                 run_registry("dftu.lazy.select", lf1, a);
             dftu_lazyframe* direct = dftu_lazyframe_select(lf2, names, 1);
@@ -463,7 +463,7 @@ TEST_SUITE("lazy_ops") {
             dftu_lazyframe* lf2 = dftu_dataframe_lazy(df);
             const char* names[2] = {"key", "val"};
             OpArgs a;
-            a.strlist(1, names, 2);
+            a.strlist(1, {names, 2});
             dftu_dataframe* via_registry =
                 run_registry("dftu.lazy.rename", lf1, a);
             dftu_lazyframe* direct = dftu_lazyframe_rename(lf2, names, 2);
@@ -494,8 +494,8 @@ TEST_SUITE("lazy_ops") {
             dftu_lazyframe* lf1 = dftu_dataframe_lazy(df);
             dftu_lazyframe* lf2 = dftu_dataframe_lazy(df);
             OpArgs a;
-            a.strlist(1, id_vars, 1);
-            a.strlist(2, value_vars, 1);
+            a.strlist(1, {id_vars, 1});
+            a.strlist(2, {value_vars, 1});
             dftu_dataframe* via_registry = run_registry(name, lf1, a);
             dftu_lazyframe* direct =
                 dstd::String(name) == "dftu.lazy.unpivot"
@@ -524,7 +524,7 @@ TEST_SUITE("lazy_ops") {
         dftu_lazyframe* lf1 = dftu_dataframe_lazy(df);
         dftu_lazyframe* lf2 = dftu_dataframe_lazy(df);
         OpArgs a;
-        a.strlist(1, keys, 1);
+        a.strlist(1, {keys, 1});
         a.agglist(2, {aggs, 1});
         dftu_dataframe* grouped_registry =
             run_registry("dftu.lazy.group_by", lf1, a);
@@ -674,7 +674,7 @@ TEST_SUITE("lazy_ops") {
         dftu_lazyframe* lf2 = dftu_dataframe_lazy(df);
         const char* by[2] = {"k", "v"};
         OpArgs a;
-        a.strlist(1, by, 2).i32(2, 0).i32(3, 1);
+        a.strlist(1, {by, 2}).i32(2, 0).i32(3, 1);
         dftu_dataframe* via_registry =
             run_registry("dftu.lazy.sort_by_multi", lf1, a);
         dftu_lazyframe* direct = dftu_lazyframe_sort_by_multi(lf2, by, 2, 0);

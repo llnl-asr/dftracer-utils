@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -26,7 +27,7 @@ namespace {
 
 constexpr int PARTS = 60;
 
-dstd::Vector<DataFrame> shared(const dstd::Vector<DataFrame>& parts) {
+dstd::Vector<DataFrame> shared(dstd::Span<const DataFrame> parts) {
     dstd::Vector<DataFrame> out;
     for (const DataFrame& p : parts) {
         DataFrame df;
@@ -65,7 +66,7 @@ class PartsCursor : public Cursor {
 
 class PartsSource : public Source {
    public:
-    PartsSource(const dstd::Vector<DataFrame>& parts, std::size_t leading)
+    PartsSource(dstd::Span<const DataFrame> parts, std::size_t leading)
         : parts_(
               dstd::make_shared<const dstd::Vector<DataFrame>>(shared(parts))),
           leading_(leading) {}
@@ -95,7 +96,7 @@ class PartsSource : public Source {
     std::size_t leading_;
 };
 
-dstd::Result<DataFrame> collect_result(const dstd::Vector<DataFrame>& parts,
+dstd::Result<DataFrame> collect_result(dstd::Span<const DataFrame> parts,
                                        std::size_t leading) {
     auto source = dstd::make_shared<PartsSource>(parts, leading);
     return dftracer::utils::default_runtime()
@@ -103,11 +104,11 @@ dstd::Result<DataFrame> collect_result(const dstd::Vector<DataFrame>& parts,
         .get();
 }
 
-DataFrame collect(const dstd::Vector<DataFrame>& parts, std::size_t leading) {
+DataFrame collect(dstd::Span<const DataFrame> parts, std::size_t leading) {
     return dftu_utils_test::ok(collect_result(parts, leading));
 }
 
-DataFrame serial(const dstd::Vector<DataFrame>& parts, ConcatHow how) {
+DataFrame serial(dstd::Span<const DataFrame> parts, ConcatHow how) {
     dstd::Vector<const DataFrame*> ptrs;
     for (const DataFrame& p : parts) ptrs.push_back(&p);
     return dftu_utils_test::ok(dftracer::utils::dataframe::concat(ptrs, how));

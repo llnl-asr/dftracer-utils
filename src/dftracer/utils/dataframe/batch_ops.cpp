@@ -60,7 +60,7 @@ namespace dftracer::utils::dataframe {
 
 namespace {
 
-std::int64_t index_of(const DataFrame& b, const dstd::String& name) {
+std::int64_t index_of(const DataFrame& b, dstd::StringView name) {
     for (std::size_t i = 0; i < b.names.size(); ++i)
         if (b.names[i] == name) return static_cast<std::int64_t>(i);
     return -1;
@@ -68,14 +68,14 @@ std::int64_t index_of(const DataFrame& b, const dstd::String& name) {
 
 // The index of column `name`; a missing one is the NotFound error of op `who`.
 dstd::Result<std::int64_t> require_index(const DataFrame& b,
-                                         const dstd::String& name,
-                                         const char* who) {
+                                         dstd::StringView name,
+                                         dstd::StringView who) {
     const std::int64_t i = index_of(b, name);
     if (i < 0) return not_found<"{}: no column named {}">(who, name);
     return i;
 }
 
-dstd::Result<AggOp> agg_op_of(const dstd::String& op) {
+dstd::Result<AggOp> agg_op_of(dstd::StringView op) {
 #define DFTU_AGG_OP(id, code, str) \
     if (op == str) return AggOp::id;
 #include <dftracer/utils/dataframe/agg_ops.def>
@@ -152,7 +152,7 @@ dstd::Result<Series> join_chunks(const Series& c) {
 // One gather per column, each fanning out over its rows. The result is
 // FLAT: a caller reads the buffers directly, and a frame that is filtered
 // once and read many times pays the gather once.
-DataFrame take(const DataFrame& b, const dstd::Vector<std::int64_t>& indices) {
+DataFrame take(const DataFrame& b, dstd::Span<const std::int64_t> indices) {
     DataFrame out;
     out.names = b.names;
     out.columns = take_all(b.columns, indices.data(),
@@ -205,7 +205,7 @@ DataFrame slice(const DataFrame& b, std::int64_t offset, std::int64_t len) {
 DataFrame head(const DataFrame& b, std::int64_t n) { return slice(b, 0, n); }
 
 dstd::Result<DataFrame> select(const DataFrame& b,
-                               const dstd::Vector<dstd::String>& names) {
+                               dstd::Span<const dstd::String> names) {
     DataFrame out;
     out.names.reserve(names.size());
     out.columns.reserve(names.size());
@@ -219,7 +219,7 @@ dstd::Result<DataFrame> select(const DataFrame& b,
 }
 
 dstd::Result<DataFrame> rename(const DataFrame& b,
-                               const dstd::Vector<dstd::String>& new_names) {
+                               dstd::Span<const dstd::String> new_names) {
     if (new_names.size() != b.columns.size())
         return invalid_argument<"rename: name count must match columns">();
     DataFrame out;
@@ -231,7 +231,7 @@ dstd::Result<DataFrame> rename(const DataFrame& b,
     return out;
 }
 
-DataFrame with_column(const DataFrame& b, const dstd::String& name,
+DataFrame with_column(const DataFrame& b, dstd::StringView name,
                       const Series& col) {
     DataFrame out;
     out.names = b.names;
@@ -247,7 +247,7 @@ DataFrame with_column(const DataFrame& b, const dstd::String& name,
     return out;
 }
 
-dstd::Result<DataFrame> sort_by(const DataFrame& b, const dstd::String& name,
+dstd::Result<DataFrame> sort_by(const DataFrame& b, dstd::StringView name,
                                 bool descending, bool nulls_last) {
     const dstd::Result<std::int64_t> k = require_index(b, name, "sort_by");
     if (!k) return k.error();
@@ -259,7 +259,7 @@ dstd::Result<DataFrame> sort_by(const DataFrame& b, const dstd::String& name,
     return take(b, order);
 }
 
-dstd::Result<DataFrame> topk(const DataFrame& b, const dstd::String& name,
+dstd::Result<DataFrame> topk(const DataFrame& b, dstd::StringView name,
                              std::int64_t k, bool largest) {
     const dstd::Result<std::int64_t> j = require_index(b, name, "topk");
     if (!j) return j.error();
@@ -271,7 +271,7 @@ dstd::Result<DataFrame> topk(const DataFrame& b, const dstd::String& name,
     return take(b, ind);
 }
 
-dstd::Result<Series> concat_struct_by_name(const dstd::Vector<Series>& mats);
+dstd::Result<Series> concat_struct_by_name(dstd::Span<const Series> mats);
 
 namespace {
 
@@ -291,7 +291,7 @@ struct ColumnKind {
 };
 
 dstd::Result<ColumnKind> promote_type(ColumnKind a, ColumnKind b,
-                                      const dstd::String& name) {
+                                      dstd::StringView name) {
     if (a.type == b.type && a.json == b.json) return a;
     // String and LargeString are one family: the wider one holds both.
     if (!a.json && !b.json &&
@@ -311,7 +311,7 @@ dstd::Result<ColumnKind> promote_type(ColumnKind a, ColumnKind b,
 
 // A List or Struct concat: offsets rebased and children concatenated, then
 // the null rows gathered as nulls.
-dstd::Result<Series> concat_nested(const dstd::Vector<Series>& mats,
+dstd::Result<Series> concat_nested(dstd::Span<const Series> mats,
                                    std::int64_t total, bool any_null) {
     Series out;
     if (mats.front().type() == TypeId::List) {
@@ -371,7 +371,7 @@ std::int64_t text_part_bytes(const OffIn* off, const std::uint8_t* valid,
 }
 
 template <class OffIn, class OffOut>
-void text_part_fill(const OffIn* off, const char* data,
+void text_part_fill(const OffIn* off, dstd::StringView data,
                     const std::uint8_t* valid, bool has_null, std::int64_t rows,
                     std::int64_t row0, std::int64_t byte0, OffOut* out_off,
                     char* out_data) {
@@ -382,8 +382,8 @@ void text_part_fill(const OffIn* off, const char* data,
             out_off[row0 + i + 1] = static_cast<OffOut>(
                 byte0 + static_cast<std::int64_t>(off[i + 1] - base));
         const std::size_t bytes = static_cast<std::size_t>(off[rows] - base);
-        if (bytes != 0 && data != nullptr)
-            std::memcpy(out_data + byte0, data + base, bytes);
+        if (bytes != 0 && data.data() != nullptr)
+            std::memcpy(out_data + byte0, data.data() + base, bytes);
         return;
     }
     std::int64_t at = byte0;
@@ -391,8 +391,8 @@ void text_part_fill(const OffIn* off, const char* data,
         if ((valid[i >> 3] >> (i & 7)) & 1) {
             const std::size_t len =
                 static_cast<std::size_t>(off[i + 1] - off[i]);
-            if (len != 0 && data != nullptr)
-                std::memcpy(out_data + at, data + off[i], len);
+            if (len != 0 && data.data() != nullptr)
+                std::memcpy(out_data + at, data.data() + off[i], len);
             at += static_cast<std::int64_t>(len);
         }
         out_off[row0 + i + 1] = static_cast<OffOut>(at);
@@ -426,7 +426,7 @@ bool fits_view(const dftu_series& c) {
 // Text parts (String/LargeString, or Binary/LargeBinary) concatenate into a
 // view column over the parts' buffers, or into one dictionary when every part
 // is a dictionary. An invalid Series means the parts need the flat path.
-Series concat_text_views(const dstd::Vector<const Series*>& parts) {
+Series concat_text_views(dstd::Span<const Series* const> parts) {
     auto family = [](TypeId x) {
         return x == TypeId::String || x == TypeId::LargeString ? TypeId::String
                : x == TypeId::Binary || x == TypeId::LargeBinary
@@ -525,7 +525,7 @@ Series concat_text_views(const dstd::Vector<const Series*>& parts) {
 
 }  // namespace
 
-dstd::Result<Series> concat_columns(const dstd::Vector<const Series*>& parts) {
+dstd::Result<Series> concat_columns(dstd::Span<const Series* const> parts) {
     if (parts.empty()) return Series{};
     if (Series out = concat_text_views(parts); out.valid()) return out;
     // Materialize each part to FLAT so the value buffers are contiguous; concat
@@ -705,7 +705,7 @@ dstd::Result<Series> concat_columns(const dstd::Vector<const Series*>& parts) {
         struct TextPart {
             const std::int32_t* off32 = nullptr;
             const std::int64_t* off64 = nullptr;
-            const char* data = nullptr;
+            dstd::StringView data;
             const std::uint8_t* valid = nullptr;  // null: every row present
             bool has_null = false;
         };
@@ -715,9 +715,10 @@ dstd::Result<Series> concat_columns(const dstd::Vector<const Series*>& parts) {
         for (std::size_t i = 0; i < mats.size(); ++i) {
             const dftu_series* h = mats[i].handle();
             TextPart& q = tp[i];
-            q.data = h->data.block()
-                         ? reinterpret_cast<const char*>(h->data.data())
-                         : nullptr;
+            if (h->data.block())
+                q.data = dstd::StringView(
+                    reinterpret_cast<const char*>(h->data.data()),
+                    h->data.size());
             q.valid = h->validity.block() ? h->validity.data() : nullptr;
             q.has_null = q.valid != nullptr && mats[i].null_count() > 0;
             const bool wide_part = is_wide_offset_type(mats[i].type());
@@ -842,8 +843,8 @@ dstd::Result<Series> concat_columns(const dstd::Vector<const Series*>& parts) {
 }
 
 dstd::Result<DataFrame> group_by(const DataFrame& b,
-                                 const dstd::Vector<dstd::String>& keys,
-                                 const dstd::Vector<GroupAgg>& aggs) {
+                                 dstd::Span<const dstd::String> keys,
+                                 dstd::Span<const GroupAgg> aggs) {
     dstd::Vector<const Series*> key_cols;
     key_cols.reserve(keys.size());
     for (const dstd::String& key : keys) {
@@ -856,7 +857,7 @@ dstd::Result<DataFrame> group_by(const DataFrame& b,
     // (deduped), all aggregates computed in one parallel pass over the batch.
     dstd::Vector<const Series*> values;
     dstd::HashMap<dstd::String, std::int32_t> col_idx;
-    auto resolve = [&](const dstd::String& name) -> dstd::Result<std::int32_t> {
+    auto resolve = [&](dstd::StringView name) -> dstd::Result<std::int32_t> {
         auto it = col_idx.find(name);
         if (it != col_idx.end()) return it->second;
         const dstd::Result<std::int64_t> vi =
@@ -877,9 +878,10 @@ dstd::Result<DataFrame> group_by(const DataFrame& b,
     return group_agg(key_cols, values, std::move(specs), keys);
 }
 
-dstd::Result<DataFrame> group_by(const DataFrame& b, const dstd::String& key,
-                                 const dstd::Vector<GroupAgg>& aggs) {
-    return group_by(b, dstd::Vector<dstd::String>{key}, aggs);
+dstd::Result<DataFrame> group_by(const DataFrame& b, dstd::StringView key,
+                                 dstd::Span<const GroupAgg> aggs) {
+    const dstd::String name(key);
+    return group_by(b, dstd::Span<const dstd::String>(&name, 1), aggs);
 }
 
 namespace {
@@ -913,7 +915,7 @@ std::uint64_t hash_cell(const Series& c, std::int64_t i) {
 }  // namespace
 
 dstd::Result<Series> partition_id(const DataFrame& b,
-                                  const dstd::Vector<dstd::String>& keys,
+                                  dstd::Span<const dstd::String> keys,
                                   std::int64_t n_parts) {
     if (keys.empty()) return invalid_argument<"partition_id: no keys">();
     if (n_parts < 1) return invalid_argument<"partition_id: n_parts < 1">();
@@ -960,7 +962,7 @@ dstd::Result<Series> partition_id(const DataFrame& b,
 }
 
 dstd::Result<dstd::Vector<DataFrame>> hash_partition(
-    const DataFrame& b, const dstd::Vector<dstd::String>& keys,
+    const DataFrame& b, dstd::Span<const dstd::String> keys,
     std::int64_t n_parts) {
     dstd::Result<Series> ids = partition_id(b, keys, n_parts);
     if (!ids) return ids.error();
@@ -1123,7 +1125,7 @@ struct DiagonalSchema {
 
 // A column with no values in a part does not decide its type.
 dstd::Result<DiagonalSchema> diagonal_schema(
-    const dstd::Vector<const DataFrame*>& parts) {
+    dstd::Span<const DataFrame* const> parts) {
     dstd::Vector<ColumnKind> kinds;
     dstd::Vector<char> valued;
     DiagonalSchema out;
@@ -1159,7 +1161,7 @@ dstd::Result<DiagonalSchema> diagonal_schema(
 }
 
 dstd::Vector<Series> diagonal_parts(
-    const dstd::Vector<const DataFrame*>& parts, dstd::StringView name,
+    dstd::Span<const DataFrame* const> parts, dstd::StringView name,
     TypeId target, bool json,
     const dstd::Vector<std::int64_t>* rows = nullptr) {
     dstd::Vector<Series> owned;
@@ -1199,7 +1201,7 @@ dstd::Vector<Series> diagonal_parts(
     return owned;
 }
 
-dstd::Result<Series> concat_owned(const dstd::Vector<Series>& owned) {
+dstd::Result<Series> concat_owned(dstd::Span<const Series> owned) {
     dstd::Vector<const Series*> cols;
     cols.reserve(owned.size());
     for (const Series& s : owned) cols.push_back(&s);
@@ -1211,7 +1213,7 @@ dstd::Result<Series> concat_owned(const dstd::Vector<Series>& owned) {
 // Struct parts join by field name, in first-seen order. A field a part lacks
 // is nulls, and a field with different types widens as the diagonal concat
 // does.
-dstd::Result<Series> concat_struct_by_name(const dstd::Vector<Series>& mats) {
+dstd::Result<Series> concat_struct_by_name(dstd::Span<const Series> mats) {
     dstd::Vector<DataFrame> frames(mats.size());
     dstd::Vector<const DataFrame*> parts;
     dstd::Vector<std::int64_t> rows;
@@ -1240,7 +1242,7 @@ dstd::Result<Series> concat_struct_by_name(const dstd::Vector<Series>& mats) {
 }
 
 dstd::Result<ConcatPlan> ConcatPlan::make(
-    const dstd::Vector<const DataFrame*>& parts, ConcatHow how) {
+    dstd::Span<const DataFrame* const> parts, ConcatHow how) {
     ConcatPlan plan(parts);
     if (parts.empty()) return plan;
     if (parts.size() == 1) {
@@ -1277,7 +1279,7 @@ dstd::Vector<Series> ConcatPlan::chunks(std::size_t c) const {
     return out;
 }
 
-dstd::Result<DataFrame> concat(const dstd::Vector<const DataFrame*>& parts,
+dstd::Result<DataFrame> concat(dstd::Span<const DataFrame* const> parts,
                                ConcatHow how) {
     DataFrame out;
     if (parts.empty()) return out;
@@ -1312,8 +1314,8 @@ dstd::Vector<Series> materialized_columns(const DataFrame& b) {
 // Composite dedupe key per row over `cols` (already FLAT), built in parallel
 // (each row's key is independent scalar string work). A column with no per-row
 // key is an error, noted once by the first chunk that meets it.
-dstd::Result<dstd::Vector<dstd::String>> row_keys(
-    const dstd::Vector<Series>& cols, std::int64_t n) {
+dstd::Result<dstd::Vector<dstd::String>> row_keys(dstd::Span<const Series> cols,
+                                                  std::int64_t n) {
     constexpr int NONE = -1;
     std::atomic<int> refused{NONE};
     dstd::Vector<dstd::String> keys(static_cast<std::size_t>(n));
@@ -1388,7 +1390,7 @@ DataFrame fill_null(const DataFrame& b, dftu_scalar value) {
 }
 
 dstd::Result<DataFrame> unique(const DataFrame& b,
-                               const dstd::Vector<dstd::String>& subset) {
+                               dstd::Span<const dstd::String> subset) {
     const std::int64_t n = b.num_rows();
     dstd::Vector<const Series*> cols;
     if (subset.empty()) {
@@ -1521,7 +1523,7 @@ bool permutation_order(const Series& c, bool descending, std::int64_t n,
 // the radix/SIMD kernel for numbers. Integer, Bool and dictionary-ranked text
 // keys qualify, floats too (NaN is one value above infinity and -0.0 equals
 // +0.0); false means a key does not, and `order` is then unusable.
-bool radix_order(const dstd::Vector<const Series*>& keys,
+bool radix_order(dstd::Span<const Series* const> keys,
                  dstd::Span<const std::uint8_t> desc,
                  dstd::Span<const std::uint8_t> nulls_last, std::int64_t n,
                  dstd::Vector<std::int64_t>& order) {
@@ -1578,7 +1580,7 @@ bool radix_order(const dstd::Vector<const Series*>& keys,
 }  // namespace
 
 dstd::Result<DataFrame> sort_by_multi(
-    const DataFrame& b, const dstd::Vector<dstd::String>& names,
+    const DataFrame& b, dstd::Span<const dstd::String> names,
     dstd::Span<const std::uint8_t> descending,
     dstd::Span<const std::uint8_t> nulls_last) {
     if (descending.size() > 1 && descending.size() != names.size())
@@ -1700,7 +1702,7 @@ dstd::Result<DataFrame> sort_by_multi(
 }
 
 dstd::Result<DataFrame> sort_by_multi(const DataFrame& b,
-                                      const dstd::Vector<dstd::String>& names,
+                                      dstd::Span<const dstd::String> names,
                                       bool descending, bool nulls_last) {
     const std::uint8_t desc = descending ? 1 : 0;
     const std::uint8_t last = nulls_last ? 1 : 0;
@@ -1740,7 +1742,7 @@ DataFrame sample(const DataFrame& b, std::int64_t n, std::uint64_t seed) {
     return take(b, order);
 }
 
-DataFrame with_row_index(const DataFrame& b, const dstd::String& name) {
+DataFrame with_row_index(const DataFrame& b, dstd::StringView name) {
     const std::int64_t n = b.num_rows();
     dstd::Vector<std::int64_t> ids(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i) ids[static_cast<std::size_t>(i)] = i;
@@ -1864,8 +1866,8 @@ bool reduces_temporal(Agg agg, TypeId t) noexcept {
 
 template <class Name>
 dstd::Result<dstd::Vector<GroupAgg>> reduce_specs_of(
-    const dstd::Vector<Name>& names, const dstd::Vector<TypeId>& types, Agg agg,
-    const dstd::Vector<dstd::String>& keys) {
+    dstd::Span<const Name> names, dstd::Span<const TypeId> types, Agg agg,
+    dstd::Span<const dstd::String> keys) {
     if (!reduce_broadcasts(agg))
         return invalid_argument<
             "reduce: '{}' takes a second column or a parameter; give it as a "
@@ -1886,25 +1888,24 @@ dstd::Result<dstd::Vector<GroupAgg>> reduce_specs_of(
 }  // namespace
 
 dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
-    const dstd::Vector<dstd::String>& names, const dstd::Vector<TypeId>& types,
-    Agg agg, const dstd::Vector<dstd::String>& keys) {
-    return reduce_specs_of(names, types, agg, keys);
+    dstd::Span<const dstd::String> names, dstd::Span<const TypeId> types,
+    Agg agg, dstd::Span<const dstd::String> keys) {
+    return reduce_specs_of<dstd::String>(names, types, agg, keys);
 }
 
 dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
-    const dstd::Vector<dstd::SharedString>& names,
-    const dstd::Vector<TypeId>& types, Agg agg,
-    const dstd::Vector<dstd::String>& keys) {
-    return reduce_specs_of(names, types, agg, keys);
+    dstd::Span<const dstd::SharedString> names, dstd::Span<const TypeId> types,
+    Agg agg, dstd::Span<const dstd::String> keys) {
+    return reduce_specs_of<dstd::SharedString>(names, types, agg, keys);
 }
 
 dstd::Result<DataFrame> reduce(const DataFrame& b,
-                               const dstd::Vector<GroupAgg>& aggs) {
+                               dstd::Span<const GroupAgg> aggs) {
     return group_by(b, dstd::Vector<dstd::String>{}, aggs);
 }
 
 dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
-    const DataFrame& b, Agg agg, const dstd::Vector<dstd::String>& keys) {
+    const DataFrame& b, Agg agg, dstd::Span<const dstd::String> keys) {
     dstd::Vector<TypeId> types;
     types.reserve(b.columns.size());
     for (const Series& c : b.columns) types.push_back(c.type());
@@ -1970,8 +1971,8 @@ bool is_float_type(TypeId t) {
 }  // namespace
 
 dstd::Result<DataFrame> unpivot(const DataFrame& b,
-                                const dstd::Vector<dstd::String>& id_vars,
-                                const dstd::Vector<dstd::String>& value_vars) {
+                                dstd::Span<const dstd::String> id_vars,
+                                dstd::Span<const dstd::String> value_vars) {
     if (value_vars.empty())
         return invalid_argument<"unpivot: value_vars must be non-empty">();
 
@@ -2038,9 +2039,9 @@ dstd::Result<DataFrame> unpivot(const DataFrame& b,
 namespace {
 
 dstd::Result<DataFrame> explode_impl(const DataFrame& b,
-                                     const dstd::String& column,
-                                     bool keep_empty, bool flatten_struct,
-                                     const char* who) {
+                                     dstd::StringView column, bool keep_empty,
+                                     bool flatten_struct,
+                                     dstd::StringView who) {
     std::int64_t ci = index_of(b, column);
     if (ci < 0) return not_found<"{}: no column named {}">(who, column);
     Series lst = flat_copy(b.columns[static_cast<std::size_t>(ci)]);
@@ -2092,18 +2093,17 @@ dstd::Result<DataFrame> explode_impl(const DataFrame& b,
 
 }  // namespace
 
-dstd::Result<DataFrame> explode(const DataFrame& b,
-                                const dstd::String& column) {
+dstd::Result<DataFrame> explode(const DataFrame& b, dstd::StringView column) {
     return explode_impl(b, column, true, false, "explode");
 }
 
-dstd::Result<DataFrame> unnest(const DataFrame& b, const dstd::String& column,
+dstd::Result<DataFrame> unnest(const DataFrame& b, dstd::StringView column,
                                bool keep_empty) {
     return explode_impl(b, column, keep_empty, true, "unnest");
 }
 
 dstd::Result<DataFrame> to_dummies(const DataFrame& b,
-                                   const dstd::String& column) {
+                                   dstd::StringView column) {
     const dstd::Result<std::int64_t> col =
         require_index(b, column, "to_dummies");
     if (!col) return col.error();
@@ -2174,7 +2174,7 @@ namespace {
 
 enum class PivotMode { First, Last, Reduce };
 
-dstd::Result<PivotMode> pivot_mode_of(const dstd::String& agg, AggOp& op) {
+dstd::Result<PivotMode> pivot_mode_of(dstd::StringView agg, AggOp& op) {
     if (agg == "first") return PivotMode::First;
     if (agg == "last") return PivotMode::Last;
     const dstd::Result<AggOp> found =
@@ -2186,11 +2186,10 @@ dstd::Result<PivotMode> pivot_mode_of(const dstd::String& agg, AggOp& op) {
 
 }  // namespace
 
-dstd::Result<DataFrame> pivot(const DataFrame& b,
-                              const dstd::String& index_name,
-                              const dstd::String& columns_name,
-                              const dstd::String& values_name,
-                              const dstd::String& agg) {
+dstd::Result<DataFrame> pivot(const DataFrame& b, dstd::StringView index_name,
+                              dstd::StringView columns_name,
+                              dstd::StringView values_name,
+                              dstd::StringView agg) {
     const dstd::Result<std::int64_t> index_col =
         require_index(b, index_name, "pivot");
     if (!index_col) return index_col.error();
@@ -2319,10 +2318,10 @@ dstd::Result<DataFrame> pivot(const DataFrame& b,
 }
 
 dstd::Result<DataFrame> group_by_dynamic(const DataFrame& b,
-                                         const dstd::String& time_col,
+                                         dstd::StringView time_col,
                                          std::int64_t every,
                                          std::int64_t period,
-                                         const dstd::Vector<GroupAgg>& aggs,
+                                         dstd::Span<const GroupAgg> aggs,
                                          std::int64_t origin, bool origin_min) {
     if (every <= 0)
         return invalid_argument<"group_by_dynamic: every must be > 0">();
@@ -2398,7 +2397,7 @@ dstd::Result<DataFrame> group_by_dynamic(const DataFrame& b,
         dstd::Vector<const Series*> values;
         dstd::HashMap<dstd::String, std::int32_t> col_idx;
         auto resolve =
-            [&](const dstd::String& name) -> dstd::Result<std::int32_t> {
+            [&](dstd::StringView name) -> dstd::Result<std::int32_t> {
             auto it = col_idx.find(name);
             if (it != col_idx.end()) return it->second;
             const dstd::Result<std::int64_t> vidx =
@@ -2447,7 +2446,7 @@ dstd::Result<DataFrame> group_by_dynamic(const DataFrame& b,
     dstd::Vector<Series> gathered;
     dstd::Vector<AggSpec> specs;
     dstd::HashMap<dstd::String, std::int32_t> col_idx;
-    auto resolve = [&](const dstd::String& name) -> dstd::Result<std::int32_t> {
+    auto resolve = [&](dstd::StringView name) -> dstd::Result<std::int32_t> {
         auto it = col_idx.find(name);
         if (it != col_idx.end()) return it->second;
         const dstd::Result<std::int64_t> vidx =

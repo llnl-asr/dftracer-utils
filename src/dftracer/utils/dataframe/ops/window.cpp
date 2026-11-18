@@ -67,17 +67,18 @@ struct Column {
 };
 
 Series pass_through(const Series& column,
-                    const dstd::Vector<std::int64_t>& source) {
+                    dstd::Span<const std::int64_t> source) {
     return column.take(source);
 }
 
-dstd::Result<void> numeric(const ColumnReader& v, const char* what) {
+dstd::Result<void> numeric(const ColumnReader& v, dstd::StringView what) {
     if (v.is_bytes())
         return invalid_argument<"window: {} over a non-numeric column">(what);
     return {};
 }
 
-dstd::Result<ColumnReader> view_of(const Series& column, const char* what) {
+dstd::Result<ColumnReader> view_of(const Series& column,
+                                   dstd::StringView what) {
     if (!ColumnReader::supports(column.type()))
         return invalid_argument<"window: {} over an unsupported column type">(
             what);
@@ -97,7 +98,7 @@ dstd::Result<const Series*> value_column(const DataFrame& df,
 dstd::Result<const Series*> named_column(const DataFrame& df,
                                          const dstd::String* name,
                                          const WindowColumn& w,
-                                         const char* role) {
+                                         dstd::StringView role) {
     if (!name)
         return invalid_argument<"window: '{}' needs a {} column">(w.out, role);
     const dstd::Result<std::size_t> at = ops::column_named(df, *name, "window");
@@ -106,8 +107,8 @@ dstd::Result<const Series*> named_column(const DataFrame& df,
 }
 
 // The error a running or frame sum reports when `step` overflowed `type`.
-dstd::Unexpected<dstd::Error> overflow_error(const char* func,
-                                             const char* type) {
+dstd::Unexpected<dstd::Error> overflow_error(dstd::StringView func,
+                                             dstd::StringView type) {
     return common::make_error(common::ErrorCode::InvalidArgument,
                               steps::overflow_message(func, type));
 }
@@ -1141,8 +1142,8 @@ dstd::Vector<std::int64_t> present_prefix(const UdafWindow& u) {
     return prefix;
 }
 
-std::int64_t present_in(const dstd::Vector<std::int64_t>& prefix,
-                        std::int64_t lo, std::int64_t hi) {
+std::int64_t present_in(dstd::Span<const std::int64_t> prefix, std::int64_t lo,
+                        std::int64_t hi) {
     return hi < lo ? 0
                    : prefix[static_cast<std::size_t>(hi + 1)] -
                          prefix[static_cast<std::size_t>(lo)];
@@ -1655,9 +1656,9 @@ WindowColumn window_column(const dftu_window_spec& s) {
 }
 
 dstd::Result<DataFrame> window(const DataFrame& df,
-                               const dstd::Vector<dstd::String>& partition_by,
-                               const dstd::Vector<dstd::String>& order_by,
-                               const dstd::Vector<WindowColumn>& specs) {
+                               dstd::Span<const dstd::String> partition_by,
+                               dstd::Span<const dstd::String> order_by,
+                               dstd::Span<const WindowColumn> specs) {
     dstd::Result<dstd::Vector<ColumnReader>> part_views =
         ops::views_of(df, partition_by, "window");
     if (!part_views) return part_views.error();
@@ -1791,34 +1792,27 @@ dstd::Result<DataFrame> window(const DataFrame& df,
 }
 
 dstd::Result<DataFrame> window_checked(
-    const DataFrame& df, const char* const* partition_by, std::int32_t n_part,
-    const char* const* order_by, std::int32_t n_order,
-    const dftu_window_spec* specs, std::int32_t n_specs) {
+    const DataFrame& df, dstd::Span<const char* const> partition_by,
+    dstd::Span<const char* const> order_by,
+    dstd::Span<const dftu_window_spec> specs) {
     const auto names =
-        [](const char* const* items, std::int32_t n,
-           const char* what) -> dstd::Result<dstd::Vector<dstd::String>> {
-        if (n < 0 || (n > 0 && !items))
-            return invalid_argument<"window: bad {} list">(what);
+        [](dstd::Span<const char* const> items,
+           dstd::StringView what) -> dstd::Result<dstd::Vector<dstd::String>> {
         dstd::Vector<dstd::String> out;
-        for (std::int32_t i = 0; i < n; ++i) {
-            if (!items[i])
-                return invalid_argument<"window: NULL {} name">(what);
-            out.emplace_back(items[i]);
+        for (const char* item : items) {
+            if (!item) return invalid_argument<"window: NULL {} name">(what);
+            out.emplace_back(item);
         }
         return out;
     };
     dstd::Result<dstd::Vector<dstd::String>> parts =
-        names(partition_by, n_part, "partition");
+        names(partition_by, "partition");
     if (!parts) return parts.error();
-    dstd::Result<dstd::Vector<dstd::String>> order =
-        names(order_by, n_order, "order");
+    dstd::Result<dstd::Vector<dstd::String>> order = names(order_by, "order");
     if (!order) return order.error();
-    if (n_specs < 0 || (n_specs > 0 && !specs))
-        return invalid_argument<"window: bad spec list">();
     dstd::Vector<WindowColumn> cols;
-    cols.reserve(static_cast<std::size_t>(n_specs));
-    for (std::int32_t i = 0; i < n_specs; ++i) {
-        const dftu_window_spec& s = specs[i];
+    cols.reserve(specs.size());
+    for (const dftu_window_spec& s : specs) {
         if (s.func < DFTU_WINDOW_ROW_NUMBER ||
             s.func > DFTU_WINDOW_FRAME_UDAF || !s.out)
             return invalid_argument<"window: bad function or output name">();

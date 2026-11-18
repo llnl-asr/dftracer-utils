@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -418,12 +419,16 @@ TEST_SUITE("dataframe_types_matrix") {
             DataFrame df = keyed_frame(s);
             if (row.ops[OpGroupAgg] == Support::Refuses) {
                 dftu_utils_test::expect_error(
-                    df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}),
+                    df.group_by("k", dftu_utils_test::span_of<
+                                         dftracer::utils::dataframe::GroupAgg>(
+                                         {GroupAgg{Agg::Count, "v", "n"}})),
                     dftracer::utils::common::ErrorCode::InvalidArgument);
                 continue;
             }
-            DataFrame g = dftu_utils_test::ok(
-                df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
+            DataFrame g = dftu_utils_test::ok(df.group_by(
+                "k",
+                dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                    {GroupAgg{Agg::Count, "v", "n"}})));
             CHECK(g.num_rows() == 3);
             CHECK(g.column("k").type() == row.id);
         }

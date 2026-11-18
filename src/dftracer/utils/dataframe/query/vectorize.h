@@ -49,19 +49,18 @@ struct VectorColumn {
 /// wrong type, compile to a null column. With `args_fallback`, a bare name no
 /// column names reads the column of that name under `args.`; the same holds
 /// for the functions below.
-dstd::Result<dataframe::Expr> vectorize(
-    const duql::Term& t, const dstd::Vector<VectorColumn>& columns,
-    bool args_fallback);
+dstd::Result<dataframe::Expr> vectorize(const duql::Term& t,
+                                        dstd::Span<const VectorColumn> columns,
+                                        bool args_fallback);
 
 /// Whether `t` compiles to a null in every row: the literal null or a field no
 /// column names.
-bool is_null_term(const duql::Term& t,
-                  const dstd::Vector<VectorColumn>& columns,
+bool is_null_term(const duql::Term& t, dstd::Span<const VectorColumn> columns,
                   bool args_fallback);
 
 /// `t` as a Bool column: its truth, null where it is not a bool.
 dstd::Result<dataframe::Expr> vectorize_condition(
-    const duql::Term& t, const dstd::Vector<VectorColumn>& columns,
+    const duql::Term& t, dstd::Span<const VectorColumn> columns,
     bool args_fallback);
 
 /// The truth of `q` for each row of `inputs`, the frame `columns` describes:
@@ -71,15 +70,14 @@ dstd::Result<dataframe::Expr> vectorize_condition(
 /// subject that is a lookup of every match reads the matching rows' values,
 /// null where none matches.
 dstd::Result<dataframe::Series> quantify(
-    const duql::TQuant& q, const dstd::Vector<const dataframe::Series*>& inputs,
-    const dstd::Vector<VectorColumn>& columns, bool args_fallback);
+    const duql::TQuant& q, dstd::Span<const dataframe::Series* const> inputs,
+    dstd::Span<const VectorColumn> columns, bool args_fallback);
 
 /// The column the bound lookup `l` (not `l.all`) gives for each row of
 /// `inputs`. A query error of the lookup is an InvalidArgument error.
 dstd::Result<dataframe::Series> lookup(
-    const duql::TLookup& l,
-    const dstd::Vector<const dataframe::Series*>& inputs,
-    const dstd::Vector<VectorColumn>& columns, bool args_fallback);
+    const duql::TLookup& l, dstd::Span<const dataframe::Series* const> inputs,
+    dstd::Span<const VectorColumn> columns, bool args_fallback);
 
 /// Whether `fn` runs on columns only through call_column(): slice, flatten,
 /// keys, values, parse_json, split, index_of, sort, unique and join.
@@ -98,14 +96,14 @@ bool is_column_term(const duql::Term& t);
 /// fields with no common type, a list literal whose items are not of one
 /// scalar type, and sort() or unique() of an array of arrays or objects.
 dstd::Result<dstd::Optional<dataframe::DataType>> call_type(
-    const duql::Term& t, const dstd::Vector<dataframe::DataType>& args);
+    const duql::Term& t, dstd::Span<const dataframe::DataType> args);
 
 /// The column of `t` over its arguments' columns `args`, as `type`, of
 /// `rows` rows. For keys and values, `args` are the object's fields named
 /// `keys`, or its one struct column. parse_json gives canonical JSON text.
 dataframe::Series call_column(const duql::Term& t,
-                              const dstd::Vector<dataframe::Series>& args,
-                              const dstd::Vector<dstd::String>& keys,
+                              dstd::Span<const dataframe::Series> args,
+                              dstd::Span<const dstd::String> keys,
                               const dataframe::DataType& type,
                               std::int64_t rows);
 
@@ -133,7 +131,7 @@ dstd::Result<dstd::SharedPtr<const duql::LookupTable>> make_lookup_table(
 /// A table over `frame` keyed by `columns`.
 dstd::SharedPtr<const duql::LookupTable> make_lookup_table(
     dstd::String name, dstd::SharedPtr<const dataframe::DataFrame> frame,
-    const dstd::Vector<std::size_t>& columns);
+    dstd::Span<const std::size_t> columns);
 
 /// Each row's matching rows: row r's are rows[offsets[r], offsets[r + 1]);
 /// keyed[r] is 0 when a key part is null or missing.
@@ -144,27 +142,26 @@ struct Matches {
 };
 
 /// The key of row `r` of the key columns `keys`, for messages.
-dstd::String row_key(const dstd::Vector<const dataframe::Series*>& keys,
+dstd::String row_key(dstd::Span<const dataframe::Series* const> keys,
                      std::int64_t r);
 
 /// The matches in `table` of each of the `n` rows of the key columns `keys`.
 Matches match(const duql::LookupTable& table,
-              const dstd::Vector<const dataframe::Series*>& keys,
-              std::int64_t n);
+              dstd::Span<const dataframe::Series* const> keys, std::int64_t n);
 
 /// The column the bound lookup `t` gives for `n` rows with key columns
 /// `keys`: IN a Bool, ARROW the value (an InvalidArgument error, naming the row
 /// set and the key, when matching rows differ), SCALAR its cell. Not for
 /// `t.all`.
 dstd::Result<dataframe::Series> lookup_column(
-    const duql::TLookup& t, const dstd::Vector<const dataframe::Series*>& keys,
+    const duql::TLookup& t, dstd::Span<const dataframe::Series* const> keys,
     std::int64_t n);
 
 /// A joined `in` over `matched`, the marker its lookup join attached (null
 /// where no side row matched): TRUE on a match (FALSE when `negated`), the
 /// opposite without one, null when one of the first `subject` key columns
 /// has no value.
-dataframe::Series in_column(const dstd::Vector<const dataframe::Series*>& keys,
+dataframe::Series in_column(dstd::Span<const dataframe::Series* const> keys,
                             std::size_t subject,
                             const dataframe::Series& matched, bool negated);
 
@@ -173,8 +170,7 @@ dataframe::Series in_column(const dstd::Vector<const dataframe::Series*>& keys,
 /// the one-row `empty` (else null) for none. An InvalidArgument error naming
 /// the sub-query `name` and the key for several rows.
 dstd::Result<dataframe::Series> scalar_column(
-    const dstd::String& name,
-    const dstd::Vector<const dataframe::Series*>& keys,
+    dstd::StringView name, dstd::Span<const dataframe::Series* const> keys,
     const dataframe::Series& nest, std::size_t field,
     const dataframe::DataFrame* empty);
 

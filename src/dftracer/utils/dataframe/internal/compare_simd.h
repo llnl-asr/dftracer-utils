@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/span.h>
 
 #include <cstdint>
 
@@ -22,10 +23,10 @@ bool compare(const dftu_series& v, std::int32_t op, dftu_scalar rhs,
 bool compare(TypeId type, const void* p, std::int64_t n, std::int32_t op,
              dftu_scalar rhs, std::uint8_t* out);
 
-/// Pack `n` per-row byte flags (nonzero = set) into the bit-packed bool bitmap
+/// Pack the per-row byte flags (nonzero = set) into the bit-packed bool bitmap
 /// `out` (which the caller zeroed), 64 bits at a time via a vectorized
 /// nonzero-mask store.
-void pack_flags(const char* flags, std::int64_t n, std::uint8_t* out);
+void pack_flags(dstd::Span<const char> flags, std::uint8_t* out);
 
 /// Monotonicity of a FLAT numeric column (integer or float), checked a vector
 /// of adjacent pairs at a time. Sets `*out` and returns true if handled;

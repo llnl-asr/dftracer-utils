@@ -103,8 +103,8 @@ class GroupByCursor : public Cursor {
     }
 
    private:
-    static dstd::Result<int> index_in(const dstd::Vector<dstd::String>& s,
-                                      const dstd::String& n) {
+    static dstd::Result<int> index_in(dstd::Span<const dstd::String> s,
+                                      dstd::StringView n) {
         return require_col(s, n, "group_by");
     }
 
@@ -134,7 +134,7 @@ class GroupByCursor : public Cursor {
             value_idx;  // sch indices of the deduped value columns
         dstd::HashMap<dstd::String, std::int32_t> dedup;
         dstd::Optional<dstd::Error> resolve_error;
-        auto resolve = [&](const dstd::String& name) -> std::int32_t {
+        auto resolve = [&](dstd::StringView name) -> std::int32_t {
             auto it = dedup.find(name);
             if (it != dedup.end()) return it->second;
             const std::int32_t idx =
@@ -224,7 +224,7 @@ class GroupByCursor : public Cursor {
                 return {};
             },
             [] { return true; },
-            [&](const dstd::Vector<Morsel>& batch) {
+            [&](dstd::Span<const Morsel> batch) {
                 if (!has_cap(budget_)) return false;
                 if (batch.size() == 1) batch_bytes = 0;
                 batch_bytes += spill::columns_bytes(batch.back().columns);
@@ -309,8 +309,8 @@ class GroupByCursor : public Cursor {
     // in parallel (in turn for a UDAF that is not parallel safe) and calls
     // `fn` on it until it returns false.
     template <class F>
-    dstd::Result<void> read_batches(const dstd::String& path,
-                                    std::uint64_t limit, F&& fn) const {
+    dstd::Result<void> read_batches(dstd::CStringView path, std::uint64_t limit,
+                                    F&& fn) const {
         dstd::ScopedFile is;
         std::uint64_t file_size = 0;
         {
@@ -709,7 +709,7 @@ CursorResult make_group_by_dynamic(dstd::UniquePtr<Cursor> in,
     dstd::Vector<int> value_idx;
     dstd::Vector<dstd::String> used;
     dstd::Optional<dstd::Error> resolve_error;
-    const auto resolve = [&](const dstd::String& name) -> std::int32_t {
+    const auto resolve = [&](dstd::StringView name) -> std::int32_t {
         const auto it = std::find(used.begin(), used.end(), name);
         if (it != used.end())
             return static_cast<std::int32_t>(it - used.begin());
@@ -719,7 +719,7 @@ CursorResult make_group_by_dynamic(dstd::UniquePtr<Cursor> in,
             return 0;
         }
         value_idx.push_back(*at);
-        used.push_back(name);
+        used.emplace_back(name);
         return static_cast<std::int32_t>(used.size() - 1);
     };
     dstd::Vector<AggSpec> specs;

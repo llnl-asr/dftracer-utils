@@ -64,10 +64,8 @@ class SinkFactory {
     /// the `options` name/value pairs the caller gave. Both vectors are
     /// borrowed for the call. Nothing calls this yet.
     virtual dstd::Result<dstd::UniquePtr<SinkWriter>> bind(
-        const dstd::Vector<dstd::String>& names,
-        const dstd::Vector<TypeId>& types,
-        const dstd::Vector<dstd::Pair<dstd::String, dstd::String>>&
-            options) = 0;
+        dstd::Span<const dstd::String> names, dstd::Span<const TypeId> types,
+        dstd::Span<const dstd::Pair<dstd::String, dstd::String>> options) = 0;
 };
 
 /// Registers `format` under its name(). A null format or a name already taken

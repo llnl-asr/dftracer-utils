@@ -18,8 +18,8 @@ namespace dftracer::utils::dataframe::ops {
 /// The index of the column `name` of `df`; a NotFound error naming `who` when
 /// it has none.
 inline dstd::Result<std::size_t> column_named(const DataFrame& df,
-                                              const dstd::String& name,
-                                              const char* who) {
+                                              dstd::StringView name,
+                                              dstd::StringView who) {
     const std::int64_t i = df.column_index(name);
     if (i < 0) return not_found<"{}: no column named {}">(who, name);
     return static_cast<std::size_t>(i);
@@ -28,8 +28,8 @@ inline dstd::Result<std::size_t> column_named(const DataFrame& df,
 /// One view per named column of `df`, in order; an unsupported type is an
 /// InvalidArgument error naming `who` and the column.
 inline dstd::Result<dstd::Vector<ColumnReader>> views_of(
-    const DataFrame& df, const dstd::Vector<dstd::String>& names,
-    const char* who) {
+    const DataFrame& df, dstd::Span<const dstd::String> names,
+    dstd::StringView who) {
     dstd::Vector<ColumnReader> out;
     out.reserve(names.size());
     for (const dstd::String& n : names) {
@@ -57,9 +57,8 @@ inline void set_null(dstd::Vector<std::uint8_t>& bits, std::size_t i) {
 /// The order of the key tuple of row `a` of `left` against row `b` of `right`
 /// (each a run of ColumnReaders of equal kinds): a null sorts after every value
 /// and equals a null.
-inline int compare_keys(const dstd::Vector<ColumnReader>& left, std::int64_t a,
-                        const dstd::Vector<ColumnReader>& right,
-                        std::int64_t b) {
+inline int compare_keys(dstd::Span<const ColumnReader> left, std::int64_t a,
+                        dstd::Span<const ColumnReader> right, std::int64_t b) {
     for (std::size_t k = 0; k < left.size(); ++k) {
         const bool na = left[k].is_null(a);
         const bool nb = right[k].is_null(b);
@@ -134,9 +133,9 @@ inline bool closer_or_equal(const ColumnReader& l, std::int64_t il,
 /// a second collision is an InvalidArgument error naming `who`.
 inline dstd::Result<DataFrame> join_columns(
     const DataFrame& left, const DataFrame& right,
-    const dstd::Vector<std::size_t>& skip,
-    const dstd::Vector<std::int64_t>& left_rows,
-    const dstd::Vector<std::int64_t>& right_rows, const char* who) {
+    dstd::Span<const std::size_t> skip,
+    dstd::Span<const std::int64_t> left_rows,
+    dstd::Span<const std::int64_t> right_rows, dstd::StringView who) {
     DataFrame out;
     for (std::size_t c = 0; c < left.columns.size(); ++c) {
         out.names.push_back(left.names[c]);

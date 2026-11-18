@@ -276,7 +276,7 @@ dftracer::utils::dstd::SharedPtr<ExprNode> clone(const ExprNode& n) {
 
 dftracer::utils::dstd::SharedPtr<const ExprNode> node_remap(
     const dftracer::utils::dstd::SharedPtr<const ExprNode>& n,
-    const dstd::Vector<std::int32_t>& old_to_new) {
+    dstd::Span<const std::int32_t> old_to_new) {
     if (!n) return nullptr;
     if (n->kind == ExprKind::Col) {
         const bool in_range =
@@ -305,7 +305,7 @@ dftracer::utils::dstd::SharedPtr<const ExprNode> node_remap(
 }
 dftracer::utils::dstd::SharedPtr<const ExprNode> node_rebind(
     const dftracer::utils::dstd::SharedPtr<const ExprNode>& n,
-    const dstd::Vector<Expr>& by) {
+    dstd::Span<const Expr> by) {
     if (!n) return nullptr;
     if (n->kind == ExprKind::Col) {
         const bool in_range =
@@ -393,12 +393,11 @@ void canonical_node(dstd::String& out, const ExprNode* n) {
 
 }  // namespace
 
-Expr expr_remap_cols(const Expr& e,
-                     const dstd::Vector<std::int32_t>& old_to_new) {
+Expr expr_remap_cols(const Expr& e, dstd::Span<const std::int32_t> old_to_new) {
     return Expr{node_remap(e.node(), old_to_new)};
 }
 
-Expr expr_rebind_cols(const Expr& e, const dstd::Vector<Expr>& by_index) {
+Expr expr_rebind_cols(const Expr& e, dstd::Span<const Expr> by_index) {
     return Expr{node_rebind(e.node(), by_index)};
 }
 
@@ -597,8 +596,8 @@ Expr expr_cmp_expr(CmpOp cmp, const Expr& a, const Expr& b) {
 namespace {
 // An n-ary node as a right fold of binary nodes; every n-ary form here is
 // associative.
-Expr fold_args(ExprKind k, std::int32_t i, const dstd::Vector<Expr>& args,
-               const char* who) {
+Expr fold_args(ExprKind k, std::int32_t i, dstd::Span<const Expr> args,
+               dstd::StringView who) {
     if (args.empty())
         dstd::fatal("expr: an n-ary expression needs at least one operand",
                     who);
@@ -610,7 +609,7 @@ Expr fold_args(ExprKind k, std::int32_t i, const dstd::Vector<Expr>& args,
 }  // namespace
 
 Expr udf_call_expr(dstd::SharedPtr<const UdfRecord> udf,
-                   const dstd::Vector<Expr>& args) {
+                   dstd::Span<const Expr> args) {
     auto n = dstd::make_shared<ExprNode>();
     n->kind = ExprKind::Udf;
     n->text = dstd::String(udf->name());
@@ -623,7 +622,7 @@ Expr udf_call_expr(dstd::SharedPtr<const UdfRecord> udf,
 }
 
 dstd::Result<Expr> expr_udf(dstd::StringView name,
-                            const dstd::Vector<Expr>& args) {
+                            dstd::Span<const Expr> args) {
     auto udf = find_udf(name);
     if (!udf)
         return common::make_error<"no udf named '{}'">(
@@ -631,14 +630,14 @@ dstd::Result<Expr> expr_udf(dstd::StringView name,
     return udf_call_expr(std::move(udf), args);
 }
 
-Expr expr_coalesce(const dstd::Vector<Expr>& args) {
+Expr expr_coalesce(dstd::Span<const Expr> args) {
     return fold_args(ExprKind::Coalesce, 0, args, "coalesce");
 }
-Expr expr_extreme(const dstd::Vector<Expr>& args, bool least) {
+Expr expr_extreme(dstd::Span<const Expr> args, bool least) {
     return fold_args(ExprKind::Extreme, least ? 1 : 0, args,
                      least ? "least" : "greatest");
 }
-Expr expr_concat(const dstd::Vector<Expr>& args) {
+Expr expr_concat(dstd::Span<const Expr> args) {
     if (args.size() == 1)
         return make(ExprKind::Concat, 0, {}, args.front().node(),
                     expr_lit_str("").node());
@@ -1026,7 +1025,7 @@ TypeId arith_type(std::int32_t op, TypeId a, TypeId b) {
 // with no data) and the two can never disagree.
 class Compiler {
    public:
-    explicit Compiler(const dstd::Vector<DataType>& input_types)
+    explicit Compiler(dstd::Span<const DataType> input_types)
         : input_types_(input_types) {}
 
     // A root that folded to a scalar, as a column of that value in every row.
@@ -1511,7 +1510,7 @@ class Compiler {
 
     // A numeric operand as Int64, Uint64 or Float64, the three types the
     // duql kernels read; a literal broadcasts.
-    Val num(Val v, const char* who) {
+    Val num(Val v, dstd::StringView who) {
         if (v.is_scalar)
             return broadcast(v.scalar, v.scalar.kind == DFTU_SCALAR_TAG_F64
                                            ? TypeId::Float64
@@ -1529,12 +1528,12 @@ class Compiler {
 
     // An operand of a comparison-like node: numeric ones as num() makes
     // them, the rest as they are.
-    Val operand(Val v, const char* who) {
+    Val operand(Val v, dstd::StringView who) {
         if (v.is_scalar || is_num_type(v.type)) return num(v, who);
         return v;
     }
 
-    void same_domain(const Val& a, const Val& b, const char* who) {
+    void same_domain(const Val& a, const Val& b, dstd::StringView who) {
         const bool ok = (is_num_type(a.type) && is_num_type(b.type)) ||
                         (is_text_type(a.type) && is_text_type(b.type)) ||
                         (a.type == TypeId::Bool && b.type == TypeId::Bool);
@@ -1543,7 +1542,7 @@ class Compiler {
                 who, type_name(a.type), type_name(b.type)));
     }
 
-    TypeId common_type(const Val& a, const Val& b, const char* who) {
+    TypeId common_type(const Val& a, const Val& b, dstd::StringView who) {
         if (is_num_type(a.type) && is_num_type(b.type))
             return promote(a.type, b.type);
         if (a.type != b.type) {
@@ -1562,7 +1561,7 @@ class Compiler {
     }
 
     // The element type of a List operand, which must be known.
-    DataType as_list(const Val& v, const char* who) {
+    DataType as_list(const Val& v, dstd::StringView who) {
         if (v.is_scalar || v.type != TypeId::List ||
             v.full.fields.size() != 1) {
             fail(dstd::fmt<"expr: {} needs a List column with a known element "
@@ -1745,7 +1744,7 @@ class Compiler {
         dstd::fatal("expr: unknown string method");
     }
 
-    Val as_col(Val v, const char* who) {
+    Val as_col(Val v, dstd::StringView who) {
         if (v.is_scalar)
             return fail(dstd::fmt<"expr: {} needs a column operand">(who));
         return v;
@@ -1753,7 +1752,7 @@ class Compiler {
 
     // A string operand: String always; Binary too when `binary_ok` (the
     // predicate / length / find kernels read bytes, the maps produce text).
-    Val as_str(Val v, const char* who, bool binary_ok) {
+    Val as_str(Val v, dstd::StringView who, bool binary_ok) {
         Val a = as_col(v, who);
         const bool ok =
             a.type == TypeId::String || (binary_ok && a.type == TypeId::Binary);
@@ -2021,7 +2020,7 @@ class Compiler {
         return unknown_val();
     }
 
-    const dstd::Vector<DataType>& input_types_;
+    dstd::Span<const DataType> input_types_;
     dstd::String error_;
     dstd::Map<dftracer::utils::dstd::Tuple<
                   int, int, int, int, int, int, std::int64_t, std::int64_t,
@@ -3496,9 +3495,9 @@ Series str_fn_eval(const SlotOp& op, const Series& a, const Series* b,
 // Evaluate the slot program over rows [offset, offset+len) and extract one
 // column per requested final slot (shared, so distinct outputs that resolved to
 // the same slot alias the one buffer).
-dstd::Vector<Series> eval_chunk(const dstd::Vector<SlotOp>& prog,
-                                const dstd::Vector<Series>& inputs,
-                                const dstd::Vector<int>& finals,
+dstd::Vector<Series> eval_chunk(dstd::Span<const SlotOp> prog,
+                                dstd::Span<const Series> inputs,
+                                dstd::Span<const int> finals,
                                 std::int64_t offset, std::int64_t len,
                                 EvalError& error) {
     dstd::Vector<Series> s(prog.size());
@@ -3833,7 +3832,7 @@ dstd::Vector<Series> eval_chunk(const dstd::Vector<SlotOp>& prog,
 // eval_chunk returns no columns when a kernel does not take its input type;
 // reported here, on the calling thread, since the parallel workers cannot
 // return an error.
-dstd::Result<void> require_evaluated(const dstd::Vector<Series>& outs,
+dstd::Result<void> require_evaluated(dstd::Span<const Series> outs,
                                      EvalError& error) {
     if (outs.empty()) {
         dstd::String message;
@@ -3857,8 +3856,7 @@ constexpr std::int64_t GRAIN = 1 << 16;
 }  // namespace
 
 dstd::Result<dstd::Vector<Series>> eval_many(
-    const dstd::Vector<Expr>& roots,
-    const dstd::Vector<const Series*>& inputs) {
+    dstd::Span<const Expr> roots, dstd::Span<const Series* const> inputs) {
     if (roots.empty())
         return common::make_error(common::ErrorCode::InvalidArgument,
                                   "expr: needs at least one expression");
@@ -3985,17 +3983,18 @@ dstd::Result<dstd::Vector<Series>> eval_many(
 }
 
 dstd::Result<Series> eval(const Expr& root,
-                          const dstd::Vector<const Series*>& inputs) {
+                          dstd::Span<const Series* const> inputs) {
     if (!root.valid())
         return common::make_error(common::ErrorCode::InvalidArgument,
                                   "expr: null expression");
-    dstd::Result<dstd::Vector<Series>> outs = eval_many({root}, inputs);
+    dstd::Result<dstd::Vector<Series>> outs =
+        eval_many(dstd::Span<const Expr>(&root, 1), inputs);
     if (!outs) return outs.error();
     return std::move(outs->front());
 }
 
 dstd::Result<DataType> infer_type(const Expr& root,
-                                  const dstd::Vector<DataType>& input_types) {
+                                  dstd::Span<const DataType> input_types) {
     if (!root.valid())
         return common::make_error(common::ErrorCode::InvalidArgument,
                                   "expr: null expression");

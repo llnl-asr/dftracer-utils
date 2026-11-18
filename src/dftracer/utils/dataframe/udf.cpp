@@ -371,7 +371,7 @@ dstd::Result<Udf> make_udf(const dftu_udf_desc& desc, void* self) {
                dstd::SharedPtr<const void>(std::move(record)), true);
 }
 
-Expr Udf::operator()(const dstd::Vector<Expr>& args) const {
+Expr Udf::operator()(dstd::Span<const Expr> args) const {
     return udf_call_expr(std::static_pointer_cast<const UdfRecord>(
                              dstd::SharedPtr<const void>(record_)),
                          args);

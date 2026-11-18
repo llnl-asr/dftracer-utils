@@ -32,7 +32,7 @@ class NodeImpl {
     /// never 0.
     virtual dstd::Result<dstd::UniquePtr<Cursor>> open(
         dstd::UniquePtr<Cursor> input,
-        const dstd::Vector<dstd::String>& input_names, const OpArgs& args,
+        dstd::Span<const dstd::String> input_names, const OpArgs& args,
         std::uint64_t memory_budget) const = 0;
 };
 

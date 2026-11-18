@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -319,7 +320,9 @@ TEST_SUITE("slice views") {
 
     TEST_CASE("list and struct columns are refused") {
         dstd::Vector<std::int64_t> v{1, 2, 3, 4};
-        Series list = Series::list({0, 1, 3, 4}, Series::flat_i64(v.data(), 4));
+        Series list =
+            Series::list(dftu_utils_test::span_of<std::int32_t>({0, 1, 3, 4}),
+                         Series::flat_i64(v.data(), 4));
         CHECK(dftu_series_slice(list.handle(), 0, 2) == nullptr);
 
         dstd::Vector<Series> fields;

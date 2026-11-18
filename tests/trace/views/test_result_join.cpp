@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/result_join.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <initializer_list>
@@ -149,16 +150,20 @@ TEST_SUITE("ResultJoin") {
     TEST_CASE("multi-column group key joins on the full tuple") {
         dataframe::DataFrame l;
         l.names = dstd::make_shared_strings({"pid", "name", "count"});
-        l.columns.push_back(dataframe::Series::strings({"1", "1", "2"}));
-        l.columns.push_back(
-            dataframe::Series::strings({"read", "write", "read"}));
+        l.columns.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"1", "1", "2"})));
+        l.columns.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>(
+                {"read", "write", "read"})));
         dstd::Vector<double> lv{1.0, 2.0, 3.0};
         l.columns.push_back(dataframe::Series::flat_f64(lv.data(), 3));
         dataframe::DataFrame r;
         r.names = dstd::make_shared_strings({"pid", "name", "sum"});
-        r.columns.push_back(dataframe::Series::strings({"1", "2", "2"}));
-        r.columns.push_back(
-            dataframe::Series::strings({"write", "read", "open"}));
+        r.columns.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"1", "2", "2"})));
+        r.columns.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>(
+                {"write", "read", "open"})));
         dstd::Vector<double> rv{9.0, 8.0, 7.0};
         r.columns.push_back(dataframe::Series::flat_f64(rv.data(), 3));
 
@@ -174,8 +179,10 @@ TEST_SUITE("ResultJoin") {
     TEST_CASE("a text column survives the join opaquely") {
         dataframe::DataFrame l;
         l.names = dstd::make_shared_strings({"cat", "top"});
-        l.columns.push_back(dataframe::Series::strings({"a", "b"}));
-        l.columns.push_back(dataframe::Series::strings({"read", "write"}));
+        l.columns.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"a", "b"})));
+        l.columns.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"read", "write"})));
         dataframe::DataFrame r = make({"a"}, "sum", {2.5});
 
         dataframe::DataFrame j = dftu_utils_test::ok(
@@ -191,8 +198,10 @@ TEST_SUITE("ResultJoin") {
         dataframe::DataFrame l = make({"a"}, "count", {1.0});
         dataframe::DataFrame r;
         r.names = dstd::make_shared_strings({"pid", "name"});
-        r.columns.push_back(dataframe::Series::strings({"1"}));
-        r.columns.push_back(dataframe::Series::strings({"read"}));
+        r.columns.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"1"})));
+        r.columns.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"read"})));
         dataframe::DataFrame j = dftu_utils_test::ok(
             views::join_batches(l, r, 1, views::JoinType::Inner));
         CHECK(j.num_columns() == 0);

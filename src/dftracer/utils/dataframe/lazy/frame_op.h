@@ -446,7 +446,7 @@ inline constexpr std::int64_t NATIVE_SHIFT_MAX = 1024;
 // operand's plan, and returns its result.
 inline coro::CoroTask<dstd::Result<DataFrame>> run_frame_op(
     const dftu_op_desc* op, const OwnedFrameOpArgs& args, DataFrame primary,
-    const dstd::String& name, const dstd::Vector<dstd::String>& sch) {
+    dstd::String name, dstd::Vector<dstd::String> sch) {
     dstd::Vector<dftu_dataframe*> handles;
     struct Free {
         dstd::Vector<dftu_dataframe*>& h;
@@ -470,8 +470,13 @@ inline coro::CoroTask<dstd::Result<DataFrame>> run_frame_op(
         // Run here, not through the C runner, which has no error channel.
         const dftu_op_val* g = bag.args;
         dstd::Result<DataFrame> win = window_checked(
-            dataframe_handle_view(handles[0]), g[1].list.items, g[1].list.n,
-            g[2].list.items, g[2].list.n, g[3].winlist.items, g[3].winlist.n);
+            dataframe_handle_view(handles[0]),
+            dstd::Span<const char* const>(
+                g[1].list.items, static_cast<std::size_t>(g[1].list.n)),
+            dstd::Span<const char* const>(
+                g[2].list.items, static_cast<std::size_t>(g[2].list.n)),
+            dstd::Span<const dftu_window_spec>(
+                g[3].winlist.items, static_cast<std::size_t>(g[3].winlist.n)));
         if (!win) co_return dstd::Unexpected(std::move(win.error()));
         out = std::move(*win);
     } else {

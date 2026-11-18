@@ -283,9 +283,7 @@ Status Applier::stage(const duql::PipelineSession& ss) {
                      dataframe::scalar(dataframe::TypeId::Int64), false});
     const dstd::Vector<dftu_window_spec> specs{w};
     dataframe::OpArgs a;
-    a.strlist(1, keys.data(), static_cast<std::int32_t>(keys.size()))
-        .strlist(2, &by, 1)
-        .winlist(3, specs);
+    a.strlist(1, keys).strlist(2, {&by, 1}).winlist(3, specs);
     v_ = v_.with_lazy(
         v_.lazy().frame_op("dftu.frame.window", a, {}, std_strs(out)));
 

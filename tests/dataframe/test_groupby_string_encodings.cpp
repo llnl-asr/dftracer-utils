@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -52,7 +53,7 @@ Morsel make_morsel(std::size_t n, std::size_t rot, std::size_t pool) {
     return m;
 }
 
-Series flat_keys(const dstd::Vector<Row>& keys) {
+Series flat_keys(dstd::Vector<Row> keys) {
     dstd::Vector<dstd::StringView> v;
     dstd::Vector<std::uint8_t> valid((keys.size() + 7) / 8, 0);
     bool any_null = false;
@@ -67,7 +68,7 @@ Series flat_keys(const dstd::Vector<Row>& keys) {
     return Series::strings(v, any_null ? valid.data() : nullptr);
 }
 
-Series keys_as(const dstd::Vector<Row>& keys, Layout layout) {
+Series keys_as(dstd::Vector<Row> keys, Layout layout) {
     Series flat = flat_keys(keys);
     switch (layout) {
         case Layout::Flat:
@@ -102,8 +103,8 @@ Cells cells_of(const DataFrame& df) {
     return out;
 }
 
-Cells fold(const dstd::Vector<Morsel>& morsels,
-           const dstd::Vector<Layout>& layouts, bool two_keys) {
+Cells fold(dstd::Vector<Morsel> morsels, dstd::Vector<Layout> layouts,
+           bool two_keys) {
     AggStatePtr st = agg_new(
         {AggSpec{AggOp::Count, -1, "n"}, AggSpec{AggOp::Sum, 0, "sum"}});
     for (std::size_t j = 0; j < morsels.size(); ++j) {
@@ -114,7 +115,11 @@ Cells fold(const dstd::Vector<Morsel>& morsels,
         Series v = Series::flat_i64(m.vals.data(), len);
         dstd::Vector<const Series*> keys = {&k};
         if (two_keys) keys.push_back(&o);
-        dftu_utils_test::ok(agg_accumulate(*st, keys, {&v}, 0, len));
+        dftu_utils_test::ok(agg_accumulate(
+            *st, keys,
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&v}),
+            0, len));
     }
     DataFrame out =
         agg_finalize(*st, dstd::Vector<dstd::String>{"k", "o"}.at(0));

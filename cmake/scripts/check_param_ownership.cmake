@@ -7,7 +7,11 @@
 # with an extern "C" line, io_uring_wrapper.h (it mirrors the kernel sqe ABI),
 # the parameter list of a function or function-pointer type such as
 # `R (*)(const char*)` (a C ABI signature, not a parameter of ours),
-# and main. A constructor of a dstd view type (ByteView, MutableByteView,
+# main, and a C ABI trampoline: a function whose name appears, in the same
+# file, in the braced initializer of a `dftu_*` table (`const dftu_x_vt T =
+# {..., f, ...}`) or on the right of `table.field = f;` where `table` is a
+# name that some file declares with a `dftu_*` type. The table fixes its
+# signature. A constructor of a dstd view type (ByteView, MutableByteView,
 # CStringView, PathView) is exempt for every parameter kind: it is where a
 # view is made. A pointer pair such as (const char* first, const char* last)
 # counts as two sites, one per parameter. Comments and string literals are not
@@ -128,11 +132,72 @@ function site(T, s, e, exempt_file,    m, kind, p, c, q, depth, n, i, opener, j,
   if (w ~ /^(if|while|for|switch|catch|sizeof|alignof|decltype|typeid|static_assert|requires)$/) return 0
   sub(/.*::/, "", w)
   if (w ~ /^(ByteView|MutableByteView|CStringView|PathView)$/) return 0
-  if (kind == "c" && (exempt_file || w ~ /^dftu_/ || w == "main")) return 0
+  if (kind == "c" && (exempt_file || w ~ /^dftu_/ || w == "main" || (w in stored))) return 0
   return 1
+}
+# Fills stored[] with the names of functions that a `dftu_*` table holds.
+# dftu_objs[] holds the names declared with a `dftu_*` type in any file (the
+# first pass over the file list collects it), so `host_.f = fn;` counts where
+# `host_` is a member declared in a header.
+function find_stored(    T, k, rest, off, body, depth, i, c, id, after, pos, tail) {
+  delete stored
+  T = ""
+  for (k = 1; k <= nlines; k++) T = T L[k] "\n"
+  rest = T
+  while (match(rest, /dftu_[A-Za-z0-9_]*[ \t\n*&]+[A-Za-z_][A-Za-z0-9_]*[ \t\n]*(\[[^]]*\])?[ \t\n]*[=;{]/)) {
+    tail = substr(rest, RSTART, RLENGTH)
+    pos = RSTART + RLENGTH
+    id = tail
+    sub(/^dftu_[A-Za-z0-9_]*[ \t\n*&]+/, "", id)
+    sub(/[^A-Za-z0-9_].*$/, "", id)
+    dftu_objs[id] = 1
+    if (substr(tail, length(tail), 1) == "=") {
+      after = substr(rest, pos)
+      sub(/^[ \t\n]+/, "", after)
+      if (substr(after, 1, 1) == "{") {
+        depth = 0
+        body = ""
+        for (i = 1; i <= length(after); i++) {
+          c = substr(after, i, 1)
+          if (c == "{") depth++
+          else if (c == "}") { depth--; if (depth == 0) break }
+          body = body c
+        }
+        collect_names(body)
+      }
+    }
+    rest = substr(rest, pos)
+  }
+  rest = T
+  while (match(rest, /[A-Za-z_][A-Za-z0-9_]*(\.|->)[A-Za-z_][A-Za-z0-9_]*[ \t\n]*=[ \t\n]*&?[A-Za-z_][A-Za-z0-9_:]*[ \t\n]*;/)) {
+    tail = substr(rest, RSTART, RLENGTH)
+    rest = substr(rest, RSTART + RLENGTH)
+    id = tail
+    sub(/(\.|->).*$/, "", id)
+    if (!(id in dftu_objs)) continue
+    sub(/^.*=[ \t\n]*&?/, "", tail)
+    sub(/[ \t\n]*;$/, "", tail)
+    sub(/.*::/, "", tail)
+    stored[tail] = 1
+  }
+}
+# Adds each bare identifier of an initializer body that is not called.
+function collect_names(body,    id, before, after) {
+  while (match(body, /[A-Za-z_][A-Za-z0-9_]*/)) {
+    id = substr(body, RSTART, RLENGTH)
+    before = (RSTART > 1) ? substr(body, RSTART - 1, 1) : ""
+    after = substr(body, RSTART + RLENGTH)
+    body = after
+    sub(/^[ \t\n]+/, "", after)
+    if (before == ".") continue
+    if (substr(after, 1, 1) == "(") continue
+    stored[id] = 1
+  }
 }
 function flush_file(    n, a, k, lo, hi, ctx, base, line, col, rest, off, s, e, count, i, rel, exempt, sites, nsites, kn) {
   if (cur == "") return
+  find_stored()
+  if (!pass2) return
   rel = substr(cur, length(root) + 1)
   exempt = extern_c || rel ~ /(^|\/)(c_api[^\/]*|[^\/]*abi[^\/]*|io_uring_wrapper\.h)$/ || rel ~ /(^|\/)(plugins\/abi|python|vendor)\//
   count = 0
@@ -181,8 +246,10 @@ NR == FNR {
   if ($1 == "A") allowed[$2] = $3 + 0
   next
 }
-FILENAME != cur {
+FNR == 1 {
   flush_file()
+  if (FILENAME in first_pass) pass2 = 1
+  first_pass[FILENAME] = 1
   cur = FILENAME
   nlines = 0
   inblock = 0
@@ -231,7 +298,7 @@ function(param_ownership_run root allow work out_var rc_var)
     set(_gen 1)
   endif()
   execute_process(
-    COMMAND ${_awk} -v "root=${root}/" -v "generate=${_gen}" -f "${_awk_file}" "${_allow_data}" ${_files}
+    COMMAND ${_awk} -v "root=${root}/" -v "generate=${_gen}" -f "${_awk_file}" "${_allow_data}" ${_files} ${_files}
     RESULT_VARIABLE _rc
     OUTPUT_VARIABLE _out
     ERROR_VARIABLE _err)
@@ -346,6 +413,34 @@ if(SELF_TEST)
        "}\n")
   param_ownership_run("${_root}" "${_root}/allow.txt" "${_root}/work" _out _rc "${_file}")
   _expect("locals and range for" FALSE "${_out}" ${_rc})
+
+  file(WRITE "${_file}"
+       "dftu_status tramp(dftu_ctx* c, const char* msg, int n);\n"
+       "dftu_status plain(dftu_ctx* c, const char* msg, int n);\n"
+       "const void* assigned(void* h, const char* id);\n"
+       "void other(const char* s);\n"
+       "static const dftu_ctx_vt VT = {sizeof(dftu_ctx_vt), &tramp, nullptr};\n"
+       "void setup(Plain& o) {\n"
+       "  dftu_host host;\n"
+       "  host.get_service = assigned;\n"
+       "  o.cb = other;\n"
+       "}\n")
+  param_ownership_run("${_root}" "${_root}/allow.txt" "${_root}/work" _out _rc "${_file}")
+  _expect("c abi trampolines" TRUE "${_out}" ${_rc} "a.cpp:2: dftu_status plain" "a.cpp:4: void other" "a.cpp: 2 parameter sites")
+  if(_out MATCHES "a.cpp:[13]:")
+    message(FATAL_ERROR "param_ownership self test: a trampoline was reported:\n${_out}")
+  endif()
+
+  file(WRITE "${_file}" "class X { dftu_plugin_host host_; };\n")
+  file(WRITE "${_other}"
+       "const void* cb(void* h, const char* id);\n"
+       "void init() { host_.get_service = cb; }\n"
+       "void other(const char* s);\n")
+  param_ownership_run("${_root}" "${_root}/allow.txt" "${_root}/work" _out _rc "${_file}" "${_other}")
+  _expect("trampoline stored through a member declared elsewhere" TRUE "${_out}" ${_rc} "b.cpp:3: void other" "b.cpp: 1 parameter sites")
+  if(_out MATCHES "b.cpp:1:")
+    message(FATAL_ERROR "param_ownership self test: a stored trampoline was reported:\n${_out}")
+  endif()
 
   file(WRITE "${_file}" "void dftu_f(const char* a);\nvoid g(const char* b);\n")
   param_ownership_run("${_root}" "${_root}/allow.txt" "${_root}/work" _out _rc "${_file}")

@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cmath>
@@ -401,8 +402,10 @@ TEST_SUITE("dataframe_types_compute") {
         df.names = dstd::make_shared_strings({"ts", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = dftu_utils_test::ok(
-            df.group_by("ts", {GroupAgg{Agg::Count, "v", "n"}}));
+        DataFrame grouped = dftu_utils_test::ok(df.group_by(
+            "ts",
+            dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                {GroupAgg{Agg::Count, "v", "n"}})));
         REQUIRE(grouped.num_rows() == 2);
         Series gkeys = grouped.column("ts");
         Series gn = grouped.column("n");
@@ -627,8 +630,9 @@ TEST_SUITE("dataframe_types_compute") {
         df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = dftu_utils_test::ok(
-            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
+        DataFrame grouped = dftu_utils_test::ok(df.group_by(
+            "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                     {GroupAgg{Agg::Count, "v", "n"}})));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::FixedSizeBinary);
@@ -736,8 +740,9 @@ TEST_SUITE("dataframe_types_compute") {
         df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = dftu_utils_test::ok(
-            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
+        DataFrame grouped = dftu_utils_test::ok(df.group_by(
+            "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                     {GroupAgg{Agg::Count, "v", "n"}})));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Decimal128);
@@ -821,8 +826,9 @@ TEST_SUITE("dataframe_types_compute") {
         df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = dftu_utils_test::ok(
-            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
+        DataFrame grouped = dftu_utils_test::ok(df.group_by(
+            "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                     {GroupAgg{Agg::Count, "v", "n"}})));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Decimal256);
@@ -904,8 +910,9 @@ TEST_SUITE("dataframe_types_compute") {
         df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = dftu_utils_test::ok(
-            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
+        DataFrame grouped = dftu_utils_test::ok(df.group_by(
+            "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                     {GroupAgg{Agg::Count, "v", "n"}})));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Binary);
@@ -978,8 +985,9 @@ TEST_SUITE("dataframe_types_compute") {
         df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = dftu_utils_test::ok(
-            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
+        DataFrame grouped = dftu_utils_test::ok(df.group_by(
+            "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                     {GroupAgg{Agg::Count, "v", "n"}})));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::LargeBinary);
@@ -1056,8 +1064,9 @@ TEST_SUITE("dataframe_types_compute") {
         df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = dftu_utils_test::ok(
-            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
+        DataFrame grouped = dftu_utils_test::ok(df.group_by(
+            "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                     {GroupAgg{Agg::Count, "v", "n"}})));
         REQUIRE(grouped.num_rows() == 4);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Float16);

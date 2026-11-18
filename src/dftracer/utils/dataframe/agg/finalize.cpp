@@ -79,7 +79,7 @@ double kmv_estimate(const KmvMap& m, std::size_t k) {
 // Time32/Time64/Timestamp/Duration group key column. Series::flat has no
 // parametric constructor, so this builds the dftu_series directly to carry
 // the source's own time_unit (and, for Timestamp, timezone).
-Series flat_temporal(TypeId type, TimeUnit unit, const dstd::String& timezone,
+Series flat_temporal(TypeId type, TimeUnit unit, dstd::StringView timezone,
                      const void* data, std::int64_t n,
                      const std::uint8_t* validity = nullptr) {
     auto* col = new dftu_series();
@@ -103,7 +103,7 @@ Series flat_temporal(TypeId type, TimeUnit unit, const dstd::String& timezone,
 
 // The aggregate column of a temporal output type from per-group I64 values:
 // Date32 and Time32 narrow to 32 bits, the rest keep 64.
-Series temporal_column(const DataType& t, const dstd::Vector<std::int64_t>& v,
+Series temporal_column(const DataType& t, dstd::Span<const std::int64_t> v,
                        const std::uint8_t* validity) {
     const std::int64_t n = static_cast<std::int64_t>(v.size());
     if (t.id == TypeId::Date32 || t.id == TypeId::Time32) {
@@ -138,7 +138,7 @@ DataType field_data_type(const AggState& st, int fi) {
 // A String/Binary (32-bit offset) group key column: skey_cols already holds
 // each group's raw bytes. Series::strings hardcodes TypeId::String, so a
 // Binary key is built directly, mirroring wide_bytes_key below.
-Series bytes_key(TypeId type, const dstd::Vector<dstd::String>& values) {
+Series bytes_key(TypeId type, dstd::Span<const dstd::String> values) {
     auto* col = new dftu_series();
     col->type = type;
     col->encoding = Encoding::Flat;
@@ -163,7 +163,7 @@ Series bytes_key(TypeId type, const dstd::Vector<dstd::String>& values) {
 // group's raw bytes (its distinct value). dftu_series_new_string only builds
 // the 32-bit offset String/Binary pair, so this is built directly, mirroring
 // flat_temporal above.
-Series wide_bytes_key(TypeId type, const dstd::Vector<dstd::String>& values) {
+Series wide_bytes_key(TypeId type, dstd::Span<const dstd::String> values) {
     auto* col = new dftu_series();
     col->type = type;
     col->encoding = Encoding::Flat;
@@ -192,7 +192,7 @@ Series wide_bytes_key(TypeId type, const dstd::Vector<dstd::String>& values) {
 Series bytes_flat_key(TypeId type, std::int32_t fixed_size,
                       std::int32_t decimal_precision,
                       std::int32_t decimal_scale,
-                      const dstd::Vector<dstd::String>& values) {
+                      dstd::Span<const dstd::String> values) {
     auto* col = new dftu_series();
     col->type = type;
     col->encoding = Encoding::Flat;
@@ -208,7 +208,7 @@ Series bytes_flat_key(TypeId type, std::int32_t fixed_size,
 }
 
 // One list<string> column from a per-group vector of already-ordered reprs.
-Series strings_list(const dstd::Vector<dstd::Vector<dstd::String>>& rows) {
+Series strings_list(dstd::Span<const dstd::Vector<dstd::String>> rows) {
     dstd::Vector<std::int32_t> off{0};
     dstd::Vector<dstd::String> flat;
     off.reserve(rows.size() + 1);
@@ -251,8 +251,7 @@ double co_readout(AggOp op, const CoStat& c) {
 }  // namespace
 
 // The null key groups of column k as the output column's validity bitmap.
-static void mark_null_keys(Series& col,
-                           const dstd::Vector<std::uint8_t>& nulls) {
+static void mark_null_keys(Series& col, dstd::Span<const std::uint8_t> nulls) {
     std::int64_t count = 0;
     for (std::uint8_t n : nulls) count += n ? 1 : 0;
     if (count == 0) return;
@@ -370,7 +369,7 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
 // The finalized columns of one state. `with_keys` false leaves the key columns
 // out, for a caller that writes them itself (the in-place group-by).
 static DataFrame finalize_impl(const AggState& st_in,
-                               const dstd::Vector<dstd::String>& key_names,
+                               dstd::Span<const dstd::String> key_names,
                                bool with_keys,
                                const AggDynLayout* layout = nullptr) {
     // A light state is read cell by cell, never expanded into field stats.
@@ -1066,7 +1065,7 @@ static DataFrame finalize_impl(const AggState& st_in,
 }
 
 DataFrame agg_finalize(const AggState& st,
-                       const dstd::Vector<dstd::String>& key_names) {
+                       dstd::Span<const dstd::String> key_names) {
     return finalize_impl(st, key_names, true);
 }
 
@@ -1082,7 +1081,7 @@ void agg_dyn_layout_add(AggDynLayout& layout, const AggState& in) {
 }
 
 DataFrame agg_finalize(const AggState& st,
-                       const dstd::Vector<dstd::String>& key_names,
+                       dstd::Span<const dstd::String> key_names,
                        const AggDynLayout& layout) {
     return finalize_impl(st, key_names, true, &layout);
 }
@@ -1091,8 +1090,9 @@ DataFrame agg_finalize_values(const AggState& st) {
     return finalize_impl(st, {}, false);
 }
 
-DataFrame agg_finalize(const AggState& st, const dstd::String& key_name) {
-    return agg_finalize(st, dstd::Vector<dstd::String>{key_name});
+DataFrame agg_finalize(const AggState& st, dstd::StringView key_name) {
+    const dstd::String name(key_name);
+    return agg_finalize(st, dstd::Span<const dstd::String>(&name, 1));
 }
 
 }  // namespace dftracer::utils::dataframe

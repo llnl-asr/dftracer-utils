@@ -163,16 +163,15 @@ void check_variant(const StringMatch& k, const char* label) {
              {dstd::String("read"), dstd::String(""), dstd::String("write"),
               long_a, dstd::fmt<"{}read">(dstd::String(130, 'q'))}) {
             CAPTURE(lit);
-            const auto n = static_cast<std::int32_t>(lit.size());
-            check_mask(k.eq(c.series.handle(), lit.data(), n), rows,
+            check_mask(k.eq(c.series.handle(), lit), rows,
                        [&](dstd::StringView s) { return s == lit; });
-            check_mask(k.contains(c.series.handle(), lit.data(), n), rows,
+            check_mask(k.contains(c.series.handle(), lit), rows,
                        [&](dstd::StringView s) {
                            return s.find(lit) != dstd::StringView::npos;
                        });
-            check_mask(k.starts_with(c.series.handle(), lit.data(), n), rows,
+            check_mask(k.starts_with(c.series.handle(), lit), rows,
                        [&](dstd::StringView s) { return s.starts_with(lit); });
-            check_mask(k.ends_with(c.series.handle(), lit.data(), n), rows,
+            check_mask(k.ends_with(c.series.handle(), lit), rows,
                        [&](dstd::StringView s) { return s.ends_with(lit); });
         }
     }

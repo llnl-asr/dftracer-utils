@@ -433,9 +433,7 @@ PyObject* LazyFrame_window(PyObject* self, PyObject* args, PyObject* kwds) {
     for (const dftracer::utils::dstd::String& s : ocols)
         oc.push_back(s.c_str());
     dataframe::OpArgs a;
-    a.strlist(1, pc.data(), static_cast<std::int32_t>(pc.size()))
-        .strlist(2, oc.data(), static_cast<std::int32_t>(oc.size()))
-        .winlist(3, parsed.specs);
+    a.strlist(1, pc).strlist(2, oc).winlist(3, parsed.specs);
     return run_lazy_op([&] {
         // A window keeps every input column and appends one per spec.
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names =
@@ -518,10 +516,10 @@ PyObject* LazyFrame_gap_fill(PyObject* self, PyObject* args, PyObject* kwds) {
     for (const dftracer::utils::dstd::String& s : vcols)
         vc.push_back(s.c_str());
     dataframe::OpArgs a;
-    a.strlist(1, pc.data(), static_cast<std::int32_t>(pc.size()))
+    a.strlist(1, pc)
         .str(2, time)
         .i64(3, static_cast<std::int64_t>(bucket))
-        .strlist(4, vc.data(), static_cast<std::int32_t>(vc.size()))
+        .strlist(4, vc)
         .i32(5, static_cast<std::int32_t>(m))
         .i64list(6, range);
     return run_lazy_op([&] {

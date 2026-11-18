@@ -34,10 +34,10 @@ Series borrow(const dftu_series* v) {
 }
 
 // A bit-packed Bool column from per-row flags (no validity).
-Series bool_from_flags(const dstd::Vector<char>& flags) {
+Series bool_from_flags(dstd::Span<const char> flags) {
     const std::int64_t n = static_cast<std::int64_t>(flags.size());
     dstd::Vector<std::uint8_t> packed(static_cast<std::size_t>((n + 7) / 8), 0);
-    pack_flags(flags.data(), n, packed.data());
+    pack_flags(flags, packed.data());
     return Series::flat(TypeId::Bool, packed.data(), n);
 }
 

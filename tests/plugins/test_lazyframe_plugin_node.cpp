@@ -29,6 +29,7 @@
 #include <dftracer/utils/plugins/task_abi.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -384,8 +385,10 @@ dftu_status narrow_cursor_narrow(dftu_ctx*, void* self,
     const dstd::Vector<std::int64_t>& v = cs->owner->src.col0;
     dataframe::Series column = dataframe::Series::flat_i64(
         v.data(), static_cast<std::int64_t>(v.size()));
-    dataframe::Series mask = dftu_utils_test::ok(
-        dataframe::eval(dataframe::expr_handle_unwrap(predicate), {&column}));
+    dataframe::Series mask = dftu_utils_test::ok(dataframe::eval(
+        dataframe::expr_handle_unwrap(predicate),
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&column})));
     dstd::Vector<bool> bits;
     for (std::int64_t i = 0; i < mask.length(); ++i)
         bits.push_back((mask.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1);

@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -324,7 +325,8 @@ TEST_SUITE("dataframe_types_lazy") {
             {
                 LazyFrame lf = src.lazy().select({"v"});
                 DataFrame lazy_r = run(lf.collect());
-                DataFrame eager_r = dftu_utils_test::ok(src.select({"v"}));
+                DataFrame eager_r = dftu_utils_test::ok(
+                    src.select(dftu_utils_test::span_of<dstd::String>({"v"})));
                 REQUIRE(lazy_r.columns.size() == 1);
                 check_v_equal(lazy_r.columns[0], eager_r.columns[0]);
             }

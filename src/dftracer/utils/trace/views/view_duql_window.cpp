@@ -155,9 +155,7 @@ void Applier::window_op(dstd::Span<const dstd::String> part,
         cols_.push_back({s.out, s.type, false});
     }
     dataframe::OpArgs a;
-    a.strlist(1, keys.data(), static_cast<std::int32_t>(keys.size()))
-        .strlist(2, &by, 1)
-        .winlist(3, raw);
+    a.strlist(1, keys).strlist(2, {&by, 1}).winlist(3, raw);
     v_ = v_.with_lazy(
         v_.lazy().frame_op("dftu.frame.window", a, {}, std_strs(out)));
 }
@@ -225,7 +223,8 @@ Status Applier::partition_aggs(
          specs](dataframe::DataFrame f) -> dstd::Result<dataframe::DataFrame> {
             auto g = f.group_by(dstd::Vector<dstd::String>{spid}, specs);
             if (!g) return g.error();
-            return f.join(*g, {spid}, {spid}, dataframe::JoinHow::Lookup);
+            const dstd::Span<const dstd::String> by(&spid, 1);
+            return f.join(*g, by, by, dataframe::JoinHow::Lookup);
         },
         dstd::fmt<"partition aggregates {}">(text), std::move(schema));
     cols_ = std::move(next);

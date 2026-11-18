@@ -121,7 +121,7 @@ bool equal_at(const Series& v, std::int64_t a, std::int64_t b) {
 // Decimal128/256 are ValueDomain::Bytes (exact compare needs the scaled
 // integer) but read_f64 decodes them to a real number, so they window like
 // Float16; every other Bytes/None type has no numeric magnitude to widen.
-bool refuse_non_numeric(const char* op, TypeId t) {
+bool refuse_non_numeric(dstd::StringView op, TypeId t) {
     if (value_domain(t) == ValueDomain::Numeric || t == TypeId::Decimal128 ||
         t == TypeId::Decimal256)
         return false;
@@ -662,7 +662,7 @@ double quantile_sorted(dstd::Vector<double>& x, double q) {
 }
 
 // Sample variance of a scratch window (divide by n-1); 0 for fewer than 2.
-double window_sample_var(const dstd::Vector<double>& x) {
+double window_sample_var(dstd::Span<const double> x) {
     const std::size_t n = x.size();
     if (n < 2) return 0.0;
     double mean = 0.0;
@@ -684,7 +684,7 @@ double window_sample_var(const dstd::Vector<double>& x) {
 // ever touch their own disjoint `out` slots.
 template <class Agg>
 Series rolling_window(const Series& v, std::int64_t window, Agg agg,
-                      const char* op_name) {
+                      dstd::StringView op_name) {
     if (refuse_non_numeric(op_name, v.type())) return Series{};
     const std::int64_t n = v.length();
     if (window < 1) window = 1;
@@ -750,14 +750,14 @@ Series rolling_window(const Series& v, std::int64_t window, Agg agg,
 Series rolling_var(const Series& v, std::int64_t window) {
     return rolling_window(
         v, window,
-        [](const dstd::Vector<double>& w) { return window_sample_var(w); },
+        [](dstd::Span<const double> w) { return window_sample_var(w); },
         "rolling_var");
 }
 
 Series rolling_std(const Series& v, std::int64_t window) {
     return rolling_window(
         v, window,
-        [](const dstd::Vector<double>& w) {
+        [](dstd::Span<const double> w) {
             return std::sqrt(window_sample_var(w));
         },
         "rolling_std");

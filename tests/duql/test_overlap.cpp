@@ -8,6 +8,7 @@
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 #include <mmix_lcg.h>
+#include <span_list.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 
@@ -179,7 +180,8 @@ TEST_CASE("overlap refuses a start that is not a number") {
     const std::int64_t one = 1;
     dftracer::utils::dataframe::query::OverlapColumns side;
     side.keys.push_back(dataframe::Series::flat_i64(&one, 1));
-    side.start = dataframe::Series::strings({"a"});
+    side.start = dataframe::Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"a"}));
     side.duration = dataframe::Series::flat_i64(&one, 1);
     dftracer::utils::dataframe::query::OverlapColumns rows;
     rows.keys.push_back(dataframe::Series::flat_i64(&one, 1));

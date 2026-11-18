@@ -24,6 +24,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -409,11 +410,18 @@ TEST_SUITE("kernels keep layouts") {
             same(df.head(10), flat.head(10));
             same(df.tail(10), flat.tail(10));
             same(df.slice(20, 30), flat.slice(20, 30));
-            same(df.take({3, -1, 3, 80}), flat.take({3, -1, 3, 80}));
+            same(
+                df.take(dftu_utils_test::span_of<std::int64_t>({3, -1, 3, 80})),
+                flat.take(
+                    dftu_utils_test::span_of<std::int64_t>({3, -1, 3, 80})));
             same(dftu_utils_test::ok(df.sort_by("id")),
                  dftu_utils_test::ok(flat.sort_by("id")));
-            same(dftu_utils_test::ok(df.sort_by_multi({"key", "id"}, true)),
-                 dftu_utils_test::ok(flat.sort_by_multi({"key", "id"}, true)));
+            same(dftu_utils_test::ok(df.sort_by_multi(
+                     dftu_utils_test::span_of<dstd::String>({"key", "id"}),
+                     true)),
+                 dftu_utils_test::ok(flat.sort_by_multi(
+                     dftu_utils_test::span_of<dstd::String>({"key", "id"}),
+                     true)));
 
             DataFrame right;
             right.names = dstd::make_shared_strings({"key", "w"});
@@ -421,9 +429,12 @@ TEST_SUITE("kernels keep layouts") {
             right.columns.push_back(Series::flat_i64(rk.data(), 4));
             right.columns.push_back(Series::flat_i64(rw.data(), 4));
             for (JoinHow how : {JoinHow::Inner, JoinHow::Left}) {
-                DataFrame j = dftu_utils_test::ok(df.join(right, {"key"}, how));
-                DataFrame jf =
-                    dftu_utils_test::ok(flat.join(right, {"key"}, how));
+                DataFrame j = dftu_utils_test::ok(df.join(
+                    right, dftu_utils_test::span_of<dstd::String>({"key"}),
+                    how));
+                DataFrame jf = dftu_utils_test::ok(flat.join(
+                    right, dftu_utils_test::span_of<dstd::String>({"key"}),
+                    how));
                 REQUIRE(j.num_rows() == jf.num_rows());
                 CHECK(rows_of(j.columns[0]) == rows_of(jf.columns[0]));
                 check_layout(c, j.columns[0]);
@@ -635,8 +646,10 @@ void scale_case(bool long_keys) {
     const Series c = Series::flat_i64(f.c.data(), SCALE_ROWS);
     const dstd::Vector<const Series*> values{&a, &b, &c};
     const auto names = dstd::Vector<dstd::String>{"k"};
-    const DataFrame want =
-        dftu_utils_test::ok(group_agg({&flat}, values, scale_specs(), names));
+    const DataFrame want = dftu_utils_test::ok(group_agg(
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&flat}),
+        values, scale_specs(), names));
     REQUIRE(want.num_rows() > 2048);
     ViewBuilder vb;
     vb.append_column(*flat.handle());
@@ -645,8 +658,10 @@ void scale_case(bool long_keys) {
     REQUIRE(view.encoding() == Encoding::View);
     REQUIRE(dict.encoding() == Encoding::Dictionary);
     for (const Series* key : {&view, &dict}) {
-        const DataFrame got =
-            dftu_utils_test::ok(group_agg({key}, values, scale_specs(), names));
+        const DataFrame got = dftu_utils_test::ok(group_agg(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {key}),
+            values, scale_specs(), names));
         CHECK(int_cells(got) == int_cells(want));
     }
 }
@@ -786,11 +801,18 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
                 const Idx one = expected(k.rows, desc, false);
                 CHECK(ids_of(dftu_utils_test::ok(df.sort_by("s", desc))
                                  .columns[1]) == one);
-                CHECK(ids_of(dftu_utils_test::ok(df.sort_by_multi({"s"}, desc))
-                                 .columns[1]) == one);
+                CHECK(ids_of(
+                          dftu_utils_test::ok(
+                              df.sort_by_multi(
+                                  dftu_utils_test::span_of<dstd::String>({"s"}),
+                                  desc))
+                              .columns[1]) == one);
                 CHECK(ids_of(k.col.argsort(desc)) == one);
                 CHECK(ids_of(dftu_utils_test::ok(
-                                 df.sort_by_multi({"s", "o"}, desc))
+                                 df.sort_by_multi(
+                                     dftu_utils_test::span_of<dstd::String>(
+                                         {"s", "o"}),
+                                     desc))
                                  .columns[1]) == expected(k.rows, desc, true));
             }
         }

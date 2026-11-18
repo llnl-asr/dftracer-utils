@@ -15,6 +15,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -98,7 +99,8 @@ DataFrame make3u(const dstd::Vector<std::int64_t>& p,
 
 Series tag_lists() {
     return Series::list(
-        {0, 1, 3}, Series::strings(dstd::Vector<dstd::String>{"r", "p", "q"}));
+        dftu_utils_test::span_of<std::int32_t>({0, 1, 3}),
+        Series::strings(dstd::Vector<dstd::String>{"r", "p", "q"}));
 }
 
 DataFrame win(const DataFrame& in, const dstd::Vector<dstd::String>& part,
@@ -474,11 +476,18 @@ TEST_CASE("window - sessionize gives a null time a null session") {
 TEST_CASE("window - sessionize rejects a negative gap and a text end") {
     const DataFrame in = make3({1, 1}, {0, 10}, {0, 0});
     dftu_utils_test::expect_error(
-        dataframe::window(in, {"p"}, {"o"}, {session_spec("o", "sid", -1.0)}),
+        dataframe::window(
+            in, dftu_utils_test::span_of<dstd::String>({"p"}),
+            dftu_utils_test::span_of<dstd::String>({"o"}),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+                {session_spec("o", "sid", -1.0)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     dftu_utils_test::expect_error(
-        dataframe::window(in, {"p"}, {"o"},
-                          {session_spec("o", "sid", 1.0, -2.0)}),
+        dataframe::window(
+            in, dftu_utils_test::span_of<dstd::String>({"p"}),
+            dftu_utils_test::span_of<dstd::String>({"o"}),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+                {session_spec("o", "sid", 1.0, -2.0)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     DataFrame text;
     text.names = dstd::make_shared_strings({"p", "o", "e"});
@@ -486,8 +495,11 @@ TEST_CASE("window - sessionize rejects a negative gap and a text end") {
     text.columns.push_back(plain({0}));
     text.columns.push_back(Series::strings(dstd::Vector<dstd::String>{"x"}));
     dftu_utils_test::expect_error(
-        dataframe::window(text, {"p"}, {"o"},
-                          {session_spec("o", "sid", 1.0, 0.0, "e")}),
+        dataframe::window(
+            text, dftu_utils_test::span_of<dstd::String>({"p"}),
+            dftu_utils_test::span_of<dstd::String>({"o"}),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+                {session_spec("o", "sid", 1.0, 0.0, "e")})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
@@ -660,12 +672,18 @@ TEST_CASE(
     CHECK(strs(out, "rmin") == SCol{"c", "a", "a", "a"});
     CHECK(strs(out, "fmax") == SCol{"c", "c", "b", "b"});
     dftu_utils_test::expect_error(
-        dataframe::window(in, {"p"}, {"o"},
-                          {frame_spec(WindowFunc::FrameSum, "s", "x", 1, 1)}),
+        dataframe::window(
+            in, dftu_utils_test::span_of<dstd::String>({"p"}),
+            dftu_utils_test::span_of<dstd::String>({"o"}),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+                {frame_spec(WindowFunc::FrameSum, "s", "x", 1, 1)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     dftu_utils_test::expect_error(
-        dataframe::window(in, {"p"}, {"o"},
-                          {spec(WindowFunc::RunningSum, "missing", "x")}),
+        dataframe::window(
+            in, dftu_utils_test::span_of<dstd::String>({"p"}),
+            dftu_utils_test::span_of<dstd::String>({"o"}),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+                {spec(WindowFunc::RunningSum, "missing", "x")})),
         dftracer::utils::common::ErrorCode::NotFound);
 }
 
@@ -880,17 +898,25 @@ TEST_CASE(
 TEST_CASE("window - negative frame bounds are refused") {
     const DataFrame in = make3({1, 1}, {1, 2}, {1, 2});
     dftu_utils_test::expect_error(
-        dataframe::window(in, {"p"}, {"o"},
-                          {frame_spec(WindowFunc::FrameSum, "v", "fs", -3, 1)}),
-        dftracer::utils::common::ErrorCode::InvalidArgument);
-    dftu_utils_test::expect_error(
-        dataframe::window(in, {"p"}, {"o"},
-                          {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, -1)}),
+        dataframe::window(
+            in, dftu_utils_test::span_of<dstd::String>({"p"}),
+            dftu_utils_test::span_of<dstd::String>({"o"}),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+                {frame_spec(WindowFunc::FrameSum, "v", "fs", -3, 1)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     dftu_utils_test::expect_error(
         dataframe::window(
-            in, {"p"}, {"o"},
-            {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 1, -1)}),
+            in, dftu_utils_test::span_of<dstd::String>({"p"}),
+            dftu_utils_test::span_of<dstd::String>({"o"}),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+                {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, -1)})),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
+    dftu_utils_test::expect_error(
+        dataframe::window(
+            in, dftu_utils_test::span_of<dstd::String>({"p"}),
+            dftu_utils_test::span_of<dstd::String>({"o"}),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+                {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 1, -1)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
@@ -1505,18 +1531,28 @@ TEST_CASE("window - running_sum of uint64 values past 2^63 is exact") {
 TEST_CASE("window - integer sums outside the type are errors, not wraps") {
     const DataFrame u = make3u({1, 1}, {1, 2}, {UINT64_MAX, 1});
     const dstd::String run = overflow_of(dataframe::window(
-        u, {"p"}, {"o"}, {spec(WindowFunc::RunningSum, "v", "s")}));
+        u, dftu_utils_test::span_of<dstd::String>({"p"}),
+        dftu_utils_test::span_of<dstd::String>({"o"}),
+        dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+            {spec(WindowFunc::RunningSum, "v", "s")})));
     CHECK(run.find("RUNNING_SUM") != dstd::String::npos);
     CHECK(run.find("uint64") != dstd::String::npos);
 
     const DataFrame i = make3({1, 1}, {1, 2}, {INT64_MAX, 1});
-    CHECK(
-        overflow_of(dataframe::window(i, {"p"}, {"o"},
-                                      {spec(WindowFunc::RunningSum, "v", "s")}))
-            .find("int64") != dstd::String::npos);
-    CHECK(overflow_of(dataframe::window(i, {"p"}, {"o"},
-                                        {frame_spec(WindowFunc::FrameSum, "v",
-                                                    "s", WINDOW_UNBOUNDED, 0)}))
+    CHECK(overflow_of(dataframe::window(
+                          i, dftu_utils_test::span_of<dstd::String>({"p"}),
+                          dftu_utils_test::span_of<dstd::String>({"o"}),
+                          dftu_utils_test::span_of<
+                              dftracer::utils::dataframe::WindowColumn>(
+                              {spec(WindowFunc::RunningSum, "v", "s")})))
+              .find("int64") != dstd::String::npos);
+    CHECK(overflow_of(
+              dataframe::window(
+                  i, dftu_utils_test::span_of<dstd::String>({"p"}),
+                  dftu_utils_test::span_of<dstd::String>({"o"}),
+                  dftu_utils_test::span_of<
+                      dftracer::utils::dataframe::WindowColumn>({frame_spec(
+                      WindowFunc::FrameSum, "v", "s", WINDOW_UNBOUNDED, 0)})))
               .find("FRAME_SUM") != dstd::String::npos);
 }
 
@@ -1535,12 +1571,20 @@ TEST_CASE("window - delta is exact int64 or an error") {
                                dstd::Vector<std::uint64_t>{0, BIG}}) {
         const DataFrame in = make3u({1, 1}, {1, 2}, values);
         const dstd::String e = overflow_of(dataframe::window(
-            in, {"p"}, {"o"}, {spec(WindowFunc::Delta, "v", "d")}));
+            in, dftu_utils_test::span_of<dstd::String>({"p"}),
+            dftu_utils_test::span_of<dstd::String>({"o"}),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+                {spec(WindowFunc::Delta, "v", "d")})));
         CHECK(e.find("DELTA") != dstd::String::npos);
     }
     const DataFrame signed_in = make3({1, 1}, {1, 2}, {INT64_MIN, INT64_MAX});
-    CHECK(overflow_of(dataframe::window(signed_in, {"p"}, {"o"},
-                                        {spec(WindowFunc::Delta, "v", "d")}))
+    CHECK(overflow_of(
+              dataframe::window(signed_in,
+                                dftu_utils_test::span_of<dstd::String>({"p"}),
+                                dftu_utils_test::span_of<dstd::String>({"o"}),
+                                dftu_utils_test::span_of<
+                                    dftracer::utils::dataframe::WindowColumn>(
+                                    {spec(WindowFunc::Delta, "v", "d")})))
               .find("DELTA") != dstd::String::npos);
 }
 
@@ -2112,9 +2156,11 @@ TEST_CASE("window - collect past 2^27 values in all fails naming the frame") {
         for (const Series& c : in.columns)
             part.columns.push_back(c.slice(0, rows));
         return dataframe::window(
-            part, {"p"}, {"o"},
-            {frame_spec(WindowFunc::FrameCollect, "v", "c", WINDOW_UNBOUNDED,
-                        WINDOW_UNBOUNDED)});
+            part, dftu_utils_test::span_of<dstd::String>({"p"}),
+            dftu_utils_test::span_of<dstd::String>({"o"}),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+                {frame_spec(WindowFunc::FrameCollect, "v", "c",
+                            WINDOW_UNBOUNDED, WINDOW_UNBOUNDED)}));
     };
     dftu_utils_test::expect_error(
         run(n), dftracer::utils::common::ErrorCode::InvalidArgument,
@@ -2128,7 +2174,11 @@ TEST_CASE("window - new frame functions refuse bad parameters") {
         WindowColumn w = frame_spec(WindowFunc::FrameQuantile, "dur", "q",
                                     WINDOW_UNBOUNDED, 0);
         w.params.frame.q = level;
-        return dataframe::window(in, {"p"}, {"o"}, {w});
+        return dataframe::window(
+            in, dftu_utils_test::span_of<dstd::String>({"p"}),
+            dftu_utils_test::span_of<dstd::String>({"o"}),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+                {w}));
     };
     dftu_utils_test::expect_error(
         quantile(-0.1), dftracer::utils::common::ErrorCode::InvalidArgument);
@@ -2142,14 +2192,20 @@ TEST_CASE("window - new frame functions refuse bad parameters") {
 
     dftu_utils_test::expect_error(
         dataframe::window(
-            in, {"p"}, {"o"},
-            {frame_spec(WindowFunc::FrameArgMax, "name", "r", 1, 0)}),
+            in, dftu_utils_test::span_of<dstd::String>({"p"}),
+            dftu_utils_test::span_of<dstd::String>({"o"}),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+                {frame_spec(WindowFunc::FrameArgMax, "name", "r", 1, 0)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     WindowColumn unknown =
         frame_spec(WindowFunc::FrameArgMax, "name", "r", 1, 0);
     unknown.set_by("nope");
     dftu_utils_test::expect_error(
-        dataframe::window(in, {"p"}, {"o"}, {unknown}),
+        dataframe::window(
+            in, dftu_utils_test::span_of<dstd::String>({"p"}),
+            dftu_utils_test::span_of<dstd::String>({"o"}),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+                {unknown})),
         dftracer::utils::common::ErrorCode::NotFound);
     WindowColumn listed = frame_spec(WindowFunc::FrameArgMin, "dur", "r", 1, 0);
     listed.set_by("tags");
@@ -2157,17 +2213,25 @@ TEST_CASE("window - new frame functions refuse bad parameters") {
     with_tags.names.push_back(dstd::SharedString{"tags"});
     with_tags.columns.push_back(tag_lists());
     dftu_utils_test::expect_error(
-        dataframe::window(with_tags, {"p"}, {"o"}, {listed}),
+        dataframe::window(
+            with_tags, dftu_utils_test::span_of<dstd::String>({"p"}),
+            dftu_utils_test::span_of<dstd::String>({"o"}),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+                {listed})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     dftu_utils_test::expect_error(
         dataframe::window(
-            in, {"p"}, {"o"},
-            {frame_spec(WindowFunc::FrameVar, "name", "r", 1, 0)}),
+            in, dftu_utils_test::span_of<dstd::String>({"p"}),
+            dftu_utils_test::span_of<dstd::String>({"o"}),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+                {frame_spec(WindowFunc::FrameVar, "name", "r", 1, 0)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     dftu_utils_test::expect_error(
         dataframe::window(
-            in, {"p"}, {"o"},
-            {frame_spec(WindowFunc::FrameQuantile, "name", "r", 1, 0)}),
+            in, dftu_utils_test::span_of<dstd::String>({"p"}),
+            dftu_utils_test::span_of<dstd::String>({"o"}),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+                {frame_spec(WindowFunc::FrameQuantile, "name", "r", 1, 0)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
@@ -2410,8 +2474,9 @@ TEST_CASE("lag and lead read the row `offset` back or ahead in the partition") {
         specs.push_back(
             offset_spec(WindowFunc::Lead, "v", dstd::fmt<"lead{}">(n), n));
     }
-    const DataFrame out =
-        dftu_utils_test::ok(dataframe::window(frame, {"k"}, {"ord"}, specs));
+    const DataFrame out = dftu_utils_test::ok(dataframe::window(
+        frame, dftu_utils_test::span_of<dstd::String>({"k"}),
+        dftu_utils_test::span_of<dstd::String>({"ord"}), specs));
     const auto start_of = [&](std::size_t r) { return r < 4 ? 0 : 4; };
     const auto size_of = [&](std::size_t r) { return r < 4 ? 4 : 3; };
     for (std::int64_t n : offsets) {

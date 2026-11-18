@@ -25,6 +25,7 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -89,7 +90,7 @@ void do_not_optimize(T&& v) {
 }
 
 double time_group_by(const DataFrame& df,
-                     const dftracer::utils::dstd::Vector<GroupAgg>& aggs,
+                     dftracer::utils::dstd::Span<const GroupAgg> aggs,
                      int reps) {
     double best = 1e300;
     for (int r = 0; r < reps; ++r) {

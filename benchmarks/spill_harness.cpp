@@ -322,7 +322,7 @@ LazyFrame window_lag(const LazyFrame& plan) {
     specs[0].out = "lag_v";
     specs[0].param.offset = 1;
     dataframe::OpArgs args;
-    args.strlist(1, part, 1).strlist(2, order, 1).winlist(3, specs);
+    args.strlist(1, {part, 1}).strlist(2, {order, 1}).winlist(3, specs);
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names =
         plan.schema();
     names.emplace_back("lag_v");

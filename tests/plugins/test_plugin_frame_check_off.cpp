@@ -27,6 +27,7 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <plugins/test_plugin_common.h>
+#include <span_list.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -88,7 +89,10 @@ TEST_CASE("with check mode off the broken UDF result is passed through") {
 
     const std::int64_t xs[] = {1, 2, 3};
     const Series in = Series::flat_i64(xs, 3);
-    auto got = eval((*call)(col(0)), {&in});
+    auto got = eval(
+        (*call)(col(0)),
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&in}));
     if (!got) MESSAGE("the UDF failed: " << got.error().message());
     REQUIRE(got.has_value());
     CHECK(got->length() == 3);

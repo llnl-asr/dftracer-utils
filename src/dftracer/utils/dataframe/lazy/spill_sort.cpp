@@ -486,7 +486,7 @@ class SortMergeCursor : public Cursor {
             std::max<std::uint64_t>(4, budget_ / per_run));
     }
 
-    coro::CoroTask<dstd::Result<int>> merge_runs(const dstd::Vector<int>& ids,
+    coro::CoroTask<dstd::Result<int>> merge_runs(dstd::Vector<int> ids,
                                                  int out_id,
                                                  std::int64_t max_rows) {
         {
@@ -588,9 +588,10 @@ class SortMergeCursor : public Cursor {
                         next_ids.push_back(ids[at]);
                         continue;
                     }
-                    const dstd::Vector<int> group(ids.begin() + at,
-                                                  ids.begin() + end);
-                    auto merging = merge_runs(group, run_id++, max_rows);
+                    dstd::Vector<int> group(ids.begin() + at,
+                                            ids.begin() + end);
+                    auto merging =
+                        merge_runs(std::move(group), run_id++, max_rows);
                     auto merged_id = co_await std::move(merging);
                     if (!merged_id) co_return merged_id.error();
                     next_ids.push_back(*merged_id);

@@ -506,8 +506,8 @@ static TimeUnit read_time_unit(Reader& r) {
     return static_cast<TimeUnit>(u);
 }
 
-dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
-                                          bool compact, const AggState* like) {
+dstd::Result<AggStatePtr> agg_deserialize(dstd::StringView blob, bool compact,
+                                          const AggState* like) {
     Reader r{blob.data(), blob.data() + blob.size()};
     const bool marked =
         blob.size() >= sizeof(COMPACT_MAGIC) &&

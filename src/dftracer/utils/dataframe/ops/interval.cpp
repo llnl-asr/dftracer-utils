@@ -22,9 +22,9 @@ struct RightPartition {
 }  // namespace
 
 dstd::Result<DataFrame> interval(const DataFrame& left, const DataFrame& right,
-                                 const dstd::String& point,
-                                 const dstd::String& lo, const dstd::String& hi,
-                                 const dstd::Vector<dstd::String>& by,
+                                 dstd::StringView point, dstd::StringView lo,
+                                 dstd::StringView hi,
+                                 dstd::Span<const dstd::String> by,
                                  bool outer) {
     const dstd::Result<std::size_t> p =
         ops::column_named(left, point, "interval");

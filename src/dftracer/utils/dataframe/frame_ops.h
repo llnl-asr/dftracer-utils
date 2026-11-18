@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -140,13 +141,13 @@ constexpr bool is_offset_func(WindowFunc f) {
 /// The @ref WindowColumn a C ABI window spec names; its strings are copied.
 WindowColumn window_column(const dftu_window_spec& s);
 
-/// The C ABI entry of @ref window: checks the borrowed arrays and each spec
-/// (a count above 0 needs its array, every name is non-NULL) and reports a
-/// bad one as an InvalidArgument error before it runs the window.
+/// What the C ABI entry of @ref window runs: checks each spec (every name is
+/// non-NULL) and reports a bad one as an InvalidArgument error before it runs
+/// the window.
 dstd::Result<DataFrame> window_checked(
-    const DataFrame& df, const char* const* partition_by, std::int32_t n_part,
-    const char* const* order_by, std::int32_t n_order,
-    const dftu_window_spec* specs, std::int32_t n_specs);
+    const DataFrame& df, dstd::Span<const char* const> partition_by,
+    dstd::Span<const char* const> order_by,
+    dstd::Span<const dftu_window_spec> specs);
 
 /// SQL window functions over `df`, PARTITION BY `partition_by` and ORDER BY
 /// `order_by` (either may be empty). The output holds every input column,
@@ -160,9 +161,9 @@ dstd::Result<DataFrame> window_checked(
 /// error. A FrameCollect whose frames hold more than 2^27 values in all is
 /// fatal.
 dstd::Result<DataFrame> window(const DataFrame& df,
-                               const dstd::Vector<dstd::String>& partition_by,
-                               const dstd::Vector<dstd::String>& order_by,
-                               const dstd::Vector<WindowColumn>& specs);
+                               dstd::Span<const dstd::String> partition_by,
+                               dstd::Span<const dstd::String> order_by,
+                               dstd::Span<const WindowColumn> specs);
 
 /// One row per grid point per partition of width `bucket` over the integer or
 /// floating `time` column: a real row that lands on a grid point is kept, one
@@ -178,9 +179,9 @@ dstd::Result<DataFrame> window(const DataFrame& df,
 /// grid over 10,000,000 points is an InvalidArgument error, and an unknown
 /// column is a NotFound error.
 dstd::Result<DataFrame> gap_fill(
-    const DataFrame& df, const dstd::Vector<dstd::String>& partition_by,
-    const dstd::String& time, std::int64_t bucket,
-    const dstd::Vector<dstd::String>& values, GapFillMode mode,
+    const DataFrame& df, dstd::Span<const dstd::String> partition_by,
+    dstd::StringView time, std::int64_t bucket,
+    dstd::Span<const dstd::String> values, GapFillMode mode,
     dstd::Optional<dstd::Pair<std::int64_t, std::int64_t>> range);
 
 /// Matches each `left` row to the one `right` row nearest in the numeric time
@@ -199,8 +200,8 @@ dstd::Result<DataFrame> gap_fill(
 /// unequal time or key types are an InvalidArgument error, and an unknown
 /// column is a NotFound error.
 dstd::Result<DataFrame> asof(const DataFrame& left, const DataFrame& right,
-                             const dstd::String& on,
-                             const dstd::Vector<dstd::String>& by,
+                             dstd::StringView on,
+                             dstd::Span<const dstd::String> by,
                              AsofDirection direction,
                              dstd::Optional<double> tolerance);
 
@@ -213,10 +214,9 @@ dstd::Result<DataFrame> asof(const DataFrame& left, const DataFrame& right,
 /// colliding name gets "_right"). Non-numeric or unequal types are an
 /// InvalidArgument error, and an unknown column is a NotFound error.
 dstd::Result<DataFrame> interval(const DataFrame& left, const DataFrame& right,
-                                 const dstd::String& point,
-                                 const dstd::String& lo, const dstd::String& hi,
-                                 const dstd::Vector<dstd::String>& by,
-                                 bool outer);
+                                 dstd::StringView point, dstd::StringView lo,
+                                 dstd::StringView hi,
+                                 dstd::Span<const dstd::String> by, bool outer);
 
 }  // namespace dftracer::utils::dataframe
 

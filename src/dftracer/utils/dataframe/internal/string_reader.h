@@ -191,7 +191,7 @@ inline bool string_ranks(const dftu_series* v,
 /// Stable row order by `ranks` (-1 is a null, which sorts last in both
 /// directions, or first when `nulls_last` is false): one histogram pass and
 /// one placement pass.
-inline void counting_order(const dstd::Vector<std::int32_t>& ranks,
+inline void counting_order(dstd::Span<const std::int32_t> ranks,
                            std::int32_t nranks, bool descending,
                            std::int64_t* order, bool nulls_last = true) {
     const auto k = static_cast<std::size_t>(nranks);

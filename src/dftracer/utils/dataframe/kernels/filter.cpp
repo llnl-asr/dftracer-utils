@@ -90,8 +90,7 @@ dftu_series* make_selection(const dftu_series& base, BufferView indices,
     return out;
 }
 
-BufferView index_buffer(
-    const dftracer::utils::dstd::Vector<std::int64_t>& sel) {
+BufferView index_buffer(dftracer::utils::dstd::Span<const std::int64_t> sel) {
     auto buf = new_buffer(sel.size() * sizeof(std::int64_t));
     if (!sel.empty())
         std::memcpy(writable(buf), sel.data(),
@@ -101,7 +100,7 @@ BufferView index_buffer(
 
 dftu_series* make_selection(
     const dftu_series& base,
-    const dftracer::utils::dstd::Vector<std::int64_t>& sel) {
+    dftracer::utils::dstd::Span<const std::int64_t> sel) {
     return make_selection(base, index_buffer(sel),
                           static_cast<std::int64_t>(sel.size()));
 }
@@ -1208,11 +1207,11 @@ dftu_series* dftu_series_materialize(const dftu_series* v) {
 }
 
 namespace dftracer::utils::dataframe {
-Series select_rows(const Series& v, const dstd::Vector<std::int64_t>& indices) {
+Series select_rows(const Series& v, dstd::Span<const std::int64_t> indices) {
     return Series{make_selection(*v.handle(), indices)};
 }
-dstd::Vector<Series> select_rows(const dstd::Vector<Series>& columns,
-                                 const dstd::Vector<std::int64_t>& indices) {
+dstd::Vector<Series> select_rows(dstd::Span<const Series> columns,
+                                 dstd::Span<const std::int64_t> indices) {
     BufferView shared = index_buffer(indices);
     const auto n = static_cast<std::int64_t>(indices.size());
     dstd::Vector<Series> out;
@@ -1373,12 +1372,12 @@ Series materialize(const Series& v) {
     return Series{dftu_series_materialize(v.handle())};
 }
 
-Series take(const Series& v, const dstd::Vector<std::int64_t>& indices) {
+Series take(const Series& v, dstd::Span<const std::int64_t> indices) {
     return Series{dftu_series_take(v.handle(), indices.data(),
                                    static_cast<std::int64_t>(indices.size()))};
 }
 
-dstd::Vector<Series> take_all(const dstd::Vector<Series>& columns,
+dstd::Vector<Series> take_all(dstd::Span<const Series> columns,
                               const std::int64_t* idx, std::int64_t n) {
     IdxInfo info = scan_indices(idx, n);
     for (const Series& c : columns)
@@ -1393,7 +1392,7 @@ dstd::Vector<Series> take_all(const dstd::Vector<Series>& columns,
     return out;
 }
 
-Series take32(const Series& v, const dstd::Vector<std::int32_t>& indices) {
+Series take32(const Series& v, dstd::Span<const std::int32_t> indices) {
     return Series{gather_column(*v.handle(), indices.data(),
                                 static_cast<std::int64_t>(indices.size()))};
 }

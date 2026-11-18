@@ -32,6 +32,7 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <dlfcn.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 
@@ -230,7 +231,9 @@ using PlusOneClash = PlusOneT<true>;
 
 dstd::Vector<std::int64_t> eval_i64(const dataframe::Expr& e,
                                     const dataframe::Series& in) {
-    auto got = dataframe::eval(e, {&in});
+    auto got = dataframe::eval(
+        e, dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+               {&in}));
     REQUIRE(got.has_value());
     dstd::Vector<std::int64_t> out;
     for (std::int64_t i = 0; i < got->length(); ++i)
@@ -539,7 +542,9 @@ coro::CoroTask<dstd::Result<dataframe::Series>> eval_cancellable(
     co_await coro::yield();
     const coro::CancelView cancel = co_await coro::this_coro::cancel_view;
     const dataframe::UdfCancelScope scope(cancel);
-    auto got = dataframe::eval(e, {in});
+    auto got = dataframe::eval(
+        e, dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+               {in}));
     if (!got && got.error().condition() == dstd::Condition::Cancelled)
         co_await coro::stop_here();
     co_return got;

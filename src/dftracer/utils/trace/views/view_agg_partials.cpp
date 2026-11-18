@@ -692,7 +692,7 @@ class Seeder {
 
     // A file key of a row without a file hash is null, as a scan keys it.
     void keys_of(const AggKey& key, dstd::Vector<dstd::String>& out,
-                 dstd::Vector<bool>& nulls) const {
+                 dstd::Vector<std::uint8_t>& nulls) const {
         out.clear();
         nulls.clear();
         if (has_bucket_) {
@@ -713,9 +713,8 @@ class Seeder {
         }
     }
 
-    void seed(dataframe::AggState& state,
-              const dstd::Vector<dstd::String>& keys,
-              const dstd::Vector<bool>& nulls,
+    void seed(dataframe::AggState& state, dstd::Span<const dstd::String> keys,
+              dstd::Span<const std::uint8_t> nulls,
               const trace::index::schemas::dft::agg::AggPartial& p) {
         dstd::Vector<dataframe::AggSeedValue> values;
         values.reserve(cols_.size());
@@ -835,7 +834,7 @@ dataframe::AggStatePtr seed_rows_of(const ViewPlan& plan, AggInputSpec spec,
     Seeder seeder(plan, std::move(spec), keys, extra, quantiles, texts);
     auto state = seeder.new_state();
     dstd::Vector<dstd::String> texts_of_row;
-    dstd::Vector<bool> nulls;
+    dstd::Vector<std::uint8_t> nulls;
     const bool events_only = plan.phase == Phase::Events;
     for (const auto& [key, partial] : rows) {
         if (events_only && key.kind != AggKind::Event) continue;
@@ -950,7 +949,7 @@ coro::CoroTask<dstd::Result<bool>> partials_collect_typed(
     auto events = seeder.new_state();
     auto profiles = seeder.new_state();
     dstd::Vector<dstd::String> keys;
-    dstd::Vector<bool> nulls;
+    dstd::Vector<std::uint8_t> nulls;
     dstd::String joined;
     for (const auto& [key, partial] : result.rows) {
         if (key.kind == AggKind::System) continue;

@@ -118,7 +118,7 @@ void add_new_bytes(const dftu_series* c,
 }
 }  // namespace
 
-std::size_t new_buffer_bytes(const dstd::Vector<Series>& cols,
+std::size_t new_buffer_bytes(dstd::Span<const Series> cols,
                              dstd::HashSet<const void*, dstd::PtrHash>& seen) {
     std::size_t total = 0;
     for (const Series& c : cols)
@@ -126,7 +126,7 @@ std::size_t new_buffer_bytes(const dstd::Vector<Series>& cols,
     return total;
 }
 
-std::size_t columns_bytes(const dstd::Vector<Series>& cols) {
+std::size_t columns_bytes(dstd::Span<const Series> cols) {
     std::size_t total = 0;
     for (const Series& c : cols) {
         const std::int64_t n = c.length();
@@ -610,7 +610,7 @@ dstd::Result<dstd::UniquePtr<PartFile>> PartFile::create() {
 PartFile::~PartFile() = default;
 
 dstd::Result<dstd::Vector<Series>> PartFile::append(
-    const dstd::Vector<Series>& cols) {
+    dstd::Span<const Series> cols) {
     dstd::Vector<ColumnPlan> plans(cols.size());
     std::size_t at = 0;
     const auto place = [&at](Piece& p, const void* src, std::size_t bytes) {
@@ -731,7 +731,7 @@ Dir::~Dir() = default;
 
 int Dir::next_run() { return runs_.fetch_add(1); }
 
-void Dir::remove_run(const dstd::String& path) const noexcept {
+void Dir::remove_run(dstd::CStringView path) const noexcept {
     const auto size = dstd::fs::file_size(dstd::PathView(path));
     const std::uint64_t bytes = size.has_value() ? *size : 0;
     const auto removed = dstd::fs::remove(dstd::PathView(path));
@@ -752,7 +752,7 @@ const ZSTD_customMem TRACKED_MEM = {
     [](void*, void* p) { dftracer::utils::memory::detail::c_free(p); },
     nullptr};
 
-bool spill_compression_on(const dstd::String& path) {
+bool spill_compression_on(dstd::CStringView path) {
     const auto v = common::Env::get(common::constants::SPILL_COMPRESS_ENV);
     const auto is = [&](dstd::StringView a, dstd::StringView b = {},
                         dstd::StringView c = {}) {
@@ -769,9 +769,9 @@ bool spill_compression_on(const dstd::String& path) {
 // A morsel smaller than this is not worth a compression call.
 constexpr std::size_t COMPRESS_MIN_BYTES = 4096;
 
-std::FILE* open_file(const dstd::String& path, const char* mode) {
+std::FILE* open_file(dstd::CStringView path, dstd::CStringView mode) {
     coro::BlockingRegion blocking;
-    return std::fopen(path.c_str(), mode);
+    return std::fopen(path.c_str(), mode.c_str());
 }
 
 }  // namespace
@@ -789,7 +789,7 @@ struct Reader::Codec {
 Writer::Writer(dstd::ScopedFile os, dstd::SharedPtr<common::SpillCharge> charge)
     : os_(std::move(os)), charge_(std::move(charge)) {}
 
-dstd::Result<Writer> Writer::open(const dstd::String& path) {
+dstd::Result<Writer> Writer::open(dstd::CStringView path) {
     dstd::ScopedFile os(open_file(path, "wb"));
     if (!os)
         return common::make_error<"spill: cannot open run file {}">(
@@ -806,7 +806,7 @@ Writer::~Writer() = default;
 
 // Each morsel is [stored bytes][raw bytes][payload]; the payload is zstd when
 // the two differ.
-dstd::Result<void> Writer::write(const dstd::Vector<Series>& cols,
+dstd::Result<void> Writer::write(dstd::Span<const Series> cols,
                                  std::int64_t rows) {
     blob_.clear();
     put_pod<std::int64_t>(blob_, rows);
@@ -853,8 +853,7 @@ dstd::Result<void> Writer::close() {
     return {};
 }
 
-dstd::Result<std::uint64_t> write_run(Writer& w,
-                                      const dstd::Vector<Series>& cols,
+dstd::Result<std::uint64_t> write_run(Writer& w, dstd::Span<const Series> cols,
                                       std::int64_t rows,
                                       std::int64_t rows_per_morsel) {
     std::uint64_t largest = 0;
@@ -890,7 +889,7 @@ dstd::Result<HashPartitions> HashPartitions::make(Dir& dir, std::size_t parts) {
 }
 
 dstd::Result<void> HashPartitions::write(std::size_t p,
-                                         const dstd::Vector<Series>& cols,
+                                         dstd::Span<const Series> cols,
                                          std::int64_t rows) {
     bytes_[p] += columns_bytes(cols);
     rows_[p] += rows;
@@ -908,7 +907,7 @@ dstd::Result<void> HashPartitions::close() {
 Reader::Reader(dstd::ScopedFile is, std::uint64_t size)
     : is_(std::move(is)), size_(size) {}
 
-dstd::Result<dstd::UniquePtr<Reader>> Reader::open(const dstd::String& path) {
+dstd::Result<dstd::UniquePtr<Reader>> Reader::open(dstd::CStringView path) {
     dstd::ScopedFile is(open_file(path, "rb"));
     if (!is)
         return common::make_error<"spill: cannot open run file {}">(
@@ -1080,7 +1079,7 @@ dstd::Result<dstd::UniquePtr<Cursor>> Spool::reverse_reader() {
         &mem_, std::move(*disk), offsets_));
 }
 
-dstd::Result<void> write_agg_run(AggState& state, const dstd::String& path) {
+dstd::Result<void> write_agg_run(AggState& state, dstd::CStringView path) {
     agg_sort_groups(state);
     if (dstd::Result<void> checked = agg_check(state); !checked) return checked;
     dstd::ScopedFile os(open_file(path, "wb"));
@@ -1115,7 +1114,7 @@ AggRunReader::AggRunReader(dstd::ScopedFile is, std::uint64_t size)
     : is_(std::move(is)), size_(size) {}
 
 dstd::Result<dstd::UniquePtr<AggRunReader>> AggRunReader::open(
-    const dstd::String& path) {
+    dstd::CStringView path) {
     dstd::ScopedFile is(open_file(path, "rb"));
     if (!is)
         return common::make_error<"agg spill: cannot open run {}">(

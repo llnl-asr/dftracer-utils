@@ -16,6 +16,7 @@
 #include <dftracer/utils/dataframe/plugin_frame.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -202,10 +203,10 @@ concept NamedUdfType = UdfType<U> && requires {
 namespace detail {
 
 template <UdfType U>
-dftu_udf_desc udf_desc_of(const char* name, UdfOptions options) noexcept {
+dftu_udf_desc udf_desc_of(dstd::CStringView name, UdfOptions options) noexcept {
     dftu_udf_desc d{};
     d.struct_size = sizeof(dftu_udf_desc);
-    d.name = name;
+    d.name = name.c_str();
     d.flags = static_cast<std::uint32_t>(options.flags);
     d.min_args = options.min_args;
     d.max_args = options.max_args;

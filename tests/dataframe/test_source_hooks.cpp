@@ -32,7 +32,7 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-dstd::Vector<std::uint8_t> flags_of(const dstd::Vector<bool>& flags) {
+dstd::Vector<std::uint8_t> flags_of(dstd::Vector<bool> flags) {
     dstd::Vector<std::uint8_t> out;
     for (bool f : flags) out.push_back(f ? 1 : 0);
     return out;
@@ -66,7 +66,7 @@ DataFrame make_df() {
     return df;
 }
 
-dstd::Vector<std::int64_t> ints(const DataFrame& df, const dstd::String& name) {
+dstd::Vector<std::int64_t> ints(const DataFrame& df, dstd::StringView name) {
     const Series& c = df.column(name);
     const std::int64_t* p = c.data<std::int64_t>();
     return dstd::Vector<std::int64_t>(p, p + c.length());
@@ -134,7 +134,7 @@ class SmartSource final : public Source,
     }
 
     dstd::Optional<SourceApplication> apply_projection(
-        const dstd::Vector<NamedExpr>& exprs) const override {
+        dstd::Span<const NamedExpr> exprs) const override {
         log_->offered.push_back(Kind::Projection);
         if (!accepts(Kind::Projection)) return dstd::nullopt;
         dstd::Vector<dstd::String> names;
@@ -252,7 +252,7 @@ Smart smart(Policy policy) {
     return Smart{std::move(log), std::move(lf)};
 }
 
-dstd::Vector<double> nums(const DataFrame& df, const dstd::String& name) {
+dstd::Vector<double> nums(const DataFrame& df, dstd::StringView name) {
     const Series& c = df.column(name);
     dstd::Vector<double> out;
     for (std::int64_t i = 0; i < c.length(); ++i)
@@ -548,10 +548,10 @@ class KeyedSource final : public Source {
     bool streams_;
 };
 
-LazyFrame keyed(const dstd::String& key, dstd::SharedPtr<BatchLog> log,
+LazyFrame keyed(dstd::StringView key, dstd::SharedPtr<BatchLog> log,
                 bool streams = true) {
     return LazyFrame::scan(dstd::make_shared<KeyedSource>(
-        make_df(), key, std::move(log), streams));
+        make_df(), dstd::String(key), std::move(log), streams));
 }
 
 }  // namespace

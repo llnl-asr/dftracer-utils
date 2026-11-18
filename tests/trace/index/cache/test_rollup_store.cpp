@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/index/cache/rollup_store.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 
@@ -31,7 +32,9 @@ dataframe::AggStatePtr make_state(dstd::Vector<double> values) {
         vd.data(), static_cast<std::int64_t>(vd.size()));
     dstd::Vector<const dataframe::Series*> vals{&val};
     return dftu_utils_test::ok(dataframe::group_agg_state(
-        {&key}, vals,
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&key}),
+        vals,
         {dataframe::AggSpec{dataframe::AggOp::Count, -1, "n"},
          dataframe::AggSpec{dataframe::AggOp::Sum, 0, "total"}}));
 }
@@ -46,7 +49,9 @@ dataframe::AggStatePtr make_state_kv(dstd::Vector<dstd::String> gkeys,
         vd.data(), static_cast<std::int64_t>(vd.size()));
     dstd::Vector<const dataframe::Series*> vals{&val};
     return dftu_utils_test::ok(dataframe::group_agg_state(
-        {&key}, vals,
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&key}),
+        vals,
         {dataframe::AggSpec{dataframe::AggOp::Count, -1, "n"},
          dataframe::AggSpec{dataframe::AggOp::Sum, 0, "total"}}));
 }

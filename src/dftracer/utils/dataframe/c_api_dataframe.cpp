@@ -120,10 +120,11 @@ bool group_transform_args_ok(std::int32_t kind, std::int32_t rank_method) {
            rank_method >= DFTU_RANK_AVERAGE && rank_method <= DFTU_RANK_MAX;
 }
 
-char* dup_string(const dftracer::utils::dstd::String& s) {
+char* dup_string(dftracer::utils::dstd::StringView s) {
     char* out = static_cast<char*>(std::malloc(s.size() + 1));
     if (!out) return nullptr;
-    std::memcpy(out, s.c_str(), s.size() + 1);
+    std::memcpy(out, s.data(), s.size());
+    out[s.size()] = '\0';
     return out;
 }
 

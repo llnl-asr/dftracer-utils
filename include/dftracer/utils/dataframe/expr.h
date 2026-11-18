@@ -85,8 +85,7 @@ bool expr_as_not(const Expr& e, Expr* a);
 /// out-of-range index unchanged. Lets the planner renumber a predicate after
 /// columns are dropped or reordered (projection pushdown). Returns a new Expr;
 /// unchanged subtrees are shared.
-Expr expr_remap_cols(const Expr& e,
-                     const dstd::Vector<std::int32_t>& old_to_new);
+Expr expr_remap_cols(const Expr& e, dstd::Span<const std::int32_t> old_to_new);
 Expr expr_lit(std::int64_t value);
 Expr expr_lit(double value);
 Expr expr_binary(BinaryOp op, const Expr& a, const Expr& b);
@@ -238,22 +237,21 @@ Expr expr_cmp_expr(CmpOp cmp, const Expr& a, const Expr& b);
 /// @ref infer_type fail with the UDF's own message for operands it refuses. A
 /// row with a null operand is null in the result unless the UDF reads nulls
 /// itself.
-dstd::Result<Expr> expr_udf(dstd::StringView name,
-                            const dstd::Vector<Expr>& args);
+dstd::Result<Expr> expr_udf(dstd::StringView name, dstd::Span<const Expr> args);
 
 /// The first operand that is not null in each row; operands are promoted to
 /// one type as arithmetic promotes them (numeric) or must share it. `args`
 /// must not be empty (fatal).
-Expr expr_coalesce(const dstd::Vector<Expr>& args);
+Expr expr_coalesce(dstd::Span<const Expr> args);
 
 /// The least (`least` true) or greatest operand per row; null when any
 /// operand is null. Numeric operands compare exactly; String operands
 /// compare bytewise. `args` must not be empty (fatal).
-Expr expr_extreme(const dstd::Vector<Expr>& args, bool least);
+Expr expr_extreme(dstd::Span<const Expr> args, bool least);
 
 /// String concatenation of String operands; null when any is null. `args` must
 /// not be empty (fatal).
-Expr expr_concat(const dstd::Vector<Expr>& args);
+Expr expr_concat(dstd::Span<const Expr> args);
 
 /// Round to `digits` decimals, half away from zero; an integer operand with
 /// `digits` >= 0 is returned unchanged.
@@ -381,7 +379,7 @@ inline Expr operator<=(const Expr& a, double v) {
 /// `inputs` in one chunked pass. A malformed expression, an operand of the
 /// wrong type or an out-of-range column reference is an InvalidArgument error.
 dstd::Result<Series> eval(const Expr& root,
-                          const dstd::Vector<const Series*>& inputs);
+                          dstd::Span<const Series* const> inputs);
 
 /// Compile `roots` into ONE slot program - CSE spans all of them, so a
 /// subexpression shared across outputs (e.g. `a+b` in both `sum(a+b)` and
@@ -390,7 +388,7 @@ dstd::Result<Series> eval(const Expr& root,
 /// Returns one column per root, aligned to `roots`. Same error contract as
 /// @ref eval.
 dstd::Result<dstd::Vector<Series>> eval_many(
-    const dstd::Vector<Expr>& roots, const dstd::Vector<const Series*>& inputs);
+    dstd::Span<const Expr> roots, dstd::Span<const Series* const> inputs);
 
 /// The @ref DataType `root` would produce over columns typed `input_types`,
 /// without evaluating data. Shares eval()'s compiler, so the two can never
@@ -400,7 +398,7 @@ dstd::Result<dstd::Vector<Series>> eval_many(
 /// target a parameterized type. Reports TypeId::Unknown where the input type is
 /// itself Unknown. Same error contract as @ref eval.
 dstd::Result<DataType> infer_type(const Expr& root,
-                                  const dstd::Vector<DataType>& input_types);
+                                  dstd::Span<const DataType> input_types);
 
 }  // namespace dftracer::utils::dataframe
 

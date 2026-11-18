@@ -13,8 +13,8 @@ namespace {
 
 const dstd::Vector<double> BINS = {0, 80, 100, 120, 1e9};
 
-dataframe::Series f64(const dstd::Vector<double>& v,
-                      const dstd::Vector<std::uint8_t>& valid = {}) {
+dataframe::Series f64(dstd::Vector<double> v,
+                      dstd::Vector<std::uint8_t> valid = {}) {
     return dataframe::Series::flat_f64(v.data(),
                                        static_cast<std::int64_t>(v.size()),
                                        valid.empty() ? nullptr : valid.data());

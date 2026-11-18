@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 
 #include <cstdint>
 
@@ -30,7 +31,8 @@ TEST_SUITE("expr string comparisons") {
 
     TEST_CASE(
         "col == string literal masks matching rows, != is the complement") {
-        Series cat = Series::strings({"POSIX", "STDIO", "POSIX", "MPIIO"});
+        Series cat = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"POSIX", "STDIO", "POSIX", "MPIIO"}));
         dstd::Vector<const Series*> in{&cat};
 
         Series eq_mask = dftu_utils_test::eval_ok(
@@ -55,7 +57,8 @@ TEST_SUITE("expr string comparisons") {
     TEST_CASE(
         "expr_cmp copies a STR rhs; mutating the source buffer afterward "
         "does not change the result") {
-        Series cat = Series::strings({"POSIX", "STDIO", "POSIX"});
+        Series cat = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"POSIX", "STDIO", "POSIX"}));
         dstd::Vector<const Series*> in{&cat};
 
         dstd::String needle = "POSIX";
@@ -75,7 +78,8 @@ TEST_SUITE("expr string comparisons") {
     TEST_CASE(
         "expr_cmp copies a STR rhs; destroying the source string "
         "afterward does not change the result") {
-        Series cat = Series::strings({"POSIX", "STDIO", "POSIX"});
+        Series cat = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"POSIX", "STDIO", "POSIX"}));
         dstd::Vector<const Series*> in{&cat};
 
         Expr e;
@@ -93,7 +97,9 @@ TEST_SUITE("expr string comparisons") {
     }
 
     TEST_CASE("dictionary-encoded column gives the same answer as flat") {
-        Series flat = Series::strings({"read", "write", "read", "open"});
+        Series flat =
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"read", "write", "read", "open"}));
         Series dict = dictionary_encode(flat);
         REQUIRE(dict.encoding() == Encoding::Dictionary);
 
@@ -120,7 +126,8 @@ TEST_SUITE("expr string comparisons") {
     }
 
     TEST_CASE("ordered comparison on a string scalar goes by byte order") {
-        Series cat = Series::strings({"POSIX", "STDIO"});
+        Series cat = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"POSIX", "STDIO"}));
         dftu_scalar rhs = dftracer::utils::dataframe::str("POSIX");
         const struct {
             dftu_cmp_op op;
@@ -156,7 +163,8 @@ TEST_SUITE("expr string comparisons") {
     TEST_CASE(
         "CSE keys on string content: two different literals in one "
         "eval_many stay distinct") {
-        Series cat = Series::strings({"POSIX", "STDIO", "POSIX"});
+        Series cat = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"POSIX", "STDIO", "POSIX"}));
         dstd::Vector<const Series*> in{&cat};
 
         Expr posix_eq = expr_cmp(CmpOp::Eq, expr_col(0),

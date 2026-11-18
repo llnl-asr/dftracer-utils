@@ -28,7 +28,7 @@ const std::int32_t INT32S[] = {-7, 0, 2147483647, 42};
 const std::int64_t INT64S[] = {-9000000000LL, 0, 1, 9000000000LL};
 const double DOUBLES[] = {1.5, -2.25, 0.0, 1e300};
 
-Series large_strings(const dstd::Vector<dstd::String>& values) {
+Series large_strings(dstd::Vector<dstd::String> values) {
     auto* col = new dftu_series();
     col->type = TypeId::LargeString;
     col->encoding = Encoding::Flat;
@@ -47,7 +47,7 @@ Series large_strings(const dstd::Vector<dstd::String>& values) {
     return Series{col};
 }
 
-Series binaries(const dstd::Vector<dstd::String>& values) {
+Series binaries(dstd::Vector<dstd::String> values) {
     Series s = Series::strings(values);
     s.handle()->type = TypeId::Binary;
     return s;

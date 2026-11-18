@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -66,7 +67,8 @@ DataFrame basic_frame() {
     df.names = dstd::make_shared_strings({"a", "b", "cat"});
     df.columns.push_back(i64({1, 2, 3, 4, 5}));
     df.columns.push_back(f64({1.5, 2.5, 3.5, 4.5, 5.5}));
-    df.columns.push_back(Series::strings({"x", "y", "x", "z", "y"}));
+    df.columns.push_back(Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"x", "y", "x", "z", "y"})));
     return df;
 }
 
@@ -76,10 +78,14 @@ DataFrame basic_frame() {
 DataFrame mixed_frame() {
     DataFrame df;
     df.names = dstd::make_shared_strings({"cat", "a", "b", "s", "ts", "dur"});
-    df.columns.push_back(Series::strings({"x", "x", "x", "y", "y", "y"}));
+    df.columns.push_back(
+        Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"x", "x", "x", "y", "y", "y"})));
     df.columns.push_back(i64({1, 2, 3, 10, 20, 30}));
     df.columns.push_back(f64({1.5, 2.5, 3.5, 10.5, 20.5, 30.5}));
-    df.columns.push_back(Series::strings({"p", "q", "r", "m", "n", "o"}));
+    df.columns.push_back(
+        Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"p", "q", "r", "m", "n", "o"})));
     df.columns.push_back(i64({100, 150, 200, 1000, 1050, 1100}));
     df.columns.push_back(i64({10, 20, 15, 5, 25, 10}));
     return df;
@@ -381,7 +387,8 @@ TEST_SUITE("LazyFrame output_schema") {
         "Int64 domain") {
         DataFrame df;
         df.names = dstd::make_shared_strings({"cat", "dec", "ts"});
-        df.columns.push_back(Series::strings({"x", "x", "y"}));
+        df.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"x", "x", "y"})));
         df.columns.push_back(make_decimal128({100, 200, 300}, 38, 9));
         df.columns.push_back(
             make_timestamp({1, 2, 3}, TimeUnit::Micro, "America/Chicago"));
@@ -410,7 +417,8 @@ TEST_SUITE("LazyFrame output_schema") {
         DataFrame df;
         df.names =
             dstd::make_shared_strings({"cat", "ts", "d32", "d64", "dur"});
-        df.columns.push_back(Series::strings({"x", "x", "y", "y"}));
+        df.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"x", "x", "y", "y"})));
         df.columns.push_back(
             make_timestamp({1, 2, 3, 4}, TimeUnit::Nano, "UTC"));
         df.columns.push_back(make_date32({1, 2, 3, 4}));
@@ -443,12 +451,14 @@ TEST_SUITE("LazyFrame output_schema") {
         "keeps in their type") {
         DataFrame df;
         df.names = dstd::make_shared_strings({"cat", "ts", "d32", "dur", "s"});
-        df.columns.push_back(Series::strings({"x", "x", "y", "y"}));
+        df.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"x", "x", "y", "y"})));
         df.columns.push_back(
             make_timestamp({1, 2, 3, 4}, TimeUnit::Nano, "UTC"));
         df.columns.push_back(make_date32({1, 2, 3, 4}));
         df.columns.push_back(make_duration({1, 2, 3, 4}, TimeUnit::Milli));
-        df.columns.push_back(Series::strings({"a", "b", "c", "d"}));
+        df.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"a", "b", "c", "d"})));
         LazyFrame lf = LazyFrame::scan(src(std::move(df)));
         auto names = [&](Agg agg) {
             dstd::Vector<dstd::String> out;
@@ -464,6 +474,8 @@ TEST_SUITE("LazyFrame output_schema") {
         CHECK(names(Agg::Mean) == Names{"ts", "dur"});
         CHECK(names(Agg::First) == Names{"ts", "d32", "dur", "s"});
         check_matches_collect(lf.group_by(
-            "cat", dftu_utils_test::ok(lf.reduce_specs(Agg::Max, {"cat"}))));
+            "cat",
+            dftu_utils_test::ok(lf.reduce_specs(
+                Agg::Max, dftu_utils_test::span_of<dstd::String>({"cat"})))));
     }
 }

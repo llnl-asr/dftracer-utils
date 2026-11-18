@@ -90,18 +90,17 @@ class ColumnReader {
 
 /// The row indices [0, n) ordered by `keys` ascending, a null sorting after
 /// every value, ties in row order.
-dstd::Vector<std::int64_t> order_rows(const dstd::Vector<ColumnReader>& keys,
+dstd::Vector<std::int64_t> order_rows(dstd::Span<const ColumnReader> keys,
                                       std::int64_t n);
 
 /// Whether rows `a` and `b` hold the same key tuple, a null equal to a null.
-bool same_keys(const dstd::Vector<ColumnReader>& keys, std::int64_t a,
+bool same_keys(dstd::Span<const ColumnReader> keys, std::int64_t a,
                std::int64_t b);
 
 /// Given `order` from order_rows, the end of the run of rows from position
 /// `begin` that share its key tuple.
-std::int64_t run_end(const dstd::Vector<ColumnReader>& keys,
-                     const dstd::Vector<std::int64_t>& order,
-                     std::int64_t begin);
+std::int64_t run_end(dstd::Span<const ColumnReader> keys,
+                     dstd::Span<const std::int64_t> order, std::int64_t begin);
 
 }  // namespace dftracer::utils::dataframe
 

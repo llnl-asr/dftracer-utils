@@ -128,14 +128,14 @@ class PivotCursor : public Cursor {
 
    private:
     // The cells of `parts` as one materialized column.
-    static dstd::Result<Series> joined(const dstd::Vector<Series>& parts) {
+    static dstd::Result<Series> joined(dstd::Span<const Series> parts) {
         if (parts.size() == 1) return parts[0].materialize();
         auto whole = concat_columns(column_ptrs(parts));
         if (!whole) return whole.error();
         return whole->materialize();
     }
 
-    int idx_of(const dstd::String& name) const {
+    int idx_of(dstd::StringView name) const {
         auto it = std::find(sch_.begin(), sch_.end(), name);
         return it == sch_.end() ? -1 : static_cast<int>(it - sch_.begin());
     }

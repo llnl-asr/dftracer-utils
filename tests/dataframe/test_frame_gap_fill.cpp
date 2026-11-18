@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -32,8 +33,7 @@ const I NI = dstd::nullopt;
 const D ND = dstd::nullopt;
 
 template <class T>
-dstd::Vector<std::uint8_t> validity_of(
-    const dstd::Vector<dstd::Optional<T>>& v) {
+dstd::Vector<std::uint8_t> validity_of(dstd::Vector<dstd::Optional<T>> v) {
     dstd::Vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
         if (v[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
@@ -41,7 +41,7 @@ dstd::Vector<std::uint8_t> validity_of(
 }
 
 template <class T, class U>
-Series flat_of(TypeId type, const dstd::Vector<dstd::Optional<U>>& v) {
+Series flat_of(TypeId type, dstd::Vector<dstd::Optional<U>> v) {
     dstd::Vector<T> data(v.size(), T{});
     for (std::size_t i = 0; i < v.size(); ++i)
         if (v[i]) data[i] = static_cast<T>(*v[i]);
@@ -50,15 +50,13 @@ Series flat_of(TypeId type, const dstd::Vector<dstd::Optional<U>>& v) {
                         bits.data());
 }
 
-Series i64s(const dstd::Vector<I>& v) {
+Series i64s(dstd::Vector<I> v) {
     return flat_of<std::int64_t>(TypeId::Int64, v);
 }
 
-Series f64s(const dstd::Vector<D>& v) {
-    return flat_of<double>(TypeId::Float64, v);
-}
+Series f64s(dstd::Vector<D> v) { return flat_of<double>(TypeId::Float64, v); }
 
-dstd::Vector<I> int_col(const DataFrame& df, const dstd::String& name) {
+dstd::Vector<I> int_col(const DataFrame& df, dstd::StringView name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
@@ -85,7 +83,7 @@ dstd::Vector<I> int_col(const DataFrame& df, const dstd::String& name) {
     return out;
 }
 
-dstd::Vector<D> f64_col(const DataFrame& df, const dstd::String& name) {
+dstd::Vector<D> f64_col(const DataFrame& df, dstd::StringView name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
@@ -100,7 +98,7 @@ dstd::Vector<D> f64_col(const DataFrame& df, const dstd::String& name) {
     return out;
 }
 
-dstd::Vector<S> str_col(const DataFrame& df, const dstd::String& name) {
+dstd::Vector<S> str_col(const DataFrame& df, dstd::StringView name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
@@ -114,7 +112,7 @@ dstd::Vector<S> str_col(const DataFrame& df, const dstd::String& name) {
     return out;
 }
 
-void check_doubles(const dstd::Vector<D>& got, const dstd::Vector<D>& want) {
+void check_doubles(dstd::Vector<D> got, dstd::Vector<D> want) {
     REQUIRE(got.size() == want.size());
     for (std::size_t i = 0; i < got.size(); ++i) {
         CAPTURE(i);
@@ -124,8 +122,7 @@ void check_doubles(const dstd::Vector<D>& got, const dstd::Vector<D>& want) {
 }
 
 // {t:Int64, v:Int64, x:Int64}; a nullopt v is a null cell, x = 900 + i.
-DataFrame make_tvx(const dstd::Vector<std::int64_t>& t,
-                   const dstd::Vector<I>& v) {
+DataFrame make_tvx(dstd::Vector<std::int64_t> t, dstd::Vector<I> v) {
     dstd::Vector<I> tt(t.begin(), t.end());
     dstd::Vector<I> x;
     for (std::size_t i = 0; i < t.size(); ++i)
@@ -139,8 +136,7 @@ DataFrame make_tvx(const dstd::Vector<std::int64_t>& t,
 }
 
 // {t:Int64, v:Float64}.
-DataFrame make_tvd(const dstd::Vector<std::int64_t>& t,
-                   const dstd::Vector<double>& v) {
+DataFrame make_tvd(dstd::Vector<std::int64_t> t, dstd::Vector<double> v) {
     DataFrame df;
     df.names = dstd::make_shared_strings({"t", "v"});
     df.columns.push_back(
@@ -151,9 +147,8 @@ DataFrame make_tvd(const dstd::Vector<std::int64_t>& t,
 }
 
 // {p:Int64, t:Int64, v:Int64}.
-DataFrame make_ptv(const dstd::Vector<std::int64_t>& p,
-                   const dstd::Vector<std::int64_t>& t,
-                   const dstd::Vector<std::int64_t>& v) {
+DataFrame make_ptv(dstd::Vector<std::int64_t> p, dstd::Vector<std::int64_t> t,
+                   dstd::Vector<std::int64_t> v) {
     DataFrame df;
     df.names = dstd::make_shared_strings({"p", "t", "v"});
     df.columns.push_back(
@@ -173,7 +168,8 @@ Range range_of(std::int64_t lo, std::int64_t hi) {
 
 TEST_CASE("gap_fill - None leaves a missing bucket null, preserves real rows") {
     DataFrame out = dftu_utils_test::ok(
-        gap_fill(make_tvx({0, 10, 30}, {100, 200, 400}), {}, "t", 10, {"v"},
+        gap_fill(make_tvx({0, 10, 30}, {100, 200, 400}), {}, "t", 10,
+                 dftu_utils_test::span_of<dstd::String>({"v"}),
                  GapFillMode::None, dstd::nullopt));
     CHECK(dstd::to_strings(out.names) ==
           dstd::Vector<dstd::String>{"t", "v", "x"});
@@ -184,7 +180,8 @@ TEST_CASE("gap_fill - None leaves a missing bucket null, preserves real rows") {
 
 TEST_CASE("gap_fill - Locf carries the last real value forward") {
     DataFrame out = dftu_utils_test::ok(
-        gap_fill(make_tvx({0, 10, 30}, {100, 200, 400}), {}, "t", 10, {"v"},
+        gap_fill(make_tvx({0, 10, 30}, {100, 200, 400}), {}, "t", 10,
+                 dftu_utils_test::span_of<dstd::String>({"v"}),
                  GapFillMode::Locf, dstd::nullopt));
     CHECK(int_col(out, "v") == dstd::Vector<I>{100, 200, 200, 400});
     CHECK(int_col(out, "x") == dstd::Vector<I>{900, 901, NI, 902});
@@ -192,7 +189,8 @@ TEST_CASE("gap_fill - Locf carries the last real value forward") {
 
 TEST_CASE("gap_fill - Locf leading gap before first real is null") {
     DataFrame out = dftu_utils_test::ok(
-        gap_fill(make_tvx({0, 10}, {100, 200}), {}, "t", 10, {"v"},
+        gap_fill(make_tvx({0, 10}, {100, 200}), {}, "t", 10,
+                 dftu_utils_test::span_of<dstd::String>({"v"}),
                  GapFillMode::Locf, range_of(-20, 10)));
     CHECK(int_col(out, "t") == dstd::Vector<I>{-20, -10, 0, 10});
     CHECK(int_col(out, "v") == dstd::Vector<I>{NI, NI, 100, 200});
@@ -200,7 +198,8 @@ TEST_CASE("gap_fill - Locf leading gap before first real is null") {
 
 TEST_CASE("gap_fill - Linear interpolates the missing bucket as double") {
     DataFrame out = dftu_utils_test::ok(
-        gap_fill(make_tvd({0, 20}, {100.0, 200.0}), {}, "t", 10, {"v"},
+        gap_fill(make_tvd({0, 20}, {100.0, 200.0}), {}, "t", 10,
+                 dftu_utils_test::span_of<dstd::String>({"v"}),
                  GapFillMode::Linear, dstd::nullopt));
     CHECK(int_col(out, "t") == dstd::Vector<I>{0, 10, 20});
     check_doubles(f64_col(out, "v"), {100.0, 150.0, 200.0});
@@ -208,7 +207,8 @@ TEST_CASE("gap_fill - Linear interpolates the missing bucket as double") {
 
 TEST_CASE("gap_fill - Linear does not extrapolate past the real endpoints") {
     DataFrame out = dftu_utils_test::ok(
-        gap_fill(make_tvd({0, 20}, {100.0, 200.0}), {}, "t", 10, {"v"},
+        gap_fill(make_tvd({0, 20}, {100.0, 200.0}), {}, "t", 10,
+                 dftu_utils_test::span_of<dstd::String>({"v"}),
                  GapFillMode::Linear, range_of(-10, 30)));
     CHECK(int_col(out, "t") == dstd::Vector<I>{-10, 0, 10, 20, 30});
     check_doubles(f64_col(out, "v"), {ND, 100.0, 150.0, 200.0, ND});
@@ -216,8 +216,10 @@ TEST_CASE("gap_fill - Linear does not extrapolate past the real endpoints") {
 
 TEST_CASE("gap_fill - partitions are filled independently") {
     DataFrame out = dftu_utils_test::ok(
-        gap_fill(make_ptv({1, 1, 2, 2}, {0, 20, 0, 10}, {1, 3, 5, 7}), {"p"},
-                 "t", 10, {"v"}, GapFillMode::None, dstd::nullopt));
+        gap_fill(make_ptv({1, 1, 2, 2}, {0, 20, 0, 10}, {1, 3, 5, 7}),
+                 dftu_utils_test::span_of<dstd::String>({"p"}), "t", 10,
+                 dftu_utils_test::span_of<dstd::String>({"v"}),
+                 GapFillMode::None, dstd::nullopt));
     CHECK(int_col(out, "p") == dstd::Vector<I>{1, 1, 1, 2, 2});
     CHECK(int_col(out, "t") == dstd::Vector<I>{0, 10, 20, 0, 10});
     CHECK(int_col(out, "v") == dstd::Vector<I>{1, NI, 3, 5, 7});
@@ -226,13 +228,17 @@ TEST_CASE("gap_fill - partitions are filled independently") {
 TEST_CASE("gap_fill - explicit range unifies grids across partitions") {
     DataFrame in = make_ptv({1, 1, 2, 2}, {0, 10, 20, 30}, {1, 2, 3, 4});
     SUBCASE("per-partition min/max keeps each grid tight") {
-        DataFrame out = dftu_utils_test::ok(gap_fill(
-            in, {"p"}, "t", 10, {"v"}, GapFillMode::None, dstd::nullopt));
+        DataFrame out = dftu_utils_test::ok(
+            gap_fill(in, dftu_utils_test::span_of<dstd::String>({"p"}), "t", 10,
+                     dftu_utils_test::span_of<dstd::String>({"v"}),
+                     GapFillMode::None, dstd::nullopt));
         CHECK(out.num_rows() == 4);
     }
     SUBCASE("explicit range gives every partition the same span") {
-        DataFrame out = dftu_utils_test::ok(gap_fill(
-            in, {"p"}, "t", 10, {"v"}, GapFillMode::None, range_of(0, 30)));
+        DataFrame out = dftu_utils_test::ok(
+            gap_fill(in, dftu_utils_test::span_of<dstd::String>({"p"}), "t", 10,
+                     dftu_utils_test::span_of<dstd::String>({"v"}),
+                     GapFillMode::None, range_of(0, 30)));
         CHECK(int_col(out, "p") == dstd::Vector<I>{1, 1, 1, 1, 2, 2, 2, 2});
         CHECK(int_col(out, "t") ==
               dstd::Vector<I>{0, 10, 20, 30, 0, 10, 20, 30});
@@ -242,11 +248,15 @@ TEST_CASE("gap_fill - explicit range unifies grids across partitions") {
 
 TEST_CASE("gap_fill - deterministic regardless of input row order") {
     DataFrame oa = dftu_utils_test::ok(
-        gap_fill(make_ptv({1, 1, 2}, {0, 20, 10}, {1, 3, 5}), {"p"}, "t", 10,
-                 {"v"}, GapFillMode::Locf, dstd::nullopt));
+        gap_fill(make_ptv({1, 1, 2}, {0, 20, 10}, {1, 3, 5}),
+                 dftu_utils_test::span_of<dstd::String>({"p"}), "t", 10,
+                 dftu_utils_test::span_of<dstd::String>({"v"}),
+                 GapFillMode::Locf, dstd::nullopt));
     DataFrame ob = dftu_utils_test::ok(
-        gap_fill(make_ptv({2, 1, 1}, {10, 20, 0}, {5, 3, 1}), {"p"}, "t", 10,
-                 {"v"}, GapFillMode::Locf, dstd::nullopt));
+        gap_fill(make_ptv({2, 1, 1}, {10, 20, 0}, {5, 3, 1}),
+                 dftu_utils_test::span_of<dstd::String>({"p"}), "t", 10,
+                 dftu_utils_test::span_of<dstd::String>({"v"}),
+                 GapFillMode::Locf, dstd::nullopt));
     CHECK(int_col(oa, "p") == int_col(ob, "p"));
     CHECK(int_col(oa, "t") == int_col(ob, "t"));
     CHECK(int_col(oa, "v") == int_col(ob, "v"));
@@ -255,7 +265,8 @@ TEST_CASE("gap_fill - deterministic regardless of input row order") {
 
 TEST_CASE("gap_fill - duplicate real times in one bucket keep the first") {
     DataFrame out = dftu_utils_test::ok(
-        gap_fill(make_tvx({0, 0, 20}, {100, 111, 200}), {}, "t", 10, {"v"},
+        gap_fill(make_tvx({0, 0, 20}, {100, 111, 200}), {}, "t", 10,
+                 dftu_utils_test::span_of<dstd::String>({"v"}),
                  GapFillMode::None, dstd::nullopt));
     CHECK(int_col(out, "t") == dstd::Vector<I>{0, 10, 20});
     CHECK(int_col(out, "v") == dstd::Vector<I>{100, NI, 200});
@@ -264,16 +275,20 @@ TEST_CASE("gap_fill - duplicate real times in one bucket keep the first") {
 TEST_CASE("gap_fill - rejects a non-positive bucket width") {
     DataFrame in = make_tvx({0, 10}, {1, 2});
     dftu_utils_test::expect_error(
-        gap_fill(in, {}, "t", 0, {"v"}, GapFillMode::None, dstd::nullopt),
+        gap_fill(in, {}, "t", 0, dftu_utils_test::span_of<dstd::String>({"v"}),
+                 GapFillMode::None, dstd::nullopt),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     dftu_utils_test::expect_error(
-        gap_fill(in, {}, "t", -10, {"v"}, GapFillMode::None, dstd::nullopt),
+        gap_fill(in, {}, "t", -10,
+                 dftu_utils_test::span_of<dstd::String>({"v"}),
+                 GapFillMode::None, dstd::nullopt),
         dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("gap_fill - runaway grid guard trips on a huge range") {
     dftu_utils_test::expect_error(
-        gap_fill(make_tvx({0, 10}, {1, 2}), {}, "t", 1, {"v"},
+        gap_fill(make_tvx({0, 10}, {1, 2}), {}, "t", 1,
+                 dftu_utils_test::span_of<dstd::String>({"v"}),
                  GapFillMode::None, range_of(0, 1'000'000'000)),
         dftracer::utils::common::ErrorCode::InvalidArgument);
 }
@@ -282,7 +297,8 @@ TEST_CASE("gap_fill - grid guard trips before the span overflows int64") {
     const std::int64_t lo = std::numeric_limits<std::int64_t>::min();
     const std::int64_t hi = std::numeric_limits<std::int64_t>::max();
     dftu_utils_test::expect_error(
-        gap_fill(make_tvx({0, 10}, {1, 2}), {}, "t", 1, {"v"},
+        gap_fill(make_tvx({0, 10}, {1, 2}), {}, "t", 1,
+                 dftu_utils_test::span_of<dstd::String>({"v"}),
                  GapFillMode::None, range_of(lo, hi)),
         dftracer::utils::common::ErrorCode::InvalidArgument);
 }
@@ -290,13 +306,19 @@ TEST_CASE("gap_fill - grid guard trips before the span overflows int64") {
 TEST_CASE("gap_fill - rejects unknown columns and unsupported types") {
     DataFrame in = make_tvx({0, 10}, {1, 2});
     dftu_utils_test::expect_error(
-        gap_fill(in, {}, "nope", 10, {"v"}, GapFillMode::None, dstd::nullopt),
+        gap_fill(in, {}, "nope", 10,
+                 dftu_utils_test::span_of<dstd::String>({"v"}),
+                 GapFillMode::None, dstd::nullopt),
         dftracer::utils::common::ErrorCode::NotFound);
-    dftu_utils_test::expect_error(gap_fill(in, {"nope"}, "t", 10, {"v"},
-                                           GapFillMode::None, dstd::nullopt),
-                                  dftracer::utils::common::ErrorCode::NotFound);
     dftu_utils_test::expect_error(
-        gap_fill(in, {}, "t", 10, {"nope"}, GapFillMode::None, dstd::nullopt),
+        gap_fill(in, dftu_utils_test::span_of<dstd::String>({"nope"}), "t", 10,
+                 dftu_utils_test::span_of<dstd::String>({"v"}),
+                 GapFillMode::None, dstd::nullopt),
+        dftracer::utils::common::ErrorCode::NotFound);
+    dftu_utils_test::expect_error(
+        gap_fill(in, {}, "t", 10,
+                 dftu_utils_test::span_of<dstd::String>({"nope"}),
+                 GapFillMode::None, dstd::nullopt),
         dftracer::utils::common::ErrorCode::NotFound);
     dftu_utils_test::expect_error(
         gap_fill(make_tvd({0, 10}, {1.0, 2.0}), {}, "v", 10, {},
@@ -306,7 +328,8 @@ TEST_CASE("gap_fill - rejects unknown columns and unsupported types") {
     s.names.push_back(dstd::SharedString{"s"});
     s.columns.push_back(Series::strings(dstd::Vector<dstd::String>{"a", "b"}));
     dftu_utils_test::expect_error(
-        gap_fill(s, {}, "t", 10, {"s"}, GapFillMode::Linear, dstd::nullopt),
+        gap_fill(s, {}, "t", 10, dftu_utils_test::span_of<dstd::String>({"s"}),
+                 GapFillMode::Linear, dstd::nullopt),
         dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
@@ -340,7 +363,7 @@ D interpolate(D v0, D v1, std::int64_t t0, std::int64_t t1, std::int64_t g) {
                      static_cast<double>(t1 - t0);
 }
 
-dstd::Vector<Out> reference(const dstd::Vector<Row>& rows, std::int64_t width,
+dstd::Vector<Out> reference(dstd::Vector<Row> rows, std::int64_t width,
                             GapFillMode mode, Range range) {
     const auto key_less = [&](std::size_t a, std::size_t b) {
         const Row& x = rows[a];
@@ -410,7 +433,7 @@ dstd::Vector<Out> reference(const dstd::Vector<Row>& rows, std::int64_t width,
     return out;
 }
 
-Series time_series(TypeId type, const dstd::Vector<I>& t) {
+Series time_series(TypeId type, dstd::Vector<I> t) {
     switch (type) {
         case TypeId::Int32:
             return flat_of<std::int32_t>(type, t);
@@ -489,7 +512,9 @@ TEST_CASE("gap_fill - randomized frames match a naive reference") {
                 const dstd::Vector<Out> want =
                     reference(rows, width, mode, range);
                 DataFrame out = dftu_utils_test::ok(gap_fill(
-                    df, {"p", "s"}, "t", width, {"v", "w"}, mode, range));
+                    df, dftu_utils_test::span_of<dstd::String>({"p", "s"}), "t",
+                    width, dftu_utils_test::span_of<dstd::String>({"v", "w"}),
+                    mode, range));
                 REQUIRE(out.names == df.names);
                 REQUIRE(out.num_rows() ==
                         static_cast<std::int64_t>(want.size()));

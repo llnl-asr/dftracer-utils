@@ -287,8 +287,8 @@ AggStatePtr agg_new(dstd::Vector<AggSpec> specs, dstd::Vector<AggDynSpec> dyn) {
 }
 
 dstd::Result<void> agg_accumulate(AggState& st,
-                                  const dstd::Vector<const Series*>& keys,
-                                  const dstd::Vector<const Series*>& values,
+                                  dstd::Span<const Series* const> keys,
+                                  dstd::Span<const Series* const> values,
                                   std::int64_t begin, std::int64_t end) {
     return agg_accumulate(st, keys, values, dstd::Vector<AggDynInput>{}, begin,
                           end);
@@ -417,8 +417,8 @@ bool plain_key(const Series& c, PlainKey& out) {
 
 // Whether the plain loop can run this state over these columns, and the
 // column views it reads if so.
-bool plain_shape(const AggState& st, const dstd::Vector<const Series*>& keys,
-                 const dstd::Vector<const Series*>& values,
+bool plain_shape(const AggState& st, dstd::Span<const Series* const> keys,
+                 dstd::Span<const Series* const> values,
                  dstd::Vector<PlainKey>& k, dstd::Vector<Plain8>& v) {
     if (st.has_fl || st.has_arg || st.has_bitor || st.has_prod || st.has_qv ||
         st.has_msk || st.has_kmv || st.has_lst || st.has_ss || st.has_co ||
@@ -440,15 +440,14 @@ bool plain_shape(const AggState& st, const dstd::Vector<const Series*>& keys,
 // word, a string of up to 16 bytes its length and two words.
 constexpr std::uint64_t FAST_TAG = 0xFFFFFFFF00000000ULL;
 
-std::size_t key_word_count(const dstd::Vector<PlainKey>& k) {
+std::size_t key_word_count(dstd::Span<const PlainKey> k) {
     std::size_t w = 0;
     for (const PlainKey& kk : k) w += kk.is_str ? 3 : 1;
     return w;
 }
 
 // Row i's key words; false for a string longer than 16 bytes.
-bool key_words(const dstd::Vector<PlainKey>& k, std::int64_t i,
-               std::uint64_t* w) {
+bool key_words(dstd::Span<const PlainKey> k, std::int64_t i, std::uint64_t* w) {
     for (const PlainKey& kk : k) {
         if (!kk.is_str) {
             *w++ = kk.fixed.bits(i);
@@ -558,7 +557,7 @@ void fast_add(AggState& st, std::uint64_t h, const std::uint64_t* w) {
 
 // Whether the word table takes this state over these keys (string keys,
 // no nulls, every group so far seen through it), opening it on first use.
-bool fast_open(AggState& st, const dstd::Vector<PlainKey>& k,
+bool fast_open(AggState& st, dstd::Span<const PlainKey> k,
                bool any_keys = false) {
     if (st.fast_refused) return false;
     bool fast = any_keys;
@@ -718,7 +717,7 @@ __attribute__((noinline, cold)) void add_carry(AggState& st, std::size_t slot,
 }
 
 // find_or_add_group over a row's key words.
-std::int64_t slow_group_words(AggState& st, const dstd::Vector<PlainKey>& k,
+std::int64_t slow_group_words(AggState& st, dstd::Span<const PlainKey> k,
                               const std::uint64_t* w) {
     std::size_t at[64];
     for (std::size_t j = 0, p = 0; j < k.size(); ++j) {
@@ -756,8 +755,8 @@ bool light_cells(const AggState& st) {
     return true;
 }
 
-bool accumulate_plain(AggState& st, const dstd::Vector<const Series*>& keys,
-                      const dstd::Vector<const Series*>& values,
+bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
+                      dstd::Span<const Series* const> values,
                       std::int64_t begin, std::int64_t end) {
     dstd::Vector<PlainKey> k;
     dstd::Vector<Plain8> v;
@@ -1192,9 +1191,9 @@ bool accumulate_plain(AggState& st, const dstd::Vector<const Series*>& keys,
 }  // namespace
 
 dstd::Result<void> agg_accumulate(AggState& st,
-                                  const dstd::Vector<const Series*>& keys,
-                                  const dstd::Vector<const Series*>& values,
-                                  const dstd::Vector<AggDynInput>& dyn_in,
+                                  dstd::Span<const Series* const> keys,
+                                  dstd::Span<const Series* const> values,
+                                  dstd::Span<const AggDynInput> dyn_in,
                                   std::int64_t begin, std::int64_t end) {
     if (!st.init_error.empty())
         return common::make_error(common::ErrorCode::InvalidArgument,
@@ -1715,7 +1714,7 @@ dstd::Result<void> agg_accumulate(AggState& st,
 }
 
 dstd::Result<void> agg_accumulate(AggState& st, const Series& key,
-                                  const dstd::Vector<const Series*>& values,
+                                  dstd::Span<const Series* const> values,
                                   std::int64_t begin, std::int64_t end) {
     const dstd::Vector<const Series*> keys{&key};
     return agg_accumulate(st, keys, values, begin, end);
@@ -1767,7 +1766,7 @@ dstd::Result<void> check_field_types(const AggState& into,
 }  // namespace
 
 void agg_merge(AggState& into, const AggState& other,
-               const dstd::Vector<std::int64_t>& order) {
+               dstd::Span<const std::int64_t> order) {
     into.settle_light();
     if (!other.inited) return;
     if (into.inited) {
@@ -1815,8 +1814,8 @@ void agg_merge(AggState& into, const AggState& other,
     if (into.has_udaf) into.udaf_combine(other, udaf_into, order);
 }
 
-bool agg_pack_shape(AggState& st, const dstd::Vector<const Series*>& keys,
-                    const dstd::Vector<const Series*>& values, AggPacked& out) {
+bool agg_pack_shape(AggState& st, dstd::Span<const Series* const> keys,
+                    dstd::Span<const Series* const> values, AggPacked& out) {
     if (!st.inited && !agg_accumulate(st, keys, values, 0, 0)) return false;
     dstd::Vector<PlainKey> k;
     dstd::Vector<Plain8> v;
@@ -1835,8 +1834,8 @@ bool agg_pack_shape(AggState& st, const dstd::Vector<const Series*>& keys,
            keys[0]->length() < (std::int64_t{1} << 32);
 }
 
-bool agg_pack(const AggState& st, const dstd::Vector<const Series*>& keys,
-              const dstd::Vector<const Series*>& values, std::int64_t begin,
+bool agg_pack(const AggState& st, dstd::Span<const Series* const> keys,
+              dstd::Span<const Series* const> values, std::int64_t begin,
               std::int64_t end, const AggPacked& shape,
               dstd::Vector<AggPages>& out,
               dstd::FunctionRef<void(std::size_t)> full) {
@@ -1893,9 +1892,8 @@ bool agg_pack(const AggState& st, const dstd::Vector<const Series*>& keys,
     }
 }
 
-void agg_accumulate_packed(AggState& st,
-                           const dstd::Vector<const Series*>& keys,
-                           const dstd::Vector<const Series*>& values,
+void agg_accumulate_packed(AggState& st, dstd::Span<const Series* const> keys,
+                           dstd::Span<const Series* const> values,
                            const AggPacked& shape, const AggPages& rows) {
     if (!st.inited && !agg_accumulate(st, keys, values, 0, 0))
         dstd::fatal("agg_accumulate_packed: the columns were rejected");
@@ -2043,7 +2041,7 @@ AggStatePtr agg_merge_many(dstd::Vector<AggStatePtr>& partials) {
 }
 
 AggStatePtr agg_regroup(const AggState& src_in,
-                        const dstd::Vector<std::int32_t>& keep,
+                        dstd::Span<const std::int32_t> keep,
                         std::int64_t bucket_recut) {
     const AggState& src = settled(src_in);
     AggStatePtr dst(new AggState());

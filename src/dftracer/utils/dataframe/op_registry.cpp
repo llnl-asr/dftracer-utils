@@ -117,9 +117,10 @@ dftracer::utils::dataframe::OpDesc handle_of(
 
 // A name resolves to the last built-in row that carries it: the tables are
 // append only, so a row that supersedes another of the same name comes later.
-dftracer::utils::dataframe::OpDesc find_handle_locked(const char* name) {
+dftracer::utils::dataframe::OpDesc find_handle_locked(
+    dftracer::utils::dstd::StringView name) {
     for (std::uint32_t i = BUILTIN_COUNT; i-- > 0;)
-        if (std::strcmp(BUILTINS[i].name, name) == 0)
+        if (name == BUILTINS[i].name)
             return dftracer::utils::dataframe::OpDesc(&BUILTINS[i]);
     for (const auto& op : user_ops())
         if (op->name == name) return handle_of(op);
@@ -912,8 +913,7 @@ dftu_lazyframe* dftu_op_run_lazy(const dftu_op_desc* op,
 
 namespace dftracer::utils::dataframe {
 
-dstd::Optional<OpDesc> find_op(const char* name) noexcept {
-    if (!name) return dstd::nullopt;
+dstd::Optional<OpDesc> find_op(dstd::StringView name) noexcept {
     std::lock_guard<std::mutex> lock(reg_mutex());
     OpDesc op = find_handle_locked(name);
     if (!op) return dstd::nullopt;

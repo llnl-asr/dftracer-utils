@@ -3,6 +3,7 @@
 #include <arrow/arrow_helpers.h>
 #include <dataframe/builders_types.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -70,7 +71,8 @@ void check_all_ops(const Case& c) {
 
     check_op(c, c.source.head(3), 0, "head");
     check_op(c, c.source.tail(2), 3, "tail");
-    check_op(c, c.source.take({4, 1}), 4, "take");
+    check_op(c, c.source.take(dftu_utils_test::span_of<std::int64_t>({4, 1})),
+             4, "take");
     check_op(c, c.source.slice(2, 2), 2, "slice");
     check_op(c, c.source.reverse(), -1, "reverse");
     check_op(c, c.source.sort(false), -1, "sort");
@@ -154,8 +156,9 @@ TEST_SUITE("arrow_type_parameter_propagation") {
             dstd::Vector<std::int64_t>{10, 20, 30, 40}.data(), 4));
 
         DataFrame g = dftu_utils_test::ok(df.group_by(
-            "k",
-            {GroupAgg{Agg::Sum, "v", "total"}, GroupAgg{Agg::Count, "", "n"}}));
+            "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                     {GroupAgg{Agg::Sum, "v", "total"},
+                      GroupAgg{Agg::Count, "", "n"}})));
         REQUIRE(g.num_rows() == 2);
 
         Series key = arrow_round_trip(g.column("k"));

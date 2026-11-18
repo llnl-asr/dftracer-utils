@@ -23,8 +23,8 @@ struct RightPartition {
 }  // namespace
 
 dstd::Result<DataFrame> asof(const DataFrame& left, const DataFrame& right,
-                             const dstd::String& on,
-                             const dstd::Vector<dstd::String>& by,
+                             dstd::StringView on,
+                             dstd::Span<const dstd::String> by,
                              AsofDirection direction,
                              dstd::Optional<double> tolerance) {
     const dstd::Result<std::size_t> lt = ops::column_named(left, on, "asof");

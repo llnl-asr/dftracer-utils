@@ -26,6 +26,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -330,7 +331,8 @@ TEST_SUITE("lazyframe") {
             dftu_utils_test::eval_ok(col(0) > std::int64_t{3}, ptrs(e)));
         DataFrame ew = ef.with_column(
             "c", dftu_utils_test::eval_ok(col(0) + col(1), ptrs(ef)));
-        DataFrame eager = dftu_utils_test::ok(ew.select({"a", "c"}));
+        DataFrame eager = dftu_utils_test::ok(
+            ew.select(dftu_utils_test::span_of<dstd::String>({"a", "c"})));
 
         REQUIRE(lazy.num_rows() == eager.num_rows());
         REQUIRE(lazy.num_columns() == eager.num_columns());
@@ -764,8 +766,10 @@ TEST_SUITE("lazyframe") {
         DataFrame spilled =
             run(df.lazy().memory_budget(2000).group_by("k", aggs).collect(16));
 
-        DataFrame a = dftu_utils_test::ok(in_mem.sort_by_multi({"k"}));
-        DataFrame b = dftu_utils_test::ok(spilled.sort_by_multi({"k"}));
+        DataFrame a = dftu_utils_test::ok(in_mem.sort_by_multi(
+            dftu_utils_test::span_of<dstd::String>({"k"})));
+        DataFrame b = dftu_utils_test::ok(spilled.sort_by_multi(
+            dftu_utils_test::span_of<dstd::String>({"k"})));
         REQUIRE(a.num_rows() == N);
         REQUIRE(b.num_rows() == N);
         for (std::int64_t i = 0; i < N; ++i) {
@@ -1320,9 +1324,7 @@ TEST_SUITE("lazyframe") {
                 for (const dstd::String& s : layout.by) pc.push_back(s.c_str());
                 const char* oc[] = {"o"};
                 OpArgs args;
-                args.strlist(1, pc.data(), static_cast<std::int32_t>(pc.size()))
-                    .strlist(2, oc, 1)
-                    .winlist(3, specs);
+                args.strlist(1, pc).strlist(2, {oc, 1}).winlist(3, specs);
                 dstd::Vector<dstd::String> names = dstd::to_strings(df.names);
                 for (const dftu_window_spec& s : specs)
                     names.emplace_back(s.out);
@@ -1621,9 +1623,7 @@ TEST_SUITE("lazyframe") {
                 for (const dstd::String& s : layout.by) pc.push_back(s.c_str());
                 const char* oc[] = {group.order};
                 OpArgs args;
-                args.strlist(1, pc.data(), static_cast<std::int32_t>(pc.size()))
-                    .strlist(2, oc, 1)
-                    .winlist(3, group.specs);
+                args.strlist(1, pc).strlist(2, {oc, 1}).winlist(3, group.specs);
                 dstd::Vector<dstd::String> names = dstd::to_strings(df.names);
                 for (const dftu_window_spec& s : group.specs)
                     names.emplace_back(s.out);
@@ -1691,7 +1691,7 @@ TEST_SUITE("lazyframe") {
         const char* pc[] = {"p"};
         const char* oc[] = {"o"};
         OpArgs args;
-        args.strlist(1, pc, 1).strlist(2, oc, 1).winlist(3, specs);
+        args.strlist(1, {pc, 1}).strlist(2, {oc, 1}).winlist(3, specs);
         dstd::Vector<dstd::String> names = dstd::to_strings(df.names);
         for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
         const LazyFrame plan =
@@ -2153,7 +2153,11 @@ TEST_SUITE("lazyframe") {
             w.out = "out";
             w.set_value("v");
             dftu_utils_test::expect_error(
-                dftracer::utils::dataframe::window(c.df, {"k"}, {"ord"}, {w}),
+                dftracer::utils::dataframe::window(
+                    c.df, dftu_utils_test::span_of<dstd::String>({"k"}),
+                    dftu_utils_test::span_of<dstd::String>({"ord"}),
+                    dftu_utils_test::span_of<
+                        dftracer::utils::dataframe::WindowColumn>({w})),
                 dftracer::utils::common::ErrorCode::InvalidArgument, c.text);
             const LazyFrame fast = dftu_utils_test::ok(
                 c.df.lazy()
@@ -2507,8 +2511,8 @@ TEST_SUITE("lazyframe") {
 
         DataFrame lz1 =
             run(df.lazy().sort_by_multi({"k", "v"}, false).collect(2));
-        DataFrame eg1 =
-            dftu_utils_test::ok(df.sort_by_multi({"k", "v"}, false));
+        DataFrame eg1 = dftu_utils_test::ok(df.sort_by_multi(
+            dftu_utils_test::span_of<dstd::String>({"k", "v"}), false));
         REQUIRE(lz1.num_rows() == eg1.num_rows());
         {
             const std::int64_t* lk = lz1.column("k").data<std::int64_t>();
@@ -2526,7 +2530,8 @@ TEST_SUITE("lazyframe") {
                     .sort_by_multi({"k", "v"}, dstd::Vector<bool>{false, true})
                     .collect(2));
         DataFrame eg2 = dftu_utils_test::ok(
-            df.sort_by_multi({"k", "v"}, dstd::Vector<std::uint8_t>{0, 1}));
+            df.sort_by_multi(dftu_utils_test::span_of<dstd::String>({"k", "v"}),
+                             dstd::Vector<std::uint8_t>{0, 1}));
         REQUIRE(lz2.num_rows() == eg2.num_rows());
         const std::int64_t* lk = lz2.column("k").data<std::int64_t>();
         const std::int64_t* ek = eg2.column("k").data<std::int64_t>();
@@ -2581,7 +2586,8 @@ TEST_SUITE("lazyframe") {
         DataFrame eg = dftu_utils_test::ok(
             df.filter(
                   dftu_utils_test::eval_ok(col(0) > std::int64_t{1}, ptrs(df)))
-                .sort_by_multi({"k", "v"}, false));
+                .sort_by_multi(
+                    dftu_utils_test::span_of<dstd::String>({"k", "v"}), false));
         DataFrame lz = run(lf.collect(2));
         REQUIRE(lz.num_rows() == eg.num_rows());
         const std::int64_t* lk = lz.column("k").data<std::int64_t>();
@@ -2627,7 +2633,8 @@ TEST_SUITE("lazyframe") {
 
         DataFrame filtered = df.filter(
             dftu_utils_test::eval_ok(col(0) > std::int64_t{1}, ptrs(df)));
-        DataFrame eg = dftu_utils_test::ok(filtered.take(idx).select({"a"}));
+        DataFrame eg = dftu_utils_test::ok(filtered.take(idx).select(
+            dftu_utils_test::span_of<dstd::String>({"a"})));
         DataFrame lz = run(lf.collect(2));
         REQUIRE(lz.num_rows() == eg.num_rows());
         const std::int64_t* la = lz.column("a").data<std::int64_t>();
@@ -2645,7 +2652,8 @@ TEST_SUITE("lazyframe") {
 
         DataFrame filtered = df.filter(
             dftu_utils_test::eval_ok(col(0) > std::int64_t{2}, ptrs(df)));
-        DataFrame eg = dftu_utils_test::ok(filtered.reverse().select({"a"}));
+        DataFrame eg = dftu_utils_test::ok(filtered.reverse().select(
+            dftu_utils_test::span_of<dstd::String>({"a"})));
         DataFrame lz = run(lf.collect(2));
         REQUIRE(lz.num_rows() == eg.num_rows());
         const std::int64_t* la = lz.column("a").data<std::int64_t>();
@@ -2671,7 +2679,8 @@ TEST_SUITE("lazyframe") {
         CHECK(plan.find("select [a]") != dstd::String::npos);
         CHECK(plan.find("filter_mask") != dstd::String::npos);
 
-        DataFrame eg = dftu_utils_test::ok(filtered.filter(mask).select({"a"}));
+        DataFrame eg = dftu_utils_test::ok(filtered.filter(mask).select(
+            dftu_utils_test::span_of<dstd::String>({"a"})));
         DataFrame lz = run(lf.collect(2));
         REQUIRE(lz.num_rows() == eg.num_rows());
         const std::int64_t* la = lz.column("a").data<std::int64_t>();

@@ -117,7 +117,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     dstd::Optional<dftracer::utils::dataframe::SourceApplication> apply_filter(
         const dftracer::utils::dataframe::Expr& predicate) const override;
     dstd::Optional<dftracer::utils::dataframe::SourceApplication>
-    apply_projection(const dstd::Vector<dftracer::utils::dataframe::NamedExpr>&
+    apply_projection(dstd::Span<const dftracer::utils::dataframe::NamedExpr>
                          exprs) const override;
     dstd::Optional<dftracer::utils::dataframe::SourceApplication>
     apply_aggregation(
@@ -132,7 +132,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// acc_pat, window, clip, list and agg-engine tokens); the host cursor
     /// then handles it.
     dstd::Optional<dftracer::utils::dataframe::SourceApplication>
-    apply_distinct(const dstd::Vector<dstd::String>& subset) const override;
+    apply_distinct(dstd::Span<const dstd::String> subset) const override;
 
     /// Equal for sources that read the same files with the same scan
     /// settings (time range and scale, metadata, index roots, spill budget),

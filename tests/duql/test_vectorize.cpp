@@ -11,6 +11,7 @@
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -255,7 +256,8 @@ TEST_CASE("calendar time agrees between the column and row evaluators") {
     f.columns.push_back(numbers(dataframe::TypeId::Int64, TS));
     f.columns.push_back(numbers(dataframe::TypeId::Float64, SECS));
     f.columns.push_back(
-        dataframe::Series::strings({"a", "b", "c", "d", "e", "f", "g", "h"}));
+        dataframe::Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"a", "b", "c", "d", "e", "f", "g", "h"})));
     Roles roles;
     roles.fields.emplace("ts", 1000);
     roles.fields.emplace("secs", 1000000000);
@@ -310,7 +312,8 @@ TEST_CASE("quantifiers over a list column agree with the row evaluator") {
         dataframe::Series::list(
             offs, dataframe::Series::flat_i64(vals.data(), 5, valid.data()))
             .take(dstd::Vector<std::int64_t>{0, 1, -1, 3, 4}));
-    f.columns.push_back(dataframe::Series::strings({"a", "b", "c", "d", "e"}));
+    f.columns.push_back(dataframe::Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"a", "b", "c", "d", "e"})));
     const char* const JSON[] = {"[1,5]", "[]", nullptr, "[2,null]", "[7]"};
     const char* const S5[] = {"a", "b", "c", "d", "e"};
     const char* const FORMS[] = {

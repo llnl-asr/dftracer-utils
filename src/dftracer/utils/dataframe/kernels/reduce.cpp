@@ -188,7 +188,7 @@ void argextreme_one(const dftu_series& v, bool is_min, std::int64_t& out_idx) {
 // count first attains the eventual maximum.
 template <class T>
 void mode_serial(const T* p,
-                 const dftracer::utils::dstd::Vector<std::int64_t>& idx,
+                 dftracer::utils::dstd::Span<const std::int64_t> idx,
                  dftu_scalar& out) {
     dftracer::utils::dstd::HashMap<T, std::int64_t> counts;
     T best{};
@@ -274,7 +274,7 @@ const char* reduce_op_name(std::int32_t op) {
 // The ERR scalar a reduction returns instead of a value. The error and its text
 // live in thread-local storage, so they stay valid until the next reduction on
 // this thread (dftu_error borrows its message).
-dftu_scalar refuse(const dftracer::utils::dstd::String& message) {
+dftu_scalar refuse(dftracer::utils::dstd::StringView message) {
     static thread_local dftracer::utils::dstd::String text;
     static thread_local dftu_error err;
     text = message;

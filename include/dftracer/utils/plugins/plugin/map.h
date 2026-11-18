@@ -101,7 +101,7 @@ class OpArgsBuilder {
         for (const dstd::CStringView item : items) {
             slot.push_back(item.c_str());
         }
-        args_.strlist(i, slot.data(), static_cast<std::int32_t>(slot.size()));
+        args_.strlist(i, slot);
         return *this;
     }
     OpArgsBuilder& i32list(std::uint32_t i,

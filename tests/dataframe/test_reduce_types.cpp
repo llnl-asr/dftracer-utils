@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cmath>
@@ -96,7 +97,8 @@ TEST_CASE("a bool reduction agrees with the group-by sum") {
     df.columns.push_back(i64({7, 7, 7, 7}));
     df.columns.push_back(bools({true, false, true, true}));
     dataframe::DataFrame g = dftu_utils_test::ok(df.group_by(
-        "k", {dataframe::GroupAgg{dataframe::Agg::Sum, "flag", "total"}}));
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {dataframe::GroupAgg{dataframe::Agg::Sum, "flag", "total"}})));
     REQUIRE(g.num_rows() == 1);
     CHECK(g.column("total").data<std::int64_t>()[0] == expected);
 }

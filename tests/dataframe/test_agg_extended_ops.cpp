@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -218,8 +219,12 @@ TEST_CASE("Quantile skips nulls, ranks NaN last and is null with no value") {
     Series sv = Series::flat_f64(v.data(), 7, valid.data());
     dstd::Vector<AggSpec> specs{
         quantile_spec(0, "median", 0.5, Interpolation::Linear)};
-    DataFrame r =
-        dftu_utils_test::ok(dataframe::group_agg({&sk}, {&sv}, specs, {"k"}));
+    DataFrame r = dftu_utils_test::ok(dataframe::group_agg(
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&sk}),
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&sv}),
+        specs, dftu_utils_test::span_of<dstd::String>({"k"})));
     const Series med = r.column("median");
     REQUIRE(med.length() == 3);
     const std::int64_t g0 = row_of(r, "k", 0);
@@ -246,8 +251,12 @@ static void check_quantile_against_series(std::int64_t n) {
         for (int i = 0; i <= 100; ++i) {
             const double q = static_cast<double>(i) / 100.0;
             dstd::Vector<AggSpec> specs{quantile_spec(0, "q", q, interp)};
-            DataFrame r = dftu_utils_test::ok(
-                dataframe::group_agg({&sk}, {&sv}, specs, {"k"}));
+            DataFrame r = dftu_utils_test::ok(dataframe::group_agg(
+                dftu_utils_test::span_of<
+                    const dftracer::utils::dataframe::Series*>({&sk}),
+                dftu_utils_test::span_of<
+                    const dftracer::utils::dataframe::Series*>({&sv}),
+                specs, dftu_utils_test::span_of<dstd::String>({"k"})));
             CAPTURE(n);
             CAPTURE(static_cast<int>(interp));
             CAPTURE(q);
@@ -273,8 +282,13 @@ TEST_CASE("Quantile refuses a level outside [0, 1] and NaN") {
             dataframe::agg_quantile(dataframe::expr_col(0), q).has_value());
         dstd::Vector<AggSpec> specs{
             quantile_spec(0, "q", q, Interpolation::Linear)};
-        CHECK_FALSE(
-            dataframe::group_agg({&sk}, {&sv}, specs, {"k"}).has_value());
+        CHECK_FALSE(dataframe::group_agg(
+                        dftu_utils_test::span_of<
+                            const dftracer::utils::dataframe::Series*>({&sk}),
+                        dftu_utils_test::span_of<
+                            const dftracer::utils::dataframe::Series*>({&sv}),
+                        specs, dftu_utils_test::span_of<dstd::String>({"k"}))
+                        .has_value());
         dftu_expr* key = dftu_expr_col(0);
         dftu_expr* value = dftu_expr_col(1);
         const dftu_agg_spec c =
@@ -292,7 +306,14 @@ TEST_CASE("Quantile refuses a level outside [0, 1] and NaN") {
     CHECK(dataframe::agg_quantile(dataframe::expr_col(0), 1.0).has_value());
     dstd::Vector<AggSpec> bad{
         quantile_spec(0, "q", 0.5, static_cast<Interpolation>(9))};
-    CHECK_FALSE(dataframe::group_agg({&sk}, {&sv}, bad, {"k"}).has_value());
+    CHECK_FALSE(
+        dataframe::group_agg(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&sk}),
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&sv}),
+            bad, dftu_utils_test::span_of<dstd::String>({"k"}))
+            .has_value());
 }
 
 TEST_CASE("a keyless aggregate over no rows is one row") {
@@ -301,8 +322,11 @@ TEST_CASE("a keyless aggregate over no rows is one row") {
     dstd::Vector<AggSpec> specs{
         AggSpec{AggOp::Sum, 0, "sum"}, AggSpec{AggOp::Mean, 0, "mean"},
         quantile_spec(0, "q", 0.5, Interpolation::Linear)};
-    DataFrame r = dftu_utils_test::ok(
-        dataframe::group_agg({}, {&sv}, specs, dstd::Vector<dstd::String>{}));
+    DataFrame r = dftu_utils_test::ok(dataframe::group_agg(
+        {},
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&sv}),
+        specs, dstd::Vector<dstd::String>{}));
     REQUIRE(r.num_rows() == 1);
     CHECK(r.column("sum").data<std::int64_t>()[0] == 0);
     CHECK(r.column("mean").is_null(0));
@@ -512,11 +536,12 @@ TEST_CASE("group_agg_expr reads a value column in a view encoding") {
     const std::int64_t kv[2] = {7, 7};
     Series k = Series::flat_i64(kv, 2);
     dstd::Vector<const Series*> inputs{&k, &xs, &y};
-    DataFrame r = dftu_utils_test::ok(
-        dataframe::group_agg_expr(dataframe::col(0),
-                                  {dataframe::agg_sum(dataframe::col(1), "sx"),
-                                   dataframe::agg_sum(dataframe::col(2), "sy")},
-                                  inputs, "k"));
+    DataFrame r = dftu_utils_test::ok(dataframe::group_agg_expr(
+        dataframe::col(0),
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggExprSpec>(
+            {dataframe::agg_sum(dataframe::col(1), "sx"),
+             dataframe::agg_sum(dataframe::col(2), "sy")}),
+        inputs, "k"));
     REQUIRE(r.num_rows() == 1);
     CHECK(r.column("sx").data<double>()[0] == doctest::Approx(1.0));
     CHECK(r.column("sy").data<double>()[0] == doctest::Approx(4.0));

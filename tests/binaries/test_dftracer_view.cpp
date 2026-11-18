@@ -23,6 +23,7 @@
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <refused_lines.h>
+#include <span_list.h>
 #include <sys/wait.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -1151,9 +1152,12 @@ TEST_SUITE("DFTracerView JSON cell printer") {
         dstd::Vector<dataframe::Series> fields;
         fields.push_back(dataframe::Series::flat_i64(
             dstd::Vector<std::int64_t>{1, 2, 3}.data(), 3));
-        fields.push_back(dataframe::Series::strings({"a", "b", "c"}));
+        fields.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"a", "b", "c"})));
         auto rec = dataframe::Series::structs({"n", "s"}, std::move(fields));
-        auto list = dataframe::Series::list({0, 2, 2, 3}, std::move(rec));
+        auto list = dataframe::Series::list(
+            dftu_utils_test::span_of<std::int32_t>({0, 2, 2, 3}),
+            std::move(rec));
         CHECK(cell(list, 0) == R"([{"n":1,"s":"a"},{"n":2,"s":"b"}])");
         CHECK(cell(list, 1) == "[]");
         CHECK(cell(list, 2) == R"([{"n":3,"s":"c"}])");

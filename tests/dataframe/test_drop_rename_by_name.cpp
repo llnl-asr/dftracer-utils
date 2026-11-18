@@ -107,7 +107,7 @@ dataframe::DataFrame run(const dataframe::LazyFrame& lf) {
 
 using Names = dstd::Vector<dstd::String>;
 
-std::int64_t cell(const dataframe::DataFrame& df, const dstd::String& name,
+std::int64_t cell(const dataframe::DataFrame& df, dstd::StringView name,
                   std::int64_t row) {
     for (std::size_t c = 0; c < df.names.size(); ++c)
         if (df.names[c] == name)

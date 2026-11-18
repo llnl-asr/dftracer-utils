@@ -51,16 +51,16 @@ CursorResult make_compare_agg(dstd::UniquePtr<Cursor> in,
 
 dstd::Result<LazyFrame> compose_compare_agg(const LazyFrame& base,
                                             const LazyFrame& variant,
-                                            const dstd::Vector<Field>& lhs,
-                                            const dstd::Vector<Field>& rhs,
+                                            dstd::Span<const Field> lhs,
+                                            dstd::Span<const Field> rhs,
                                             std::size_t nk);
 
 // `in_fields` types the input columns (empty or Unknown when the plan cannot
 // say): a float sum over a whole partition depends on the order it adds in.
 CursorResult make_window(dstd::UniquePtr<Cursor> in,
-                         const dstd::Vector<dstd::String>& sch,
-                         const dstd::Vector<Field>& in_fields,
-                         const dstd::String& name, OpDesc op,
+                         dstd::Span<const dstd::String> sch,
+                         dstd::Span<const Field> in_fields,
+                         dstd::StringView name, OpDesc op,
                          dstd::SharedPtr<const OwnedFrameOpArgs> args,
                          std::uint64_t budget);
 
@@ -71,8 +71,8 @@ CursorResult make_window(dstd::UniquePtr<Cursor> in,
 // untouched, when a side's columns are only known once it runs, so the caller
 // collects both sides instead.
 CursorResult make_ordered_join(dstd::UniquePtr<Cursor>& in,
-                               const dstd::Vector<dstd::String>& sch,
-                               const dstd::String& name,
+                               dstd::Span<const dstd::String> sch,
+                               dstd::StringView name,
                                const OwnedFrameOpArgs& args,
                                const LazyFrame& other, std::uint64_t budget);
 
@@ -80,23 +80,23 @@ CursorResult make_ordered_join(dstd::UniquePtr<Cursor>& in,
 // declared schemas settle, then appends the registry op that make_ordered_join
 // streams.
 dstd::Result<LazyFrame> compose_asof(const LazyFrame& left, LazyFrame other,
-                                     const dstd::String& on,
-                                     const dstd::Vector<dstd::String>& by,
+                                     dstd::StringView on,
+                                     dstd::Span<const dstd::String> by,
                                      AsofDirection direction,
                                      dstd::Optional<double> tolerance);
 
 dstd::Result<LazyFrame> compose_interval(const LazyFrame& left, LazyFrame other,
-                                         const dstd::String& point,
-                                         const dstd::String& lo,
-                                         const dstd::String& hi,
-                                         const dstd::Vector<dstd::String>& by,
+                                         dstd::StringView point,
+                                         dstd::StringView lo,
+                                         dstd::StringView hi,
+                                         dstd::Span<const dstd::String> by,
                                          bool outer);
 
 CursorResult make_native_transform(dstd::UniquePtr<Cursor> in,
-                                   const dstd::Vector<dstd::String>& sch,
+                                   dstd::Span<const dstd::String> sch,
                                    const OwnedFrameOpArgs& args,
-                                   const dstd::Vector<dstd::String>& out_names,
-                                   const dstd::Vector<DataType>& out_types,
+                                   dstd::Span<const dstd::String> out_names,
+                                   dstd::Span<const DataType> out_types,
                                    std::uint64_t budget);
 
 // The streaming form of the column op `args` (COLUMN_OP): a running or
@@ -107,16 +107,16 @@ CursorResult make_native_transform(dstd::UniquePtr<Cursor> in,
 // op, the column or its type is not covered; the caller then runs the op over
 // the whole input.
 CursorResult make_column_scan(dstd::UniquePtr<Cursor>& in,
-                              const dstd::Vector<dstd::String>& sch,
-                              const dstd::Vector<Field>& in_fields,
+                              dstd::Span<const dstd::String> sch,
+                              dstd::Span<const Field> in_fields,
                               const OwnedFrameOpArgs& args);
 
 // The streaming form of the frame op with_column (WITH_COLUMN_OP): each morsel
 // gets the rows of the operand column that match it. A null cursor, leaving
 // `in` untouched, when the input's columns are only known once it runs.
 CursorResult make_series_column(dstd::UniquePtr<Cursor>& in,
-                                const dstd::Vector<dstd::String>& sch,
-                                const dstd::Vector<Field>& in_fields,
+                                dstd::Span<const dstd::String> sch,
+                                dstd::Span<const Field> in_fields,
                                 const OwnedFrameOpArgs& args);
 
 }  // namespace dftracer::utils::dataframe::lazy_internal

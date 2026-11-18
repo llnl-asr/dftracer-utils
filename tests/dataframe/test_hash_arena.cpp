@@ -30,13 +30,13 @@ using namespace dftracer::utils::dataframe;
 namespace {
 
 bool put(lazy_internal::HashArena& a, std::uint64_t hash,
-         const dstd::String& key) {
-    return a.insert(hash, key.data(), static_cast<std::uint32_t>(key.size()));
+         dstd::StringView key) {
+    return a.insert(hash, key);
 }
 
 bool has(const lazy_internal::HashArena& a, std::uint64_t hash,
-         const dstd::String& key) {
-    return a.contains(hash, key.data(), static_cast<std::uint32_t>(key.size()));
+         dstd::StringView key) {
+    return a.contains(hash, key);
 }
 
 }  // namespace

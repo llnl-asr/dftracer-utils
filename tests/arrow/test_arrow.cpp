@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
+#include <span_list.h>
 
 #include <cstdint>
 #include <cstring>
@@ -195,7 +196,8 @@ TEST_SUITE("dataframe_arrow_public") {
     }
 
     TEST_CASE("String Series round-trips through the public Arrow bridge") {
-        Series s = Series::strings({"alpha", "beta", "gamma"});
+        Series s = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"alpha", "beta", "gamma"}));
 
         arrow::Batch a = test_types::exported(s);
         Series back = test_types::import_series(a.schema(), a.array());
@@ -242,7 +244,8 @@ TEST_SUITE("dataframe_arrow_public") {
     }
 
     TEST_CASE("Dictionary column round-trips through the Arrow bridge") {
-        Series s = Series::strings({"a", "b", "a", "c", "b", "a"});
+        Series s = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"a", "b", "a", "c", "b", "a"}));
         Series dict = s.dictionary_encode();
         REQUIRE(dict.valid());
         REQUIRE(dict.encoding() == Encoding::Dictionary);
@@ -264,7 +267,8 @@ TEST_SUITE("dataframe_arrow_public") {
     }
 
     TEST_CASE("Sliced dictionary array round-trips through the Arrow bridge") {
-        Series s = Series::strings({"a", "b", "a", "c", "b", "a"});
+        Series s = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"a", "b", "a", "c", "b", "a"}));
         Series dict = s.dictionary_encode();
         REQUIRE(dict.valid());
 
@@ -351,7 +355,8 @@ TEST_SUITE("dataframe_arrow_public") {
     }
 
     TEST_CASE("Exporting outer-fill selection rows gives in-range indices") {
-        Series base = Series::strings({"x", "y", "z"});
+        Series base = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"x", "y", "z"}));
         std::uint8_t mask_bits = 0b101;
         Series mask = Series::flat(TypeId::Bool, &mask_bits, 3);
         arrow::Batch src = test_types::exported(base.filter(mask));
@@ -382,7 +387,9 @@ TEST_SUITE("dataframe_arrow_public") {
         DataFrame df;
         df.names = dstd::make_shared_strings({"s"});
         df.columns.push_back(
-            Series::strings({"a", "b", "a", "a"}).dictionary_encode());
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                                {"a", "b", "a", "a"}))
+                .dictionary_encode());
         auto bytes = test_types::export_ipc(df);
         CHECK_FALSE(bytes.empty());
     }
@@ -391,7 +398,9 @@ TEST_SUITE("dataframe_arrow_public") {
         const std::uint64_t ts[3] = {500, 501, 502};
         DataFrame df;
         df.names = dstd::make_shared_strings({"cat", "ts"});
-        df.columns.push_back(Series::strings({"STDIO", "STDIO", "STDIO"}));
+        df.columns.push_back(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"STDIO", "STDIO", "STDIO"})));
         df.columns.push_back(Series::flat(TypeId::Uint64, ts, 3));
         auto bytes = test_types::export_ipc(df);
         DataFrame back = test_types::import_ipc(bytes);

@@ -925,8 +925,8 @@ dstd::Result<bool> fill_missing_rows(const FillSpec& spec,
         add.names.emplace_back("__duql_added");
         add.columns.push_back(dataframe::Series::flat_i64(ones.data(), m));
     }
-    auto joined_rows =
-        dataframe::concat({base, &add}, dataframe::ConcatHow::Diagonal);
+    const dataframe::DataFrame* const both[] = {base, &add};
+    auto joined_rows = dataframe::concat(both, dataframe::ConcatHow::Diagonal);
     if (!joined_rows) return joined_rows.error();
     out = std::move(*joined_rows);
     dstd::Vector<dstd::String> keep = strings_of(f.names);

@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -145,7 +146,8 @@ TEST_CASE("agg_regroup coarsens (k1,k2)->k1 matching a direct k1 group_agg") {
     auto fine = dftu_utils_test::ok(
         dataframe::group_agg_state(s.keys2, s.values, mixed_specs()));
 
-    auto coarse = dataframe::agg_regroup(*fine, {0});  // keep k1 only
+    auto coarse = dataframe::agg_regroup(
+        *fine, dftu_utils_test::span_of<std::int32_t>({0}));  // keep k1 only
     dataframe::agg_sort_groups(*coarse);
     DataFrame got = dataframe::agg_finalize(*coarse, "k1");
 
@@ -198,7 +200,8 @@ TEST_CASE("agg_regroup preserves occupancy busy/active exactly") {
 
     auto fine =
         dftu_utils_test::ok(dataframe::group_agg_state(keys2, values, specs));
-    auto coarse = dataframe::agg_regroup(*fine, {0});
+    auto coarse = dataframe::agg_regroup(
+        *fine, dftu_utils_test::span_of<std::int32_t>({0}));
     dataframe::agg_sort_groups(*coarse);
     DataFrame got = dataframe::agg_finalize(*coarse, "k1");
 
@@ -235,7 +238,9 @@ TEST_CASE("agg_regroup with bucket_recut coarsens the time grain") {
 
     auto fine =
         dftu_utils_test::ok(dataframe::group_agg_state(keys, values, specs));
-    auto coarse = dataframe::agg_regroup(*fine, {0, 1}, /*bucket_recut=*/20);
+    auto coarse = dataframe::agg_regroup(
+        *fine, dftu_utils_test::span_of<std::int32_t>({0, 1}),
+        /*bucket_recut=*/20);
     dataframe::agg_sort_groups(*coarse);
     DataFrame got = dataframe::agg_finalize(
         *coarse, dstd::Vector<dstd::String>{"bucket", "grp"});
@@ -510,7 +515,8 @@ TEST_CASE("agg_regroup over serialize/deserialize round-trip is exact") {
         auto one = dftu_utils_test::ok(dataframe::agg_deserialize(blob));
         dataframe::agg_merge(*rebuilt, *one);
     }
-    auto coarse = dataframe::agg_regroup(*rebuilt, {0});
+    auto coarse = dataframe::agg_regroup(
+        *rebuilt, dftu_utils_test::span_of<std::int32_t>({0}));
     dataframe::agg_sort_groups(*coarse);
     DataFrame got = dataframe::agg_finalize(*coarse, "k1");
 
@@ -536,22 +542,22 @@ namespace {
 // first batch carries the dynamics) and the full FieldStat per cell (taken when
 // the state holds the group already). Every reduction must answer the same from
 // either.
-dataframe::AggStatePtr dyn_light_state(
-    const dstd::Vector<AggDynSpec>& specs,
-    const dstd::Vector<const Series*>& keys,
-    const dstd::Vector<AggDynInput>& inputs) {
+dataframe::AggStatePtr dyn_light_state(dstd::Vector<AggDynSpec> specs,
+                                       dstd::Vector<const Series*> keys,
+                                       dstd::Vector<AggDynInput> inputs) {
     auto st = dataframe::agg_new({}, specs);
     dftu_utils_test::ok(agg_accumulate(*st, keys, {}, inputs));
     return st;
 }
 
-dataframe::AggStatePtr dyn_full_state(const dstd::Vector<AggDynSpec>& specs,
-                                      const dstd::Vector<const Series*>& keys,
-                                      const dstd::Vector<AggDynInput>& inputs) {
+dataframe::AggStatePtr dyn_full_state(dstd::Vector<AggDynSpec> specs,
+                                      dstd::Vector<const Series*> keys,
+                                      dstd::Vector<AggDynInput> inputs) {
     // The same batches regrouped into a fresh state, whose cells are FieldStats
     // unpacked from the light ones.
     auto st = dyn_light_state(specs, keys, inputs);
-    return dataframe::agg_regroup(*st, {0});
+    return dataframe::agg_regroup(*st,
+                                  dftu_utils_test::span_of<std::int32_t>({0}));
 }
 
 // Every column, bit for bit. The two layouts must not differ in one bit.
@@ -579,9 +585,9 @@ void check_same_columns(const DataFrame& a, const DataFrame& b) {
     }
 }
 
-void check_same_dyn(const dstd::Vector<AggDynSpec>& specs,
-                    const dstd::Vector<const Series*>& keys,
-                    const dstd::Vector<AggDynInput>& inputs) {
+void check_same_dyn(dstd::Vector<AggDynSpec> specs,
+                    dstd::Vector<const Series*> keys,
+                    dstd::Vector<AggDynInput> inputs) {
     auto light = dyn_light_state(specs, keys, inputs);
     auto full = dyn_full_state(specs, keys, inputs);
     dataframe::agg_sort_groups(*light);
@@ -681,12 +687,24 @@ TEST_CASE("AggState dyn: a name fed two domains keeps the full cells") {
                                          {AggOp::Count, 0.0, "n_"}};
 
     auto light = dataframe::agg_new({}, specs);
-    dftu_utils_test::ok(agg_accumulate(*light, keys, {}, {{"a", &sa}}));
-    dftu_utils_test::ok(agg_accumulate(*light, keys, {}, {{"a", &sf}}));
+    dftu_utils_test::ok(agg_accumulate(
+        *light, keys, {},
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggDynInput>(
+            {{"a", &sa}})));
+    dftu_utils_test::ok(agg_accumulate(
+        *light, keys, {},
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggDynInput>(
+            {{"a", &sf}})));
     auto full = dataframe::agg_new({}, specs);
     dftu_utils_test::ok(agg_accumulate(*full, keys, {}));
-    dftu_utils_test::ok(agg_accumulate(*full, keys, {}, {{"a", &sa}}));
-    dftu_utils_test::ok(agg_accumulate(*full, keys, {}, {{"a", &sf}}));
+    dftu_utils_test::ok(agg_accumulate(
+        *full, keys, {},
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggDynInput>(
+            {{"a", &sa}})));
+    dftu_utils_test::ok(agg_accumulate(
+        *full, keys, {},
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggDynInput>(
+            {{"a", &sf}})));
     dataframe::agg_sort_groups(*light);
     dataframe::agg_sort_groups(*full);
     check_same_columns(dataframe::agg_finalize(*light, "k"),
@@ -713,9 +731,14 @@ TEST_CASE("AggState dyn: merge unions names through both layouts") {
     // Two batches, one naming a only and one naming a and b. Folding them into
     // one state is the merge's answer. a is in both, so it counts twice.
     auto ref = dataframe::agg_new({}, specs);
-    dftu_utils_test::ok(agg_accumulate(*ref, keys, {}, {{"a", &sa}}));
-    dftu_utils_test::ok(
-        agg_accumulate(*ref, keys, {}, {{"a", &sa}, {"b", &sb}}));
+    dftu_utils_test::ok(agg_accumulate(
+        *ref, keys, {},
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggDynInput>(
+            {{"a", &sa}})));
+    dftu_utils_test::ok(agg_accumulate(
+        *ref, keys, {},
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggDynInput>(
+            {{"a", &sa}, {"b", &sb}})));
     dataframe::agg_sort_groups(*ref);
     const DataFrame w = dataframe::agg_finalize(*ref, "k");
     CHECK(w.column("n_a").data<std::int64_t>()[0] == 4);
@@ -735,8 +758,10 @@ TEST_CASE("AggState dyn: merge unions names through both layouts") {
     // A full other, one pass of both names, into a fresh destination. The same
     // batches folded once into one state.
     auto one_pass = dataframe::agg_new({}, specs);
-    dftu_utils_test::ok(
-        agg_accumulate(*one_pass, keys, {}, {{"a", &sa}, {"b", &sb}}));
+    dftu_utils_test::ok(agg_accumulate(
+        *one_pass, keys, {},
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggDynInput>(
+            {{"a", &sa}, {"b", &sb}})));
     dataframe::agg_sort_groups(*one_pass);
     const DataFrame w1 = dataframe::agg_finalize(*one_pass, "k");
 
@@ -799,7 +824,8 @@ TEST_CASE("seeding an op with no seed form ends the process" *
           doctest::skip()) {
     fresh_process::announce_abort();
     auto st = dataframe::agg_new({AggSpec{AggOp::First, 0, "first"}});
-    dataframe::agg_seed_group(*st, {"k"}, {}, 1, {});
+    dataframe::agg_seed_group(
+        *st, dftu_utils_test::span_of<dstd::String>({"k"}), {}, 1, {});
 }
 
 TEST_CASE("seeding an op with no seed form is fatal") {
@@ -818,7 +844,13 @@ TEST_CASE("packed accumulation of a shape that does not pack ends the process" *
     auto st = dataframe::agg_new({AggSpec{AggOp::Sum, 0, "sum"}});
     dataframe::AggPacked shape;
     dataframe::AggPages pages;
-    dataframe::agg_accumulate_packed(*st, {&key}, {&val}, shape, pages);
+    dataframe::agg_accumulate_packed(
+        *st,
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&key}),
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&val}),
+        shape, pages);
 }
 
 TEST_CASE("packed accumulation of a shape that does not pack is fatal") {

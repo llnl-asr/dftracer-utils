@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/c_api.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -231,7 +232,7 @@ TEST_SUITE("op_registry") {
 
         const char* sel[1] = {"a"};
         OpArgs sarg;
-        sarg.strlist(1, sel, 1);
+        sarg.strlist(1, {sel, 1});
         dftu_dataframe* s =
             dftu_op_run_frame(dftu_op_find("dftu.frame.select"), fin, 1, sarg);
         REQUIRE(s != nullptr);
@@ -460,7 +461,7 @@ TEST_SUITE("op_registry") {
         dftu_group_agg aggs[1] = {{"sum", "v", "total"}};
 
         OpArgs gb_arg;
-        gb_arg.strlist(1, keys, 1).agglist(2, aggs);
+        gb_arg.strlist(1, {keys, 1}).agglist(2, aggs);
         dftu_dataframe* via_registry = dftu_op_run_frame(
             dftu_op_find("dftu.frame.group_by"), fin, 1, gb_arg);
         dftu_dataframe* via_direct =
@@ -476,9 +477,10 @@ TEST_SUITE("op_registry") {
         cpp_df.names = dstd::make_shared_strings({"k", "v"});
         cpp_df.columns.emplace_back(k_col);
         cpp_df.columns.emplace_back(v_col);
-        DataFrame via_cpp = dftu_utils_test::ok(
-            cpp_df.group_by(dstd::Vector<dstd::String>{"k"},
-                            {GroupAgg{Agg::Sum, "v", "total"}}));
+        DataFrame via_cpp = dftu_utils_test::ok(cpp_df.group_by(
+            dstd::Vector<dstd::String>{"k"},
+            dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                {GroupAgg{Agg::Sum, "v", "total"}})));
         REQUIRE(static_cast<std::int64_t>(via_cpp.num_rows()) ==
                 dftu_dataframe_num_rows(via_registry));
 

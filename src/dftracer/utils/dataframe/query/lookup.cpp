@@ -24,7 +24,7 @@ namespace dftracer::utils::dataframe::query {
 
 namespace {
 
-dstd::Unexpected<dstd::Error> fail(const dstd::String& why) {
+dstd::Unexpected<dstd::Error> fail(dstd::StringView why) {
     return common::make_error(common::ErrorCode::InvalidArgument,
                               dstd::fmt<"View::duql {}">(why));
 }
@@ -293,7 +293,7 @@ dstd::Optional<std::size_t> column_of(const dataframe::DataFrame& f,
 
 dstd::SharedPtr<const duql::LookupTable> make_lookup_table(
     dstd::String name, dstd::SharedPtr<const dataframe::DataFrame> frame,
-    const dstd::Vector<std::size_t>& columns) {
+    dstd::Span<const std::size_t> columns) {
     if (std::any_of(frame->columns.begin(), frame->columns.end(),
                     [](const dataframe::Series& c) { return !c.is_flat(); })) {
         dataframe::DataFrame flat;
@@ -317,7 +317,7 @@ dstd::SharedPtr<const duql::LookupTable> make_lookup_table(
         if (keyed) t->rows[key].push_back(r);
     }
     t->frame = std::move(frame);
-    t->key_columns = columns;
+    t->key_columns.assign(columns.begin(), columns.end());
     return t;
 }
 
@@ -501,7 +501,7 @@ dstd::Result<dstd::SharedPtr<const duql::LookupTable>> make_lookup_table(
     return t;
 }
 
-dstd::String row_key(const dstd::Vector<const dataframe::Series*>& keys,
+dstd::String row_key(dstd::Span<const dataframe::Series* const> keys,
                      std::int64_t r) {
     dstd::String key;
     for (const auto* k : keys) append_cell_key(key, *k, r);
@@ -509,8 +509,7 @@ dstd::String row_key(const dstd::Vector<const dataframe::Series*>& keys,
 }
 
 Matches match(const duql::LookupTable& table,
-              const dstd::Vector<const dataframe::Series*>& keys,
-              std::int64_t n) {
+              dstd::Span<const dataframe::Series* const> keys, std::int64_t n) {
     Matches m;
     m.offsets.reserve(static_cast<std::size_t>(n) + 1);
     m.offsets.push_back(0);
@@ -548,7 +547,7 @@ namespace {
 
 dstd::Result<dataframe::Series> range_column(
     const duql::TLookup& t, const duql::LookupTable& table,
-    const dstd::Vector<const dataframe::Series*>& keys, std::int64_t n) {
+    dstd::Span<const dataframe::Series* const> keys, std::int64_t n) {
     const std::size_t bounds = (t.low ? 1 : 0) + (t.high ? 1 : 0);
     const std::size_t keyed = keys.size() - bounds;
     const std::size_t subject = keys.size() - t.correlated;
@@ -618,7 +617,7 @@ dstd::Result<dataframe::Series> range_column(
 }  // namespace
 
 dstd::Result<dataframe::Series> lookup_column(
-    const duql::TLookup& t, const dstd::Vector<const dataframe::Series*>& keys,
+    const duql::TLookup& t, dstd::Span<const dataframe::Series* const> keys,
     std::int64_t n) {
     const duql::LookupTable* table = t.slot ? t.slot->table.get() : nullptr;
     if (!table)
@@ -676,7 +675,7 @@ dstd::Result<dataframe::Series> lookup_column(
     return value.take(pick);
 }
 
-dataframe::Series in_column(const dstd::Vector<const dataframe::Series*>& keys,
+dataframe::Series in_column(dstd::Span<const dataframe::Series* const> keys,
                             std::size_t subject,
                             const dataframe::Series& matched, bool negated) {
     const std::int64_t n = matched.length();
@@ -700,8 +699,7 @@ dataframe::Series in_column(const dstd::Vector<const dataframe::Series*>& keys,
 }
 
 dstd::Result<dataframe::Series> scalar_column(
-    const dstd::String& name,
-    const dstd::Vector<const dataframe::Series*>& keys,
+    dstd::StringView name, dstd::Span<const dataframe::Series* const> keys,
     const dataframe::Series& nest, std::size_t field,
     const dataframe::DataFrame* empty) {
     const std::int64_t n = nest.length();
@@ -716,8 +714,9 @@ dstd::Result<dataframe::Series> scalar_column(
             return fail(dstd::fmt<"'{}' over no rows gives {} rows, not one">(
                 name, empty->num_rows()));
         none = values.num_rows();
+        const dataframe::DataFrame* const parts[] = {&values, empty};
         dstd::Result<dataframe::DataFrame> merged =
-            dataframe::concat({&values, empty}, dataframe::ConcatHow::Diagonal);
+            dataframe::concat(parts, dataframe::ConcatHow::Diagonal);
         if (!merged) return merged.error();
         values = std::move(*merged);
     }

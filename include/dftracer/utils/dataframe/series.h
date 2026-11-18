@@ -133,7 +133,7 @@ class Series {
 
     /// Build a FLAT String column from `values` (offsets + concatenated bytes).
     /// Ends the process when the total bytes pass INT32_MAX.
-    static Series strings(const dstd::Vector<dstd::String>& values) {
+    static Series strings(dstd::Span<const dstd::String> values) {
         dstd::Vector<std::int32_t> offsets(values.size() + 1, 0);
         std::size_t total = 0;
         for (const auto& v : values) total += v.size();
@@ -207,11 +207,11 @@ class Series {
     /// Build a STRUCT column from field `names` and `columns` (each the same
     /// length, aligned to names); takes ownership of the field columns. The
     /// columns are move-only, so pass them in a vector built by move.
-    static Series structs(const dstd::Vector<dstd::String>& names,
+    static Series structs(dstd::Span<const dstd::String> names,
                           dstd::Vector<Series> columns);
 
     /// @ref structs over shared names: the names are read, not copied.
-    static Series structs(const dstd::Vector<dstd::SharedString>& names,
+    static Series structs(dstd::Span<const dstd::SharedString> names,
                           dstd::Vector<Series> columns);
 
     /// @ref structs over literal names, such as `structs({"a", "b"}, ...)`.
@@ -220,8 +220,7 @@ class Series {
 
     /// Build a LIST column: `offsets` (n+1 entries) index into `values`; takes
     /// ownership of `values`.
-    static Series list(const dstd::Vector<std::int32_t>& offsets,
-                       Series values) {
+    static Series list(dstd::Span<const std::int32_t> offsets, Series values) {
         return Series{dftu_series_new_list(
             offsets.data(), static_cast<std::int64_t>(offsets.size()) - 1,
             values.release())};
@@ -566,7 +565,6 @@ class Series {
     Series sample(std::int64_t n, std::uint64_t seed = 0) const;
 
     Series argsort(bool descending = false, bool nulls_last = true) const;
-    Series take(const dstd::Vector<std::int64_t>& indices) const;
     Series take(dstd::Span<const std::int64_t> indices) const;
     Series materialize() const;
     /// Keep the rows where the bit-packed Bool `mask` (same length) is true.
@@ -761,7 +759,7 @@ class Series {
     }
 
    private:
-    static Series structs_from(const char* const* names,
+    static Series structs_from(dstd::Span<const char* const> names,
                                dstd::Vector<Series> columns);
 
     template <class T>

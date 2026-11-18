@@ -30,7 +30,8 @@ using Wide = ::dftracer::utils::dstd::int128_t;
 
 /// The message of a step that overflowed its type: `func` names the window
 /// function and `type` the integer type it overflowed.
-inline dstd::String overflow_message(const char* func, const char* type) {
+inline dstd::String overflow_message(dstd::StringView func,
+                                     dstd::StringView type) {
     return dstd::fmt<"window: {} overflows {}">(func, type);
 }
 

@@ -302,11 +302,12 @@ class VtableNode final : public dataframe::NodeImpl {
 
     dstd::Result<dstd::UniquePtr<dataframe::Cursor>> open(
         dstd::UniquePtr<dataframe::Cursor> input,
-        const dstd::Vector<dstd::String>& input_names,
+        dstd::Span<const dstd::String> input_names,
         const dataframe::OpArgs& args,
         std::uint64_t memory_budget) const override {
-        auto bridge =
-            dstd::make_unique<HostCursorBridge>(std::move(input), input_names);
+        auto bridge = dstd::make_unique<HostCursorBridge>(
+            std::move(input),
+            dstd::Vector<dstd::String>(input_names.begin(), input_names.end()));
         void* out_self = nullptr;
         const ::dftu_cursor_vt* out_vt = nullptr;
         plugins::AbiContext ctx;

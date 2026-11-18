@@ -18,6 +18,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cerrno>
@@ -287,7 +288,8 @@ TEST_CASE(
         CHECK(back->data<double>()[1] == 2.5);
     }
     SUBCASE("string") {
-        Series column = Series::strings({"x", "yy", "zzz"});
+        Series column = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"x", "yy", "zzz"}));
         StreamGuard out;
         REQUIRE(to_arrow_stream(column, &out.stream).has_value());
         auto back = series_from_arrow_stream(&out.stream);
@@ -307,7 +309,10 @@ TEST_CASE(
         CHECK(back->length() == 3);
     }
     SUBCASE("dictionary") {
-        Series column = Series::strings({"a", "b", "a"}).dictionary_encode();
+        Series column =
+            Series::strings(
+                dftu_utils_test::span_of<dstd::StringView>({"a", "b", "a"}))
+                .dictionary_encode();
         REQUIRE(column.valid());
         StreamGuard out;
         REQUIRE(to_arrow_stream(column, &out.stream).has_value());
@@ -668,8 +673,11 @@ TEST_CASE("arrow stream: an import that fails releases its stream once") {
 
 TEST_CASE("arrow stream: a Series with flat and dictionary chunks streams") {
     dstd::Vector<Series> parts;
-    parts.push_back(Series::strings({"a", "b"}).dictionary_encode());
-    parts.push_back(Series::strings({"c"}));
+    parts.push_back(
+        Series::strings(dftu_utils_test::span_of<dstd::StringView>({"a", "b"}))
+            .dictionary_encode());
+    parts.push_back(
+        Series::strings(dftu_utils_test::span_of<dstd::StringView>({"c"})));
     auto chunked = chunked_column(std::move(parts));
     REQUIRE(chunked.has_value());
     StreamGuard out;

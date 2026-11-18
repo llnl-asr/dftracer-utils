@@ -504,10 +504,12 @@ dataframe::TypeId observed_type(dstd::StringView type) {
 }
 
 dataframe::Series null_cell(const dataframe::DataType& type) {
-    if (type.id == dataframe::TypeId::List && !type.fields.empty())
-        return dataframe::Series::list({0, 0},
+    if (type.id == dataframe::TypeId::List && !type.fields.empty()) {
+        const std::int32_t offsets[] = {0, 0};
+        return dataframe::Series::list(offsets,
                                        null_cell(type.fields.front().type))
             .take(dstd::Vector<std::int64_t>{-1});
+    }
     const bool scalar = type.id != dataframe::TypeId::Unknown &&
                         type.id != dataframe::TypeId::List &&
                         type.id != dataframe::TypeId::Struct;
@@ -748,9 +750,14 @@ dstd::Result<Pushdown> key_sets(const duql::Pipeline& p) {
             });
         if (cond && !record && t.value) {
             const dataframe::Series& values = t.frame->columns[*t.value];
-            if (auto e = dataframe::query::vectorize_condition(
-                    *cond, {{".", values.data_type()}}, false)) {
-                auto evaluated = dataframe::eval(*e, {&values});
+            const dataframe::query::VectorColumn columns[] = {
+                {".", values.data_type()}};
+            const dataframe::Series* const value_ptr = &values;
+            if (auto e = dataframe::query::vectorize_condition(*cond, columns,
+                                                               false)) {
+                auto evaluated = dataframe::eval(
+                    *e,
+                    dstd::Span<const dataframe::Series* const>(&value_ptr, 1));
                 if (!evaluated) {
                     failure = evaluated.error();
                     return;

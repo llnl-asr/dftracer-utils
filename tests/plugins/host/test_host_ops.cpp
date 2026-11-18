@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/host/host_ops.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -169,8 +170,10 @@ TEST_SUITE("host_ops") {
     }
 
     TEST_CASE("dftu.text.line_filter keeps the rows containing the needle") {
-        Series lines = Series::strings(
-            {"ERROR: disk full", "INFO: ok", "ERROR: timeout", "DEBUG: trace"});
+        Series lines =
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"ERROR: disk full", "INFO: ok", "ERROR: timeout",
+                 "DEBUG: trace"}));
         const dstd::String needle = "ERROR";
         dftu_op_arg arg{};
         arg.args[1] = str_val(needle);

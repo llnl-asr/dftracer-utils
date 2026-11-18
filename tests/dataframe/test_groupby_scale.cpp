@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 
@@ -323,8 +324,9 @@ struct Backend {
 TEST_CASE("many groups on a long string key equal the one-thread fold") {
     const Input& in = input();
     const dstd::Vector<const Series*> keys{&in.skey, &in.tkey};
-    DataFrame got = dftu_utils_test::ok(
-        dataframe::group_agg(keys, in.values(), specs(), {"proc", "t"}));
+    DataFrame got = dftu_utils_test::ok(dataframe::group_agg(
+        keys, in.values(), specs(),
+        dftu_utils_test::span_of<dstd::String>({"proc", "t"})));
     REQUIRE(dataframe::parallel_backend_installed());
     CHECK(got.num_rows() > in.groups * 2 / 3);
     expect_equal(got, reference(keys, in, {"proc", "t"}), {"p50_x"});
@@ -333,8 +335,9 @@ TEST_CASE("many groups on a long string key equal the one-thread fold") {
 TEST_CASE("many groups on an integer key equal the one-thread fold") {
     const Input& in = input();
     const dstd::Vector<const Series*> keys{&in.bkey, &in.tkey};
-    DataFrame got = dftu_utils_test::ok(
-        dataframe::group_agg(keys, in.values(), specs(), {"big", "t"}));
+    DataFrame got = dftu_utils_test::ok(dataframe::group_agg(
+        keys, in.values(), specs(),
+        dftu_utils_test::span_of<dstd::String>({"big", "t"})));
     CHECK(got.num_rows() > in.groups * 2 / 3);
     expect_equal(got, reference(keys, in, {"big", "t"}), {"p50_x"});
 }
@@ -342,8 +345,9 @@ TEST_CASE("many groups on an integer key equal the one-thread fold") {
 TEST_CASE("null keys form one group and equal the one-thread fold") {
     const Input& in = input();
     const dstd::Vector<const Series*> keys{&in.nkey, &in.tkey};
-    DataFrame got = dftu_utils_test::ok(
-        dataframe::group_agg(keys, in.values(), specs(), {"proc", "t"}));
+    DataFrame got = dftu_utils_test::ok(dataframe::group_agg(
+        keys, in.values(), specs(),
+        dftu_utils_test::span_of<dstd::String>({"proc", "t"})));
     expect_equal(got, reference(keys, in, {"proc", "t"}), {"p50_x"});
     // the null string key is one group per time bucket, not one per partition
     std::int64_t nulls = 0;
@@ -360,7 +364,8 @@ TEST_CASE("a float key keeps the existing path and still equals the fold") {
     Series fkey = Series::flat_f64(fk.data(), in.rows);
     const dstd::Vector<const Series*> keys{&fkey};
     DataFrame got = dftu_utils_test::ok(
-        dataframe::group_agg(keys, in.values(), specs(), {"f"}));
+        dataframe::group_agg(keys, in.values(), specs(),
+                             dftu_utils_test::span_of<dstd::String>({"f"})));
     // The quantile sketch is left out: its 128 collapsing bins make a merge of
     // per-thread partial sketches differ from one sketch run to run (a
     // separate, existing limitation).
@@ -371,7 +376,8 @@ TEST_CASE("arg_max over many groups equals the fold, the first row on a tie") {
     const Input& in = input();
     const dstd::Vector<const Series*> keys{&in.skey, &in.tkey};
     DataFrame got = dftu_utils_test::ok(dataframe::group_agg(
-        keys, in.values(), specs_with_arg_max(), {"proc", "t"}));
+        keys, in.values(), specs_with_arg_max(),
+        dftu_utils_test::span_of<dstd::String>({"proc", "t"})));
     // The sketch quantile is left out for the reason given above.
     expect_equal(got, reference(keys, in, {"proc", "t"}, specs_with_arg_max()),
                  {"p50_x"});
@@ -410,7 +416,8 @@ TEST_CASE("the group-by of many groups equals the serial one-pass sum") {
     const Input& in = input();
     const dstd::Vector<const Series*> keys{&in.bkey};
     DataFrame got = dftu_utils_test::ok(
-        dataframe::group_agg(keys, in.values(), specs(), {"big"}));
+        dataframe::group_agg(keys, in.values(), specs(),
+                             dftu_utils_test::span_of<dstd::String>({"big"})));
     DataFrame ref = reference(keys, in, {"big"});
     dstd::String why;
     // Only the columns whose bits do not depend on how partials merge.

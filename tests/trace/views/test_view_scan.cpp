@@ -17,6 +17,7 @@
 #include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
@@ -847,7 +848,11 @@ TEST_SUITE("View") {
                       doctest::Approx(nm == "read" ? 0 : 3));
             }
             auto refused = dataframe::group_agg_expr(
-                key, {dataframe::agg_sum(cyc, "sum_cycles")}, inputs, "name");
+                key,
+                dftu_utils_test::span_of<
+                    dftracer::utils::dataframe::AggExprSpec>(
+                    {dataframe::agg_sum(cyc, "sum_cycles")}),
+                inputs, "name");
             REQUIRE(!refused.has_value());
             CHECK(common::errorcode_of(refused.error()) ==
                   common::ErrorCode::InvalidArgument);

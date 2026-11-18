@@ -17,7 +17,7 @@ namespace dftracer::utils::dataframe {
 /// without DFTU_AGG_PARALLEL_SAFE, or one that is not registered): no callback
 /// of it, bind and deserialize included. A parallel driver then leaves every
 /// state of those specs to one thread at a time.
-bool agg_specs_serial(const dstd::Vector<AggSpec>& specs);
+bool agg_specs_serial(dstd::Span<const AggSpec> specs);
 
 /// The engine spec of `a`. `resolve` maps a column name to its index among the
 /// value columns the engine reads, and returns that index or a Result of it;
@@ -26,7 +26,7 @@ bool agg_specs_serial(const dstd::Vector<AggSpec>& specs);
 /// up here, the state reports an unknown name at the first accumulate.
 template <class Resolve>
 dstd::Result<AggSpec> lower_group_agg(const GroupAgg& a, Resolve&& resolve) {
-    auto index = [&](const dstd::String& name) -> dstd::Result<std::int32_t> {
+    auto index = [&](dstd::StringView name) -> dstd::Result<std::int32_t> {
         return resolve(name);
     };
     AggSpec sp;

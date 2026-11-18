@@ -336,7 +336,7 @@ class ProviderSource final
 
     dftracer::utils::dstd::Optional<dataframe::SourceApplication>
     apply_projection(
-        const dstd::Vector<dataframe::NamedExpr>& exprs) const override {
+        dstd::Span<const dataframe::NamedExpr> exprs) const override {
         ExprLoans loans;
         dstd::Vector<::dftu_named_expr> cexprs;
         cexprs.reserve(exprs.size());

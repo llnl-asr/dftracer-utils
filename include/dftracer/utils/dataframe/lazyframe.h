@@ -261,7 +261,7 @@ class Source {
         return dstd::nullopt;
     }
     virtual dstd::Optional<SourceApplication> apply_projection(
-        const dstd::Vector<NamedExpr>&) const {
+        dstd::Span<const NamedExpr>) const {
         return dstd::nullopt;
     }
     virtual dstd::Optional<SourceApplication> apply_aggregation(
@@ -273,7 +273,7 @@ class Source {
     /// schema. A source that accepts it must produce the first-occurrence
     /// order itself; the planner removes the UniqueOp.
     virtual dstd::Optional<SourceApplication> apply_distinct(
-        const dstd::Vector<dstd::String>&) const {
+        dstd::Span<const dstd::String>) const {
         return dstd::nullopt;
     }
     virtual dstd::Optional<SourceApplication> apply_sort(
@@ -461,7 +461,7 @@ class LazyFrame {
     /// An InvalidArgument error for an `agg` that does not broadcast, and a
     /// NotFound one for a key the schema lacks.
     dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
-        Agg agg, const dstd::Vector<dstd::String>& keys = {}) const;
+        Agg agg, dstd::Span<const dstd::String> keys = {}) const;
     /// DataFrame::reduce as a plan step: the streaming one-group group_by
     /// with `agg` broadcast over the eligible columns. The grouped form is
     /// group_by(keys).reduce(agg).
@@ -1011,7 +1011,7 @@ struct LoweredGroupAggs {
     dstd::Vector<AggSpec> specs;
     dstd::Vector<dstd::String> value_names;
 };
-LoweredGroupAggs lower_group_aggs(const dstd::Vector<GroupAgg>& aggs);
+LoweredGroupAggs lower_group_aggs(dstd::Span<const GroupAgg> aggs);
 
 /// Accumulate one already-built chunk `frame` into `state`: resolve `keys` and
 /// `value_names` (from lower_group_aggs) by name against `frame`, feeding every
@@ -1020,9 +1020,8 @@ LoweredGroupAggs lower_group_aggs(const dstd::Vector<GroupAgg>& aggs);
 /// LazyFrame chunk driver (a trace Fold accumulating over a shared scan).
 dstd::Result<void> agg_accumulate_chunk(
     AggState& state, const DataFrame& frame,
-    const dstd::Vector<dstd::String>& keys,
-    const dstd::Vector<dstd::String>& value_names,
-    const dstd::String& dyn_prefix);
+    dstd::Span<const dstd::String> keys,
+    dstd::Span<const dstd::String> value_names, dstd::StringView dyn_prefix);
 
 }  // namespace dftracer::utils::dataframe
 

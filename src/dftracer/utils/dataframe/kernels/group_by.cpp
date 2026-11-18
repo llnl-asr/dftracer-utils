@@ -52,7 +52,7 @@ constexpr TypeId typeid_of() {
 }
 
 template <class X>
-dftu_series* flat_from(const dftracer::utils::dstd::Vector<X>& vals) {
+dftu_series* flat_from(dftracer::utils::dstd::Span<const X> vals) {
     return dftu_series_new_flat(
         static_cast<dftu_dtype>(typeid_of<X>()), vals.data(),
         static_cast<std::int64_t>(vals.size()), nullptr);
@@ -177,7 +177,7 @@ Groups build_groups(const dftu_series* keys_in) {
 // set flag in flag order (sum, min, max, count, mean).
 template <class T>
 void aggregate(const dftu_series& v,
-               const dftracer::utils::dstd::Vector<std::int32_t>& group_of,
+               dftracer::utils::dstd::Span<const std::int32_t> group_of,
                std::int32_t ng, std::int32_t op_mask, dftu_series** out,
                std::int32_t max_values, std::int32_t& out_n) {
     using W = std::conditional_t<
@@ -207,17 +207,17 @@ void aggregate(const dftu_series& v,
     auto emit = [&](dftu_series* c) {
         if (out_n < max_values) out[out_n++] = c;
     };
-    if (op_mask & DFTU_REDUCE_SUM) emit(flat_from(sums));
-    if (op_mask & DFTU_REDUCE_MIN) emit(flat_from(mins));
-    if (op_mask & DFTU_REDUCE_MAX) emit(flat_from(maxs));
-    if (op_mask & DFTU_REDUCE_COUNT) emit(flat_from(cnts));
+    if (op_mask & DFTU_REDUCE_SUM) emit(flat_from<W>(sums));
+    if (op_mask & DFTU_REDUCE_MIN) emit(flat_from<T>(mins));
+    if (op_mask & DFTU_REDUCE_MAX) emit(flat_from<T>(maxs));
+    if (op_mask & DFTU_REDUCE_COUNT) emit(flat_from<std::int64_t>(cnts));
     if (op_mask & DFTU_REDUCE_MEAN) {
         dftracer::utils::dstd::Vector<double> means(g_count, 0.0);
         for (std::size_t g = 0; g < g_count; ++g)
             means[g] = cnts[g] ? static_cast<double>(sums[g]) /
                                      static_cast<double>(cnts[g])
                                : 0.0;
-        emit(flat_from(means));
+        emit(flat_from<double>(means));
     }
 }
 

@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -36,8 +37,8 @@ DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
-Series i64s(const dstd::Vector<std::int64_t>& v,
-            const dstd::Vector<std::uint8_t>& validity = {}) {
+Series i64s(dstd::Vector<std::int64_t> v,
+            dstd::Vector<std::uint8_t> validity = {}) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()),
                             validity.empty() ? nullptr : validity.data());
 }
@@ -47,7 +48,8 @@ DataFrame make_a() {
     DataFrame df;
     df.names = dstd::make_shared_strings({"k", "s"});
     df.columns.push_back(i64s({1, 2, 0}, {0x03}));
-    df.columns.push_back(Series::strings({"x", "y", "z"}));
+    df.columns.push_back(Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"x", "y", "z"})));
     return df;
 }
 
@@ -56,7 +58,8 @@ DataFrame make_b() {
     DataFrame df;
     df.names = dstd::make_shared_strings({"k", "s"});
     df.columns.push_back(i64s({2, 4}));
-    df.columns.push_back(Series::strings({"y", "w"}));
+    df.columns.push_back(Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"y", "w"})));
     return df;
 }
 
@@ -64,7 +67,7 @@ using I = dstd::Optional<std::int64_t>;
 using S = dstd::Optional<dstd::String>;
 const I NI = dstd::nullopt;
 
-dstd::Vector<I> i64_col(const DataFrame& df, const dstd::String& name) {
+dstd::Vector<I> i64_col(const DataFrame& df, dstd::StringView name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
@@ -78,7 +81,7 @@ dstd::Vector<I> i64_col(const DataFrame& df, const dstd::String& name) {
     return out;
 }
 
-dstd::Vector<S> str_col(const DataFrame& df, const dstd::String& name) {
+dstd::Vector<S> str_col(const DataFrame& df, dstd::StringView name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
@@ -112,7 +115,7 @@ dstd::Vector<S> texts(const Series& s) {
     return out;
 }
 
-Series dict_of(const dstd::Vector<dstd::String>& v) {
+Series dict_of(dstd::Vector<dstd::String> v) {
     return Series::strings(v).dictionary_encode();
 }
 
@@ -128,15 +131,19 @@ TEST_SUITE("dataframe concat") {
                 dftracer::utils::dataframe::Encoding::Dictionary);
         REQUIRE(b.encoding() ==
                 dftracer::utils::dataframe::Encoding::Dictionary);
-        Series out = dftu_utils_test::ok(
-            dftracer::utils::dataframe::concat_columns({&a, &b}));
+        Series out =
+            dftu_utils_test::ok(dftracer::utils::dataframe::concat_columns(
+                dftu_utils_test::span_of<
+                    const dftracer::utils::dataframe::Series*>({&a, &b})));
         CHECK(out.encoding() ==
               dftracer::utils::dataframe::Encoding::Dictionary);
         CHECK(texts(out) == dstd::Vector<S>{"a", "b", "a", "b", "c"});
         CHECK(dict_size(out) == 3);
 
-        Series alone = dftu_utils_test::ok(
-            dftracer::utils::dataframe::concat_columns({&a}));
+        Series alone =
+            dftu_utils_test::ok(dftracer::utils::dataframe::concat_columns(
+                dftu_utils_test::span_of<
+                    const dftracer::utils::dataframe::Series*>({&a})));
         CHECK(alone.encoding() ==
               dftracer::utils::dataframe::Encoding::Dictionary);
         CHECK(texts(alone) == dstd::Vector<S>{"a", "b", "a"});
@@ -145,13 +152,16 @@ TEST_SUITE("dataframe concat") {
     TEST_CASE("dictionary parts keep nulls and accept an empty part") {
         const std::int32_t codes[] = {0, 1, 0, 1};
         const std::uint8_t valid = 0x05;
-        Series va = Series::strings({"p", "q"});
+        Series va = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"p", "q"}));
         Series a = dftracer::utils::dataframe::dictionary_from_codes(
             codes, std::move(va), &valid);
         Series e = dict_of({});
         Series b = dict_of({"q", "r"});
-        Series out = dftu_utils_test::ok(
-            dftracer::utils::dataframe::concat_columns({&a, &e, &b}));
+        Series out =
+            dftu_utils_test::ok(dftracer::utils::dataframe::concat_columns(
+                dftu_utils_test::span_of<
+                    const dftracer::utils::dataframe::Series*>({&a, &e, &b})));
         CHECK(out.encoding() ==
               dftracer::utils::dataframe::Encoding::Dictionary);
         CHECK(out.null_count() == 2);
@@ -161,9 +171,12 @@ TEST_SUITE("dataframe concat") {
 
     TEST_CASE("mixed flat and dictionary parts give a view column") {
         Series a = dict_of({"a", "b", "a"});
-        Series f = Series::strings({"z", "a"});
-        Series out = dftu_utils_test::ok(
-            dftracer::utils::dataframe::concat_columns({&a, &f}));
+        Series f = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"z", "a"}));
+        Series out =
+            dftu_utils_test::ok(dftracer::utils::dataframe::concat_columns(
+                dftu_utils_test::span_of<
+                    const dftracer::utils::dataframe::Series*>({&a, &f})));
         CHECK(out.encoding() == dftracer::utils::dataframe::Encoding::View);
         CHECK(texts(out) == dstd::Vector<S>{"a", "b", "a", "z", "a"});
     }
@@ -184,8 +197,10 @@ TEST_SUITE("dataframe concat") {
         std::memcpy(dftracer::utils::dataframe::writable(w->data), "xyy", 3);
         Series wide{w};
         Series a = dict_of({"a", "b", "a"});
-        Series out = dftu_utils_test::ok(
-            dftracer::utils::dataframe::concat_columns({&a, &wide}));
+        Series out =
+            dftu_utils_test::ok(dftracer::utils::dataframe::concat_columns(
+                dftu_utils_test::span_of<
+                    const dftracer::utils::dataframe::Series*>({&a, &wide})));
         CHECK(out.type() == TypeId::String);
         CHECK(out.encoding() == dftracer::utils::dataframe::Encoding::View);
         CHECK(texts(out) == dstd::Vector<S>{"a", "b", "a", "x", "yy"});
@@ -193,9 +208,13 @@ TEST_SUITE("dataframe concat") {
 
     TEST_CASE("a dictionary column marked JSON concatenates with a flat one") {
         Series d = dict_of({"1", "2", "1"}).as_json();
-        Series f = Series::strings({"3"}).as_json();
-        Series out = dftu_utils_test::ok(
-            dftracer::utils::dataframe::concat_columns({&d, &f}));
+        Series f =
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>({"3"}))
+                .as_json();
+        Series out =
+            dftu_utils_test::ok(dftracer::utils::dataframe::concat_columns(
+                dftu_utils_test::span_of<
+                    const dftracer::utils::dataframe::Series*>({&d, &f})));
         CHECK(out.is_json());
         CHECK(texts(out) == dstd::Vector<S>{"1", "2", "1", "3"});
     }
@@ -203,8 +222,9 @@ TEST_SUITE("dataframe concat") {
     TEST_CASE("eager vertical keeps every row in order, nulls included") {
         DataFrame a = make_a();
         DataFrame b = make_b();
-        DataFrame out =
-            dftu_utils_test::ok(dftracer::utils::dataframe::concat({&a, &b}));
+        DataFrame out = dftu_utils_test::ok(dftracer::utils::dataframe::concat(
+            dftu_utils_test::span_of<
+                const dftracer::utils::dataframe::DataFrame*>({&a, &b})));
         CHECK(dstd::to_strings(out.names) ==
               dstd::Vector<dstd::String>{"k", "s"});
         CHECK(i64_col(out, "k") == dstd::Vector<I>{1, 2, NI, 2, 4});
@@ -223,8 +243,9 @@ TEST_SUITE("dataframe concat") {
         };
         DataFrame a = part({0, 2, 2}, {1, 2}, {0, -1});
         DataFrame b = part({0, 0, 1}, {3}, {0, 1});
-        DataFrame out =
-            dftu_utils_test::ok(dftracer::utils::dataframe::concat({&a, &b}));
+        DataFrame out = dftu_utils_test::ok(dftracer::utils::dataframe::concat(
+            dftu_utils_test::span_of<
+                const dftracer::utils::dataframe::DataFrame*>({&a, &b})));
         const Series& l = out.columns.front();
         REQUIRE(l.type() == TypeId::List);
         REQUIRE(l.length() == 4);
@@ -250,8 +271,9 @@ TEST_SUITE("dataframe concat") {
             f.push_back(i64s({3}));
             s2.columns.push_back(Series::structs({"x"}, std::move(f)));
         }
-        DataFrame st =
-            dftu_utils_test::ok(dftracer::utils::dataframe::concat({&s1, &s2}));
+        DataFrame st = dftu_utils_test::ok(dftracer::utils::dataframe::concat(
+            dftu_utils_test::span_of<
+                const dftracer::utils::dataframe::DataFrame*>({&s1, &s2})));
         REQUIRE(st.columns.front().type() == TypeId::Struct);
         CHECK(st.columns.front().child(0).data<std::int64_t>()[2] == 3);
     }
@@ -260,7 +282,9 @@ TEST_SUITE("dataframe concat") {
         DataFrame a = make_a();
         DataFrame b = make_b();
         DataFrame eager =
-            dftu_utils_test::ok(dftracer::utils::dataframe::concat({&a, &b}));
+            dftu_utils_test::ok(dftracer::utils::dataframe::concat(
+                dftu_utils_test::span_of<
+                    const dftracer::utils::dataframe::DataFrame*>({&a, &b})));
         for (std::int64_t morsel : dstd::Vector<std::int64_t>{0, 1, 2}) {
             LazyFrame la =
                 LazyFrame::scan(dstd::make_shared<InMemorySource>(make_a()));
@@ -330,8 +354,10 @@ TEST_SUITE("dataframe concat") {
         renamed.names = dstd::make_shared_strings({"k", "t"});
         DataFrame retyped;
         retyped.names = dstd::make_shared_strings({"k", "s"});
-        retyped.columns.push_back(Series::strings({"1"}));
-        retyped.columns.push_back(Series::strings({"q"}));
+        retyped.columns.push_back(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>({"1"})));
+        retyped.columns.push_back(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>({"q"})));
         dftu_utils_test::expect_error(
             la.concat(LazyFrame::scan(
                           dstd::make_shared<InMemorySource>(std::move(fewer))))

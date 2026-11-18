@@ -19,6 +19,7 @@
 #include <duql/eval_json.h>
 #include <memory/fresh_process.h>
 #include <simdjson.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <memory>
@@ -275,13 +276,20 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     const dataframe::Series k2 = dataframe::Series::flat_i64(opid, 2);
     const dataframe::Series a2 = dataframe::Series::flat_i64(one_lo, 2);
     const dataframe::Series b2 = dataframe::Series::flat_i64(one_hi, 1);
-    CHECK(ints(dftu_utils_test::ok(
-              dftracer::utils::dataframe::query::lookup_column(
-                  *sl, {&k2, &a2, &b2}, 1))) == V{"5"});
+    CHECK(
+        ints(dftu_utils_test::ok(
+            dftracer::utils::dataframe::query::lookup_column(
+                *sl,
+                dftu_utils_test::span_of<
+                    const dftracer::utils::dataframe::Series*>({&k2, &a2, &b2}),
+                1))) == V{"5"});
     const dataframe::Series b3 = dataframe::Series::flat_i64(one_hi + 1, 1);
     const dataframe::Series a3 = dataframe::Series::flat_i64(one_lo + 1, 1);
     const auto conflict = dftracer::utils::dataframe::query::lookup_column(
-        *sl, {&k2, &a3, &b3}, 1);
+        *sl,
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&k2, &a3, &b3}),
+        1);
     REQUIRE(!conflict.has_value());
     const dstd::String error(conflict.error().message());
     CHECK(error.find("rows in the range") != dstd::String::npos);

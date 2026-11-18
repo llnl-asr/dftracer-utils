@@ -495,9 +495,9 @@ class VtableSink final : public dataframe::SinkFactory {
     dstd::StringView name() const override { return handle_->name; }
 
     dstd::Result<dstd::UniquePtr<dataframe::SinkWriter>> bind(
-        const dstd::Vector<dstd::String>& names,
-        const dstd::Vector<dataframe::TypeId>& types,
-        const dstd::Vector<dstd::Pair<dstd::String, dstd::String>>& options)
+        dstd::Span<const dstd::String> names,
+        dstd::Span<const dataframe::TypeId> types,
+        dstd::Span<const dstd::Pair<dstd::String, dstd::String>> options)
         override {
         dstd::Vector<const char*> name_ptrs;
         name_ptrs.reserve(names.size());

@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cmath>
@@ -20,8 +21,8 @@ using namespace dftracer::utils;
 
 namespace {
 
-dataframe::Series ints(const dstd::Vector<std::int64_t>& v,
-                       const dstd::Vector<std::uint8_t>& valid = {}) {
+dataframe::Series ints(dstd::Vector<std::int64_t> v,
+                       dstd::Vector<std::uint8_t> valid = {}) {
     dstd::Vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
         if (valid.empty() || valid[i])
@@ -83,13 +84,13 @@ TEST_CASE("sort_by_multi takes one nulls_last flag per key") {
     const dstd::Vector<std::int64_t> row = {0, 1, 2, 3, 4, 5, 6, 7};
     f.columns.push_back(ints(row));
     using I = dstd::Vector<std::int64_t>;
-    auto out = dftu_utils_test::ok(
-        f.sort_by_multi({"a", "b"}, dstd::Vector<std::uint8_t>{0, 0},
-                        dstd::Vector<std::uint8_t>{0, 1}));
+    auto out = dftu_utils_test::ok(f.sort_by_multi(
+        dftu_utils_test::span_of<dstd::String>({"a", "b"}),
+        dstd::Vector<std::uint8_t>{0, 0}, dstd::Vector<std::uint8_t>{0, 1}));
     CHECK(values_of(out.column("row")) == I{6, 1, 4, 7, 2, 0, 3, 5});
-    out = dftu_utils_test::ok(
-        f.sort_by_multi({"a", "b"}, dstd::Vector<std::uint8_t>{1, 1},
-                        dstd::Vector<std::uint8_t>{0, 0}));
+    out = dftu_utils_test::ok(f.sort_by_multi(
+        dftu_utils_test::span_of<dstd::String>({"a", "b"}),
+        dstd::Vector<std::uint8_t>{1, 1}, dstd::Vector<std::uint8_t>{0, 0}));
     CHECK(values_of(out.column("row")) == I{1, 4, 6, 5, 0, 3, 2, 7});
 }
 
@@ -189,7 +190,12 @@ TEST_CASE("the unbiased moments survive a serialized partial and a merge") {
         auto st = dataframe::agg_new(
             {dataframe::AggSpec{dataframe::AggOp::SkewUnbiased, 0, "s"},
              dataframe::AggSpec{dataframe::AggOp::KurtUnbiased, 0, "k"}});
-        dftu_utils_test::ok(dataframe::agg_accumulate(*st, {&k}, {&v}));
+        dftu_utils_test::ok(dataframe::agg_accumulate(
+            *st,
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&k}),
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&v})));
         return st;
     };
     auto whole = part(0, x.size());
@@ -233,11 +239,16 @@ TEST_CASE("sort_by_multi flag spans: empty is the default, sizes are checked") {
     f.columns.push_back(ints(row));
     using I = dstd::Vector<std::int64_t>;
     const dstd::Span<const std::uint8_t> none;
-    auto out = dftu_utils_test::ok(f.sort_by_multi({"a"}, none, none));
+    auto out = dftu_utils_test::ok(f.sort_by_multi(
+        dftu_utils_test::span_of<dstd::String>({"a"}), none, none));
     CHECK(values_of(out.column("row")) == I{2, 7, 0, 3, 5, 1, 4, 6});
     const dstd::Vector<std::uint8_t> three = {0, 0, 0};
-    CHECK(!f.sort_by_multi({"a"}, three, none).has_value());
-    CHECK(!f.sort_by_multi({"a"}, none, three).has_value());
+    CHECK(!f.sort_by_multi(dftu_utils_test::span_of<dstd::String>({"a"}), three,
+                           none)
+               .has_value());
+    CHECK(!f.sort_by_multi(dftu_utils_test::span_of<dstd::String>({"a"}), none,
+                           three)
+               .has_value());
 }
 
 TEST_CASE("the per-column C sort refuses null arrays and bad sizes") {

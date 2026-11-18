@@ -53,7 +53,7 @@ std::uint64_t read_bits(const Series& c, std::int64_t i, FieldStatDomain d);
 bool is_bytes_key_type(TypeId t);
 
 /// Reorder the groups of `st` so group i becomes old group perm[i].
-void agg_permute_groups(AggState& st, const dstd::Vector<std::int64_t>& perm);
+void agg_permute_groups(AggState& st, dstd::Span<const std::int64_t> perm);
 
 /// `st` with its groups in first-row order (the order they were first
 /// seen in a frame accumulated in parallel); untouched when they already
@@ -119,23 +119,22 @@ struct AggPages {
 /// The packed layout of `st` over these columns, initializing `st`; false
 /// when the shape does not pack (a reducer past mean, a null key, a
 /// value column that is not 8 bytes wide).
-bool agg_pack_shape(AggState& st, const dstd::Vector<const Series*>& keys,
-                    const dstd::Vector<const Series*>& values, AggPacked& out);
+bool agg_pack_shape(AggState& st, dstd::Span<const Series* const> keys,
+                    dstd::Span<const Series* const> values, AggPacked& out);
 
 /// Scatter the rows [begin, end) into `out[p]`, p from the hash's top
 /// word scaled to out.size(), calling `full(p)` whenever out[p] holds a
 /// page's worth (the caller takes the page there); false when a row does
 /// not pack (a string over 16 bytes), leaving `out` partly filled.
-bool agg_pack(const AggState& st, const dstd::Vector<const Series*>& keys,
-              const dstd::Vector<const Series*>& values, std::int64_t begin,
+bool agg_pack(const AggState& st, dstd::Span<const Series* const> keys,
+              dstd::Span<const Series* const> values, std::int64_t begin,
               std::int64_t end, const AggPacked& shape,
               dstd::Vector<AggPages>& out,
               dstd::FunctionRef<void(std::size_t)> full);
 
 /// Accumulate packed rows into `st`.
-void agg_accumulate_packed(AggState& st,
-                           const dstd::Vector<const Series*>& keys,
-                           const dstd::Vector<const Series*>& values,
+void agg_accumulate_packed(AggState& st, dstd::Span<const Series* const> keys,
+                           dstd::Span<const Series* const> values,
                            const AggPacked& shape, const AggPages& rows);
 
 /// Merge the partials into one state: the groups the widest partial holds
@@ -201,7 +200,7 @@ using SpaceSavingMap = dstd::Map<dstd::String, std::uint64_t>;
 /// Metwally, Agrawal, El Abbadi, "Efficient Computation of Frequent and Top-k
 /// Elements in Data Streams", ICDT 2005.
 inline void space_saving_offer(SpaceSavingMap& m, std::size_t k,
-                               const dstd::String& value, std::uint64_t count) {
+                               dstd::StringView value, std::uint64_t count) {
     if (k == 0) return;
     auto it = m.find(value);
     if (it != m.end()) {
@@ -292,14 +291,14 @@ inline DDSketch& dyn_sketch_cell_of(dstd::Vector<DynSketchCell>& cells,
 }
 
 /// The stat of `id` in `cells`, or null when the group has not seen the name.
-inline const FieldStat* dyn_find_cell(const dstd::Vector<DynCell>& cells,
+inline const FieldStat* dyn_find_cell(dstd::Span<const DynCell> cells,
                                       std::uint32_t id) {
     const auto it =
         std::lower_bound(cells.begin(), cells.end(), id, dyn_stat_before);
     return it != cells.end() && it->id == id ? &it->stat : nullptr;
 }
 
-inline const DDSketch* dyn_find_sketch(const dstd::Vector<DynSketchCell>& cells,
+inline const DDSketch* dyn_find_sketch(dstd::Span<const DynSketchCell> cells,
                                        std::uint32_t id) {
     const auto it =
         std::lower_bound(cells.begin(), cells.end(), id, dyn_sketch_before);
@@ -653,11 +652,11 @@ class AggState : public dstd::HeapObject {
     void init_udaf_layout();
     /// Binds each slot on its first batch and checks the later ones against
     /// it; `values` are the columns accumulate reads.
-    dstd::Result<void> udaf_prepare(const dstd::Vector<const Series*>& values);
+    dstd::Result<void> udaf_prepare(dstd::Span<const Series* const> values);
     /// Feeds rows [begin, end) of `values`: row begin + i goes to group
     /// gids[i].
-    dstd::Result<void> udaf_update(const dstd::Vector<std::int64_t>& gids,
-                                   const dstd::Vector<const Series*>& values,
+    dstd::Result<void> udaf_update(dstd::Span<const std::int64_t> gids,
+                                   dstd::Span<const Series* const> values,
                                    std::int64_t begin, std::int64_t end);
     /// The table of slot `i`, made from its binding when it has none.
     dstd::Result<UdafStates*> udaf_table(std::size_t i) const;
@@ -666,11 +665,11 @@ class AggState : public dstd::HeapObject {
     /// Merges group from[i] of `other` into group into[i] of this state, each
     /// slot, `other` unchanged. Failures go to udaf_error.
     void udaf_combine(const AggState& other,
-                      const dstd::Vector<std::int64_t>& into,
-                      const dstd::Vector<std::int64_t>& from);
+                      dstd::Span<const std::int64_t> into,
+                      dstd::Span<const std::int64_t> from);
     /// Puts each table's groups in perm order (group i becomes old group
     /// perm[i]).
-    void udaf_permute(const dstd::Vector<std::int64_t>& perm);
+    void udaf_permute(dstd::Span<const std::int64_t> perm);
     /// Copies slot bindings and argument types of `other`, which hold no
     /// states here.
     void udaf_adopt(const AggState& other);
@@ -824,7 +823,7 @@ class AggState : public dstd::HeapObject {
 
     /// The word index of `id`'s cell in a group's `words`, or its size when the
     /// cell is absent.
-    std::size_t dyn_light_lower(const dstd::Vector<std::uint64_t>& w,
+    std::size_t dyn_light_lower(dstd::Span<const std::uint64_t> w,
                                 std::uint32_t id) const {
         std::size_t lo = 0, hi = w.size() / dyn_light_stride;
         // A call's dyn inputs come in the same order in every row, so the id
@@ -1574,7 +1573,7 @@ class AggState : public dstd::HeapObject {
         grow_group();
         return g;
     }
-    std::int64_t group_of(const dstd::Vector<const Series*>& keys,
+    std::int64_t group_of(dstd::Span<const Series* const> keys,
                           std::int64_t i) {
         // A non-string key column widens to int64 by its own domain, not
         // plain read_i64: a Uint64/Float64 key (e.g. a hash or a fractional

@@ -95,13 +95,14 @@ AggExprSpec agg_set_union(Expr value, dstd::String out = "set_union",
 /// expression that is not numeric, and any @ref eval or @ref group_agg error
 /// come back as an error result.
 dstd::Result<DataFrame> group_agg_expr(
-    const dstd::Vector<Expr>& keys, const dstd::Vector<AggExprSpec>& specs,
-    const dstd::Vector<const Series*>& inputs,
-    const dstd::Vector<dstd::String>& key_names);
+    dstd::Span<const Expr> keys, dstd::Span<const AggExprSpec> specs,
+    dstd::Span<const Series* const> inputs,
+    dstd::Span<const dstd::String> key_names);
 /// Single-key convenience: forwards to the N-key form.
-dstd::Result<DataFrame> group_agg_expr(
-    const Expr& key, const dstd::Vector<AggExprSpec>& specs,
-    const dstd::Vector<const Series*>& inputs, const dstd::String& key_name);
+dstd::Result<DataFrame> group_agg_expr(const Expr& key,
+                                       dstd::Span<const AggExprSpec> specs,
+                                       dstd::Span<const Series* const> inputs,
+                                       dstd::StringView key_name);
 
 }  // namespace dftracer::utils::dataframe
 

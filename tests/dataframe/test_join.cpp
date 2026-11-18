@@ -16,6 +16,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -32,13 +33,13 @@ DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
-Series i64s(const dstd::Vector<std::int64_t>& v,
-            const dstd::Vector<std::uint8_t>& validity = {}) {
+Series i64s(dstd::Vector<std::int64_t> v,
+            dstd::Vector<std::uint8_t> validity = {}) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()),
                             validity.empty() ? nullptr : validity.data());
 }
 
-Series bools(const dstd::Vector<bool>& v) {
+Series bools(dstd::Vector<bool> v) {
     dstd::Vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
         if (v[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
@@ -61,13 +62,14 @@ DataFrame make_right() {
     DataFrame df;
     df.names = dstd::make_shared_strings({"k", "name", "v"});
     df.columns.push_back(i64s({2, 4, 2, 0}, {0x07}));
-    df.columns.push_back(Series::strings({"b", "d", "bb", "n"}));
+    df.columns.push_back(Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"b", "d", "bb", "n"})));
     df.columns.push_back(i64s({200, 400, 220, 0}));
     return df;
 }
 
 dstd::Vector<dstd::Optional<std::int64_t>> i64_col(const DataFrame& df,
-                                                   const dstd::String& name) {
+                                                   dstd::StringView name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
@@ -82,7 +84,7 @@ dstd::Vector<dstd::Optional<std::int64_t>> i64_col(const DataFrame& df,
 }
 
 dstd::Vector<dstd::Optional<dstd::String>> str_col(const DataFrame& df,
-                                                   const dstd::String& name) {
+                                                   dstd::StringView name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
@@ -97,7 +99,7 @@ dstd::Vector<dstd::Optional<dstd::String>> str_col(const DataFrame& df,
 }
 
 dstd::Vector<dstd::Optional<bool>> bool_col(const DataFrame& df,
-                                            const dstd::String& name) {
+                                            dstd::StringView name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
@@ -151,8 +153,8 @@ void check_same(const DataFrame& a, const DataFrame& b) {
 
 TEST_SUITE("dataframe join") {
     TEST_CASE("inner: matched pairs in left order, chains in right order") {
-        DataFrame out =
-            dftu_utils_test::ok(make_left().join(make_right(), {"k"}));
+        DataFrame out = dftu_utils_test::ok(make_left().join(
+            make_right(), dftu_utils_test::span_of<dstd::String>({"k"})));
         CHECK(dstd::to_strings(out.names) ==
               dstd::Vector<dstd::String>{"k", "v", "flag", "name", "v_right"});
         CHECK(i64_col(out, "k") == dstd::Vector<I>{2, 2, 2, 2});
@@ -164,8 +166,9 @@ TEST_SUITE("dataframe join") {
     }
 
     TEST_CASE("left: unmatched and null-keyed left rows keep null right") {
-        DataFrame out = dftu_utils_test::ok(
-            make_left().join(make_right(), {"k"}, JoinHow::Left));
+        DataFrame out = dftu_utils_test::ok(make_left().join(
+            make_right(), dftu_utils_test::span_of<dstd::String>({"k"}),
+            JoinHow::Left));
         CHECK(i64_col(out, "k") == dstd::Vector<I>{1, 2, 2, 3, 2, 2, NI});
         CHECK(i64_col(out, "v") == dstd::Vector<I>{10, 20, 20, 30, 40, 40, 50});
         CHECK(str_col(out, "name") ==
@@ -177,8 +180,9 @@ TEST_SUITE("dataframe join") {
     }
 
     TEST_CASE("right: matches then unmatched right rows, key from the right") {
-        DataFrame out = dftu_utils_test::ok(
-            make_left().join(make_right(), {"k"}, JoinHow::Right));
+        DataFrame out = dftu_utils_test::ok(make_left().join(
+            make_right(), dftu_utils_test::span_of<dstd::String>({"k"}),
+            JoinHow::Right));
         CHECK(i64_col(out, "k") == dstd::Vector<I>{2, 2, 2, 2, 4, NI});
         CHECK(i64_col(out, "v") == dstd::Vector<I>{20, 20, 40, 40, NI, NI});
         CHECK(bool_col(out, "flag") ==
@@ -190,8 +194,9 @@ TEST_SUITE("dataframe join") {
     }
 
     TEST_CASE("outer: both sides' unmatched rows") {
-        DataFrame out = dftu_utils_test::ok(
-            make_left().join(make_right(), {"k"}, JoinHow::Outer));
+        DataFrame out = dftu_utils_test::ok(make_left().join(
+            make_right(), dftu_utils_test::span_of<dstd::String>({"k"}),
+            JoinHow::Outer));
         CHECK(i64_col(out, "k") ==
               dstd::Vector<I>{1, 2, 2, 3, 2, 2, NI, 4, NI});
         CHECK(i64_col(out, "v") ==
@@ -203,13 +208,15 @@ TEST_SUITE("dataframe join") {
     }
 
     TEST_CASE("semi and anti: left columns only, one row per left row") {
-        DataFrame semi = dftu_utils_test::ok(
-            make_left().join(make_right(), {"k"}, JoinHow::Semi));
+        DataFrame semi = dftu_utils_test::ok(make_left().join(
+            make_right(), dftu_utils_test::span_of<dstd::String>({"k"}),
+            JoinHow::Semi));
         CHECK(dstd::to_strings(semi.names) ==
               dstd::Vector<dstd::String>{"k", "v", "flag"});
         CHECK(i64_col(semi, "v") == dstd::Vector<I>{20, 40});
-        DataFrame anti = dftu_utils_test::ok(
-            make_left().join(make_right(), {"k"}, JoinHow::Anti));
+        DataFrame anti = dftu_utils_test::ok(make_left().join(
+            make_right(), dftu_utils_test::span_of<dstd::String>({"k"}),
+            JoinHow::Anti));
         CHECK(dstd::to_strings(anti.names) ==
               dstd::Vector<dstd::String>{"k", "v", "flag"});
         CHECK(i64_col(anti, "v") == dstd::Vector<I>{10, 30, 50});
@@ -235,15 +242,17 @@ TEST_SUITE("dataframe join") {
     }
 
     TEST_CASE("different key names keep both key columns") {
-        DataFrame right =
-            dftu_utils_test::ok(make_right().rename({"rk", "name", "rv"}));
-        DataFrame out =
-            dftu_utils_test::ok(make_left().join(right, {"k"}, {"rk"}));
+        DataFrame right = dftu_utils_test::ok(make_right().rename(
+            dftu_utils_test::span_of<dstd::String>({"rk", "name", "rv"})));
+        DataFrame out = dftu_utils_test::ok(make_left().join(
+            right, dftu_utils_test::span_of<dstd::String>({"k"}),
+            dftu_utils_test::span_of<dstd::String>({"rk"})));
         CHECK(dstd::to_strings(out.names) ==
               dstd::Vector<dstd::String>{"k", "v", "flag", "rk", "name", "rv"});
         CHECK(i64_col(out, "rk") == dstd::Vector<I>{2, 2, 2, 2});
-        DataFrame outer = dftu_utils_test::ok(
-            make_left().join(right, {"k"}, {"rk"}, JoinHow::Outer));
+        DataFrame outer = dftu_utils_test::ok(make_left().join(
+            right, dftu_utils_test::span_of<dstd::String>({"k"}),
+            dftu_utils_test::span_of<dstd::String>({"rk"}), JoinHow::Outer));
         CHECK(i64_col(outer, "k") ==
               dstd::Vector<I>{1, 2, 2, 3, 2, 2, NI, NI, NI});
         CHECK(i64_col(outer, "rk") ==
@@ -251,8 +260,9 @@ TEST_SUITE("dataframe join") {
     }
 
     TEST_CASE("custom suffix") {
-        DataFrame out = dftu_utils_test::ok(
-            make_left().join(make_right(), {"k"}, JoinHow::Inner, "_r"));
+        DataFrame out = dftu_utils_test::ok(make_left().join(
+            make_right(), dftu_utils_test::span_of<dstd::String>({"k"}),
+            JoinHow::Inner, "_r"));
         CHECK(dstd::to_strings(out.names) ==
               dstd::Vector<dstd::String>{"k", "v", "flag", "name", "v_r"});
     }
@@ -261,14 +271,17 @@ TEST_SUITE("dataframe join") {
         DataFrame l;
         l.names = dstd::make_shared_strings({"a", "s", "x"});
         l.columns.push_back(i64s({1, 1, 2}));
-        l.columns.push_back(Series::strings({"p", "q", "p"}));
+        l.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"p", "q", "p"})));
         l.columns.push_back(i64s({7, 8, 9}));
         DataFrame r;
         r.names = dstd::make_shared_strings({"a", "s", "y"});
         r.columns.push_back(i64s({1, 2, 1}));
-        r.columns.push_back(Series::strings({"q", "p", "zz"}));
+        r.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"q", "p", "zz"})));
         r.columns.push_back(i64s({100, 200, 300}));
-        DataFrame out = dftu_utils_test::ok(l.join(r, {"a", "s"}));
+        DataFrame out = dftu_utils_test::ok(
+            l.join(r, dftu_utils_test::span_of<dstd::String>({"a", "s"})));
         CHECK(dstd::to_strings(out.names) ==
               dstd::Vector<dstd::String>{"a", "s", "x", "y"});
         CHECK(i64_col(out, "x") == dstd::Vector<I>{8, 9});
@@ -279,17 +292,26 @@ TEST_SUITE("dataframe join") {
         DataFrame l = make_left();
         DataFrame r = make_right();
         using dftracer::utils::common::ErrorCode;
-        dftu_utils_test::expect_error(l.join(r, {"nope"}), ErrorCode::NotFound);
-        dftu_utils_test::expect_error(l.join(r, {"k"}, {"nope"}),
-                                      ErrorCode::NotFound);
+        dftu_utils_test::expect_error(
+            l.join(r, dftu_utils_test::span_of<dstd::String>({"nope"})),
+            ErrorCode::NotFound);
+        dftu_utils_test::expect_error(
+            l.join(r, dftu_utils_test::span_of<dstd::String>({"k"}),
+                   dftu_utils_test::span_of<dstd::String>({"nope"})),
+            ErrorCode::NotFound);
         dftu_utils_test::expect_error(l.join(r, {}),
                                       ErrorCode::InvalidArgument);
-        dftu_utils_test::expect_error(l.join(r, {"k"}, {"k", "name"}),
-                                      ErrorCode::InvalidArgument);
-        dftu_utils_test::expect_error(l.join(r, {"k"}, {"name"}),
-                                      ErrorCode::InvalidArgument);
         dftu_utils_test::expect_error(
-            l.join(r, {"k"}, static_cast<JoinHow>(99)),
+            l.join(r, dftu_utils_test::span_of<dstd::String>({"k"}),
+                   dftu_utils_test::span_of<dstd::String>({"k", "name"})),
+            ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
+            l.join(r, dftu_utils_test::span_of<dstd::String>({"k"}),
+                   dftu_utils_test::span_of<dstd::String>({"name"})),
+            ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
+            l.join(r, dftu_utils_test::span_of<dstd::String>({"k"}),
+                   static_cast<JoinHow>(99)),
             ErrorCode::InvalidArgument);
     }
 
@@ -403,15 +425,17 @@ TEST_SUITE("dataframe join") {
         dftu_utils_test::expect_error(base.compare_agg(variant, 3),
                                       ErrorCode::InvalidArgument);
         dftu_utils_test::expect_error(
-            base.compare_agg(dftu_utils_test::ok(variant.rename({"j", "n"})),
-                             1),
+            base.compare_agg(
+                dftu_utils_test::ok(variant.rename(
+                    dftu_utils_test::span_of<dstd::String>({"j", "n"}))),
+                1),
             ErrorCode::InvalidArgument);
     }
 
     TEST_CASE(
         "lookup: each left row once, keys by value, fills and conflicts") {
         // left: k = [1, 2, 3, 1, null] (Int64), a = null or `a`
-        auto left = [](const dstd::Vector<dstd::String>& a = {}) {
+        auto left = [](dstd::Vector<dstd::String> a = {}) {
             DataFrame df;
             df.names = dstd::make_shared_strings({"k", "a"});
             df.columns.push_back(i64s({1, 2, 3, 1, 0}, {0x0f}));
@@ -420,7 +444,7 @@ TEST_SUITE("dataframe join") {
             return df;
         };
         // right: k = [1.0, 2.0, 2.0] (Float64), a, b = [7, 8, 8]
-        auto right = [](const dstd::Vector<dstd::String>& a) {
+        auto right = [](dstd::Vector<dstd::String> a) {
             DataFrame df;
             df.names = dstd::make_shared_strings({"k", "a", "b"});
             const double rk[] = {1.0, 2.0, 2.0};
@@ -431,8 +455,9 @@ TEST_SUITE("dataframe join") {
         };
         const dstd::Vector<dstd::String> xyy{"x", "y", "y"};
 
-        DataFrame out = dftu_utils_test::ok(
-            left().join(right(xyy), {"k"}, {"k"}, JoinHow::Lookup));
+        DataFrame out = dftu_utils_test::ok(left().join(
+            right(xyy), dftu_utils_test::span_of<dstd::String>({"k"}),
+            dftu_utils_test::span_of<dstd::String>({"k"}), JoinHow::Lookup));
         CHECK(dstd::to_strings(out.names) ==
               dstd::Vector<dstd::String>{"k", "a", "b"});
         CHECK(i64_col(out, "k") == dstd::Vector<I>{1, 2, 3, 1, NI});
@@ -449,15 +474,20 @@ TEST_SUITE("dataframe join") {
         CHECK(ll.join(rl, {"k"}, JoinHow::Lookup).schema() ==
               dstd::to_strings(out.names));
 
-        const auto conflict =
-            left().join(right({"x", "y", "z"}), {"k"}, {"k"}, JoinHow::Lookup);
+        const auto conflict = left().join(
+            right({"x", "y", "z"}),
+            dftu_utils_test::span_of<dstd::String>({"k"}),
+            dftu_utils_test::span_of<dstd::String>({"k"}), JoinHow::Lookup);
         dftu_utils_test::expect_error(
             conflict, dftracer::utils::common::ErrorCode::InvalidArgument);
         const dstd::String what = conflict.error().c_str();
         CHECK(what.find("key 2") != dstd::String::npos);
         CHECK(what.find("'a'") != dstd::String::npos);
-        const auto fills = left({"p", "q", "r", "s", "t"})
-                               .join(right(xyy), {"k"}, {"k"}, JoinHow::Lookup);
+        const auto fills =
+            left({"p", "q", "r", "s", "t"})
+                .join(right(xyy), dftu_utils_test::span_of<dstd::String>({"k"}),
+                      dftu_utils_test::span_of<dstd::String>({"k"}),
+                      JoinHow::Lookup);
         dftu_utils_test::expect_error(
             fills, dftracer::utils::common::ErrorCode::InvalidArgument);
         CHECK(dstd::String(fills.error().c_str()).find("fills 'a'") !=
@@ -466,9 +496,11 @@ TEST_SUITE("dataframe join") {
         // Strings never equal numbers.
         DataFrame text;
         text.names = dstd::make_shared_strings({"k"});
-        text.columns.push_back(Series::strings({"1", "2"}));
-        DataFrame none = dftu_utils_test::ok(
-            text.join(right(xyy), {"k"}, {"k"}, JoinHow::Lookup));
+        text.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"1", "2"})));
+        DataFrame none = dftu_utils_test::ok(text.join(
+            right(xyy), dftu_utils_test::span_of<dstd::String>({"k"}),
+            dftu_utils_test::span_of<dstd::String>({"k"}), JoinHow::Lookup));
         CHECK(str_col(none, "a") == dstd::Vector<S>{NS, NS});
     }
 
@@ -480,8 +512,9 @@ TEST_SUITE("dataframe join") {
             return df;
         };
         DataFrame left = keys();
-        DataFrame out = dftu_utils_test::ok(
-            left.join(make_right(), {"k"}, {"k"}, JoinHow::Nest, "m"));
+        DataFrame out = dftu_utils_test::ok(left.join(
+            make_right(), dftu_utils_test::span_of<dstd::String>({"k"}),
+            dftu_utils_test::span_of<dstd::String>({"k"}), JoinHow::Nest, "m"));
         CHECK(dstd::to_strings(out.names) ==
               dstd::Vector<dstd::String>{"k", "m"});
         const Series m = out.column("m").materialize();
@@ -497,7 +530,10 @@ TEST_SUITE("dataframe join") {
         CHECK(dstd::String(rows.child(1).materialize().string_at(0)) == "b");
         CHECK(dstd::String(rows.child(1).materialize().string_at(1)) == "bb");
         dftu_utils_test::expect_error(
-            left.join(make_right(), {"k"}, {"k"}, JoinHow::Nest, ""),
+            left.join(make_right(),
+                      dftu_utils_test::span_of<dstd::String>({"k"}),
+                      dftu_utils_test::span_of<dstd::String>({"k"}),
+                      JoinHow::Nest, ""),
             dftracer::utils::common::ErrorCode::InvalidArgument);
         LazyFrame ll =
             LazyFrame::scan(dstd::make_shared<InMemorySource>(keys()));

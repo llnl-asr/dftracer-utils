@@ -21,6 +21,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dlfcn.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -122,7 +123,9 @@ Cells cells(const DataFrame& f, dstd::String name) {
 }
 
 DataFrame run(dstd::Vector<WindowColumn> specs) {
-    auto got = dataframe::window(make_frame(), {"p"}, {"o"}, specs);
+    auto got = dataframe::window(
+        make_frame(), dftu_utils_test::span_of<dstd::String>({"p"}),
+        dftu_utils_test::span_of<dstd::String>({"o"}), specs);
     INFO(
         (got.has_value() ? dstd::String{} : dstd::String(got.error().c_str())));
     REQUIRE(got.has_value());
@@ -130,7 +133,9 @@ DataFrame run(dstd::Vector<WindowColumn> specs) {
 }
 
 dstd::String failure(dstd::Vector<WindowColumn> specs) {
-    auto got = dataframe::window(make_frame(), {"p"}, {"o"}, specs);
+    auto got = dataframe::window(
+        make_frame(), dftu_utils_test::span_of<dstd::String>({"p"}),
+        dftu_utils_test::span_of<dstd::String>({"o"}), specs);
     return got.has_value() ? dstd::String{} : dstd::String(got.error().c_str());
 }
 
@@ -322,7 +327,7 @@ TEST_CASE(
     const char* part[] = {"p"};
     const char* order[] = {"o"};
     dataframe::OpArgs args;
-    args.strlist(1, part, 1).strlist(2, order, 1).winlist(3, raw);
+    args.strlist(1, {part, 1}).strlist(2, {order, 1}).winlist(3, raw);
     const dataframe::LazyFrame plan =
         df.lazy().frame_op("dftu.frame.window", args, {}, keep);
 
@@ -366,7 +371,9 @@ DataFrame make_big(std::int64_t rows, std::int64_t parts) {
 }
 
 DataFrame run_on(const DataFrame& df, dstd::Vector<WindowColumn> specs) {
-    auto got = dataframe::window(df, {"p"}, {"o"}, specs);
+    auto got =
+        dataframe::window(df, dftu_utils_test::span_of<dstd::String>({"p"}),
+                          dftu_utils_test::span_of<dstd::String>({"o"}), specs);
     INFO(
         (got.has_value() ? dstd::String{} : dstd::String(got.error().c_str())));
     REQUIRE(got.has_value());
@@ -523,8 +530,10 @@ TEST_CASE("a combine failure of a tree window reaches the caller") {
     auto set = load();
     const DataFrame df = make_big(300, 2);
     auto got = dataframe::window(
-        df, {"p"}, {"o"},
-        {udaf_of("ufailcombine", "x", 0, 20, 0, WindowFrameMode::Rows)});
+        df, dftu_utils_test::span_of<dstd::String>({"p"}),
+        dftu_utils_test::span_of<dstd::String>({"o"}),
+        dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+            {udaf_of("ufailcombine", "x", 0, 20, 0, WindowFrameMode::Rows)}));
     REQUIRE_FALSE(got.has_value());
     CHECK(has(dstd::String(got.error().c_str()), "refused merge"));
 }

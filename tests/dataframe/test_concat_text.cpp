@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -56,7 +57,9 @@ TEST_CASE("strings with nulls and an empty part") {
     Series a = build({Row{"a"}, Row{}, Row{"ccc"}});
     Series e = build({});
     Series b = build({Row{""}, Row{"dd"}});
-    Series out = dftu_utils_test::ok(dataframe::concat_columns({&a, &e, &b}));
+    Series out = dftu_utils_test::ok(dataframe::concat_columns(
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&a, &e, &b})));
     CHECK(out.type() == TypeId::String);
     CHECK(out.length() == 5);
     CHECK(out.null_count() == 1);
@@ -71,7 +74,9 @@ TEST_CASE("a null row with a non-empty offset range copies no bytes") {
     Series odd{dftu_series_new_string(static_cast<dftu_dtype>(TypeId::String),
                                       off, data, 3, &valid)};
     Series z = build({Row{"z"}});
-    Series out = dftu_utils_test::ok(dataframe::concat_columns({&odd, &z}));
+    Series out = dftu_utils_test::ok(dataframe::concat_columns(
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&odd, &z})));
     CHECK(read(out) == Rows{Row{"a"}, Row{}, Row{"d"}, Row{"z"}});
     const Series flat = out.materialize();
     REQUIRE(flat.offsets() != nullptr);
@@ -82,8 +87,9 @@ TEST_CASE("a null row with a non-empty offset range copies no bytes") {
 TEST_CASE("a part with no data pointer and all-empty rows") {
     Series empties = build({Row{""}, Row{""}, Row{""}});
     Series s = build({Row{"x"}});
-    Series out = dftu_utils_test::ok(
-        dataframe::concat_columns({&empties, &s, &empties}));
+    Series out = dftu_utils_test::ok(dataframe::concat_columns(
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&empties, &s, &empties})));
     CHECK(read(out) ==
           Rows{Row{""}, Row{""}, Row{""}, Row{"x"}, Row{""}, Row{""}, Row{""}});
 }

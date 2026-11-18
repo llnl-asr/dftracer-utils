@@ -163,55 +163,38 @@ struct OwnedLazyFrame {
 
     OwnedLazyFrame select(std::initializer_list<const char*> names) const {
         dstd::Vector<const char*> v(names);
-        return apply("dftu.lazy.select",
-                     dataframe::OpArgs().strlist(
-                         1, v.data(), static_cast<std::int32_t>(v.size())));
+        return apply("dftu.lazy.select", dataframe::OpArgs().strlist(1, v));
     }
     OwnedLazyFrame rename(std::initializer_list<const char*> names) const {
         dstd::Vector<const char*> v(names);
-        return apply("dftu.lazy.rename",
-                     dataframe::OpArgs().strlist(
-                         1, v.data(), static_cast<std::int32_t>(v.size())));
+        return apply("dftu.lazy.rename", dataframe::OpArgs().strlist(1, v));
     }
     OwnedLazyFrame unpivot(
         std::initializer_list<const char*> id_vars,
         std::initializer_list<const char*> value_vars) const {
         dstd::Vector<const char*> ids(id_vars), vals(value_vars);
-        return apply(
-            "dftu.lazy.unpivot",
-            dataframe::OpArgs()
-                .strlist(1, ids.data(), static_cast<std::int32_t>(ids.size()))
-                .strlist(2, vals.data(),
-                         static_cast<std::int32_t>(vals.size())));
+        return apply("dftu.lazy.unpivot",
+                     dataframe::OpArgs().strlist(1, ids).strlist(2, vals));
     }
     OwnedLazyFrame melt(std::initializer_list<const char*> id_vars,
                         std::initializer_list<const char*> value_vars) const {
         dstd::Vector<const char*> ids(id_vars), vals(value_vars);
-        return apply(
-            "dftu.lazy.melt",
-            dataframe::OpArgs()
-                .strlist(1, ids.data(), static_cast<std::int32_t>(ids.size()))
-                .strlist(2, vals.data(),
-                         static_cast<std::int32_t>(vals.size())));
+        return apply("dftu.lazy.melt",
+                     dataframe::OpArgs().strlist(1, ids).strlist(2, vals));
     }
     OwnedLazyFrame group_by(std::initializer_list<const char*> keys,
                             std::initializer_list<dftu_group_agg> aggs) const {
         dstd::Vector<const char*> k(keys);
         dstd::Vector<dftu_group_agg> a(aggs);
-        return apply(
-            "dftu.lazy.group_by",
-            dataframe::OpArgs()
-                .strlist(1, k.data(), static_cast<std::int32_t>(k.size()))
-                .agglist(2, a));
+        return apply("dftu.lazy.group_by",
+                     dataframe::OpArgs().strlist(1, k).agglist(2, a));
     }
     OwnedLazyFrame sort_by_multi(std::initializer_list<const char*> by,
                                  bool descending) const {
         dstd::Vector<const char*> v(by);
-        return apply(
-            "dftu.lazy.sort_by_multi",
-            dataframe::OpArgs()
-                .strlist(1, v.data(), static_cast<std::int32_t>(v.size()))
-                .i32(2, static_cast<std::int32_t>(descending)));
+        return apply("dftu.lazy.sort_by_multi",
+                     dataframe::OpArgs().strlist(1, v).i32(
+                         2, static_cast<std::int32_t>(descending)));
     }
 
     OwnedLazyFrame sort_by(dstd::StringView name, bool descending) const {
@@ -247,14 +230,13 @@ struct OwnedLazyFrame {
         dstd::Vector<const char*> l(left_on);
         dstd::Vector<const char*> r(right_on);
         const dftu_lazyframe* in[2] = {handle_, other.handle_};
-        return apply(
-            "dftu.lazy.join", in, 2,
-            dataframe::OpArgs()
-                .strlist(2, l.data(), static_cast<std::int32_t>(l.size()))
-                .strlist(3, r.data(), static_cast<std::int32_t>(r.size()))
-                .i32(4, static_cast<std::int32_t>(how))
-                .str(5, suffix)
-                .i32(6, nulls_equal ? 1 : 0));
+        return apply("dftu.lazy.join", in, 2,
+                     dataframe::OpArgs()
+                         .strlist(2, l)
+                         .strlist(3, r)
+                         .i32(4, static_cast<std::int32_t>(how))
+                         .str(5, suffix)
+                         .i32(6, nulls_equal ? 1 : 0));
     }
     /// Join on the same-named key columns `on`.
     OwnedLazyFrame join(const OwnedLazyFrame& other,

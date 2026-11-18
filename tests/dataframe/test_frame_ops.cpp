@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -25,14 +26,14 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-Series i64s(const dstd::Vector<std::int64_t>& v) {
+Series i64s(dstd::Vector<std::int64_t> v) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()));
 }
 
 using I = dstd::Optional<std::int64_t>;
 const I NI = dstd::nullopt;
 
-dstd::Vector<I> i64_col(const DataFrame& df, const dstd::String& name) {
+dstd::Vector<I> i64_col(const DataFrame& df, dstd::StringView name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
@@ -81,8 +82,9 @@ TEST_SUITE("frame ops") {
         specs[2].set_value("dur");
         specs[2].params.offset = 1;
         specs[2].out = "prev";
-        DataFrame out = dftu_utils_test::ok(
-            dataframe::window(make_events(), {"pid"}, {"ts"}, specs));
+        DataFrame out = dftu_utils_test::ok(dataframe::window(
+            make_events(), dftu_utils_test::span_of<dstd::String>({"pid"}),
+            dftu_utils_test::span_of<dstd::String>({"ts"}), specs));
         CHECK(dstd::to_strings(out.names) ==
               dstd::Vector<dstd::String>{"pid", "ts", "dur", "rn", "cum",
                                          "prev"});
@@ -91,7 +93,9 @@ TEST_SUITE("frame ops") {
         CHECK(i64_col(out, "prev") == dstd::Vector<I>{NI, 1, 2, NI});
         specs[1].set_value("nope");
         dftu_utils_test::expect_error(
-            dataframe::window(make_events(), {"pid"}, {"ts"}, specs),
+            dataframe::window(
+                make_events(), dftu_utils_test::span_of<dstd::String>({"pid"}),
+                dftu_utils_test::span_of<dstd::String>({"ts"}), specs),
             dftracer::utils::common::ErrorCode::NotFound);
     }
 
@@ -101,13 +105,16 @@ TEST_SUITE("frame ops") {
         df.columns.push_back(i64s({1, 1, 1}));
         df.columns.push_back(i64s({0, 10, 30}));
         df.columns.push_back(i64s({100, 110, 130}));
-        DataFrame locf = dftu_utils_test::ok(
-            dataframe::gap_fill(df, {"pid"}, "ts", 10, {"v"},
-                                dataframe::GapFillMode::Locf, dstd::nullopt));
+        DataFrame locf = dftu_utils_test::ok(dataframe::gap_fill(
+            df, dftu_utils_test::span_of<dstd::String>({"pid"}), "ts", 10,
+            dftu_utils_test::span_of<dstd::String>({"v"}),
+            dataframe::GapFillMode::Locf, dstd::nullopt));
         CHECK(i64_col(locf, "ts") == dstd::Vector<I>{0, 10, 20, 30});
         CHECK(i64_col(locf, "v") == dstd::Vector<I>{100, 110, 110, 130});
         DataFrame ranged = dftu_utils_test::ok(dataframe::gap_fill(
-            df, {"pid"}, "ts", 10, {"v"}, dataframe::GapFillMode::None,
+            df, dftu_utils_test::span_of<dstd::String>({"pid"}), "ts", 10,
+            dftu_utils_test::span_of<dstd::String>({"v"}),
+            dataframe::GapFillMode::None,
             dstd::Pair<std::int64_t, std::int64_t>{0, 40}));
         CHECK(i64_col(ranged, "ts") == dstd::Vector<I>{0, 10, 20, 30, 40});
         CHECK(i64_col(ranged, "v") == dstd::Vector<I>{100, 110, NI, 130, NI});
@@ -126,19 +133,20 @@ TEST_SUITE("frame ops") {
         right.columns.push_back(i64s({1, 1, 2}));
         right.columns.push_back(i64s({5, 20, 50}));
         right.columns.push_back(i64s({50, 200, 500}));
-        DataFrame out = dftu_utils_test::ok(
-            dataframe::asof(left, right, "ts", {"pid"},
-                            dataframe::AsofDirection::Backward, dstd::nullopt));
+        DataFrame out = dftu_utils_test::ok(dataframe::asof(
+            left, right, "ts", dftu_utils_test::span_of<dstd::String>({"pid"}),
+            dataframe::AsofDirection::Backward, dstd::nullopt));
         CHECK(dstd::to_strings(out.names) ==
               dstd::Vector<dstd::String>{"pid", "ts", "x", "y"});
         CHECK(i64_col(out, "x") == dstd::Vector<I>{1, 2, 3});
         CHECK(i64_col(out, "y") == dstd::Vector<I>{50, 200, NI});
         DataFrame tight = dftu_utils_test::ok(dataframe::asof(
-            left, right, "ts", {"pid"}, dataframe::AsofDirection::Backward, 3));
+            left, right, "ts", dftu_utils_test::span_of<dstd::String>({"pid"}),
+            dataframe::AsofDirection::Backward, 3));
         CHECK(i64_col(tight, "y") == dstd::Vector<I>{NI, NI, NI});
-        DataFrame fwd = dftu_utils_test::ok(
-            dataframe::asof(left, right, "ts", {"pid"},
-                            dataframe::AsofDirection::Forward, dstd::nullopt));
+        DataFrame fwd = dftu_utils_test::ok(dataframe::asof(
+            left, right, "ts", dftu_utils_test::span_of<dstd::String>({"pid"}),
+            dataframe::AsofDirection::Forward, dstd::nullopt));
         CHECK(i64_col(fwd, "y") == dstd::Vector<I>{200, NI, 500});
     }
 
@@ -183,7 +191,7 @@ TEST_SUITE("frame ops") {
         specs[1].value = "dur";
         specs[1].out = "cum";
         OpArgs warg;
-        warg.strlist(1, pid, 1).strlist(2, ts, 1).winlist(3, specs);
+        warg.strlist(1, {pid, 1}).strlist(2, {ts, 1}).winlist(3, specs);
         dataframe::LazyFrame plan =
             scan(make_events()).frame_op("dftu.frame.window", warg);
         CHECK(plan.schema().empty());
@@ -194,7 +202,7 @@ TEST_SUITE("frame ops") {
 
         OpArgs aarg;
         aarg.str(2, "ts")
-            .strlist(3, pid, 1)
+            .strlist(3, {pid, 1})
             .i32(4, DFTU_ASOF_BACKWARD)
             .f64(5, -1);
         DataFrame a = dftu_utils_test::ok(
@@ -228,7 +236,7 @@ TEST_SUITE("frame ops") {
         specs[1].value = "dur";
         specs[1].out = "cum";
         OpArgs warg;
-        warg.strlist(1, pid, 1).strlist(2, ts, 1).winlist(3, specs);
+        warg.strlist(1, {pid, 1}).strlist(2, {ts, 1}).winlist(3, specs);
         dftu_dataframe* w = dftu_op_run_frame(window_op, fin, 1, warg);
         REQUIRE(w);
         CHECK(dftu_dataframe_num_columns(w) == 5);
@@ -248,10 +256,10 @@ TEST_SUITE("frame ops") {
         const char* v[1] = {"dur"};
         const std::int64_t range[2] = {0, 40};
         OpArgs garg;
-        garg.strlist(1, pid, 1)
+        garg.strlist(1, {pid, 1})
             .str(2, "ts")
             .i64(3, 10)
-            .strlist(4, v, 1)
+            .strlist(4, {v, 1})
             .i32(5, DFTU_GAP_FILL_NONE)
             .i64list(6, range);
         dftu_dataframe* g = dftu_op_run_frame(gap_op, fin, 1, garg);
@@ -268,7 +276,7 @@ TEST_SUITE("frame ops") {
         const dftu_dataframe* pair[2] = {ev, ev};
         OpArgs aarg;
         aarg.str(2, "ts")
-            .strlist(3, pid, 1)
+            .strlist(3, {pid, 1})
             .i32(4, DFTU_ASOF_BACKWARD)
             .f64(5, -1);
         dftu_dataframe* a = dftu_op_run_frame(asof_op, pair, 2, aarg);
@@ -281,8 +289,11 @@ TEST_SUITE("frame ops") {
                                   -1) == nullptr);
 
         OpArgs iarg;
-        iarg.str(2, "ts").str(3, "ts").str(4, "dur").strlist(5, pid, 1).i32(6,
-                                                                            0);
+        iarg.str(2, "ts")
+            .str(3, "ts")
+            .str(4, "dur")
+            .strlist(5, {pid, 1})
+            .i32(6, 0);
         dftu_dataframe* iv = dftu_op_run_frame(interval_op, pair, 2, iarg);
         REQUIRE(iv);
         // A point matches its own [ts, dur] span only where ts <= dur: never.

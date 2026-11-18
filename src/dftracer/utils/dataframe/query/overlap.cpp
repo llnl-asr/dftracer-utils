@@ -47,7 +47,7 @@ void copy_column(const dataframe::Series& s, Numbers<T>& out) {
 
 template <class T>
 dstd::Result<Numbers<T>> read_numbers(const dataframe::Series& s,
-                                      const char* what) {
+                                      dstd::StringView what) {
     if (!is_number(s.type()))
         return common::make_error<"overlap: the {} is {}, not a number">(
             common::ErrorCode::InvalidArgument, what,
@@ -139,7 +139,7 @@ dstd::Result<Intervals<T>> read_intervals(const OverlapColumns& c) {
     return out;
 }
 
-bool row_key(dstd::String& out, const dstd::Vector<dataframe::Series>& keys,
+bool row_key(dstd::String& out, dstd::Span<const dataframe::Series> keys,
              std::int64_t r) {
     out.clear();
     for (const dataframe::Series& k : keys)

@@ -17,6 +17,7 @@
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
 #include <generator_ok.h>
+#include <span_list.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
@@ -559,7 +560,9 @@ TEST_SUITE("trace scan - streaming row query") {
         }
         SUBCASE("is_in pushes exactly") {
             dataframe::Expr pred = dataframe::expr_is_in(
-                dataframe::col(ni), dataframe::Series::strings({"read", "x"}));
+                dataframe::col(ni),
+                dataframe::Series::strings(
+                    dftu_utils_test::span_of<dstd::StringView>({"read", "x"})));
             CHECK(pushed_as(pred) == dataframe::Pushed::Exact);
             CHECK(scanned(pred) == M{{"read", 30}});
             CHECK(pushed_as(~pred) == dataframe::Pushed::Exact);

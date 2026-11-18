@@ -14,7 +14,7 @@ namespace dftracer::utils::dataframe {
 namespace {
 // Reorders `v` (blocks of `stride` elements per group) into `perm` order.
 template <class Vec>
-void permute_blocks(Vec& v, const dstd::Vector<std::int64_t>& perm,
+void permute_blocks(Vec& v, dstd::Span<const std::int64_t> perm,
                     std::size_t stride) {
     if (stride == 0 || v.empty()) return;
     Vec tmp(v.size());
@@ -44,7 +44,7 @@ void agg_sort_groups(AggState& st) {
     agg_permute_groups(st, perm);
 }
 
-void agg_permute_groups(AggState& st, const dstd::Vector<std::int64_t>& perm) {
+void agg_permute_groups(AggState& st, dstd::Span<const std::int64_t> perm) {
     st.settle_light();
     const std::int64_t ng = st.ngroups();
     for (std::size_t k = 0; k < st.nkeys; ++k) {
@@ -117,7 +117,7 @@ void agg_permute_groups(AggState& st, const dstd::Vector<std::int64_t>& perm) {
 }
 
 AggStatePtr agg_extract_groups(const AggState& st_in,
-                               const dstd::Vector<std::int64_t>& groups) {
+                               dstd::Span<const std::int64_t> groups) {
     const AggState& st = settled(st_in);
     AggStatePtr out(new AggState());
     out->specs = st.specs;
@@ -263,7 +263,7 @@ AggStatePtr agg_extract_groups(const AggState& st_in,
 }
 
 AggStatePtr agg_extract_group(const AggState& st, std::int64_t g) {
-    return agg_extract_groups(st, {g});
+    return agg_extract_groups(st, dstd::Span<const std::int64_t>(&g, 1));
 }
 
 // The seed path rebuilds a group only from a FieldStat + optional DDSketch;
@@ -331,9 +331,10 @@ void agg_seed_begin(AggState& st, std::size_t nkeys) {
     st.inited = true;
 }
 
-void agg_seed_group(AggState& st, const dstd::Vector<dstd::String>& str_keys,
-                    const dstd::Vector<bool>& null_keys, std::uint64_t count,
-                    const dstd::Vector<AggSeedValue>& values) {
+void agg_seed_group(AggState& st, dstd::Span<const dstd::String> str_keys,
+                    dstd::Span<const std::uint8_t> null_keys,
+                    std::uint64_t count,
+                    dstd::Span<const AggSeedValue> values) {
     if (!st.inited) agg_seed_begin(st, str_keys.size());
     for (const AggSpec& sp : st.specs)
         if (!agg_op_seedable(sp.op))

@@ -64,7 +64,7 @@ class GroupTransformCore {
 
     // `gid[r]` is the group of row r; `starts[r]`, when given, restarts that
     // group's state before the row (a sorted stream reuses one group id).
-    dstd::Result<dstd::Vector<Series>> run(const dstd::Vector<Series>& cols,
+    dstd::Result<dstd::Vector<Series>> run(dstd::Span<const Series> cols,
                                            std::int64_t rows,
                                            const std::int32_t* gid,
                                            const std::uint8_t* starts) {
@@ -314,7 +314,7 @@ class GroupKeys {
 
     // `gid` gets the id of each row (hash mode), `starts` a 1 for each row
     // that starts a run (sorted mode). Each has `rows` entries.
-    dstd::Result<void> add(const dstd::Vector<Series>& cols, std::int64_t rows,
+    dstd::Result<void> add(dstd::Span<const Series> cols, std::int64_t rows,
                            std::int32_t* gid, std::uint8_t* starts) {
         const auto n = static_cast<std::size_t>(rows);
         if (cols.size() == 1 && numeric(cols))
@@ -345,7 +345,7 @@ class GroupKeys {
         }
     };
 
-    static bool numeric(const dstd::Vector<Series>& cols) {
+    static bool numeric(dstd::Span<const Series> cols) {
         NumClass cls = NumClass::Signed;
         for (const Series& c : cols)
             if (!num_class(c.type(), cls)) return false;
@@ -388,7 +388,7 @@ class GroupKeys {
         }
     }
 
-    void add_numeric(const dstd::Vector<Series>& cols, std::size_t n,
+    void add_numeric(dstd::Span<const Series> cols, std::size_t n,
                      std::int32_t* gid, std::uint8_t* starts) {
         dstd::Vector<NumCells> cells;
         dstd::Vector<NumClass> cls(cols.size(), NumClass::Signed);
@@ -446,7 +446,7 @@ class GroupKeys {
         }
     }
 
-    dstd::Result<void> add_text(const dstd::Vector<Series>& cols, std::size_t n,
+    dstd::Result<void> add_text(dstd::Span<const Series> cols, std::size_t n,
                                 std::int32_t* gid, std::uint8_t* starts) {
         KeyRefusal refusal;
         for (std::size_t r = 0; r < n; ++r) {
@@ -681,10 +681,10 @@ std::uint64_t native_transform_single_key_rows() {
 namespace lazy_internal {
 
 CursorResult make_native_transform(dstd::UniquePtr<Cursor> in,
-                                   const dstd::Vector<dstd::String>& sch,
+                                   dstd::Span<const dstd::String> sch,
                                    const OwnedFrameOpArgs& args,
-                                   const dstd::Vector<dstd::String>& out_names,
-                                   const dstd::Vector<DataType>& out_types,
+                                   dstd::Span<const dstd::String> out_names,
+                                   dstd::Span<const DataType> out_types,
                                    std::uint64_t budget) {
     dstd::Vector<std::size_t> keys, value;
     for (const dstd::String& name : args.strings_at(1)) {
@@ -702,8 +702,10 @@ CursorResult make_native_transform(dstd::UniquePtr<Cursor> in,
         value.push_back(static_cast<std::size_t>(*at));
     }
     return dstd::make_unique<NativeTransformCursor>(
-        std::move(in), sch, std::move(keys), kind, args.i64_at(3),
-        std::move(value), std::move(declared), out_names, budget);
+        std::move(in), dstd::Vector<dstd::String>(sch.begin(), sch.end()),
+        std::move(keys), kind, args.i64_at(3), std::move(value),
+        std::move(declared),
+        dstd::Vector<dstd::String>(out_names.begin(), out_names.end()), budget);
 }
 
 }  // namespace lazy_internal

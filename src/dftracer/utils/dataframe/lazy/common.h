@@ -72,8 +72,7 @@ inline CursorResult no_cursor() {
     return CursorResult{dstd::UniquePtr<Cursor>{}};
 }
 
-inline dstd::Vector<const Series*> column_ptrs(
-    const dstd::Vector<Series>& cols) {
+inline dstd::Vector<const Series*> column_ptrs(dstd::Span<const Series> cols) {
     dstd::Vector<const Series*> in;
     in.reserve(cols.size());
     for (const Series& c : cols) in.push_back(&c);
@@ -81,30 +80,51 @@ inline dstd::Vector<const Series*> column_ptrs(
 }
 
 template <class Name>
-inline int column_index_of(const dstd::Vector<Name>& names,
+inline int column_index_in(dstd::Span<const Name> names,
                            dstd::StringView name) {
     for (std::size_t i = 0; i < names.size(); ++i)
         if (dstd::StringView{names[i]} == name) return static_cast<int>(i);
     return -1;
 }
 
+inline int column_index_of(dstd::Span<const dstd::String> names,
+                           dstd::StringView name) {
+    return column_index_in<dstd::String>(names, name);
+}
+
+inline int column_index_of(dstd::Span<const dstd::SharedString> names,
+                           dstd::StringView name) {
+    return column_index_in<dstd::SharedString>(names, name);
+}
+
 // The index of column `name` of `sch`. A name that is not there is the error of
 // the op `op`: NotFound "<op>: no column named <name>".
-template <class Name>
-inline dstd::Result<int> require_col(const dstd::Vector<Name>& sch,
-                                     dstd::StringView name, const char* op) {
-    const int at = column_index_of(sch, name);
+inline dstd::Result<int> require_col_at(int at, dstd::StringView name,
+                                        dstd::StringView op) {
     if (at < 0)
         return common::make_error<"{}: no column named {}">(
             common::ErrorCode::NotFound, op, name);
     return at;
 }
 
+inline dstd::Result<int> require_col(dstd::Span<const dstd::String> sch,
+                                     dstd::StringView name,
+                                     dstd::StringView op) {
+    return require_col_at(column_index_of(sch, name), name, op);
+}
+
+inline dstd::Result<int> require_col(dstd::Span<const dstd::SharedString> sch,
+                                     dstd::StringView name,
+                                     dstd::StringView op) {
+    return require_col_at(column_index_of(sch, name), name, op);
+}
+
 // An all-null column of `rows` rows of the type of `f`, with the type's
 // parameters. Refuses a type it cannot rebuild rather than emit a column that
 // has silently lost them; `why` says what has no rows to take the type from.
 inline dstd::Result<Series> null_column_of(const Field& f, std::int64_t rows,
-                                           const char* who, const char* why) {
+                                           dstd::StringView who,
+                                           dstd::StringView why) {
     const DataType& dt = f.type;
     const bool rebuildable =
         dt.fields.empty() &&
@@ -302,8 +322,8 @@ class ExpansionGovernor {
 };
 
 // The columns `idx` of `cols`, flat, for row keys and comparisons.
-inline dstd::Vector<Series> key_columns(const dstd::Vector<Series>& cols,
-                                        const dstd::Vector<std::size_t>& idx) {
+inline dstd::Vector<Series> key_columns(dstd::Span<const Series> cols,
+                                        dstd::Span<const std::size_t> idx) {
     dstd::Vector<Series> out;
     out.reserve(idx.size());
     for (std::size_t c : idx)
@@ -317,8 +337,16 @@ inline constexpr std::int64_t DEFAULT_BATCH_SIZE =
     common::constants::dataframe::BATCH_SIZE;
 
 template <class Name>
-inline bool has_rest(const dstd::Vector<Name>& sch) {
+inline bool has_rest_in(dstd::Span<const Name> sch) {
     return !sch.empty() && dstd::StringView{sch.back()} == REST_COLUMN;
+}
+
+inline bool has_rest(dstd::Span<const dstd::String> sch) {
+    return has_rest_in<dstd::String>(sch);
+}
+
+inline bool has_rest(dstd::Span<const dstd::SharedString> sch) {
+    return has_rest_in<dstd::SharedString>(sch);
 }
 
 // The fields of a rest column as named columns, flat. With a `cache` the

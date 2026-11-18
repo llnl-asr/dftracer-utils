@@ -527,7 +527,7 @@ int main(int argc, char** argv) {
             specs[1].out = "p";
             specs[1].param.offset = 1;
             dataframe::OpArgs a;
-            a.strlist(1, &part, 1).strlist(2, &order, 1).winlist(3, specs);
+            a.strlist(1, {&part, 1}).strlist(2, {&order, 1}).winlist(3, specs);
             dstd::Vector<dstd::String> names = lf.schema();
             names.emplace_back("r");
             names.emplace_back("p");

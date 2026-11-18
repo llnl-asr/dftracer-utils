@@ -17,6 +17,7 @@
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
+#include <span_list.h>
 
 #include <cmath>
 #include <cstdint>
@@ -36,7 +37,7 @@ const double na_n = std::numeric_limits<double>::quiet_NaN();
 template <class T>
 using Opt = dstd::Vector<dstd::Optional<T>>;
 
-dstd::Vector<std::uint8_t> validity_of(const dstd::Vector<bool>& present) {
+dstd::Vector<std::uint8_t> validity_of(dstd::Vector<bool> present) {
     dstd::Vector<std::uint8_t> bits((present.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < present.size(); ++i)
         if (present[i])
@@ -121,12 +122,12 @@ Opt<dstd::String> as_strs(const Series& s) {
     return read<dstd::String>(s, TypeId::String);
 }
 
-Series run(const Expr& e, const dstd::Vector<const Series*>& in) {
+Series run(const Expr& e, dstd::Vector<const Series*> in) {
     return dftu_utils_test::eval_ok(e, in);
 }
 
 // Whether compiling or evaluating `e` over `in` fails with InvalidArgument.
-bool refused(const Expr& e, const dstd::Vector<const Series*>& in) {
+bool refused(const Expr& e, dstd::Vector<const Series*> in) {
     return dftu_utils_test::is_invalid(dataframe::eval(e, in));
 }
 
@@ -325,26 +326,44 @@ TEST_CASE("expr_cmp against a scalar is exact across integer and double") {
 TEST_CASE("coalesce takes the first present operand in order") {
     const Series a = ints({dstd::nullopt, 2, dstd::nullopt});
     const Series b = ints({1, 7, dstd::nullopt});
-    CHECK(as_ints(run(dataframe::expr_coalesce(
-                          {c0(), c1(), dataframe::lit(std::int64_t{9})}),
-                      {&a, &b})) == Opt<std::int64_t>{1, 2, 9});
-    CHECK(as_ints(run(dataframe::expr_coalesce({c1(), c0()}), {&a, &b})) ==
-          Opt<std::int64_t>{1, 7, dstd::nullopt});
+    CHECK(as_ints(run(
+              dataframe::expr_coalesce(
+                  dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                      {c0(), c1(), dataframe::lit(std::int64_t{9})})),
+              {&a, &b})) == Opt<std::int64_t>{1, 2, 9});
+    CHECK(as_ints(run(
+              dataframe::expr_coalesce(
+                  dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                      {c1(), c0()})),
+              {&a, &b})) == Opt<std::int64_t>{1, 7, dstd::nullopt});
 
     const Series d = dbls({0.5, 0.25, dstd::nullopt});
-    CHECK(as_dbls(run(dataframe::expr_coalesce({c0(), c1()}), {&a, &d})) ==
-          Opt<double>{0.5, 2.0, dstd::nullopt});
+    CHECK(as_dbls(run(
+              dataframe::expr_coalesce(
+                  dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                      {c0(), c1()})),
+              {&a, &d})) == Opt<double>{0.5, 2.0, dstd::nullopt});
 
     const Series u = uints({U64_MAX, dstd::nullopt});
     const Series i = ints({1, 2});
-    CHECK(as_ints(run(dataframe::expr_coalesce({c0(), c1()}), {&u, &i})) ==
-          Opt<std::int64_t>{dstd::nullopt, 2});
+    CHECK(as_ints(run(
+              dataframe::expr_coalesce(
+                  dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                      {c0(), c1()})),
+              {&u, &i})) == Opt<std::int64_t>{dstd::nullopt, 2});
 
     const Series s = strs({dstd::nullopt, "x"});
     const Series t = strs({"y", "z"});
-    CHECK(as_strs(run(dataframe::expr_coalesce({c0(), c1()}), {&s, &t})) ==
-          Opt<dstd::String>{"y", "x"});
-    CHECK(refused(dataframe::expr_coalesce({c0(), c1()}), {&s, &i}));
+    CHECK(as_strs(run(
+              dataframe::expr_coalesce(
+                  dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                      {c0(), c1()})),
+              {&s, &t})) == Opt<dstd::String>{"y", "x"});
+    CHECK(
+        refused(dataframe::expr_coalesce(
+                    dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                        {c0(), c1()})),
+                {&s, &i}));
 }
 
 TEST_CASE("coalesce of no operands ends the process" * doctest::skip()) {
@@ -361,42 +380,74 @@ TEST_CASE("coalesce of no operands is fatal") {
 TEST_CASE("least and greatest are null when any operand is null") {
     const Series a = ints({3, dstd::nullopt, 5});
     const Series b = ints({4, 1, 2});
-    CHECK(as_ints(run(dataframe::expr_extreme({c0(), c1()}, true), {&a, &b})) ==
-          Opt<std::int64_t>{3, dstd::nullopt, 2});
-    CHECK(as_ints(run(dataframe::expr_extreme(
-                          {c0(), c1(), dataframe::lit(std::int64_t{4})}, false),
-                      {&a, &b})) == Opt<std::int64_t>{4, dstd::nullopt, 5});
+    CHECK(as_ints(run(
+              dataframe::expr_extreme(
+                  dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                      {c0(), c1()}),
+                  true),
+              {&a, &b})) == Opt<std::int64_t>{3, dstd::nullopt, 2});
+    CHECK(as_ints(run(
+              dataframe::expr_extreme(
+                  dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                      {c0(), c1(), dataframe::lit(std::int64_t{4})}),
+                  false),
+              {&a, &b})) == Opt<std::int64_t>{4, dstd::nullopt, 5});
 
     const Series u = uints({U64_MAX});
     const Series i = ints({-1});
-    CHECK(as_ints(run(dataframe::expr_extreme({c0(), c1()}, true), {&u, &i})) ==
-          Opt<std::int64_t>{-1});
-    CHECK(as_ints(run(dataframe::expr_extreme({c0(), c1()}, false),
-                      {&u, &i})) == Opt<std::int64_t>{dstd::nullopt});
+    CHECK(as_ints(run(
+              dataframe::expr_extreme(
+                  dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                      {c0(), c1()}),
+                  true),
+              {&u, &i})) == Opt<std::int64_t>{-1});
+    CHECK(as_ints(run(
+              dataframe::expr_extreme(
+                  dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                      {c0(), c1()}),
+                  false),
+              {&u, &i})) == Opt<std::int64_t>{dstd::nullopt});
 
     const Series big = ints({9007199254740993});
     const Series d = dbls({9007199254740992.0});
-    CHECK(as_dbls(run(dataframe::expr_extreme({c0(), c1()}, true),
-                      {&big, &d})) == Opt<double>{9007199254740992.0});
+    CHECK(as_dbls(run(
+              dataframe::expr_extreme(
+                  dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                      {c0(), c1()}),
+                  true),
+              {&big, &d})) == Opt<double>{9007199254740992.0});
     const Series nan = dbls({na_n});
-    CHECK(as_dbls(run(dataframe::expr_extreme({c0(), c1()}, true),
-                      {&d, &nan})) == Opt<double>{dstd::nullopt});
+    CHECK(as_dbls(run(
+              dataframe::expr_extreme(
+                  dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                      {c0(), c1()}),
+                  true),
+              {&d, &nan})) == Opt<double>{dstd::nullopt});
 
     const Series s = strs({"b", "B"});
     const Series t = strs({"a", "a"});
-    CHECK(as_strs(run(dataframe::expr_extreme({c0(), c1()}, true), {&s, &t})) ==
-          Opt<dstd::String>{"a", "B"});
+    CHECK(as_strs(run(
+              dataframe::expr_extreme(
+                  dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                      {c0(), c1()}),
+                  true),
+              {&s, &t})) == Opt<dstd::String>{"a", "B"});
 }
 
 TEST_CASE("concat joins strings and is null when any operand is null") {
     const Series a = strs({"a", dstd::nullopt, ""});
     const Series b = strs({"b", "c", "d"});
-    CHECK(
-        as_strs(run(
-            dataframe::expr_concat({c0(), c1(), dataframe::expr_lit_str("!")}),
-            {&a, &b})) == Opt<dstd::String>{"ab!", dstd::nullopt, "d!"});
+    CHECK(as_strs(run(
+              dataframe::expr_concat(
+                  dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                      {c0(), c1(), dataframe::expr_lit_str("!")})),
+              {&a, &b})) == Opt<dstd::String>{"ab!", dstd::nullopt, "d!"});
     const Series i = ints({1, 2, 3});
-    CHECK(refused(dataframe::expr_concat({c0(), c1()}), {&a, &i}));
+    CHECK(
+        refused(dataframe::expr_concat(
+                    dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                        {c0(), c1()})),
+                {&a, &i}));
 }
 
 TEST_CASE("round is half away from zero and keeps integers") {
@@ -714,8 +765,8 @@ TEST_CASE("convert to string and json write duql's text forms") {
 namespace {
 
 // A List column; row i is null where !present[i] (a take of -1).
-Series make_list(const dstd::Vector<std::int32_t>& offsets, Series values,
-                 const dstd::Vector<bool>& present) {
+Series make_list(dstd::Vector<std::int32_t> offsets, Series values,
+                 dstd::Vector<bool> present) {
     const Series list = Series::list(offsets, std::move(values));
     dstd::Vector<std::int64_t> idx;
     for (std::size_t i = 0; i < present.size(); ++i)
@@ -795,7 +846,11 @@ TEST_CASE("infer_type agrees with the node types") {
               dataframe::expr_arith(ArithOp::Div, c0(), c0()), in)
               .id == TypeId::Float64);
     CHECK(dftu_utils_test::infer_type_ok(
-              dataframe::expr_extreme({c0(), c1()}, true), in)
+              dataframe::expr_extreme(
+                  dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                      {c0(), c1()}),
+                  true),
+              in)
               .id == TypeId::Float64);
     CHECK(dftu_utils_test::infer_type_ok(
               dataframe::expr_convert(ConvertOp::Json, c0()), in)
@@ -1039,10 +1094,13 @@ TEST_CASE("date_part and format_time: types, CSE and refusals") {
 
     // The same field of two units and two formats must not share a slot.
     const Expr both = dataframe::expr_concat(
-        {dftu_utils_test::built(dataframe::expr_format_time(c0(), "%H", 1000)),
-         dftu_utils_test::built(dataframe::expr_format_time(c0(), "%M", 1000)),
-         dftu_utils_test::built(
-             dataframe::expr_format_time(c0(), "%H", NS_PER_S))});
+        dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+            {dftu_utils_test::built(
+                 dataframe::expr_format_time(c0(), "%H", 1000)),
+             dftu_utils_test::built(
+                 dataframe::expr_format_time(c0(), "%M", 1000)),
+             dftu_utils_test::built(
+                 dataframe::expr_format_time(c0(), "%H", NS_PER_S))}));
     CHECK(as_strs(run(both, {&i})) ==
           Opt<dstd::String>{dstd::fmt<"2213{}">(*fmt(i, "%H", NS_PER_S)[0])});
     const Expr sum =

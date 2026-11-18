@@ -41,7 +41,7 @@ std::int64_t floor_index(std::int64_t t, std::int64_t width) {
 }
 
 // `values` narrowed to the integer type `type`.
-Series integer_column(TypeId type, const dstd::Vector<std::int64_t>& values) {
+Series integer_column(TypeId type, dstd::Span<const std::int64_t> values) {
     const auto n = static_cast<std::int64_t>(values.size());
     auto narrow = [&]<class T>() {
         dstd::Vector<T> out(values.size());
@@ -78,9 +78,9 @@ struct Real {
 }  // namespace
 
 dstd::Result<DataFrame> gap_fill(
-    const DataFrame& df, const dstd::Vector<dstd::String>& partition_by,
-    const dstd::String& time, std::int64_t bucket,
-    const dstd::Vector<dstd::String>& values, GapFillMode mode,
+    const DataFrame& df, dstd::Span<const dstd::String> partition_by,
+    dstd::StringView time, std::int64_t bucket,
+    dstd::Span<const dstd::String> values, GapFillMode mode,
     dstd::Optional<dstd::Pair<std::int64_t, std::int64_t>> range) {
     if (bucket <= 0)
         return invalid_argument<"gap_fill: bucket_width must be positive">();

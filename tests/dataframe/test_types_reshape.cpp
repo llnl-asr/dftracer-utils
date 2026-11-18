@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -159,7 +160,7 @@ constexpr bool is_audited(TypeId t) {
     return false;
 }
 
-DataFrame frame_of(const dstd::String& col_name, const Series& s) {
+DataFrame frame_of(dstd::StringView col_name, const Series& s) {
     DataFrame df;
     df.names = dstd::make_shared_strings({col_name});
     df.columns.push_back(s.share());
@@ -193,12 +194,13 @@ TEST_SUITE("dataframe_types_reshape") {
 
             if (row.ops[OpSortMulti] == Support::Refuses) {
                 dftu_utils_test::expect_error(
-                    df.sort_by_multi({"k"}, false),
+                    df.sort_by_multi(
+                        dftu_utils_test::span_of<dstd::String>({"k"}), false),
                     dftracer::utils::common::ErrorCode::InvalidArgument);
                 continue;
             }
-            DataFrame sorted =
-                dftu_utils_test::ok(df.sort_by_multi({"k"}, false));
+            DataFrame sorted = dftu_utils_test::ok(df.sort_by_multi(
+                dftu_utils_test::span_of<dstd::String>({"k"}), false));
             REQUIRE(sorted.num_rows() == 4);
             Series id_col = sorted.column("id");
             const std::int64_t* p = id_col.data<std::int64_t>();
@@ -313,11 +315,15 @@ TEST_SUITE("dataframe_types_reshape") {
 
             if (row.ops[OpUnpivotConcat] == Support::Refuses) {
                 dftu_utils_test::expect_error(
-                    df.unpivot({"id"}, {"v1", "v2"}),
+                    df.unpivot(
+                        dftu_utils_test::span_of<dstd::String>({"id"}),
+                        dftu_utils_test::span_of<dstd::String>({"v1", "v2"})),
                     dftracer::utils::common::ErrorCode::InvalidArgument);
                 continue;
             }
-            DataFrame m = dftu_utils_test::ok(df.unpivot({"id"}, {"v1", "v2"}));
+            DataFrame m = dftu_utils_test::ok(df.unpivot(
+                dftu_utils_test::span_of<dstd::String>({"id"}),
+                dftu_utils_test::span_of<dstd::String>({"v1", "v2"})));
             REQUIRE(m.num_rows() == 8);
             Series value = m.column("value");
             REQUIRE(value.valid());
@@ -360,13 +366,17 @@ TEST_SUITE("dataframe_types_reshape") {
         std::int64_t ids[3] = {1, 2, 3};
         std::int64_t counts[3] = {5, 7, 9};
         dstd::Vector<Series> fields;
-        fields.push_back(Series::strings({"read", "write", "open"}));
+        fields.push_back(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"read", "write", "open"})));
         fields.push_back(Series::flat_i64(counts, 3));
         Series elems = Series::structs({"value", "count"}, std::move(fields));
         DataFrame df;
         df.names = dstd::make_shared_strings({"pid", "tk"});
         df.columns.push_back(Series::flat_i64(ids, 3));
-        df.columns.push_back(Series::list({0, 2, 2, 3}, std::move(elems)));
+        df.columns.push_back(
+            Series::list(dftu_utils_test::span_of<std::int32_t>({0, 2, 2, 3}),
+                         std::move(elems)));
 
         DataFrame dropped = dftu_utils_test::ok(df.unnest("tk"));
         CHECK(dstd::to_strings(dropped.names) ==

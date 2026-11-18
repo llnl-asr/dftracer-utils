@@ -137,7 +137,7 @@ class RowReader {
 
 // Int64 output column with the same length/validity as `v` (nulls preserved).
 dftu_series* make_i64(const dftu_series* v,
-                      const dftracer::utils::dstd::Vector<std::int64_t>& vals) {
+                      dftracer::utils::dstd::Span<const std::int64_t> vals) {
     auto* out = new dftu_series();
     out->type = TypeId::Int64;
     out->encoding = Encoding::Flat;
@@ -153,7 +153,7 @@ dftu_series* make_i64(const dftu_series* v,
 // UInt64 output column with the same length as `v`. `validity` is a fresh
 // Arrow-layout bitmap the caller owns, or NULL to share `v`'s nulls.
 dftu_series* make_u64(const dftu_series* v,
-                      const dftracer::utils::dstd::Vector<std::uint64_t>& vals,
+                      dftracer::utils::dstd::Span<const std::uint64_t> vals,
                       const std::uint8_t* validity) {
     auto* out = new dftu_series();
     out->type = TypeId::Uint64;
@@ -180,7 +180,7 @@ dftu_series* make_u64(const dftu_series* v,
 // when the bytes pass INT32_MAX.
 dftu_series* make_string(
     const dftu_series* v,
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& parts) {
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> parts) {
     std::size_t total = 0;
     for (const dftracer::utils::dstd::String& p : parts) total += p.size();
     if (!fits_int32_offsets(total)) return nullptr;
@@ -389,39 +389,43 @@ duql::PatternPtr compiled(duql::PatternResult r) {
     return r ? std::move(*r) : nullptr;
 }
 
-dftracer::utils::dstd::StringView pattern_text(const char* pattern,
-                                               std::int32_t len) {
-    return {pattern, static_cast<std::size_t>(len)};
-}
-
 }  // namespace
 
 dftu_series* dftu_series_str_eq(const dftu_series* v, const char* rhs,
                                 std::int32_t rhs_size) {
-    return dataframe::kernels::string_match().eq(v, rhs, rhs_size);
+    return dataframe::kernels::string_match().eq(
+        v, dftracer::utils::dstd::StringView(
+               rhs, static_cast<std::size_t>(rhs_size)));
 }
 
 dftu_series* dftu_series_str_contains(const dftu_series* v, const char* needle,
                                       std::int32_t needle_size) {
-    return dataframe::kernels::string_match().contains(v, needle, needle_size);
+    return dataframe::kernels::string_match().contains(
+        v, dftracer::utils::dstd::StringView(
+               needle, static_cast<std::size_t>(needle_size)));
 }
 
 dftu_series* dftu_series_str_starts_with(const dftu_series* v,
                                          const char* prefix,
                                          std::int32_t prefix_size) {
-    return dataframe::kernels::string_match().starts_with(v, prefix,
-                                                          prefix_size);
+    return dataframe::kernels::string_match().starts_with(
+        v, dftracer::utils::dstd::StringView(
+               prefix, static_cast<std::size_t>(prefix_size)));
 }
 
 dftu_series* dftu_series_str_ends_with(const dftu_series* v, const char* suffix,
                                        std::int32_t suffix_size) {
-    return dataframe::kernels::string_match().ends_with(v, suffix, suffix_size);
+    return dataframe::kernels::string_match().ends_with(
+        v, dftracer::utils::dstd::StringView(
+               suffix, static_cast<std::size_t>(suffix_size)));
 }
 
 dftu_series* dftu_series_str_matches(const dftu_series* v, const char* pattern,
                                      std::int32_t pattern_size) {
     const auto p = compiled(duql::compile_regex(
-        pattern_text(pattern, pattern_size), false, /*whole=*/true));
+        dftracer::utils::dstd::StringView(
+            pattern, static_cast<std::size_t>(pattern_size)),
+        false, /*whole=*/true));
     if (!p) return nullptr;
     return dataframe::kernels::string_match().pattern(v, *p);
 }
@@ -472,8 +476,10 @@ dftu_series* dftu_series_str_extract(const dftu_series* v, const char* pattern,
     DFTU_FLAT_OPERAND(
         v, flat_v,
         dftu_series_str_extract(flat_v, pattern, pattern_size, group));
-    const auto re = compiled(
-        duql::compile_regex(pattern_text(pattern, pattern_size), false));
+    const auto re = compiled(duql::compile_regex(
+        dftracer::utils::dstd::StringView(
+            pattern, static_cast<std::size_t>(pattern_size)),
+        false));
     if (!re) return nullptr;
     const auto g = static_cast<std::size_t>(group);
     if (g > duql::capture_count(*re)) return nullptr;
@@ -491,8 +497,10 @@ dftu_series* dftu_series_str_regex_replace(const dftu_series* v,
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_regex_replace(flat_v, pattern,
                                                     pattern_size, to, to_size));
-    const auto re = compiled(
-        duql::compile_regex(pattern_text(pattern, pattern_size), false));
+    const auto re = compiled(duql::compile_regex(
+        dftracer::utils::dstd::StringView(
+            pattern, static_cast<std::size_t>(pattern_size)),
+        false));
     if (!re) return nullptr;
     auto sub = duql::compile_substitution(
         *re, dftracer::utils::dstd::StringView(
@@ -503,8 +511,10 @@ dftu_series* dftu_series_str_regex_replace(const dftu_series* v,
 
 dftu_series* dftu_series_str_search(const dftu_series* v, const char* pattern,
                                     std::int32_t pattern_size) {
-    const auto p = compiled(
-        duql::compile_regex(pattern_text(pattern, pattern_size), false));
+    const auto p = compiled(duql::compile_regex(
+        dftracer::utils::dstd::StringView(
+            pattern, static_cast<std::size_t>(pattern_size)),
+        false));
     if (!p) return nullptr;
     return dataframe::kernels::string_match().pattern(v, *p);
 }
@@ -512,7 +522,9 @@ dftu_series* dftu_series_str_search(const dftu_series* v, const char* pattern,
 dftu_series* dftu_series_str_like(const dftu_series* v, const char* pattern,
                                   std::int32_t pattern_size) {
     const auto p = compiled(
-        duql::compile_like(pattern_text(pattern, pattern_size), false, '\\'));
+        duql::compile_like(dftracer::utils::dstd::StringView(
+                               pattern, static_cast<std::size_t>(pattern_size)),
+                           false, '\\'));
     if (!p) return nullptr;
     return dataframe::kernels::string_match().pattern(v, *p);
 }
@@ -1000,7 +1012,7 @@ Bits compute_bits(dataframe::strsimd::BitKind kind, const std::uint8_t* p,
 // `list_off[i + 1] - list_off[i]` strings.
 dftu_series* make_str_list(
     const dftu_series* v,
-    const dftracer::utils::dstd::Vector<std::int32_t>& list_off,
+    dftracer::utils::dstd::Span<const std::int32_t> list_off,
     std::int64_t parts, BufferView coff, BufferView cdata) {
     auto* child = new dftu_series();
     child->type = TypeId::String;
@@ -1746,8 +1758,10 @@ dftu_series* dftu_series_str_findall(const dftu_series* v, const char* pattern,
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_findall(flat_v, pattern, pattern_size));
-    const auto re = compiled(
-        duql::compile_regex(pattern_text(pattern, pattern_size), false));
+    const auto re = compiled(duql::compile_regex(
+        dftracer::utils::dstd::StringView(
+            pattern, static_cast<std::size_t>(pattern_size)),
+        false));
     if (!re) return nullptr;
     dataframe::kernels::LimitedRows limited;
     dftu_series* out = list_transform(
@@ -2016,7 +2030,7 @@ class Wrapper {
           break_hyphens_((flags & DFTU_WRAP_BREAK_ON_HYPHENS) != 0) {}
 
     // The lines of `src` joined by "\n" in `out`.
-    void run(const dftracer::utils::dstd::Vector<std::uint32_t>& src,
+    void run(dftracer::utils::dstd::Span<const std::uint32_t> src,
              dftracer::utils::dstd::String& out) {
         munge(src);
         if (break_hyphens_)
@@ -2027,7 +2041,7 @@ class Wrapper {
     }
 
    private:
-    void munge(const dftracer::utils::dstd::Vector<std::uint32_t>& src) {
+    void munge(dftracer::utils::dstd::Span<const std::uint32_t> src) {
         t_.clear();
         std::uint32_t col = 0;
         for (const std::uint32_t c : src) {

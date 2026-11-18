@@ -12,6 +12,7 @@
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
+#include <span_list.h>
 #include <task_result.h>
 #include <trace/views/test_view_common.h>
 
@@ -105,8 +106,12 @@ TEST_SUITE("View misuse") {
         dataframe::Series val = dataframe::Series::flat_i64(value, 1, nullptr);
         dstd::Vector<dataframe::AggSpec> specs;
         specs.push_back(dataframe::AggSpec{dataframe::AggOp::Count, -1, "n"});
-        auto state =
-            dataframe::group_agg_state({&key}, {&val}, std::move(specs));
+        auto state = dataframe::group_agg_state(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&key}),
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&val}),
+            std::move(specs));
         auto plan = trace::views::detail::scan::group_by(
             trace::views::detail::scan::agg(
                 trace::views::detail::scan::from_files({}),

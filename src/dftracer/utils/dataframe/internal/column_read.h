@@ -138,7 +138,7 @@ inline dstd::StringView read_bytes(const Series& c, std::int64_t i) {
 /// True when `t` is nested and so has no per-row value for `op` to work on,
 /// after logging a named refusal. The caller then returns its own refusal
 /// value instead of computing over a zero it never read.
-inline bool refuse_nested_value(const char* op, TypeId t) {
+inline bool refuse_nested_value(dstd::StringView op, TypeId t) {
     if (value_domain(t) != ValueDomain::None) return false;
     DFTRACER_UTILS_LOG_ERROR("{}: no per-row value for nested type '{}'", op,
                              type_name(t));

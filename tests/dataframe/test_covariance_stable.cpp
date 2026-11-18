@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -119,7 +120,11 @@ DataFrame one_group(const dstd::Vector<double>& x,
     Series sy = Series::flat_f64(y.data(), n);
     Series sx = Series::flat_f64(x.data(), n);
     return dftu_utils_test::ok(dataframe::group_agg(
-        {&k}, {&sy, &sx}, all_specs(), dstd::Vector<dstd::String>{"g"}));
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&k}),
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&sy, &sx}),
+        all_specs(), dstd::Vector<dstd::String>{"g"}));
 }
 
 }  // namespace
@@ -168,7 +173,11 @@ TEST_CASE("every group keeps its own accuracy at different offsets") {
     Series sy = Series::flat_f64(y.data(), n);
     Series sx = Series::flat_f64(x.data(), n);
     DataFrame r = dftu_utils_test::ok(dataframe::group_agg(
-        {&k}, {&sy, &sx}, all_specs(), dstd::Vector<dstd::String>{"g"}));
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&k}),
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&sy, &sx}),
+        all_specs(), dstd::Vector<dstd::String>{"g"}));
     REQUIRE(r.num_rows() == 2);
     const std::int64_t* g = r.column("g").data<std::int64_t>();
     check_against(r, two_pass(x0, y0), g[0] == 0 ? 0 : 1);

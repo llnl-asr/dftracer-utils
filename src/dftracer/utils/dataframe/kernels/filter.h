@@ -42,21 +42,21 @@ Series materialize(const Series& v);
 
 /// Gather the rows of `v` at `indices` into a new FLAT column. Handles every
 /// column type (nested List/Struct included) and propagates validity.
-Series take(const Series& v, const dstd::Vector<std::int64_t>& indices);
+Series take(const Series& v, dstd::Span<const std::int64_t> indices);
 /// The same over 32-bit indices, for a caller whose rows fit (a join whose
 /// sides are under 2^31 rows): half the index traffic, the same gather.
-Series take32(const Series& v, const dstd::Vector<std::int32_t>& indices);
+Series take32(const Series& v, dstd::Span<const std::int32_t> indices);
 /// Every column of a frame gathered by the same `n` indices, the index list
 /// scanned once for all of them (its bound and its null sentinels).
-dstd::Vector<Series> take_all(const dstd::Vector<Series>& columns,
+dstd::Vector<Series> take_all(dstd::Span<const Series> columns,
                               const std::int64_t* idx, std::int64_t n);
 /// The rows of `v` at `indices` as a SELECTION view over `v` (its flat root:
 /// a view over a view composes), no value data copied. What a frame filter
 /// hands each column, so a column the caller never reads is never gathered.
-Series select_rows(const Series& v, const dstd::Vector<std::int64_t>& indices);
+Series select_rows(const Series& v, dstd::Span<const std::int64_t> indices);
 /// The same over every column of a frame, the index buffer shared.
-dstd::Vector<Series> select_rows(const dstd::Vector<Series>& columns,
-                                 const dstd::Vector<std::int64_t>& indices);
+dstd::Vector<Series> select_rows(dstd::Span<const Series> columns,
+                                 dstd::Span<const std::int64_t> indices);
 
 }  // namespace dftracer::utils::dataframe
 

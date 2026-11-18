@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -101,8 +102,11 @@ TEST_SUITE("dataframe_large_types_compute") {
         CHECK(nfkc.string_at(0) == "caf\xC3\xA9 au lait");
         CHECK(nfkc.string_at(1) == "fi one two three");
         CHECK(nfkc.is_null(2));
-        Series tr = s.str_translate(Series::strings({"a", "o"}),
-                                    Series::strings({"A", "0"}));
+        Series tr = s.str_translate(
+            Series::strings(
+                dftu_utils_test::span_of<dstd::StringView>({"a", "o"})),
+            Series::strings(
+                dftu_utils_test::span_of<dstd::StringView>({"A", "0"})));
         REQUIRE(tr.valid());
         CHECK(tr.string_at(1) == "\xEF\xAC\x81 0ne tw0 three");
         CHECK(tr.is_null(2));
@@ -114,7 +118,8 @@ TEST_SUITE("dataframe_large_types_compute") {
 
     TEST_CASE("LargeString: is_in runs directly on the wide-offset column") {
         Series s = make_large_utf8({"a", "b", "c", "d"});
-        Series needles = Series::strings({"b", "d"});
+        Series needles = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"b", "d"}));
         REQUIRE(s.valid());
         REQUIRE(needles.valid());
         Series mask = s.is_in(needles);
@@ -266,8 +271,9 @@ TEST_SUITE("dataframe_large_types_compute") {
         df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = dftu_utils_test::ok(
-            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
+        DataFrame grouped = dftu_utils_test::ok(df.group_by(
+            "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                     {GroupAgg{Agg::Count, "v", "n"}})));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::LargeString);

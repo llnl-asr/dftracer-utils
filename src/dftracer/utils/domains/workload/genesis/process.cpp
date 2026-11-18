@@ -1531,11 +1531,13 @@ constexpr std::size_t WALK_WAYS = 64;
 // the same time, each with its part of the sort buffer, so the spilled chunks
 // are read back in parallel. Each part's merge gives the same order either
 // way, because the order is total.
-coro::CoroTask<GResult<void>> replay(
-    coro::Scope& ctx, dstd::Vector<FilePart>& parts,
-    const dstd::Vector<GroupReader::IdMap>& maps, const GroupReader& r,
-    const dstd::Deque<SetAcc>& sets, dstd::Deque<CallSorter>& sorters,
-    GroupMem& mem, GroupProgress* progress) {
+coro::CoroTask<GResult<void>> replay(coro::Scope& ctx,
+                                     dstd::Vector<FilePart>& parts,
+                                     dstd::Vector<GroupReader::IdMap> maps,
+                                     const GroupReader& r,
+                                     const dstd::Deque<SetAcc>& sets,
+                                     dstd::Deque<CallSorter>& sorters,
+                                     GroupMem& mem, GroupProgress* progress) {
     const std::size_t ways = sorters.size();
     std::uint64_t calls = 0;
     const dstd::Vector<ChunkRef> refs = chunk_refs(parts, &calls);
@@ -1698,8 +1700,8 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
     for (std::size_t w = 0; w < ways; ++w)
         sorters.emplace_back(
             SortLess{}, std::max<std::uint64_t>(1, mem.sort_budget / ways));
-    auto replayed = co_await replay(ctx, parts, maps, r, partials[0], sorters,
-                                    mem, progress);
+    auto replayed = co_await replay(ctx, parts, std::move(maps), r, partials[0],
+                                    sorters, mem, progress);
     if (!replayed) {
         result.over_budget = replayed.error().over_budget;
         skip_all(replayed.error().file, replayed.error().reason);

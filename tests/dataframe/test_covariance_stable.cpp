@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
@@ -33,7 +34,7 @@ struct Ref {
 
 // Neumaier-compensated sum: the reference must not lose digits to the very
 // cancellation under test (on some targets `long double` is a plain double).
-double compensated_sum(const dstd::Vector<double>& v) {
+double compensated_sum(dstd::Span<const double> v) {
     double sum = 0.0, c = 0.0;
     for (double x : v) {
         const double t = sum + x;
@@ -46,7 +47,7 @@ double compensated_sum(const dstd::Vector<double>& v) {
 // The corrected two-pass value over the pairs: deviations from the compensated
 // means, with the (sum dx)(sum dy) / n term removing the rounding error of the
 // means themselves.
-Ref two_pass(const dstd::Vector<double>& x, const dstd::Vector<double>& y) {
+Ref two_pass(dstd::Span<const double> x, dstd::Span<const double> y) {
     const double n = static_cast<double>(x.size());
     const double mx = compensated_sum(x) / n;
     const double my = compensated_sum(y) / n;
@@ -99,7 +100,7 @@ dstd::Vector<AggSpec> all_specs() {
     };
 }
 
-double at(const DataFrame& d, const char* name, std::int64_t row = 0) {
+double at(const DataFrame& d, dstd::StringView name, std::int64_t row = 0) {
     return d.column(name).data<double>()[row];
 }
 
@@ -112,8 +113,7 @@ void check_against(const DataFrame& r, const Ref& ref, std::int64_t row = 0) {
     CHECK(rel(at(r, "regr_r2", row), ref.r2) < 1e-9);
 }
 
-DataFrame one_group(const dstd::Vector<double>& x,
-                    const dstd::Vector<double>& y) {
+DataFrame one_group(dstd::Span<const double> x, dstd::Span<const double> y) {
     const std::int64_t n = static_cast<std::int64_t>(x.size());
     dstd::Vector<std::int64_t> keys(x.size(), 7);
     Series k = Series::flat_i64(keys.data(), n);
@@ -242,7 +242,8 @@ TEST_CASE("a column with no spread and a single pair read 0") {
     CHECK(at(r, "corr") == 0.0);
     CHECK(at(r, "regr_slope") == 0.0);
     CHECK(at(r, "covar_samp") == 0.0);
-    DataFrame one = one_group({1.0}, {2.0});
+    DataFrame one = one_group(dftu_utils_test::span_of<double>({1.0}),
+                              dftu_utils_test::span_of<double>({2.0}));
     CHECK(at(one, "corr") == 0.0);
     CHECK(at(one, "covar_samp") == 0.0);
 }

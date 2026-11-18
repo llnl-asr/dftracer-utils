@@ -61,11 +61,18 @@ void check_matches_eval(const Expr& root, dstd::Vector<DataType> input_types) {
 TEST_SUITE("expr infer_type") {
     TEST_CASE("bare column reference reports the full input DataType") {
         DataType ts = timestamp(TimeUnit::Micro, "UTC");
-        DataType out = dftu_utils_test::infer_type_ok(col(0), {ts});
+        DataType out = dftu_utils_test::infer_type_ok(
+            col(0),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                {ts}));
         CHECK(out == ts);
 
         DataType dec = decimal128(38, 9);
-        CHECK(dftu_utils_test::infer_type_ok(col(0), {dec}) == dec);
+        CHECK(
+            dftu_utils_test::infer_type_ok(
+                col(0),
+                dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                    {dec})) == dec);
     }
 
     TEST_CASE("arithmetic: int+int stays Int64, any float widens to Float64") {
@@ -88,7 +95,9 @@ TEST_SUITE("expr infer_type") {
 
     TEST_CASE("cast reports the requested target type") {
         DataType out = dftu_utils_test::infer_type_ok(
-            expr_cast(TypeId::Float64, col(0)), {scalar(TypeId::Int64)});
+            expr_cast(TypeId::Float64, col(0)),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                {scalar(TypeId::Int64)}));
         CHECK(out == scalar(TypeId::Float64));
         check_matches_eval(expr_cast(TypeId::Float64, col(0)),
                            {scalar(TypeId::Int64)});
@@ -118,31 +127,58 @@ TEST_SUITE("expr infer_type") {
         Scalar lo = to_scalar(std::int64_t{0});
         Scalar hi = to_scalar(std::int64_t{100});
         CHECK(
-            dftu_utils_test::infer_type_ok(expr_clip(col(0), lo, hi), {dur}) ==
-            scalar(TypeId::Duration));
-        CHECK(dftu_utils_test::infer_type_ok(expr_fillna(col(0), lo), {dur}) ==
-              scalar(TypeId::Duration));
+            dftu_utils_test::infer_type_ok(
+                expr_clip(col(0), lo, hi),
+                dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                    {dur})) == scalar(TypeId::Duration));
+        CHECK(
+            dftu_utils_test::infer_type_ok(
+                expr_fillna(col(0), lo),
+                dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                    {dur})) == scalar(TypeId::Duration));
     }
 
     TEST_CASE("an Unknown input column propagates Unknown, not a guess") {
         DataType unk = scalar(TypeId::Unknown);
-        CHECK(dftu_utils_test::infer_type_ok(col(0), {unk}).id ==
-              TypeId::Unknown);
-        CHECK(dftu_utils_test::infer_type_ok(col(0) + col(1),
-                                             {scalar(TypeId::Int64), unk})
-                  .id == TypeId::Unknown);
-        CHECK(dftu_utils_test::infer_type_ok(col(0) > std::int64_t{1}, {unk})
-                  .id == TypeId::Unknown);
-        CHECK(dftu_utils_test::infer_type_ok(expr_lower(col(0)), {unk}).id ==
-              TypeId::Unknown);
+        CHECK(
+            dftu_utils_test::infer_type_ok(
+                col(0),
+                dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                    {unk}))
+                .id == TypeId::Unknown);
+        CHECK(
+            dftu_utils_test::infer_type_ok(
+                col(0) + col(1),
+                dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                    {scalar(TypeId::Int64), unk}))
+                .id == TypeId::Unknown);
+        CHECK(
+            dftu_utils_test::infer_type_ok(
+                col(0) > std::int64_t{1},
+                dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                    {unk}))
+                .id == TypeId::Unknown);
+        CHECK(
+            dftu_utils_test::infer_type_ok(
+                expr_lower(col(0)),
+                dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                    {unk}))
+                .id == TypeId::Unknown);
     }
 
     TEST_CASE("a constant is a column of its type") {
-        CHECK(dftu_utils_test::infer_type_ok(lit(std::int64_t{1}),
-                                             {scalar(TypeId::Int64)})
-                  .id == TypeId::Int64);
-        CHECK(dftu_utils_test::infer_type_ok(lit(2.5), {scalar(TypeId::Int64)})
-                  .id == TypeId::Float64);
+        CHECK(
+            dftu_utils_test::infer_type_ok(
+                lit(std::int64_t{1}),
+                dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                    {scalar(TypeId::Int64)}))
+                .id == TypeId::Int64);
+        CHECK(
+            dftu_utils_test::infer_type_ok(
+                lit(2.5),
+                dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                    {scalar(TypeId::Int64)}))
+                .id == TypeId::Float64);
     }
 
     TEST_CASE("malformed expressions are refused, matching eval()'s contract") {

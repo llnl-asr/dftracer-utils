@@ -58,7 +58,9 @@ void same(const Series& got, const Series& want) {
 Series run(const Expr& e, const Series& s) {
     dstd::Vector<const Series*> in{&s};
     Series out = dftu_utils_test::eval_ok(e, in);
-    DataType dt = dftu_utils_test::infer_type_ok(e, {s.data_type()});
+    DataType dt = dftu_utils_test::infer_type_ok(
+        e, dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+               {s.data_type()}));
     REQUIRE(out.valid());
     CHECK(dt.id == out.type());
     return out;

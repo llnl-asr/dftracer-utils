@@ -22,6 +22,8 @@
 #include <bench_counters.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/string.h>
@@ -51,10 +53,10 @@ const char* const ROUTES[ROUTE_COUNT] = {"one_by_one", "collect_all",
 
 template <class T>
 void require_ok(const dstd::Expected<T, dstd::Error>& result,
-                const char* what) {
+                dstd::CStringView what) {
     if (result.has_value()) return;
     const auto& error = result.error();
-    std::fprintf(stderr, "%s failed: %.*s %.*s\n", what,
+    std::fprintf(stderr, "%s failed: %.*s %.*s\n", what.c_str(),
                  static_cast<int>(error.name().size()), error.name().data(),
                  static_cast<int>(error.message().size()),
                  error.message().data());
@@ -77,8 +79,7 @@ T run(coro::CoroTask<dstd::Result<T>> t) {
 
 // POSIX/STDIO reads and writes across pids with a string and a numeric arg,
 // one gzip member per ~1 MB of lines.
-void write_trace(const dstd::String& gz, std::int64_t events,
-                 std::uint64_t seed) {
+void write_trace(dstd::StringView gz, std::int64_t events, std::uint64_t seed) {
     require_ok(dstd::fs::write_file(gz, {}), "write_file");
     fileio::compress::GzipMemberCompressor comp(6);
     const char* names[] = {"read", "write", "open", "close", "fread", "fwrite"};
@@ -140,7 +141,7 @@ View open_view(const Setup& s) {
 
 // Five row-heavy plans of different shapes. `shape` varies the same five.
 dstd::Vector<dataframe::LazyFrame> make_plans(const View& tv,
-                                              const dstd::String& shape) {
+                                              dstd::StringView shape) {
     dstd::Vector<dataframe::LazyFrame> p;
     if (shape == "leading_select") {
         p.push_back(tv.duql("select ts, dur, name, cat").lazy());
@@ -251,7 +252,7 @@ double now_ms() {
 
 // Child: runs one way and prints
 // "RESULT <ms> <rss_before> <peak> <rows0> <sum0> ...".
-int child(const Setup& s, const dstd::String& route) {
+int child(const Setup& s, dstd::StringView route) {
     const View tv = open_view(s);
     dstd::Vector<dataframe::LazyFrame> plans = make_plans(tv, s.shape);
     const std::uint64_t before = dftu::bench::peak_heap_bytes();
@@ -292,11 +293,10 @@ struct Sample {
     dstd::Vector<dstd::String> seq;
 };
 
-Sample spawn(const dstd::String& self, const Setup& s,
-             const dstd::String& route) {
-    const dstd::String cmd = "'" + self + "' --child " + route + " --files " +
-                             dstd::to_string(s.files) + " --shape " + s.shape +
-                             " --dir '" + s.dir + "'";
+Sample spawn(dstd::StringView self, const Setup& s, dstd::StringView route) {
+    const dstd::String cmd =
+        dstd::fmt<"'{}' --child {} --files {} --shape {} --dir '{}'">(
+            self, route, s.files, s.shape, s.dir);
     FILE* pipe = popen(cmd.c_str(), "r");
     if (!pipe) {
         std::fprintf(stderr, "popen failed\n");

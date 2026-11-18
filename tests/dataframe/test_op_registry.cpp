@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -594,8 +595,8 @@ Cells cells_of(const dftu_series* c) {
     return out;
 }
 
-Cells cells_of_column(const dftu_dataframe* df, const char* name) {
-    dftu_series* c = dftu_dataframe_column(df, name);
+Cells cells_of_column(const dftu_dataframe* df, dstd::CStringView name) {
+    dftu_series* c = dftu_dataframe_column(df, name.c_str());
     Cells out = cells_of(c);
     dftu_series_free(c);
     return out;

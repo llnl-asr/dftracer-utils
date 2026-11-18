@@ -53,12 +53,14 @@
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -114,9 +116,9 @@ constexpr std::int64_t HEAD_BY_N = 2;
 // 8-byte offset.
 constexpr std::uint64_t ROW_BYTES = 5 * 8 + 13 + 8;
 
-void check(bool ok, const char* what) {
+void check(bool ok, dftracer::utils::dstd::CStringView what) {
     if (ok) return;
-    std::fprintf(stderr, "check failed: %s\n", what);
+    std::fprintf(stderr, "check failed: %s\n", what.c_str());
     std::exit(1);
 }
 
@@ -522,7 +524,7 @@ const char* written_source() {
 #endif
 }
 
-const Case* find_case(const dftracer::utils::dstd::Vector<Case>& cases,
+const Case* find_case(dftracer::utils::dstd::Span<const Case> cases,
                       dftracer::utils::dstd::StringView name) {
     for (const Case& c : cases)
         if (c.name == name) return &c;
@@ -570,8 +572,8 @@ struct ChildResult {
 };
 
 dftracer::utils::dstd::Optional<ChildResult> run_child(
-    const dftracer::utils::dstd::String& binary,
-    const dftracer::utils::dstd::String& name, std::uint64_t budget) {
+    dftracer::utils::dstd::CStringView binary,
+    dftracer::utils::dstd::CStringView name, std::uint64_t budget) {
     int fds[2];
     if (::pipe(fds) != 0) return dftracer::utils::dstd::nullopt;
     const dftracer::utils::dstd::String budget_arg =
@@ -628,7 +630,7 @@ dftracer::utils::dstd::String budget_label(std::uint64_t budget) {
                          : dftracer::utils::dstd::fmt<"{} MiB">(budget / MIB);
 }
 
-int drive(const dftracer::utils::dstd::String& self) {
+int drive(dftracer::utils::dstd::CStringView self) {
     dftracer::utils::dstd::Vector<Case> cases = make_cases();
     const std::size_t headroom =
         dftracer::utils::memory::detail::Manager::get().spill_headroom();

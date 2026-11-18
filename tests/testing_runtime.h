@@ -10,6 +10,7 @@
 #include <dftracer/utils/coro/run_loop.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <task_result.h>
 
@@ -33,7 +34,7 @@ constexpr std::size_t pool_width(std::size_t n) {
 /// The runtime is shut down before returning, so anything the body spawned has
 /// completed by then. `tag` names the submission in the runtime's logs.
 template <typename Fn>
-void run_coro(Fn&& fn, const char* tag = "test") {
+void run_coro(Fn&& fn, dftracer::utils::dstd::StringView tag = "test") {
     dftracer::utils::Runtime rt(4);
     ok(rt.submit(dftracer::utils::coro::with_scope(std::forward<Fn>(fn)), tag)
            .wait());

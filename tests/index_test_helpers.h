@@ -25,7 +25,7 @@
 namespace dftu_utils_test {
 
 inline dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> dstd_paths(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& paths) {
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> paths) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
     out.reserve(paths.size());
     for (const auto& path : paths) out.emplace_back(path);

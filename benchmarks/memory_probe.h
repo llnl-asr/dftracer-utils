@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <new>
+#include <string_view>
 
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -95,10 +96,10 @@ inline std::size_t block_size(void* p) { return malloc_size(p); }
 
 namespace detail {
 
-inline std::uint64_t kib_field(const char* line, const char* key) {
-    const std::size_t n = std::strlen(key);
-    if (std::strncmp(line, key, n) != 0) return 0;
-    return std::strtoull(line + n, nullptr, 10) * 1024;
+inline std::uint64_t kib_field(std::string_view line, std::string_view key) {
+    const std::size_t n = key.size();
+    if (line.compare(0, n, key) != 0) return 0;
+    return std::strtoull(line.data() + n, nullptr, 10) * 1024;
 }
 
 inline bool cgroup_anon_bytes(std::uint64_t& out) {

@@ -894,18 +894,35 @@ struct TemporalCase {
 dstd::Vector<TemporalCase> temporal_cases() {
     dstd::Vector<TemporalCase> cases;
     cases.push_back(
-        {"ts_s", make_timestamp({10, 20, 30, 40}, TimeUnit::Second, nullptr)});
-    cases.push_back({"ts_ms_utc",
-                     make_timestamp({10, 20, 30, 40}, TimeUnit::Milli, "UTC")});
+        {"ts_s", make_timestamp(
+                     dftu_utils_test::span_of<std::int64_t>({10, 20, 30, 40}),
+                     TimeUnit::Second, "")});
     cases.push_back(
-        {"ts_ns_zone",
-         make_timestamp({10, 20, 30, 40}, TimeUnit::Nano, "America/Chicago")});
-    cases.push_back({"date32", make_date32({10, 20, 30, 40})});
-    cases.push_back({"date64", make_date64({10, 20, 30, 40})});
-    cases.push_back({"time32", make_time32({10, 20, 30, 40}, TimeUnit::Milli)});
-    cases.push_back({"time64", make_time64({10, 20, 30, 40}, TimeUnit::Micro)});
+        {"ts_ms_utc", make_timestamp(dftu_utils_test::span_of<std::int64_t>(
+                                         {10, 20, 30, 40}),
+                                     TimeUnit::Milli, "UTC")});
     cases.push_back(
-        {"dur_ns", make_duration({10, 20, 30, 40}, TimeUnit::Nano)});
+        {"ts_ns_zone", make_timestamp(dftu_utils_test::span_of<std::int64_t>(
+                                          {10, 20, 30, 40}),
+                                      TimeUnit::Nano, "America/Chicago")});
+    cases.push_back(
+        {"date32", make_date32(dftu_utils_test::span_of<std::int32_t>(
+                       {10, 20, 30, 40}))});
+    cases.push_back(
+        {"date64", make_date64(dftu_utils_test::span_of<std::int64_t>(
+                       {10, 20, 30, 40}))});
+    cases.push_back(
+        {"time32",
+         make_time32(dftu_utils_test::span_of<std::int32_t>({10, 20, 30, 40}),
+                     TimeUnit::Milli)});
+    cases.push_back(
+        {"time64",
+         make_time64(dftu_utils_test::span_of<std::int64_t>({10, 20, 30, 40}),
+                     TimeUnit::Micro)});
+    cases.push_back(
+        {"dur_ns",
+         make_duration(dftu_utils_test::span_of<std::int64_t>({10, 20, 30, 40}),
+                       TimeUnit::Nano)});
     return cases;
 }
 
@@ -934,8 +951,12 @@ TEST_CASE(
 TEST_CASE("a temporal aggregate holds the right values and survives the wire") {
     dstd::Vector<std::int64_t> k{0, 1, 0, 1};
     Series key = Series::flat_i64(k.data(), 4);
-    Series ts = make_timestamp({10, 20, 30, 40}, TimeUnit::Milli, "UTC");
-    Series dur = make_duration({10, 20, 30, 40}, TimeUnit::Nano);
+    Series ts =
+        make_timestamp(dftu_utils_test::span_of<std::int64_t>({10, 20, 30, 40}),
+                       TimeUnit::Milli, "UTC");
+    Series dur =
+        make_duration(dftu_utils_test::span_of<std::int64_t>({10, 20, 30, 40}),
+                      TimeUnit::Nano);
     dstd::Vector<AggSpec> specs{
         AggSpec{AggOp::Max, 0, "max_ts"}, AggSpec{AggOp::Mean, 0, "mean_ts"},
         AggSpec{AggOp::Sum, 1, "sum_dur"}, AggSpec{AggOp::Count, -1, "n"}};
@@ -999,11 +1020,16 @@ struct NullGroupColumns {
         dstd::Vector<dstd::StringView> t{"p", "q", "", ""};
         text = Series::strings(dstd::Span<const dstd::StringView>(t.data(), 4),
                                bits.data());
-        ts = make_timestamp({10, 20, 0, 0}, TimeUnit::Nano, "UTC");
+        ts = make_timestamp(
+            dftu_utils_test::span_of<std::int64_t>({10, 20, 0, 0}),
+            TimeUnit::Nano, "UTC");
         set_validity(ts.handle(), bits.data(), 4);
-        d32 = make_date32({10, 20, 0, 0});
+        d32 =
+            make_date32(dftu_utils_test::span_of<std::int32_t>({10, 20, 0, 0}));
         set_validity(d32.handle(), bits.data(), 4);
-        dur = make_duration({10, 20, 0, 0}, TimeUnit::Milli);
+        dur = make_duration(
+            dftu_utils_test::span_of<std::int64_t>({10, 20, 0, 0}),
+            TimeUnit::Milli);
         set_validity(dur.handle(), bits.data(), 4);
     }
 
@@ -1110,8 +1136,9 @@ TEST_CASE("a null group stays null across serialize, merge and the spill cut") {
 
 TEST_CASE("the spill cut keeps a temporal group key's unit and zone") {
     dstd::Vector<std::int64_t> v{1, 2, 3, 4};
-    Series key =
-        make_timestamp({100, 200, 100, 300}, TimeUnit::Nano, "America/Chicago");
+    Series key = make_timestamp(
+        dftu_utils_test::span_of<std::int64_t>({100, 200, 100, 300}),
+        TimeUnit::Nano, "America/Chicago");
     Series val = Series::flat_i64(v.data(), 4);
     dstd::Vector<const Series*> keys{&key};
     dstd::Vector<const Series*> values{&val};
@@ -1203,7 +1230,8 @@ TEST_CASE(
     "refused") {
     dstd::Vector<std::int64_t> k{0, 0};
     Series key = Series::flat_i64(k.data(), 2);
-    Series ts = make_timestamp({5, 7}, TimeUnit::Nano, "");
+    Series ts = make_timestamp(dftu_utils_test::span_of<std::int64_t>({5, 7}),
+                               TimeUnit::Nano, "");
     dstd::Vector<const Series*> keys{&key};
     dstd::Vector<const Series*> values{&ts};
     dstd::Vector<AggSpec> specs{AggSpec{AggOp::Max, 0, "s"}};
@@ -1242,10 +1270,15 @@ TEST_CASE("agg_merge refuses partials of another temporal type, unit or zone") {
         return dftu_utils_test::ok(
             dataframe::group_agg_state(keys, values, specs));
     };
-    Series ns = make_timestamp({1, 2}, TimeUnit::Nano, "UTC");
-    Series ms = make_timestamp({1, 2}, TimeUnit::Milli, "UTC");
-    Series zoned = make_timestamp({1, 2}, TimeUnit::Nano, "America/Chicago");
-    Series dur = make_duration({1, 2}, TimeUnit::Nano);
+    Series ns = make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 2}),
+                               TimeUnit::Nano, "UTC");
+    Series ms = make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 2}),
+                               TimeUnit::Milli, "UTC");
+    Series zoned =
+        make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 2}),
+                       TimeUnit::Nano, "America/Chicago");
+    Series dur = make_duration(dftu_utils_test::span_of<std::int64_t>({1, 2}),
+                               TimeUnit::Nano);
     for (const Series* other : {&ms, &zoned, &dur}) {
         auto into = build(ns);
         auto b = build(*other);

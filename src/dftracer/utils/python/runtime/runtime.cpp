@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/string.h>
@@ -76,7 +77,7 @@ static bool set_double(PyObject *d, const char *key, double val) {
 }
 
 static bool set_str(PyObject *d, const char *key,
-                    const dftracer::utils::dstd::String &val) {
+                    dftracer::utils::dstd::CStringView val) {
     return dict_set_str(d, key, val.c_str()) == 0;
 }
 

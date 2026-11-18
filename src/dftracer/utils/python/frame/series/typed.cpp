@@ -34,7 +34,7 @@ Series flat_copy(const Series& s) {
 }  // namespace
 
 Series retype_series(const Series& s, TypeId type, dataframe::TimeUnit unit,
-                     const dftracer::utils::dstd::String& zone, int precision,
+                     dftracer::utils::dstd::StringView zone, int precision,
                      int scale, int width) {
     Series flat = flat_copy(s);
     const auto from_width = dataframe::byte_width(flat.type());

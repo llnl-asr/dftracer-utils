@@ -21,6 +21,7 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/c_api_udf.h>
 #include <dftracer/utils/dataframe/udf_registry.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/singleton.h>
@@ -441,7 +442,7 @@ void batch_free_bound(void* bound) {
     dstd::UniquePtr<BatchBound> owner(static_cast<BatchBound*>(bound));
 }
 
-PyObject* raise_error(PyObject* type, const dstd::String& message) {
+PyObject* raise_error(PyObject* type, dstd::CStringView message) {
     PyErr_SetString(type, message.c_str());
     return nullptr;
 }

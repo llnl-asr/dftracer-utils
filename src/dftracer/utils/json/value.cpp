@@ -493,7 +493,8 @@ bool ValueAccess::begin_object(Value& v, ObjectWalk& out) {
         return false;
     if (!note(*v.owner_, inner(v).get_object().get(out.object))) return false;
     v.state_ = SPENT;
-    out.end = v.owner_->end();
+    out.rest = dstd::StringView(
+        v.start_, static_cast<std::size_t>(v.owner_->end() - v.start_));
     out.strings = &v.owner_->strings;
     return true;
 }
@@ -502,7 +503,8 @@ bool ValueAccess::begin_value(Value& v, ValueWalk& out) {
     if (!v.owner_ || !v.start_ || !v.fresh_for_read()) return false;
     out.value = inner(v);
     v.state_ = SPENT;
-    out.end = v.owner_->end();
+    out.rest = dstd::StringView(
+        v.start_, static_cast<std::size_t>(v.owner_->end() - v.start_));
     out.strings = &v.owner_->strings;
     return true;
 }

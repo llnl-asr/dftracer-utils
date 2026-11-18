@@ -18,10 +18,12 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/function_ref.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -54,10 +56,10 @@ duql::Query parsed_query(dstd::StringView text) {
 template <class T>
 void require_ok(const dftracer::utils::dstd::Expected<
                     T, dftracer::utils::dstd::Error>& result,
-                const char* what) {
+                dftracer::utils::dstd::CStringView what) {
     if (result.has_value()) return;
     const auto& error = result.error();
-    std::fprintf(stderr, "%s failed: %.*s %.*s\n", what,
+    std::fprintf(stderr, "%s failed: %.*s %.*s\n", what.c_str(),
                  static_cast<int>(error.name().size()), error.name().data(),
                  static_cast<int>(error.message().size()),
                  error.message().data());
@@ -80,8 +82,8 @@ T run(coro::CoroTask<dstd::Result<T>> t) {
 
 // A multi-member trace: POSIX/STDIO reads and writes across pids with a
 // string and a numeric arg, one gzip member per ~1 MB of lines.
-dstd::String write_trace(const dstd::String& dir, std::int64_t events) {
-    const dstd::String gz = dir + "/bench.pfw.gz";
+dstd::String write_trace(dstd::StringView dir, std::int64_t events) {
+    const dstd::String gz = dstd::String(dir) + "/bench.pfw.gz";
     require_ok(dstd::fs::write_file(gz, {}), "write_file");
     fileio::compress::GzipMemberCompressor comp(6);
     const char* names[] = {"read", "write", "open", "close", "fread", "fwrite"};
@@ -123,8 +125,8 @@ dstd::String write_trace(const dstd::String& dir, std::int64_t events) {
 
 // Records whose `blk` changes every 10000 events, so each key sits in a
 // few chunks.
-dstd::String write_clustered(const dstd::String& dir, std::int64_t events) {
-    const dstd::String gz = dir + "/clustered.pfw.gz";
+dstd::String write_clustered(dstd::StringView dir, std::int64_t events) {
+    const dstd::String gz = dstd::String(dir) + "/clustered.pfw.gz";
     require_ok(dstd::fs::write_file(gz, {}), "write_file");
     fileio::compress::GzipMemberCompressor comp(6);
     dstd::String chunk;
@@ -155,8 +157,8 @@ dstd::String write_clustered(const dstd::String& dir, std::int64_t events) {
 }
 
 // The same records without a ph, read by path.
-dstd::String write_generic(const dstd::String& dir, std::int64_t records) {
-    const dstd::String gz = dir + "/bench.ndjson.gz";
+dstd::String write_generic(dstd::StringView dir, std::int64_t records) {
+    const dstd::String gz = dstd::String(dir) + "/bench.ndjson.gz";
     require_ok(dstd::fs::write_file(gz, {}), "write_file");
     fileio::compress::GzipMemberCompressor comp(6);
     const char* ops[] = {"read", "write", "open", "close"};
@@ -215,9 +217,11 @@ std::int64_t int_at(const dataframe::DataFrame& f, std::size_t c,
 // of collect() gets its own rows.
 template <class Row, class Fill>
 dstd::Vector<Row> rows_via_collect(const View& v,
-                                   const dstd::Vector<dstd::String>& names,
+                                   dstd::Span<const dstd::String> names,
                                    Fill fill) {
-    dataframe::DataFrame f = run(v.select(names).collect());
+    dataframe::DataFrame f =
+        run(v.select(dstd::Vector<dstd::String>(names.begin(), names.end()))
+                .collect());
     for (auto& c : f.columns)
         if (c.type() != dataframe::TypeId::String) c = c.materialize();
     dstd::Vector<std::size_t> at;
@@ -242,8 +246,8 @@ double median(dstd::Vector<double> v) {
 }
 
 // 95% bootstrap interval of median(view) / median(base).
-dstd::Pair<double, double> ratio_ci(const dstd::Vector<double>& base_t,
-                                    const dstd::Vector<double>& view_t) {
+dstd::Pair<double, double> ratio_ci(dstd::Span<const double> base_t,
+                                    dstd::Span<const double> view_t) {
     std::mt19937_64 rng(11);
     std::uniform_int_distribution<std::size_t> pick(0, base_t.size() - 1);
     dstd::Vector<double> ratios;
@@ -287,7 +291,7 @@ int main(int argc, char** argv) {
     const trace::views::detail::scan::ScanPlan base =
         trace::views::detail::scan::from_file(gz);
     const auto cols = tv.schema();
-    auto at = [&](const char* name) {
+    auto at = [&](dstd::StringView name) {
         return static_cast<std::int32_t>(
             std::find(cols.begin(), cols.end(), name) - cols.begin());
     };
@@ -300,18 +304,21 @@ int main(int argc, char** argv) {
     run(View::from_file(clustered).agg({{AggOp::Count, "", "n"}}).collect());
     const View cv = View::from_file(clustered);
 
+    const dstd::String event_columns[] = {"name", "dur", "args.size"};
+    const dstd::String generic_columns[] = {"op", "lat", "io.size"};
     dstd::Vector<Case> cases;
-    auto add = [&cases](const char* name, dstd::Function<void()> baseline,
+    auto add = [&cases](dstd::CStringView name, dstd::Function<void()> baseline,
                         dstd::Function<void()> view) {
-        cases.push_back(Case{name, std::move(baseline), std::move(view)});
+        cases.push_back(
+            Case{name.c_str(), std::move(baseline), std::move(view)});
     };
     add(
         "typed rows vs collect + read",
         [&] {
             rows_via_collect<EventRow>(
-                tv, {"name", "dur", "args.size"},
+                tv, event_columns,
                 [](const dataframe::DataFrame& f,
-                   const dstd::Vector<std::size_t>& col_idx, std::int64_t r,
+                   dstd::Span<const std::size_t> col_idx, std::int64_t r,
                    EventRow& row) {
                     row.name.value =
                         dstd::String(f.columns[col_idx[0]].string_at(r));
@@ -324,9 +331,9 @@ int main(int argc, char** argv) {
         "generic typed rows vs collect + read",
         [&] {
             rows_via_collect<GenericRow>(
-                gv, {"op", "lat", "io.size"},
+                gv, generic_columns,
                 [](const dataframe::DataFrame& f,
-                   const dstd::Vector<std::size_t>& col_idx, std::int64_t r,
+                   dstd::Span<const std::size_t> col_idx, std::int64_t r,
                    GenericRow& row) {
                     row.op.value =
                         dstd::String(f.columns[col_idx[0]].string_at(r));

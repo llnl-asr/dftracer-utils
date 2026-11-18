@@ -1686,8 +1686,10 @@ TEST_SUITE("vec") {
             dataframe::expr_binary(dataframe::BinaryOp::Mul, sum_ab,
                                    dataframe::expr_lit(std::int64_t{2}));
         // Two outputs sharing `a+b`; the shared node is computed once (CSE).
-        dstd::Vector<dataframe::Series> outs =
-            dftu_utils_test::eval_many_ok({sum_ab, twice}, in);
+        dstd::Vector<dataframe::Series> outs = dftu_utils_test::eval_many_ok(
+            dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                {sum_ab, twice}),
+            in);
         REQUIRE(outs.size() == 2);
         REQUIRE(outs[0].length() == 4);
         CHECK(outs[0].data<std::int64_t>()[0] == 11);

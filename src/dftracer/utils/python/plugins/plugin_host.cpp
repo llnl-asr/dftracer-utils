@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/host/config.h>
@@ -390,11 +391,12 @@ PyObject* ph_run(PluginHostObject* self, PyObject* args, PyObject* kwds) {
 // set on failure.
 bool dict_set_list(
     PyObject* d, const char* key,
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& items) {
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> items) {
     PyObject* list = PyList_New(0);
     if (!list) return false;
     for (const auto& s : items) {
-        PyObject* item = PyUnicode_FromString(s.c_str());
+        PyObject* item = PyUnicode_FromStringAndSize(
+            s.data(), static_cast<Py_ssize_t>(s.size()));
         if (!item) {
             Py_DECREF(list);
             return false;

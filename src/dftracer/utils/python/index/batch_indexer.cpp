@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -389,11 +390,12 @@ static bool run_indexer(IndexerObject* self, IndexerCall call,
 }
 
 static PyObject* string_list(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& items) {
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> items) {
     PyObject* list = PyList_New(static_cast<Py_ssize_t>(items.size()));
     if (!list) return nullptr;
     for (std::size_t i = 0; i < items.size(); ++i) {
-        PyObject* s = PyUnicode_FromString(items[i].c_str());
+        PyObject* s = PyUnicode_FromStringAndSize(
+            items[i].data(), static_cast<Py_ssize_t>(items[i].size()));
         if (!s) {
             Py_DECREF(list);
             return nullptr;
@@ -669,7 +671,7 @@ PidSet file_pids(const dftracer::utils::trace::index::Snapshot& snapshot,
 }
 
 // Every indexed file with its PID set, keyed by the path the index names it by.
-PidsByPath all_file_pids(const dftracer::utils::dstd::String& index_path) {
+PidsByPath all_file_pids(dftracer::utils::dstd::StringView index_path) {
     const auto snapshot = dftracer::utils::python::core::py_unwrap(
         dftracer::utils::trace::index::plan::open_snapshot(index_path));
     PidsByPath out;

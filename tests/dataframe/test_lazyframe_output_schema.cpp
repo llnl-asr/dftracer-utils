@@ -184,7 +184,8 @@ TEST_SUITE("LazyFrame output_schema") {
         DataFrame df;
         df.names = dstd::make_shared_strings({"ts"});
         df.columns.push_back(
-            make_timestamp({1, 2, 3}, TimeUnit::Micro, "America/Chicago"));
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 2, 3}),
+                           TimeUnit::Micro, "America/Chicago"));
         LazyFrame lf =
             LazyFrame::scan(src(std::move(df))).fill_null(std::int64_t{0});
         Schema s = lf.output_schema();
@@ -199,8 +200,11 @@ TEST_SUITE("LazyFrame output_schema") {
         "Decimal128's precision/scale") {
         DataFrame df;
         df.names = dstd::make_shared_strings({"ts", "dec", "n"});
-        df.columns.push_back(make_timestamp({1, 2, 3}, TimeUnit::Nano, "UTC"));
-        df.columns.push_back(make_decimal128({1, 2, 3}, 38, 9));
+        df.columns.push_back(
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 2, 3}),
+                           TimeUnit::Nano, "UTC"));
+        df.columns.push_back(make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({1, 2, 3}), 38, 9));
         df.columns.push_back(i64({3, 1, 2}));
 
         LazyFrame lf = LazyFrame::scan(src(std::move(df)))
@@ -389,9 +393,11 @@ TEST_SUITE("LazyFrame output_schema") {
         df.names = dstd::make_shared_strings({"cat", "dec", "ts"});
         df.columns.push_back(Series::strings(
             dftu_utils_test::span_of<dstd::StringView>({"x", "x", "y"})));
-        df.columns.push_back(make_decimal128({100, 200, 300}, 38, 9));
+        df.columns.push_back(make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({100, 200, 300}), 38, 9));
         df.columns.push_back(
-            make_timestamp({1, 2, 3}, TimeUnit::Micro, "America/Chicago"));
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 2, 3}),
+                           TimeUnit::Micro, "America/Chicago"));
         LazyFrame lf =
             LazyFrame::scan(src(std::move(df)))
                 .group_by("cat", {GroupAgg{Agg::Sum, "dec", "sum_dec"},
@@ -420,10 +426,15 @@ TEST_SUITE("LazyFrame output_schema") {
         df.columns.push_back(Series::strings(
             dftu_utils_test::span_of<dstd::StringView>({"x", "x", "y", "y"})));
         df.columns.push_back(
-            make_timestamp({1, 2, 3, 4}, TimeUnit::Nano, "UTC"));
-        df.columns.push_back(make_date32({1, 2, 3, 4}));
-        df.columns.push_back(make_date64({1, 2, 3, 4}));
-        df.columns.push_back(make_duration({1, 2, 3, 4}, TimeUnit::Milli));
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 2, 3, 4}),
+                           TimeUnit::Nano, "UTC"));
+        df.columns.push_back(
+            make_date32(dftu_utils_test::span_of<std::int32_t>({1, 2, 3, 4})));
+        df.columns.push_back(
+            make_date64(dftu_utils_test::span_of<std::int64_t>({1, 2, 3, 4})));
+        df.columns.push_back(
+            make_duration(dftu_utils_test::span_of<std::int64_t>({1, 2, 3, 4}),
+                          TimeUnit::Milli));
         LazyFrame lf =
             LazyFrame::scan(src(std::move(df)))
                 .group_by("cat", {GroupAgg{Agg::Max, "ts", "max_ts"},
@@ -454,9 +465,13 @@ TEST_SUITE("LazyFrame output_schema") {
         df.columns.push_back(Series::strings(
             dftu_utils_test::span_of<dstd::StringView>({"x", "x", "y", "y"})));
         df.columns.push_back(
-            make_timestamp({1, 2, 3, 4}, TimeUnit::Nano, "UTC"));
-        df.columns.push_back(make_date32({1, 2, 3, 4}));
-        df.columns.push_back(make_duration({1, 2, 3, 4}, TimeUnit::Milli));
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 2, 3, 4}),
+                           TimeUnit::Nano, "UTC"));
+        df.columns.push_back(
+            make_date32(dftu_utils_test::span_of<std::int32_t>({1, 2, 3, 4})));
+        df.columns.push_back(
+            make_duration(dftu_utils_test::span_of<std::int64_t>({1, 2, 3, 4}),
+                          TimeUnit::Milli));
         df.columns.push_back(Series::strings(
             dftu_utils_test::span_of<dstd::StringView>({"a", "b", "c", "d"})));
         LazyFrame lf = LazyFrame::scan(src(std::move(df)));

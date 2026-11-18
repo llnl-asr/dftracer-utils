@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -37,7 +38,7 @@ struct StaleCheck {
 // edit with a restored mtime is invisible here.
 StaleCheck stale_check(
     const trace::index::Index &index,
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> &paths) {
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> paths) {
     const trace::index::Snapshot snapshot =
         dftracer::utils::python::core::py_unwrap(index.snapshot());
 

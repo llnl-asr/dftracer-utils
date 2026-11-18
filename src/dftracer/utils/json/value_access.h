@@ -25,8 +25,9 @@ struct EventView {
 /// The members of an object for one forward walk with simdjson's own iteration.
 struct ObjectWalk {
     simdjson::ondemand::object object;
-    /// One past the last byte of the line, the limit for @ref value_extent.
-    const char* end = nullptr;
+    /// The text from the start of the value to the end of the line; its end
+    /// is the limit for @ref value_extent.
+    dstd::StringView rest;
     /// The string arena of the owning @ref Document, for @ref read_key and
     /// @ref read_string.
     dstd::StringArena* strings = nullptr;
@@ -35,8 +36,9 @@ struct ObjectWalk {
 /// The root value for one forward read through simdjson's own types.
 struct ValueWalk {
     simdjson::ondemand::value value;
-    /// One past the last byte of the line, the limit for @ref value_extent.
-    const char* end = nullptr;
+    /// The text from the start of the value to the end of the line; its end
+    /// is the limit for @ref value_extent.
+    dstd::StringView rest;
     /// The string arena of the owning @ref Document, for @ref read_key and
     /// @ref read_string.
     dstd::StringArena* strings = nullptr;

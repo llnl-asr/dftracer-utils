@@ -1077,7 +1077,8 @@ TEST_SUITE("DFTracerView JSON cell printer") {
     }
 
     TEST_CASE("FixedSizeBinary reads its declared width") {
-        auto fsb = dataframe::test_types::make_fixed_size_binary({"ab\"c"}, 4);
+        auto fsb = dataframe::test_types::make_fixed_size_binary(
+            dftu_utils_test::span_of<dstd::String>({"ab\"c"}), 4);
         CHECK(cell(fsb, 0) == "\"ab\\\"c\"");
     }
 

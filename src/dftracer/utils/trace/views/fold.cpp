@@ -974,14 +974,14 @@ class OnDemandReader {
     // the other top-level ones.
     OnDemandReader(FoldEvent& ev, dftracer::utils::dstd::StringIntern& intern,
                    dftracer::utils::dstd::InternCache* cache, bool needs_args,
-                   const char* end, dstd::StringArena& arena,
+                   dstd::StringView rest, dstd::StringArena& arena,
                    bool capture_schema = false, DecodeHints* hints = nullptr)
         : ev_(ev),
           out_(&ev),
           ids_{intern, cache},
           plain_{intern, nullptr},
           needs_args_(needs_args),
-          end_(end),
+          end_(rest.data() + rest.size()),
           arena_(arena),
           schema_(capture_schema),
           walk_(capture_schema && needs_args && hints != nullptr),
@@ -2002,7 +2002,7 @@ DftracerRead read_dftracer(FoldEvent& ev, json::Value& event,
     if (!json::detail::ValueAccess::begin_object(event, walk))
         return DftracerRead::NotEvent;
     trace::internal::parse_walks::record_walk();
-    OnDemandReader reader(ev, intern, cache, needs_args, walk.end,
+    OnDemandReader reader(ev, intern, cache, needs_args, walk.rest,
                           *walk.strings, capture_schema, hints);
     bool ok = reader.run(walk.object);
     if (ok && reader.has_event() && captures && !captures->empty())
@@ -2479,9 +2479,13 @@ LeafDecode make_leaf_decode(
 // decode_leaves over a record that is read once, forward.
 class PathReader {
    public:
-    PathReader(LeafDecode& d, dstd::String& path, const char* end,
+    PathReader(LeafDecode& d, dstd::String& path, dstd::StringView rest,
                dstd::StringArena& arena)
-        : d_(d), ids_(d.ids()), path_(path), end_(end), arena_(arena) {}
+        : d_(d),
+          ids_(d.ids()),
+          path_(path),
+          end_(rest.data() + rest.size()),
+          arena_(arena) {}
 
     // False on a read error. `path_` holds the path of the container.
     bool members(simdjson::ondemand::object& object) {
@@ -2533,8 +2537,12 @@ class PathReader {
             return leaf(v, type);
         const bool is_array = type == OnDemandType::array;
         const bool json_field = d_.json && !path_.empty();
-        const char* const start =
+        const char* const token =
             json_field || d_.max_children ? v.raw_json_token().data() : nullptr;
+        const dstd::StringView start =
+            token ? dstd::StringView(token,
+                                     static_cast<std::size_t>(end_ - token))
+                  : dstd::StringView();
         const bool listed =
             d_.paths && !path_.empty() && position(*d_.paths, path_);
         if (json_field && !listed) capture_json(start, is_array);
@@ -2549,8 +2557,12 @@ class PathReader {
         }
         if (d_.paths && !path_.empty() && !wanted_below(*d_.paths, path_))
             return true;
-        if (depth_ >= MAX_READ_DEPTH)
-            return collapse(v.raw_json_token().data(), is_array, true);
+        if (depth_ >= MAX_READ_DEPTH) {
+            const char* const at = v.raw_json_token().data();
+            return collapse(
+                dstd::StringView(at, static_cast<std::size_t>(end_ - at)),
+                is_array, true);
+        }
         const bool counted = d_.max_children && !path_.empty();
         std::size_t count = 0;
         if (is_array) {
@@ -2585,15 +2597,14 @@ class PathReader {
         return ok;
     }
 
-    dstd::String canonical_text(const char* start) const {
+    dstd::String canonical_text(dstd::StringView start) const {
         return dftracer::utils::json::canonical_json_text(
-            json::detail::value_extent(dstd::StringView(
-                start, static_cast<std::size_t>(end_ - start))));
+            json::detail::value_extent(start));
     }
 
     // A declared json field at an object or array: its canonical text, keyed
     // by the field's path; the leaves below are decoded as well.
-    void capture_json(const char* start, bool is_array) {
+    void capture_json(dstd::StringView start, bool is_array) {
         std::size_t pos = 0;
         if (d_.paths) {
             const auto at = position(*d_.paths, path_);
@@ -2614,7 +2625,7 @@ class PathReader {
 
     // An array or object past max_children, or below the depth limit: one
     // leaf of its canonical text, or of its text as written when `raw`.
-    bool collapse(const char* start, bool is_array, bool raw = false) {
+    bool collapse(dstd::StringView start, bool is_array, bool raw = false) {
         using dftracer::utils::trace::index::store::PathType;
         const std::uint32_t id = ids_.get_or_insert(path_);
         // A declared json field already holds its text.
@@ -2624,8 +2635,7 @@ class PathReader {
                 id, static_cast<std::uint8_t>(is_array ? PathType::Array
                                                        : PathType::Object));
         const dstd::String text =
-            raw ? dstd::String(json::detail::value_extent(dstd::StringView(
-                      start, static_cast<std::size_t>(end_ - start))))
+            raw ? dstd::String(json::detail::value_extent(start))
                 : canonical_text(start);
         d_.ev.args.emplace_back(id, ids_.get_or_insert(text));
         d_.ev.specials.push_back({id, is_array
@@ -2735,7 +2745,7 @@ void decode_record_into(
     dstd::String local_path;
     dstd::String& path = hints ? hints->path : local_path;
     path.clear();
-    PathReader reader(d, path, walk.end, *walk.strings);
+    PathReader reader(d, path, walk.rest, *walk.strings);
     bool ok = true;
     OnDemandType type;
     if (walk.value.type().get(type)) {

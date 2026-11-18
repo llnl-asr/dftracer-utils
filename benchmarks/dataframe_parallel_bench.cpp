@@ -687,12 +687,13 @@ int main(int argc, char** argv) {
     ok = ok && td_ok;
 
     // hash_partition: per-row multi-col hash into shared buckets.
+    const dstd::String hp_keys[] = {"cat"};
     auto time_hp = [&](int reps) {
         double best = 1e300;
         dftracer::utils::dstd::Vector<DataFrame> r;
         for (int i = 0; i < reps; ++i) {
             const auto tt0 = dftracer::utils::dstd::steady_now();
-            r = dftu::bench::ok(hash_partition(dummy_df, {"cat"}, 64));
+            r = dftu::bench::ok(hash_partition(dummy_df, hp_keys, 64));
             const auto tt1 = dftracer::utils::dstd::steady_now();
             std::int64_t total = 0;
             for (const auto& p : r) total += p.num_rows();
@@ -709,7 +710,7 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 3; ++i) {
         const auto tt0 = dftracer::utils::dstd::steady_now();
         dftracer::utils::dstd::Vector<DataFrame> r =
-            dftu::bench::ok(hash_partition(dummy_df, {"cat"}, 64));
+            dftu::bench::ok(hash_partition(dummy_df, hp_keys, 64));
         const auto tt1 = dftracer::utils::dstd::steady_now();
         std::int64_t total = 0;
         for (const auto& p : r) total += p.num_rows();
@@ -724,7 +725,7 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 3; ++i) {
         const auto tt0 = dftracer::utils::dstd::steady_now();
         dftracer::utils::dstd::Vector<DataFrame> r =
-            dftu::bench::ok(hash_partition(dummy_df, {"cat"}, 64));
+            dftu::bench::ok(hash_partition(dummy_df, hp_keys, 64));
         const auto tt1 = dftracer::utils::dstd::steady_now();
         std::int64_t total = 0;
         for (const auto& p : r) total += p.num_rows();
@@ -745,7 +746,8 @@ int main(int argc, char** argv) {
     ok = ok && hp_ok;
 
     // is_in: general (string) path, no SIMD fast path.
-    Series needles = Series::strings({"c1", "c5", "c9", "c13"});
+    const dstd::String needle_values[] = {"c1", "c5", "c9", "c13"};
+    Series needles = Series::strings(needle_values);
     auto time_is_in = [&](int reps) {
         double best = 1e300;
         Series r;
@@ -798,12 +800,13 @@ int main(int argc, char** argv) {
     multi_df.names = {dstd::SharedString("k"), dstd::SharedString("v")};
     multi_df.columns.push_back(Series::flat_i64(k.data(), rows));
     multi_df.columns.push_back(Series::flat_i64(v.data(), rows));
+    const dstd::String sbm_keys[] = {"k", "v"};
     auto time_sbm = [&](int reps) {
         double best = 1e300;
         DataFrame r;
         for (int i = 0; i < reps; ++i) {
             const auto tt0 = dftracer::utils::dstd::steady_now();
-            r = dftu::bench::ok(sort_by_multi(multi_df, {"k", "v"}, false));
+            r = dftu::bench::ok(sort_by_multi(multi_df, sbm_keys, false));
             const auto tt1 = dftracer::utils::dstd::steady_now();
             do_not_optimize(r.num_rows());
             best = std::min(
@@ -817,8 +820,7 @@ int main(int argc, char** argv) {
     double sbm_ser = 1e300;
     for (int i = 0; i < 3; ++i) {
         const auto tt0 = dftracer::utils::dstd::steady_now();
-        DataFrame r =
-            dftu::bench::ok(sort_by_multi(multi_df, {"k", "v"}, false));
+        DataFrame r = dftu::bench::ok(sort_by_multi(multi_df, sbm_keys, false));
         const auto tt1 = dftracer::utils::dstd::steady_now();
         do_not_optimize(r.num_rows());
         sbm_ser = std::min(
@@ -830,8 +832,7 @@ int main(int argc, char** argv) {
     double sbm_par = 1e300;
     for (int i = 0; i < 3; ++i) {
         const auto tt0 = dftracer::utils::dstd::steady_now();
-        DataFrame r =
-            dftu::bench::ok(sort_by_multi(multi_df, {"k", "v"}, false));
+        DataFrame r = dftu::bench::ok(sort_by_multi(multi_df, sbm_keys, false));
         const auto tt1 = dftracer::utils::dstd::steady_now();
         do_not_optimize(r.num_rows());
         sbm_par = std::min(
@@ -1459,11 +1460,12 @@ int main(int argc, char** argv) {
     half.value.i = rows / 2;
     Expr vpos = expr_cmp(CmpOp::Gt, expr_col(1), half);  // v > rows/2
     Expr kv = expr_binary(BinaryOp::Add, expr_col(0), expr_col(1));  // k + v
+    const dstd::String map_columns[] = {"k", "kv"};
     auto eager_map = [&]() {
         Series m = df.column("v") > (rows / 2);
         DataFrame f = df.filter(m);
         DataFrame w = f.with_column("kv", f.column("k") + f.column("v"));
-        return dftu::bench::ok(w.select({"k", "kv"}));
+        return dftu::bench::ok(w.select(map_columns));
     };
     auto lazy_map = [&]() {
         return run(df.lazy()

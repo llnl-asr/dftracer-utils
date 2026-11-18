@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <span_list.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
@@ -916,8 +917,9 @@ TEST_SUITE("AggParity") {
         REQUIRE(!binary.empty());
         const dstd::String out = fixtures().root.str() + "/dlio_config.yaml";
         REQUIRE(dftu_utils_test::run_process(
-                    binary, {fixtures().dlio_dir, "-o", out,
-                             "--simulation-iterations", "2"}) == 0);
+                    binary, dftu_utils_test::span_of<dstd::String>(
+                                {fixtures().dlio_dir, "-o", out,
+                                 "--simulation-iterations", "2"})) == 0);
         const dstd::String produced = read_text(out);
         const dstd::String ref = reference("dlio_config.yaml", produced);
         if (!ref.empty()) compare_yaml(ref, produced);

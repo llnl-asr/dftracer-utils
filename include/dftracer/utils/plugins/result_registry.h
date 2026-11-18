@@ -23,6 +23,13 @@
 // opaque bytes, a frame or a lazy plan and never interprets any of them.
 namespace dftracer::utils::plugins {
 
+namespace detail {
+inline dftu_status drop_reason(dftu_ctx*, dftu_status code, const char*,
+                               std::uint32_t) {
+    return code;
+}
+}  // namespace detail
+
 /// A deferred columnar result carried across the ABI as a dftu_lazyframe
 /// handle, freed via the dataframe C ABI. Lets a plugin return a lazy plan the
 /// host collects at the Python edge. The plan MUST be self-contained (its
@@ -289,9 +296,7 @@ struct OwnedLazyFrame {
         // A plugin-side context: the reason a rejected call reports is dropped
         // and an empty plan is the answer, as before.
         static const dftu_ctx_vt VT = {
-            sizeof(dftu_ctx_vt),
-            [](dftu_ctx*, dftu_status code, const char*,
-               std::uint32_t) -> dftu_status { return code; },
+            sizeof(dftu_ctx_vt), detail::drop_reason,
             [](dftu_ctx*) -> dftu_status { return DFTU_OK; }};
         dftu_ctx ctx{sizeof(dftu_ctx), 0, &VT, nullptr};
         dftu_lazyframe* made = nullptr;

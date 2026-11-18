@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
@@ -80,7 +81,7 @@ PyObject* range_error(const char* what) {
 }
 
 // The `zoneinfo.ZoneInfo` (or fixed-offset timezone) of `name`, cached.
-PyObject* zone_of(const dftracer::utils::dstd::String& name) {
+PyObject* zone_of(dftracer::utils::dstd::CStringView name) {
     static PyObject* cache = nullptr;
     if (!cache && !(cache = PyDict_New())) return nullptr;
     PyObject* key = PyUnicode_FromString(name.c_str());
@@ -94,7 +95,7 @@ PyObject* zone_of(const dftracer::utils::dstd::String& name) {
         return nullptr;
     }
     PyObject* zone = nullptr;
-    if (!name.empty() && (name[0] == '+' || name[0] == '-')) {
+    if (!name.empty() && (name.c_str()[0] == '+' || name.c_str()[0] == '-')) {
         int hh = 0, mm = 0;
         if (std::sscanf(name.c_str() + 1, "%d:%d", &hh, &mm) < 1) {
             Py_DECREF(key);
@@ -102,13 +103,13 @@ PyObject* zone_of(const dftracer::utils::dstd::String& name) {
                          name.c_str());
             return nullptr;
         }
-        const int sign = name[0] == '-' ? -1 : 1;
+        const int sign = name.c_str()[0] == '-' ? -1 : 1;
         PyObject* delta = PyDelta_FromDSU(0, sign * (hh * 3600 + mm * 60), 0);
         if (delta) {
             zone = PyTimeZone_FromOffset(delta);
             Py_DECREF(delta);
         }
-    } else if (name == "UTC") {
+    } else if (name.view() == "UTC") {
         zone = PyDateTime_TimeZone_UTC;
         Py_XINCREF(zone);
     } else {

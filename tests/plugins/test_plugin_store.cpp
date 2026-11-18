@@ -61,9 +61,9 @@ struct StoreRun {
     dstd::UniquePtr<plugins::host::PluginFold> fold;
     test_plugin_common::Ctx ctx;
     static inline test_plugin_common::Ctx* g_ctx = nullptr;
+    static void expect(const char* what, int ok) { CHECK_MESSAGE(ok, what); }
     static inline dftu_test_harness harness{
-        nullptr, [](const char* what, int ok) { CHECK_MESSAGE(ok, what); },
-        [](dftu_ctx*, char* msg, std::uint64_t cap) {
+        nullptr, expect, [](dftu_ctx*, char* msg, std::uint64_t cap) {
             const dstd::String text = g_ctx->message();
             std::snprintf(msg, static_cast<std::size_t>(cap), "%s",
                           text.c_str());

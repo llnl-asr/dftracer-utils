@@ -3,11 +3,13 @@
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <mpi_launcher.h>
+#include <span_list.h>
 #include <testing_utilities.h>
 #include <zlib.h>
 
@@ -81,12 +83,14 @@ TEST_CASE("ranks split the run groups and join one output") {
     for (int i = 0; i < 6; ++i)
         write_run(root, "in" + dstd::to_string(i), 200 * (i + 1));
 
-    REQUIRE(dftu_utils_test::run_mpi(
-                launcher, 1, binary(),
-                {dstd::String(root.str()), "-o", d.file("one.pfw.gz")}) == 0);
-    REQUIRE(dftu_utils_test::run_mpi(
-                launcher, 3, binary(),
-                {dstd::String(root.str()), "-o", d.file("three.pfw.gz")}) == 0);
+    REQUIRE(dftu_utils_test::run_mpi(launcher, 1, binary(),
+                                     dftu_utils_test::span_of<dstd::String>(
+                                         {dstd::String(root.str()), "-o",
+                                          d.file("one.pfw.gz")})) == 0);
+    REQUIRE(dftu_utils_test::run_mpi(launcher, 3, binary(),
+                                     dftu_utils_test::span_of<dstd::String>(
+                                         {dstd::String(root.str()), "-o",
+                                          d.file("three.pfw.gz")})) == 0);
     const auto one = sorted_gz_lines(d.file("one.pfw.gz"));
     REQUIRE_FALSE(one.empty());
     CHECK(sorted_gz_lines(d.file("three.pfw.gz")) == one);
@@ -105,8 +109,9 @@ TEST_CASE("--shard is refused with more than one rank") {
     dftu_utils_test::set_test_library_path(binary());
     dftu_utils_test::ScopedTestDir d("gen_dist_mpi_shard");
     write_run(d.path() / "root", "in", 100);
-    CHECK(
-        dftu_utils_test::run_mpi(launcher, 2, binary(),
-                                 {dstd::String((d.path() / "root").str()), "-o",
-                                  d.file("o.pfw.gz"), "--shard", "0/2"}) != 0);
+    CHECK(dftu_utils_test::run_mpi(
+              launcher, 2, binary(),
+              dftu_utils_test::span_of<dstd::String>(
+                  {dstd::String((d.path() / "root").str()), "-o",
+                   d.file("o.pfw.gz"), "--shard", "0/2"})) != 0);
 }

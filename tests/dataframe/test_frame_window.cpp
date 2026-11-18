@@ -31,6 +31,7 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
+using dftu_utils_test::span_of;
 
 namespace {
 
@@ -40,21 +41,21 @@ using SCol = dstd::Vector<dstd::Optional<dstd::String>>;
 using Val = dstd::Optional<double>;
 using Vals = dstd::Vector<Val>;
 
-dstd::Vector<std::uint8_t> bits_of(const dstd::Vector<bool>& ok) {
+dstd::Vector<std::uint8_t> bits_of(dstd::Span<const std::uint8_t> ok) {
     dstd::Vector<std::uint8_t> bits((ok.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < ok.size(); ++i)
         if (ok[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
     return bits;
 }
 
-Series i64s(const dstd::Vector<std::int64_t>& data,
-            const dstd::Vector<bool>& ok) {
+Series i64s(dstd::Span<const std::int64_t> data,
+            dstd::Span<const std::uint8_t> ok) {
     const dstd::Vector<std::uint8_t> bits = bits_of(ok);
     return Series::flat_i64(data.data(), static_cast<std::int64_t>(data.size()),
                             bits.data());
 }
 
-Series f64s(const dstd::Vector<double>& data, const dstd::Vector<bool>& ok) {
+Series f64s(dstd::Span<const double> data, dstd::Span<const std::uint8_t> ok) {
     const dstd::Vector<std::uint8_t> bits = bits_of(ok);
     return Series::flat_f64(data.data(), static_cast<std::int64_t>(data.size()),
                             bits.data());
@@ -62,21 +63,21 @@ Series f64s(const dstd::Vector<double>& data, const dstd::Vector<bool>& ok) {
 
 Series i64s(const Col& v) {
     dstd::Vector<std::int64_t> data(v.size(), 0);
-    dstd::Vector<bool> ok(v.size(), false);
+    dstd::Vector<std::uint8_t> ok(v.size(), 0);
     for (std::size_t i = 0; i < v.size(); ++i) {
         if (!v[i]) continue;
         data[i] = *v[i];
-        ok[i] = true;
+        ok[i] = 1;
     }
     return i64s(data, ok);
 }
 
-Series plain(const dstd::Vector<std::int64_t>& v) {
+Series plain(dstd::Span<const std::int64_t> v) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()));
 }
 
-DataFrame make3(const dstd::Vector<std::int64_t>& p,
-                const dstd::Vector<std::int64_t>& o, const Col& v) {
+DataFrame make3(dstd::Span<const std::int64_t> p,
+                dstd::Span<const std::int64_t> o, const Col& v) {
     DataFrame d;
     d.names = dstd::make_shared_strings({"p", "o", "v"});
     d.columns.push_back(plain(p));
@@ -85,9 +86,9 @@ DataFrame make3(const dstd::Vector<std::int64_t>& p,
     return d;
 }
 
-DataFrame make3u(const dstd::Vector<std::int64_t>& p,
-                 const dstd::Vector<std::int64_t>& o,
-                 const dstd::Vector<std::uint64_t>& v) {
+DataFrame make3u(dstd::Span<const std::int64_t> p,
+                 dstd::Span<const std::int64_t> o,
+                 dstd::Span<const std::uint64_t> v) {
     DataFrame d;
     d.names = dstd::make_shared_strings({"p", "o", "v"});
     d.columns.push_back(plain(p));
@@ -99,13 +100,13 @@ DataFrame make3u(const dstd::Vector<std::int64_t>& p,
 
 Series tag_lists() {
     return Series::list(
-        dftu_utils_test::span_of<std::int32_t>({0, 1, 3}),
+        span_of<std::int32_t>({0, 1, 3}),
         Series::strings(dstd::Vector<dstd::String>{"r", "p", "q"}));
 }
 
-DataFrame win(const DataFrame& in, const dstd::Vector<dstd::String>& part,
-              const dstd::Vector<dstd::String>& order,
-              const dstd::Vector<WindowColumn>& specs) {
+DataFrame win(const DataFrame& in, dstd::Span<const dstd::String> part,
+              dstd::Span<const dstd::String> order,
+              dstd::Span<const WindowColumn> specs) {
     return dftu_utils_test::ok(dataframe::window(in, part, order, specs));
 }
 
@@ -153,13 +154,13 @@ WindowColumn session_spec(dstd::String time, dstd::String out, double gap,
     return w;
 }
 
-Series column_of(const DataFrame& d, const dstd::String& name) {
+Series column_of(const DataFrame& d, dstd::StringView name) {
     const Series c = d.column(name);
     REQUIRE(c.valid());
     return c.materialize();
 }
 
-Col ints(const DataFrame& d, const dstd::String& name) {
+Col ints(const DataFrame& d, dstd::StringView name) {
     const Series c = column_of(d, name);
     REQUIRE(c.type() == TypeId::Int64);
     Col out;
@@ -168,7 +169,7 @@ Col ints(const DataFrame& d, const dstd::String& name) {
     return out;
 }
 
-Vals nums(const DataFrame& d, const dstd::String& name) {
+Vals nums(const DataFrame& d, dstd::StringView name) {
     const Series c = column_of(d, name);
     const TypeId t = c.type();
     REQUIRE((t == TypeId::Int64 || t == TypeId::Float64));
@@ -184,12 +185,12 @@ Vals nums(const DataFrame& d, const dstd::String& name) {
     return out;
 }
 
-Vals dbls(const DataFrame& d, const dstd::String& name) {
+Vals dbls(const DataFrame& d, dstd::StringView name) {
     REQUIRE(column_of(d, name).type() == TypeId::Float64);
     return nums(d, name);
 }
 
-SCol strs(const DataFrame& d, const dstd::String& name) {
+SCol strs(const DataFrame& d, dstd::StringView name) {
     const Series c = column_of(d, name);
     REQUIRE(c.type() == TypeId::String);
     SCol out;
@@ -202,8 +203,7 @@ SCol strs(const DataFrame& d, const dstd::String& name) {
     return out;
 }
 
-dstd::Vector<dstd::String> str_list(const DataFrame& d,
-                                    const dstd::String& name,
+dstd::Vector<dstd::String> str_list(const DataFrame& d, dstd::StringView name,
                                     std::int64_t row) {
     const Series c = column_of(d, name);
     REQUIRE(c.type() == TypeId::List);
@@ -216,7 +216,7 @@ dstd::Vector<dstd::String> str_list(const DataFrame& d,
     return out;
 }
 
-void check_dbls(const Vals& got, const dstd::Vector<double>& want) {
+void check_dbls(const Vals& got, dstd::Span<const double> want) {
     REQUIRE(got.size() == want.size());
     for (std::size_t i = 0; i < want.size(); ++i) {
         CAPTURE(i);
@@ -228,10 +228,13 @@ void check_dbls(const Vals& got, const dstd::Vector<double>& want) {
 }  // namespace
 
 TEST_CASE("window - row_number resets per partition") {
-    const DataFrame in =
-        make3({1, 1, 1, 2, 2}, {10, 20, 30, 10, 20}, {{}, {}, {}, {}, {}});
-    const DataFrame out = win(
-        in, {"p"}, {"o"}, {spec(WindowFunc::RowNumber, dstd::nullopt, "rn")});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1, 1, 2, 2}),
+                               span_of<std::int64_t>({10, 20, 30, 10, 20}),
+                               {{}, {}, {}, {}, {}});
+    const DataFrame out =
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {spec(WindowFunc::RowNumber, dstd::nullopt, "rn")}));
     REQUIRE(out.num_columns() == 4);
     CHECK(out.names[3] == "rn");
     REQUIRE(out.num_rows() == 5);
@@ -239,41 +242,50 @@ TEST_CASE("window - row_number resets per partition") {
 }
 
 TEST_CASE("window - rank vs dense_rank on ties") {
-    const DataFrame in = make3({1, 1, 1}, {10, 10, 20}, {{}, {}, {}});
+    const DataFrame in =
+        make3(span_of<std::int64_t>({1, 1, 1}),
+              span_of<std::int64_t>({10, 10, 20}), {{}, {}, {}});
     const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {spec(WindowFunc::Rank, dstd::nullopt, "rk"),
-             spec(WindowFunc::DenseRank, dstd::nullopt, "dr")});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {spec(WindowFunc::Rank, dstd::nullopt, "rk"),
+                 spec(WindowFunc::DenseRank, dstd::nullopt, "dr")}));
     REQUIRE(out.num_rows() == 3);
     CHECK(ints(out, "rk") == Col{1, 1, 3});
     CHECK(ints(out, "dr") == Col{1, 1, 2});
 }
 
 TEST_CASE("window - lag/lead boundary null and interior shift") {
-    const DataFrame in = make3({1, 1, 1}, {1, 2, 3}, {10, 20, 30});
-    const DataFrame out = win(in, {"p"}, {"o"},
-                              {offset_spec(WindowFunc::Lag, "v", "lag", 1),
-                               offset_spec(WindowFunc::Lead, "v", "lead", 1)});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1, 1}),
+                               span_of<std::int64_t>({1, 2, 3}), {10, 20, 30});
+    const DataFrame out = win(
+        in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+        span_of<WindowColumn>({offset_spec(WindowFunc::Lag, "v", "lag", 1),
+                               offset_spec(WindowFunc::Lead, "v", "lead", 1)}));
     REQUIRE(out.num_rows() == 3);
     CHECK(ints(out, "lag") == Col{dstd::nullopt, 10, 20});
     CHECK(ints(out, "lead") == Col{20, 30, dstd::nullopt});
 }
 
 TEST_CASE("window - running sum resets per partition") {
-    const DataFrame in = make3({1, 1, 2}, {1, 2, 1}, {10, 20, 100});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1, 2}),
+                               span_of<std::int64_t>({1, 2, 1}), {10, 20, 100});
     const DataFrame out =
-        win(in, {"p"}, {"o"}, {spec(WindowFunc::RunningSum, "v", "rs")});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({spec(WindowFunc::RunningSum, "v", "rs")}));
     REQUIRE(out.num_rows() == 3);
     CHECK(ints(out, "rs") == Col{10, 30, 100});
 }
 
 TEST_CASE("window - running min/max/count") {
-    const DataFrame in = make3({1, 1, 1}, {1, 2, 3}, {30, 10, 20});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1, 1}),
+                               span_of<std::int64_t>({1, 2, 3}), {30, 10, 20});
     const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {spec(WindowFunc::RunningMin, "v", "mn"),
-             spec(WindowFunc::RunningMax, "v", "mx"),
-             spec(WindowFunc::RunningCount, dstd::nullopt, "cnt")});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {spec(WindowFunc::RunningMin, "v", "mn"),
+                 spec(WindowFunc::RunningMax, "v", "mx"),
+                 spec(WindowFunc::RunningCount, dstd::nullopt, "cnt")}));
     REQUIRE(out.num_rows() == 3);
     CHECK(ints(out, "mn") == Col{30, 10, 10});
     CHECK(ints(out, "mx") == Col{30, 30, 30});
@@ -281,34 +293,42 @@ TEST_CASE("window - running min/max/count") {
 }
 
 TEST_CASE("window - running sum skips null cell, count is count(*)") {
-    const DataFrame in = make3({1, 1, 1}, {1, 2, 3}, {10, {}, 20});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1, 1}),
+                               span_of<std::int64_t>({1, 2, 3}), {10, {}, 20});
     const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {spec(WindowFunc::RunningSum, "v", "rs"),
-             spec(WindowFunc::RunningCount, dstd::nullopt, "cnt")});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {spec(WindowFunc::RunningSum, "v", "rs"),
+                 spec(WindowFunc::RunningCount, dstd::nullopt, "cnt")}));
     REQUIRE(out.num_rows() == 3);
     CHECK(ints(out, "rs") == Col{10, 10, 30});
     CHECK(ints(out, "cnt") == Col{1, 2, 3});
 }
 
 TEST_CASE("window - partition values do not leak across boundaries") {
-    const DataFrame in = make3({1, 2, 2}, {1, 1, 2}, {999, 5, 7});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 2, 2}),
+                               span_of<std::int64_t>({1, 1, 2}), {999, 5, 7});
     const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {spec(WindowFunc::RunningMax, "v", "mx"),
-             spec(WindowFunc::RowNumber, dstd::nullopt, "rn")});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {spec(WindowFunc::RunningMax, "v", "mx"),
+                 spec(WindowFunc::RowNumber, dstd::nullopt, "rn")}));
     REQUIRE(out.num_rows() == 3);
     CHECK(ints(out, "mx") == Col{999, 5, 7});
     CHECK(ints(out, "rn") == Col{1, 1, 2});
 }
 
 TEST_CASE("window - determinism across input order") {
-    const DataFrame a = make3({1, 1, 2}, {10, 20, 5}, {1, 2, 3});
-    const DataFrame b = make3({2, 1, 1}, {5, 20, 10}, {3, 2, 1});
+    const DataFrame a = make3(span_of<std::int64_t>({1, 1, 2}),
+                              span_of<std::int64_t>({10, 20, 5}), {1, 2, 3});
+    const DataFrame b = make3(span_of<std::int64_t>({2, 1, 1}),
+                              span_of<std::int64_t>({5, 20, 10}), {3, 2, 1});
     const dstd::Vector<WindowColumn> specs = {
         spec(WindowFunc::RowNumber, dstd::nullopt, "rn")};
-    const DataFrame oa = win(a, {"p"}, {"o"}, specs);
-    const DataFrame ob = win(b, {"p"}, {"o"}, specs);
+    const DataFrame oa = win(a, span_of<dstd::String>({"p"}),
+                             span_of<dstd::String>({"o"}), specs);
+    const DataFrame ob = win(b, span_of<dstd::String>({"p"}),
+                             span_of<dstd::String>({"o"}), specs);
     REQUIRE(oa.num_rows() == 3);
     REQUIRE(ob.num_rows() == 3);
     for (const char* name : {"p", "o", "v", "rn"})
@@ -316,11 +336,13 @@ TEST_CASE("window - determinism across input order") {
 }
 
 TEST_CASE("window - multiple specs appended in order") {
-    const DataFrame in = make3({1, 1, 1}, {1, 2, 3}, {10, 20, 30});
-    const DataFrame out = win(in, {"p"}, {"o"},
-                              {spec(WindowFunc::RowNumber, dstd::nullopt, "rn"),
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1, 1}),
+                               span_of<std::int64_t>({1, 2, 3}), {10, 20, 30});
+    const DataFrame out = win(
+        in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+        span_of<WindowColumn>({spec(WindowFunc::RowNumber, dstd::nullopt, "rn"),
                                spec(WindowFunc::RunningSum, "v", "rs"),
-                               offset_spec(WindowFunc::Lag, "v", "lag", 1)});
+                               offset_spec(WindowFunc::Lag, "v", "lag", 1)}));
     REQUIRE(out.num_columns() == 6);
     CHECK(out.names[3] == "rn");
     CHECK(out.names[4] == "rs");
@@ -334,11 +356,13 @@ TEST_CASE("window - multiple specs appended in order") {
 TEST_CASE("window - list<utf8> carry-through survives") {
     DataFrame in;
     in.names = dstd::make_shared_strings({"p", "o", "tags"});
-    in.columns.push_back(plain({1, 1}));
-    in.columns.push_back(plain({20, 10}));
+    in.columns.push_back(plain(span_of<std::int64_t>({1, 1})));
+    in.columns.push_back(plain(span_of<std::int64_t>({20, 10})));
     in.columns.push_back(tag_lists());
-    const DataFrame out = win(
-        in, {"p"}, {"o"}, {spec(WindowFunc::RowNumber, dstd::nullopt, "rn")});
+    const DataFrame out =
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {spec(WindowFunc::RowNumber, dstd::nullopt, "rn")}));
     REQUIRE(out.num_rows() == 2);
     CHECK(str_list(out, "tags", 0) == dstd::Vector<dstd::String>{"p", "q"});
     CHECK(str_list(out, "tags", 1) == dstd::Vector<dstd::String>{"r"});
@@ -349,18 +373,21 @@ TEST_CASE("window - running sum over double column yields double") {
     const dstd::Vector<double> v = {1.5, 2.25};
     DataFrame in;
     in.names = dstd::make_shared_strings({"o", "v"});
-    in.columns.push_back(plain({1, 2}));
+    in.columns.push_back(plain(span_of<std::int64_t>({1, 2})));
     in.columns.push_back(Series::flat_f64(v.data(), 2));
     const DataFrame out =
-        win(in, {}, {"o"}, {spec(WindowFunc::RunningSum, "v", "rs")});
+        win(in, {}, span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({spec(WindowFunc::RunningSum, "v", "rs")}));
     REQUIRE(out.num_rows() == 2);
-    check_dbls(dbls(out, "rs"), {1.5, 3.75});
+    check_dbls(dbls(out, "rs"), span_of<double>({1.5, 3.75}));
 }
 
 TEST_CASE("window - delta discrete difference, first row null") {
-    const DataFrame in = make3({1, 1, 1}, {1, 2, 3}, {10, 15, 13});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1, 1}),
+                               span_of<std::int64_t>({1, 2, 3}), {10, 15, 13});
     const DataFrame out =
-        win(in, {"p"}, {"o"}, {spec(WindowFunc::Delta, "v", "d")});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({spec(WindowFunc::Delta, "v", "d")}));
     REQUIRE(out.num_columns() == 4);
     CHECK(out.names[3] == "d");
     REQUIRE(out.num_rows() == 3);
@@ -368,9 +395,12 @@ TEST_CASE("window - delta discrete difference, first row null") {
 }
 
 TEST_CASE("window - delta on unsigned column yields signed negative") {
-    const DataFrame in = make3u({1, 1, 1}, {1, 2, 3}, {100, 30, 45});
+    const DataFrame in = make3u(span_of<std::int64_t>({1, 1, 1}),
+                                span_of<std::int64_t>({1, 2, 3}),
+                                span_of<std::uint64_t>({100, 30, 45}));
     const DataFrame out =
-        win(in, {"p"}, {"o"}, {spec(WindowFunc::Delta, "v", "d")});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({spec(WindowFunc::Delta, "v", "d")}));
     REQUIRE(out.num_columns() == 4);
     CHECK(out.columns[3].type() == TypeId::Int64);
     REQUIRE(out.num_rows() == 3);
@@ -378,9 +408,12 @@ TEST_CASE("window - delta on unsigned column yields signed negative") {
 }
 
 TEST_CASE("window - rate on a decreasing unsigned column is correct") {
-    const DataFrame in = make3u({1, 1}, {0, 10}, {100, 30});
+    const DataFrame in =
+        make3u(span_of<std::int64_t>({1, 1}), span_of<std::int64_t>({0, 10}),
+               span_of<std::uint64_t>({100, 30}));
     const DataFrame out =
-        win(in, {"p"}, {"o"}, {rate_spec("v", "o", "rate", false)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({rate_spec("v", "o", "rate", false)}));
     REQUIRE(out.num_rows() == 2);
     const Vals r = dbls(out, "rate");
     CHECK_FALSE(r[0].has_value());
@@ -390,18 +423,23 @@ TEST_CASE("window - rate on a decreasing unsigned column is correct") {
 
 TEST_CASE("window - delta resets per partition and nulls on null endpoint") {
     const DataFrame in =
-        make3({1, 1, 1, 2, 2}, {1, 2, 3, 1, 2}, {10, {}, 20, 5, 7});
+        make3(span_of<std::int64_t>({1, 1, 1, 2, 2}),
+              span_of<std::int64_t>({1, 2, 3, 1, 2}), {10, {}, 20, 5, 7});
     const DataFrame out =
-        win(in, {"p"}, {"o"}, {spec(WindowFunc::Delta, "v", "d")});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({spec(WindowFunc::Delta, "v", "d")}));
     REQUIRE(out.num_rows() == 5);
     CHECK(ints(out, "d") ==
           Col{dstd::nullopt, dstd::nullopt, dstd::nullopt, dstd::nullopt, 2});
 }
 
 TEST_CASE("window - rate over time, zero dt yields null") {
-    const DataFrame in = make3({1, 1, 1}, {0, 10, 10}, {100, 150, 150});
+    const DataFrame in =
+        make3(span_of<std::int64_t>({1, 1, 1}),
+              span_of<std::int64_t>({0, 10, 10}), {100, 150, 150});
     const DataFrame out =
-        win(in, {"p"}, {"o"}, {rate_spec("v", "o", "rate", false)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({rate_spec("v", "o", "rate", false)}));
     REQUIRE(out.num_columns() == 4);
     REQUIRE(out.num_rows() == 3);
     const Vals r = dbls(out, "rate");
@@ -412,9 +450,12 @@ TEST_CASE("window - rate over time, zero dt yields null") {
 }
 
 TEST_CASE("window - rate counter reset uses raw value, resets per partition") {
-    const DataFrame in = make3({1, 1, 2, 2}, {0, 10, 0, 10}, {100, 30, 5, 5});
+    const DataFrame in =
+        make3(span_of<std::int64_t>({1, 1, 2, 2}),
+              span_of<std::int64_t>({0, 10, 0, 10}), {100, 30, 5, 5});
     const DataFrame out =
-        win(in, {"p"}, {"o"}, {rate_spec("v", "o", "rate", true)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({rate_spec("v", "o", "rate", true)}));
     REQUIRE(out.num_rows() == 4);
     const Vals r = dbls(out, "rate");
     CHECK_FALSE(r[0].has_value());
@@ -426,90 +467,109 @@ TEST_CASE("window - rate counter reset uses raw value, resets per partition") {
 }
 
 TEST_CASE("window - sessionize splits on gap strictly greater than threshold") {
-    const DataFrame in = make3({1, 1, 1, 1}, {0, 5, 100, 105}, {0, 0, 0, 0});
+    const DataFrame in =
+        make3(span_of<std::int64_t>({1, 1, 1, 1}),
+              span_of<std::int64_t>({0, 5, 100, 105}), {0, 0, 0, 0});
     const DataFrame out =
-        win(in, {"p"}, {"o"}, {session_spec("o", "sid", 50.0)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({session_spec("o", "sid", 50.0)}));
     REQUIRE(out.num_columns() == 4);
     REQUIRE(out.num_rows() == 4);
     CHECK(ints(out, "sid") == Col{1, 1, 2, 2});
 }
 
 TEST_CASE("window - sessionize gap equal to threshold does not split") {
-    const DataFrame in = make3({1, 1, 2, 2}, {0, 50, 0, 200}, {0, 0, 0, 0});
+    const DataFrame in =
+        make3(span_of<std::int64_t>({1, 1, 2, 2}),
+              span_of<std::int64_t>({0, 50, 0, 200}), {0, 0, 0, 0});
     const DataFrame out =
-        win(in, {"p"}, {"o"}, {session_spec("o", "sid", 50.0)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({session_spec("o", "sid", 50.0)}));
     REQUIRE(out.num_rows() == 4);
     CHECK(ints(out, "sid") == Col{1, 1, 1, 2});
 }
 
 TEST_CASE("window - sessionize measures the gap from the latest end") {
-    const DataFrame in = make3({1, 1}, {0, 150}, {120, 155});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1}),
+                               span_of<std::int64_t>({0, 150}), {120, 155});
     const DataFrame ends =
-        win(in, {"p"}, {"o"}, {session_spec("o", "sid", 50.0, 0.0, "v")});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({session_spec("o", "sid", 50.0, 0.0, "v")}));
     CHECK(ints(ends, "sid") == Col{1, 1});
     const DataFrame starts =
-        win(in, {"p"}, {"o"}, {session_spec("o", "sid", 50.0)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({session_spec("o", "sid", 50.0)}));
     CHECK(ints(starts, "sid") == Col{1, 2});
 }
 
 TEST_CASE("window - sessionize gap between starts without an end column") {
-    const DataFrame in = make3({1, 1, 1}, {0, 10, 25}, {0, 0, 0});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1, 1}),
+                               span_of<std::int64_t>({0, 10, 25}), {0, 0, 0});
     const DataFrame out =
-        win(in, {"p"}, {"o"}, {session_spec("o", "sid", 15.0)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({session_spec("o", "sid", 15.0)}));
     CHECK(ints(out, "sid") == Col{1, 1, 1});
 }
 
 TEST_CASE("window - sessionize splits a session longer than the span") {
-    const DataFrame in = make3({1, 1, 1, 1}, {0, 50, 100, 150}, {0, 0, 0, 0});
+    const DataFrame in =
+        make3(span_of<std::int64_t>({1, 1, 1, 1}),
+              span_of<std::int64_t>({0, 50, 100, 150}), {0, 0, 0, 0});
     const DataFrame out =
-        win(in, {"p"}, {"o"}, {session_spec("o", "sid", 60.0, 120.0)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({session_spec("o", "sid", 60.0, 120.0)}));
     CHECK(ints(out, "sid") == Col{1, 1, 1, 2});
 }
 
 TEST_CASE("window - sessionize gives a null time a null session") {
-    const DataFrame in = make3({1, 1, 1}, {0, 1, 2}, {0, dstd::nullopt, 300});
+    const DataFrame in =
+        make3(span_of<std::int64_t>({1, 1, 1}),
+              span_of<std::int64_t>({0, 1, 2}), {0, dstd::nullopt, 300});
     const DataFrame out =
-        win(in, {"p"}, {"o"}, {session_spec("v", "sid", 100.0)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({session_spec("v", "sid", 100.0)}));
     CHECK(ints(out, "sid") == Col{1, dstd::nullopt, 2});
 }
 
 TEST_CASE("window - sessionize rejects a negative gap and a text end") {
-    const DataFrame in = make3({1, 1}, {0, 10}, {0, 0});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1}),
+                               span_of<std::int64_t>({0, 10}), {0, 0});
     dftu_utils_test::expect_error(
-        dataframe::window(
-            in, dftu_utils_test::span_of<dstd::String>({"p"}),
-            dftu_utils_test::span_of<dstd::String>({"o"}),
-            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
-                {session_spec("o", "sid", -1.0)})),
+        dataframe::window(in, span_of<dstd::String>({"p"}),
+                          span_of<dstd::String>({"o"}),
+                          span_of<dftracer::utils::dataframe::WindowColumn>(
+                              {session_spec("o", "sid", -1.0)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     dftu_utils_test::expect_error(
-        dataframe::window(
-            in, dftu_utils_test::span_of<dstd::String>({"p"}),
-            dftu_utils_test::span_of<dstd::String>({"o"}),
-            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
-                {session_spec("o", "sid", 1.0, -2.0)})),
+        dataframe::window(in, span_of<dstd::String>({"p"}),
+                          span_of<dstd::String>({"o"}),
+                          span_of<dftracer::utils::dataframe::WindowColumn>(
+                              {session_spec("o", "sid", 1.0, -2.0)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     DataFrame text;
     text.names = dstd::make_shared_strings({"p", "o", "e"});
-    text.columns.push_back(plain({1}));
-    text.columns.push_back(plain({0}));
+    text.columns.push_back(plain(span_of<std::int64_t>({1})));
+    text.columns.push_back(plain(span_of<std::int64_t>({0})));
     text.columns.push_back(Series::strings(dstd::Vector<dstd::String>{"x"}));
     dftu_utils_test::expect_error(
-        dataframe::window(
-            text, dftu_utils_test::span_of<dstd::String>({"p"}),
-            dftu_utils_test::span_of<dstd::String>({"o"}),
-            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
-                {session_spec("o", "sid", 1.0, 0.0, "e")})),
+        dataframe::window(text, span_of<dstd::String>({"p"}),
+                          span_of<dstd::String>({"o"}),
+                          span_of<dftracer::utils::dataframe::WindowColumn>(
+                              {session_spec("o", "sid", 1.0, 0.0, "e")})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("window - delta determinism across input order") {
-    const DataFrame a = make3({1, 1, 2}, {1, 2, 1}, {10, 15, 100});
-    const DataFrame b = make3({2, 1, 1}, {1, 1, 2}, {100, 10, 15});
+    const DataFrame a = make3(span_of<std::int64_t>({1, 1, 2}),
+                              span_of<std::int64_t>({1, 2, 1}), {10, 15, 100});
+    const DataFrame b = make3(span_of<std::int64_t>({2, 1, 1}),
+                              span_of<std::int64_t>({1, 1, 2}), {100, 10, 15});
     const dstd::Vector<WindowColumn> specs = {
         spec(WindowFunc::Delta, "v", "d")};
-    const DataFrame oa = win(a, {"p"}, {"o"}, specs);
-    const DataFrame ob = win(b, {"p"}, {"o"}, specs);
+    const DataFrame oa = win(a, span_of<dstd::String>({"p"}),
+                             span_of<dstd::String>({"o"}), specs);
+    const DataFrame ob = win(b, span_of<dstd::String>({"p"}),
+                             span_of<dstd::String>({"o"}), specs);
     REQUIRE(oa.num_rows() == 3);
     REQUIRE(ob.num_rows() == 3);
     CHECK(ints(oa, "d") == ints(ob, "d"));
@@ -518,12 +578,13 @@ TEST_CASE("window - delta determinism across input order") {
 TEST_CASE("window - delta carries a list<utf8> column through") {
     DataFrame in;
     in.names = dstd::make_shared_strings({"p", "o", "v", "tags"});
-    in.columns.push_back(plain({1, 1}));
-    in.columns.push_back(plain({20, 10}));
-    in.columns.push_back(plain({15, 10}));
+    in.columns.push_back(plain(span_of<std::int64_t>({1, 1})));
+    in.columns.push_back(plain(span_of<std::int64_t>({20, 10})));
+    in.columns.push_back(plain(span_of<std::int64_t>({15, 10})));
     in.columns.push_back(tag_lists());
     const DataFrame out =
-        win(in, {"p"}, {"o"}, {spec(WindowFunc::Delta, "v", "d")});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({spec(WindowFunc::Delta, "v", "d")}));
     REQUIRE(out.num_rows() == 2);
     CHECK(str_list(out, "tags", 0) == dstd::Vector<dstd::String>{"p", "q"});
     CHECK(str_list(out, "tags", 1) == dstd::Vector<dstd::String>{"r"});
@@ -531,90 +592,117 @@ TEST_CASE("window - delta carries a list<utf8> column through") {
 }
 
 TEST_CASE("window - frame_sum rows between 1 preceding and 1 following") {
-    const DataFrame in = make3({1, 1, 1, 1}, {1, 2, 3, 4}, {1, 2, 3, 4});
-    const DataFrame out = win(
-        in, {"p"}, {"o"}, {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 1)});
+    const DataFrame in =
+        make3(span_of<std::int64_t>({1, 1, 1, 1}),
+              span_of<std::int64_t>({1, 2, 3, 4}), {1, 2, 3, 4});
+    const DataFrame out =
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 1)}));
     REQUIRE(out.num_columns() == 4);
     REQUIRE(out.num_rows() == 4);
     CHECK(ints(out, "fs") == Col{3, 6, 9, 7});
 }
 
 TEST_CASE("window - frame_min/max/mean over 1 preceding and 1 following") {
-    const DataFrame in = make3({1, 1, 1, 1}, {1, 2, 3, 4}, {1, 2, 3, 4});
+    const DataFrame in =
+        make3(span_of<std::int64_t>({1, 1, 1, 1}),
+              span_of<std::int64_t>({1, 2, 3, 4}), {1, 2, 3, 4});
     const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {frame_spec(WindowFunc::FrameMin, "v", "mn", 1, 1),
-             frame_spec(WindowFunc::FrameMax, "v", "mx", 1, 1),
-             frame_spec(WindowFunc::FrameMean, "v", "me", 1, 1)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {frame_spec(WindowFunc::FrameMin, "v", "mn", 1, 1),
+                 frame_spec(WindowFunc::FrameMax, "v", "mx", 1, 1),
+                 frame_spec(WindowFunc::FrameMean, "v", "me", 1, 1)}));
     REQUIRE(out.num_rows() == 4);
     CHECK(ints(out, "mn") == Col{1, 1, 2, 3});
     CHECK(ints(out, "mx") == Col{2, 3, 4, 4});
-    check_dbls(dbls(out, "me"), {1.5, 2.0, 3.0, 3.5});
+    check_dbls(dbls(out, "me"), span_of<double>({1.5, 2.0, 3.0, 3.5}));
 }
 
 TEST_CASE("window - frame_count skips null and frame_sum skips null in frame") {
-    const DataFrame in = make3({1, 1, 1, 1}, {1, 2, 3, 4}, {1, {}, 3, 4});
+    const DataFrame in =
+        make3(span_of<std::int64_t>({1, 1, 1, 1}),
+              span_of<std::int64_t>({1, 2, 3, 4}), {1, {}, 3, 4});
     const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {frame_spec(WindowFunc::FrameCount, "v", "fc", 1, 1),
-             frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 1)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {frame_spec(WindowFunc::FrameCount, "v", "fc", 1, 1),
+                 frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 1)}));
     REQUIRE(out.num_rows() == 4);
     CHECK(ints(out, "fc") == Col{1, 2, 2, 2});
     CHECK(ints(out, "fs") == Col{1, 4, 7, 7});
 }
 
 TEST_CASE("window - frame_sum all-null frame yields null") {
-    const DataFrame in = make3({1, 1, 1}, {1, 2, 3}, {{}, {}, {}});
-    const DataFrame out = win(
-        in, {"p"}, {"o"}, {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 1)});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1, 1}),
+                               span_of<std::int64_t>({1, 2, 3}), {{}, {}, {}});
+    const DataFrame out =
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 1)}));
     REQUIRE(out.num_rows() == 3);
     CHECK(ints(out, "fs") == Col{dstd::nullopt, dstd::nullopt, dstd::nullopt});
 }
 
 TEST_CASE("window - frame_sum resets per partition") {
-    const DataFrame in = make3({1, 1, 2, 2}, {1, 2, 1, 2}, {1, 2, 10, 20});
-    const DataFrame out = win(
-        in, {"p"}, {"o"}, {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 1)});
+    const DataFrame in =
+        make3(span_of<std::int64_t>({1, 1, 2, 2}),
+              span_of<std::int64_t>({1, 2, 1, 2}), {1, 2, 10, 20});
+    const DataFrame out =
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 1)}));
     REQUIRE(out.num_rows() == 4);
     CHECK(ints(out, "fs") == Col{3, 3, 30, 30});
 }
 
 TEST_CASE("window - unbounded preceding frame_sum equals running_sum") {
-    const DataFrame in = make3({1, 1, 1, 2}, {1, 2, 3, 1}, {10, 20, 30, 100});
+    const DataFrame in =
+        make3(span_of<std::int64_t>({1, 1, 1, 2}),
+              span_of<std::int64_t>({1, 2, 3, 1}), {10, 20, 30, 100});
     const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {spec(WindowFunc::RunningSum, "v", "rs"),
-             frame_spec(WindowFunc::FrameSum, "v", "fs", WINDOW_UNBOUNDED, 0)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({spec(WindowFunc::RunningSum, "v", "rs"),
+                                   frame_spec(WindowFunc::FrameSum, "v", "fs",
+                                              WINDOW_UNBOUNDED, 0)}));
     REQUIRE(out.num_rows() == 4);
     CHECK(ints(out, "rs") == ints(out, "fs"));
     CHECK(ints(out, "fs") == Col{10, 30, 60, 100});
 }
 
 TEST_CASE("window - ntile splits partition larger buckets first") {
-    const DataFrame a = make3({1, 1, 1, 1}, {1, 2, 3, 4}, {0, 0, 0, 0});
+    const DataFrame a =
+        make3(span_of<std::int64_t>({1, 1, 1, 1}),
+              span_of<std::int64_t>({1, 2, 3, 4}), {0, 0, 0, 0});
     const DataFrame oa =
-        win(a, {"p"}, {"o"},
-            {offset_spec(WindowFunc::Ntile, dstd::nullopt, "nt", 2)});
+        win(a, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {offset_spec(WindowFunc::Ntile, dstd::nullopt, "nt", 2)}));
     REQUIRE(oa.num_rows() == 4);
     CHECK(ints(oa, "nt") == Col{1, 1, 2, 2});
 
     const DataFrame b =
-        make3({1, 1, 1, 1, 1}, {1, 2, 3, 4, 5}, {0, 0, 0, 0, 0});
+        make3(span_of<std::int64_t>({1, 1, 1, 1, 1}),
+              span_of<std::int64_t>({1, 2, 3, 4, 5}), {0, 0, 0, 0, 0});
     const DataFrame ob =
-        win(b, {"p"}, {"o"},
-            {offset_spec(WindowFunc::Ntile, dstd::nullopt, "nt", 3)});
+        win(b, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {offset_spec(WindowFunc::Ntile, dstd::nullopt, "nt", 3)}));
     REQUIRE(ob.num_rows() == 5);
     CHECK(ints(ob, "nt") == Col{1, 1, 2, 2, 3});
 }
 
 TEST_CASE("window - first/last/nth value over partition") {
     const DataFrame in =
-        make3({1, 1, 1, 2, 2}, {1, 2, 3, 1, 2}, {10, 20, 30, 40, 50});
+        make3(span_of<std::int64_t>({1, 1, 1, 2, 2}),
+              span_of<std::int64_t>({1, 2, 3, 1, 2}), {10, 20, 30, 40, 50});
     const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {spec(WindowFunc::FirstValue, "v", "fv"),
-             spec(WindowFunc::LastValue, "v", "lv"),
-             offset_spec(WindowFunc::NthValue, "v", "nth", 2)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {spec(WindowFunc::FirstValue, "v", "fv"),
+                 spec(WindowFunc::LastValue, "v", "lv"),
+                 offset_spec(WindowFunc::NthValue, "v", "nth", 2)}));
     REQUIRE(out.num_rows() == 5);
     CHECK(ints(out, "fv") == Col{10, 10, 10, 40, 40});
     CHECK(ints(out, "lv") == Col{30, 30, 30, 50, 50});
@@ -622,9 +710,12 @@ TEST_CASE("window - first/last/nth value over partition") {
 }
 
 TEST_CASE("window - nth_value out of range yields null") {
-    const DataFrame in = make3({1, 1}, {1, 2}, {10, 20});
-    const DataFrame out = win(
-        in, {"p"}, {"o"}, {offset_spec(WindowFunc::NthValue, "v", "nth", 3)});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1}),
+                               span_of<std::int64_t>({1, 2}), {10, 20});
+    const DataFrame out =
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {offset_spec(WindowFunc::NthValue, "v", "nth", 3)}));
     REQUIRE(out.num_rows() == 2);
     CHECK(out.names[3] == "nth");
     CHECK(ints(out, "nth") == Col{dstd::nullopt, dstd::nullopt});
@@ -633,14 +724,15 @@ TEST_CASE("window - nth_value out of range yields null") {
 TEST_CASE("window - first/last/nth carry a list<utf8> column") {
     DataFrame in;
     in.names = dstd::make_shared_strings({"p", "o", "tags"});
-    in.columns.push_back(plain({1, 1}));
-    in.columns.push_back(plain({20, 10}));
+    in.columns.push_back(plain(span_of<std::int64_t>({1, 1})));
+    in.columns.push_back(plain(span_of<std::int64_t>({20, 10})));
     in.columns.push_back(tag_lists());
     const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {spec(WindowFunc::FirstValue, "tags", "fv"),
-             spec(WindowFunc::LastValue, "tags", "lv"),
-             offset_spec(WindowFunc::NthValue, "tags", "nth", 2)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {spec(WindowFunc::FirstValue, "tags", "fv"),
+                 spec(WindowFunc::LastValue, "tags", "lv"),
+                 offset_spec(WindowFunc::NthValue, "tags", "nth", 2)}));
     REQUIRE(out.num_rows() == 2);
     CHECK(str_list(out, "fv", 0) == dstd::Vector<dstd::String>{"p", "q"});
     CHECK(str_list(out, "lv", 0) == dstd::Vector<dstd::String>{"r"});
@@ -650,20 +742,22 @@ TEST_CASE("window - first/last/nth carry a list<utf8> column") {
 TEST_CASE(
     "window - String column with a null through positional and extremum") {
     const dstd::Vector<dstd::StringView> names = {"b", "", "a", "c"};
-    const dstd::Vector<std::uint8_t> valid = bits_of({true, false, true, true});
+    const dstd::Vector<std::uint8_t> valid =
+        bits_of(span_of<std::uint8_t>({1, 0, 1, 1}));
     DataFrame in;
     in.names = dstd::make_shared_strings({"p", "o", "s"});
-    in.columns.push_back(plain({1, 1, 1, 1}));
-    in.columns.push_back(plain({4, 3, 2, 1}));
+    in.columns.push_back(plain(span_of<std::int64_t>({1, 1, 1, 1})));
+    in.columns.push_back(plain(span_of<std::int64_t>({4, 3, 2, 1})));
     in.columns.push_back(Series::strings(
         dstd::Span<const dstd::StringView>(names), valid.data()));
     const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {offset_spec(WindowFunc::Lag, "s", "lag", 1),
-             spec(WindowFunc::FirstValue, "s", "fv"),
-             spec(WindowFunc::FillForward, "s", "ff"),
-             spec(WindowFunc::RunningMin, "s", "rmin"),
-             frame_spec(WindowFunc::FrameMax, "s", "fmax", 1, 1)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {offset_spec(WindowFunc::Lag, "s", "lag", 1),
+                 spec(WindowFunc::FirstValue, "s", "fv"),
+                 spec(WindowFunc::FillForward, "s", "ff"),
+                 spec(WindowFunc::RunningMin, "s", "rmin"),
+                 frame_spec(WindowFunc::FrameMax, "s", "fmax", 1, 1)}));
     REQUIRE(out.num_rows() == 4);
     CHECK(strs(out, "s") == SCol{"c", "a", dstd::nullopt, "b"});
     CHECK(strs(out, "lag") == SCol{dstd::nullopt, "c", "a", dstd::nullopt});
@@ -673,43 +767,48 @@ TEST_CASE(
     CHECK(strs(out, "fmax") == SCol{"c", "c", "b", "b"});
     dftu_utils_test::expect_error(
         dataframe::window(
-            in, dftu_utils_test::span_of<dstd::String>({"p"}),
-            dftu_utils_test::span_of<dstd::String>({"o"}),
-            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+            in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<dftracer::utils::dataframe::WindowColumn>(
                 {frame_spec(WindowFunc::FrameSum, "s", "x", 1, 1)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     dftu_utils_test::expect_error(
-        dataframe::window(
-            in, dftu_utils_test::span_of<dstd::String>({"p"}),
-            dftu_utils_test::span_of<dstd::String>({"o"}),
-            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
-                {spec(WindowFunc::RunningSum, "missing", "x")})),
+        dataframe::window(in, span_of<dstd::String>({"p"}),
+                          span_of<dstd::String>({"o"}),
+                          span_of<dftracer::utils::dataframe::WindowColumn>(
+                              {spec(WindowFunc::RunningSum, "missing", "x")})),
         dftracer::utils::common::ErrorCode::NotFound);
 }
 
 TEST_CASE("window - frame determinism across input order") {
-    const DataFrame a = make3({1, 1, 1, 2}, {1, 2, 3, 1}, {1, 2, 3, 9});
-    const DataFrame b = make3({2, 1, 1, 1}, {1, 3, 1, 2}, {9, 3, 1, 2});
+    const DataFrame a =
+        make3(span_of<std::int64_t>({1, 1, 1, 2}),
+              span_of<std::int64_t>({1, 2, 3, 1}), {1, 2, 3, 9});
+    const DataFrame b =
+        make3(span_of<std::int64_t>({2, 1, 1, 1}),
+              span_of<std::int64_t>({1, 3, 1, 2}), {9, 3, 1, 2});
     const dstd::Vector<WindowColumn> specs = {
         frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 1)};
-    const DataFrame oa = win(a, {"p"}, {"o"}, specs);
-    const DataFrame ob = win(b, {"p"}, {"o"}, specs);
+    const DataFrame oa = win(a, span_of<dstd::String>({"p"}),
+                             span_of<dstd::String>({"o"}), specs);
+    const DataFrame ob = win(b, span_of<dstd::String>({"p"}),
+                             span_of<dstd::String>({"o"}), specs);
     REQUIRE(oa.num_rows() == 4);
     REQUIRE(ob.num_rows() == 4);
     CHECK(ints(oa, "fs") == ints(ob, "fs"));
 }
 
 TEST_CASE("window - wide frame 3 preceding 2 following exercises deque") {
-    const DataFrame in =
-        make3({1, 1, 1, 1, 1, 1, 1, 1}, {1, 2, 3, 4, 5, 6, 7, 8},
-              {5, 5, 3, 1, 2, 2, 4, 6});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1, 1, 1, 1, 1, 1, 1}),
+                               span_of<std::int64_t>({1, 2, 3, 4, 5, 6, 7, 8}),
+                               {5, 5, 3, 1, 2, 2, 4, 6});
     const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {frame_spec(WindowFunc::FrameSum, "v", "fs", 3, 2),
-             frame_spec(WindowFunc::FrameMin, "v", "mn", 3, 2),
-             frame_spec(WindowFunc::FrameMax, "v", "mx", 3, 2),
-             frame_spec(WindowFunc::FrameCount, "v", "fc", 3, 2),
-             frame_spec(WindowFunc::FrameMean, "v", "me", 3, 2)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {frame_spec(WindowFunc::FrameSum, "v", "fs", 3, 2),
+                 frame_spec(WindowFunc::FrameMin, "v", "mn", 3, 2),
+                 frame_spec(WindowFunc::FrameMax, "v", "mx", 3, 2),
+                 frame_spec(WindowFunc::FrameCount, "v", "fc", 3, 2),
+                 frame_spec(WindowFunc::FrameMean, "v", "me", 3, 2)}));
     REQUIRE(out.num_rows() == 8);
     const dstd::Vector<std::int64_t> fs = {13, 14, 16, 18, 17, 18, 15, 14};
     const dstd::Vector<std::int64_t> fc = {3, 4, 5, 6, 6, 6, 5, 4};
@@ -724,41 +823,49 @@ TEST_CASE("window - wide frame 3 preceding 2 following exercises deque") {
 }
 
 TEST_CASE("window - frame slides across a null cell") {
-    const DataFrame in = make3({1, 1, 1, 1}, {1, 2, 3, 4}, {10, {}, 20, 30});
+    const DataFrame in =
+        make3(span_of<std::int64_t>({1, 1, 1, 1}),
+              span_of<std::int64_t>({1, 2, 3, 4}), {10, {}, 20, 30});
     const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 1),
-             frame_spec(WindowFunc::FrameMin, "v", "mn", 1, 1),
-             frame_spec(WindowFunc::FrameMax, "v", "mx", 1, 1),
-             frame_spec(WindowFunc::FrameCount, "v", "fc", 1, 1),
-             frame_spec(WindowFunc::FrameMean, "v", "me", 1, 1)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 1),
+                 frame_spec(WindowFunc::FrameMin, "v", "mn", 1, 1),
+                 frame_spec(WindowFunc::FrameMax, "v", "mx", 1, 1),
+                 frame_spec(WindowFunc::FrameCount, "v", "fc", 1, 1),
+                 frame_spec(WindowFunc::FrameMean, "v", "me", 1, 1)}));
     REQUIRE(out.num_rows() == 4);
     CHECK(ints(out, "fs") == Col{10, 30, 50, 50});
     CHECK(ints(out, "mn") == Col{10, 10, 20, 20});
     CHECK(ints(out, "mx") == Col{10, 20, 30, 30});
     CHECK(ints(out, "fc") == Col{1, 2, 2, 2});
-    check_dbls(dbls(out, "me"), {10.0, 15.0, 25.0, 25.0});
+    check_dbls(dbls(out, "me"), span_of<double>({10.0, 15.0, 25.0, 25.0}));
 }
 
 TEST_CASE("window - frame min/max reset per partition (no deque leak)") {
-    const DataFrame in = make3({1, 1, 2, 2}, {1, 2, 1, 2}, {9, 1, 5, 3});
+    const DataFrame in =
+        make3(span_of<std::int64_t>({1, 1, 2, 2}),
+              span_of<std::int64_t>({1, 2, 1, 2}), {9, 1, 5, 3});
     const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {frame_spec(WindowFunc::FrameMin, "v", "mn", 1, 1),
-             frame_spec(WindowFunc::FrameMax, "v", "mx", 1, 1)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {frame_spec(WindowFunc::FrameMin, "v", "mn", 1, 1),
+                 frame_spec(WindowFunc::FrameMax, "v", "mx", 1, 1)}));
     REQUIRE(out.num_rows() == 4);
     CHECK(ints(out, "mn") == Col{1, 1, 3, 3});
     CHECK(ints(out, "mx") == Col{9, 9, 5, 5});
 }
 
 TEST_CASE("window - frame all-null yields null for min/max/mean/count-zero") {
-    const DataFrame in = make3({1, 1, 1}, {1, 2, 3}, {{}, {}, {}});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1, 1}),
+                               span_of<std::int64_t>({1, 2, 3}), {{}, {}, {}});
     const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {frame_spec(WindowFunc::FrameMin, "v", "mn", 1, 1),
-             frame_spec(WindowFunc::FrameMax, "v", "mx", 1, 1),
-             frame_spec(WindowFunc::FrameMean, "v", "me", 1, 1),
-             frame_spec(WindowFunc::FrameCount, "v", "fc", 1, 1)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {frame_spec(WindowFunc::FrameMin, "v", "mn", 1, 1),
+                 frame_spec(WindowFunc::FrameMax, "v", "mx", 1, 1),
+                 frame_spec(WindowFunc::FrameMean, "v", "me", 1, 1),
+                 frame_spec(WindowFunc::FrameCount, "v", "fc", 1, 1)}));
     REQUIRE(out.num_rows() == 3);
     const Col none = {dstd::nullopt, dstd::nullopt, dstd::nullopt};
     CHECK(ints(out, "mn") == none);
@@ -780,10 +887,11 @@ TEST_CASE("window - large-n wide frame stays correct") {
     }
     const DataFrame in = make3(p, o, v);
     const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {frame_spec(WindowFunc::FrameSum, "v", "fs", prec, foll),
-             frame_spec(WindowFunc::FrameMin, "v", "mn", prec, foll),
-             frame_spec(WindowFunc::FrameMax, "v", "mx", prec, foll)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {frame_spec(WindowFunc::FrameSum, "v", "fs", prec, foll),
+                 frame_spec(WindowFunc::FrameMin, "v", "mn", prec, foll),
+                 frame_spec(WindowFunc::FrameMax, "v", "mx", prec, foll)}));
     REQUIRE(out.num_rows() == n);
     const Col fs = ints(out, "fs");
     const Col mn = ints(out, "mn");
@@ -801,13 +909,19 @@ TEST_CASE("window - large-n wide frame stays correct") {
 }
 
 TEST_CASE("window - frame_min/max determinism across input order") {
-    const DataFrame a = make3({1, 1, 1, 2}, {1, 2, 3, 1}, {3, 1, 2, 9});
-    const DataFrame b = make3({2, 1, 1, 1}, {1, 3, 1, 2}, {9, 2, 3, 1});
+    const DataFrame a =
+        make3(span_of<std::int64_t>({1, 1, 1, 2}),
+              span_of<std::int64_t>({1, 2, 3, 1}), {3, 1, 2, 9});
+    const DataFrame b =
+        make3(span_of<std::int64_t>({2, 1, 1, 1}),
+              span_of<std::int64_t>({1, 3, 1, 2}), {9, 2, 3, 1});
     const dstd::Vector<WindowColumn> specs = {
         frame_spec(WindowFunc::FrameMin, "v", "mn", 1, 1),
         frame_spec(WindowFunc::FrameMax, "v", "mx", 1, 1)};
-    const DataFrame oa = win(a, {"p"}, {"o"}, specs);
-    const DataFrame ob = win(b, {"p"}, {"o"}, specs);
+    const DataFrame oa = win(a, span_of<dstd::String>({"p"}),
+                             span_of<dstd::String>({"o"}), specs);
+    const DataFrame ob = win(b, span_of<dstd::String>({"p"}),
+                             span_of<dstd::String>({"o"}), specs);
     REQUIRE(oa.num_rows() == 4);
     REQUIRE(ob.num_rows() == 4);
     CHECK(ints(oa, "mn") == ints(ob, "mn"));
@@ -815,46 +929,62 @@ TEST_CASE("window - frame_min/max determinism across input order") {
 }
 
 TEST_CASE("window - percent_rank over ties and single-row partition") {
-    const DataFrame in = make3({1, 1, 1, 1}, {10, 20, 20, 40}, {0, 0, 0, 0});
-    const DataFrame out = win(
-        in, {"p"}, {"o"}, {spec(WindowFunc::PercentRank, dstd::nullopt, "pr")});
+    const DataFrame in =
+        make3(span_of<std::int64_t>({1, 1, 1, 1}),
+              span_of<std::int64_t>({10, 20, 20, 40}), {0, 0, 0, 0});
+    const DataFrame out =
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {spec(WindowFunc::PercentRank, dstd::nullopt, "pr")}));
     REQUIRE(out.num_columns() == 4);
     REQUIRE(out.num_rows() == 4);
-    check_dbls(dbls(out, "pr"), {0.0, 1.0 / 3.0, 1.0 / 3.0, 1.0});
+    check_dbls(dbls(out, "pr"),
+               span_of<double>({0.0, 1.0 / 3.0, 1.0 / 3.0, 1.0}));
 
-    const DataFrame in2 = make3({7}, {5}, {0});
+    const DataFrame in2 =
+        make3(span_of<std::int64_t>({7}), span_of<std::int64_t>({5}), {0});
     const DataFrame out2 =
-        win(in2, {"p"}, {"o"},
-            {spec(WindowFunc::PercentRank, dstd::nullopt, "pr")});
+        win(in2, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {spec(WindowFunc::PercentRank, dstd::nullopt, "pr")}));
     REQUIRE(out2.num_rows() == 1);
-    check_dbls(dbls(out2, "pr"), {0.0});
+    check_dbls(dbls(out2, "pr"), span_of<double>({0.0}));
 }
 
 TEST_CASE("window - cume_dist shares among peers and resets per partition") {
-    const DataFrame in =
-        make3({1, 1, 1, 1, 2, 2}, {10, 20, 20, 40, 5, 5}, {0, 0, 0, 0, 0, 0});
-    const DataFrame out = win(
-        in, {"p"}, {"o"}, {spec(WindowFunc::CumeDist, dstd::nullopt, "cd")});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1, 1, 1, 2, 2}),
+                               span_of<std::int64_t>({10, 20, 20, 40, 5, 5}),
+                               {0, 0, 0, 0, 0, 0});
+    const DataFrame out =
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {spec(WindowFunc::CumeDist, dstd::nullopt, "cd")}));
     REQUIRE(out.num_rows() == 6);
-    check_dbls(dbls(out, "cd"), {0.25, 0.75, 0.75, 1.0, 1.0, 1.0});
+    check_dbls(dbls(out, "cd"),
+               span_of<double>({0.25, 0.75, 0.75, 1.0, 1.0, 1.0}));
 }
 
 TEST_CASE("window - range frame sum by value delta on the order column") {
-    const DataFrame in = make3({1, 1, 1, 1}, {10, 12, 20, 21}, {1, 2, 3, 4});
-    const DataFrame out = win(in, {"p"}, {"o"},
-                              {frame_spec(WindowFunc::FrameSum, "v", "fs", 5, 5,
-                                          0, WindowFrameMode::Range)});
+    const DataFrame in =
+        make3(span_of<std::int64_t>({1, 1, 1, 1}),
+              span_of<std::int64_t>({10, 12, 20, 21}), {1, 2, 3, 4});
+    const DataFrame out = win(
+        in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+        span_of<WindowColumn>({frame_spec(WindowFunc::FrameSum, "v", "fs", 5, 5,
+                                          0, WindowFrameMode::Range)}));
     REQUIRE(out.num_rows() == 4);
     CHECK(ints(out, "fs") == Col{3, 3, 7, 7});
 }
 
 TEST_CASE("window - range unbounded-preceding includes peers, rows does not") {
-    const DataFrame in = make3({1, 1, 1}, {10, 10, 20}, {1, 2, 3});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1, 1}),
+                               span_of<std::int64_t>({10, 10, 20}), {1, 2, 3});
     const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {spec(WindowFunc::RunningSum, "v", "rows"),
-             frame_spec(WindowFunc::FrameSum, "v", "rng", WINDOW_UNBOUNDED, 0,
-                        0, WindowFrameMode::Range)});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {spec(WindowFunc::RunningSum, "v", "rows"),
+                 frame_spec(WindowFunc::FrameSum, "v", "rng", WINDOW_UNBOUNDED,
+                            0, 0, WindowFrameMode::Range)}));
     REQUIRE(out.num_rows() == 3);
     const Col rows = ints(out, "rows");
     const Col rng = ints(out, "rng");
@@ -867,12 +997,13 @@ TEST_CASE("window - range frame over a double order column resets per part") {
     const dstd::Vector<double> o = {10.0, 12.0, 100.0, 101.0};
     DataFrame in;
     in.names = dstd::make_shared_strings({"p", "o", "v"});
-    in.columns.push_back(plain({1, 1, 2, 2}));
+    in.columns.push_back(plain(span_of<std::int64_t>({1, 1, 2, 2})));
     in.columns.push_back(Series::flat_f64(o.data(), 4));
-    in.columns.push_back(plain({1, 2, 10, 20}));
-    const DataFrame out = win(in, {"p"}, {"o"},
-                              {frame_spec(WindowFunc::FrameSum, "v", "fs", 5, 5,
-                                          0, WindowFrameMode::Range)});
+    in.columns.push_back(plain(span_of<std::int64_t>({1, 2, 10, 20})));
+    const DataFrame out = win(
+        in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+        span_of<WindowColumn>({frame_spec(WindowFunc::FrameSum, "v", "fs", 5, 5,
+                                          0, WindowFrameMode::Range)}));
     REQUIRE(out.num_rows() == 4);
     CHECK(ints(out, "fs") == Col{3, 3, 30, 30});
 }
@@ -882,54 +1013,59 @@ TEST_CASE(
     const DataFrame in = [] {
         DataFrame d;
         d.names = dstd::make_shared_strings({"p", "o", "v"});
-        d.columns.push_back(plain({1, 1, 1, 1, 1}));
+        d.columns.push_back(plain(span_of<std::int64_t>({1, 1, 1, 1, 1})));
         d.columns.push_back(
             i64s(Col{10, 12, dstd::nullopt, dstd::nullopt, 11}));
-        d.columns.push_back(plain({1, 2, 100, 200, 4}));
+        d.columns.push_back(plain(span_of<std::int64_t>({1, 2, 100, 200, 4})));
         return d;
     }();
-    const DataFrame out = win(in, {"p"}, {"o"},
-                              {frame_spec(WindowFunc::FrameSum, "v", "fs", 5, 5,
-                                          0, WindowFrameMode::Range)});
+    const DataFrame out = win(
+        in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+        span_of<WindowColumn>({frame_spec(WindowFunc::FrameSum, "v", "fs", 5, 5,
+                                          0, WindowFrameMode::Range)}));
     REQUIRE(out.num_rows() == 5);
     CHECK(ints(out, "fs") == Col{7, 7, 7, 300, 300});
 }
 
 TEST_CASE("window - negative frame bounds are refused") {
-    const DataFrame in = make3({1, 1}, {1, 2}, {1, 2});
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1}),
+                               span_of<std::int64_t>({1, 2}), {1, 2});
     dftu_utils_test::expect_error(
         dataframe::window(
-            in, dftu_utils_test::span_of<dstd::String>({"p"}),
-            dftu_utils_test::span_of<dstd::String>({"o"}),
-            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+            in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<dftracer::utils::dataframe::WindowColumn>(
                 {frame_spec(WindowFunc::FrameSum, "v", "fs", -3, 1)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     dftu_utils_test::expect_error(
         dataframe::window(
-            in, dftu_utils_test::span_of<dstd::String>({"p"}),
-            dftu_utils_test::span_of<dstd::String>({"o"}),
-            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+            in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<dftracer::utils::dataframe::WindowColumn>(
                 {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, -1)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     dftu_utils_test::expect_error(
         dataframe::window(
-            in, dftu_utils_test::span_of<dstd::String>({"p"}),
-            dftu_utils_test::span_of<dstd::String>({"o"}),
-            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+            in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<dftracer::utils::dataframe::WindowColumn>(
                 {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 1, -1)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("window - percent_rank/cume_dist/range determinism across order") {
-    const DataFrame a = make3({1, 1, 1, 2}, {10, 20, 30, 5}, {1, 2, 3, 4});
-    const DataFrame b = make3({2, 1, 1, 1}, {5, 30, 10, 20}, {4, 3, 1, 2});
+    const DataFrame a =
+        make3(span_of<std::int64_t>({1, 1, 1, 2}),
+              span_of<std::int64_t>({10, 20, 30, 5}), {1, 2, 3, 4});
+    const DataFrame b =
+        make3(span_of<std::int64_t>({2, 1, 1, 1}),
+              span_of<std::int64_t>({5, 30, 10, 20}), {4, 3, 1, 2});
     const dstd::Vector<WindowColumn> specs = {
         spec(WindowFunc::PercentRank, dstd::nullopt, "pr"),
         spec(WindowFunc::CumeDist, dstd::nullopt, "cd"),
         frame_spec(WindowFunc::FrameSum, "v", "rng", 10, 10, 0,
                    WindowFrameMode::Range)};
-    const DataFrame oa = win(a, {"p"}, {"o"}, specs);
-    const DataFrame ob = win(b, {"p"}, {"o"}, specs);
+    const DataFrame oa = win(a, span_of<dstd::String>({"p"}),
+                             span_of<dstd::String>({"o"}), specs);
+    const DataFrame ob = win(b, span_of<dstd::String>({"p"}),
+                             span_of<dstd::String>({"o"}), specs);
     REQUIRE(oa.num_rows() == 4);
     REQUIRE(ob.num_rows() == 4);
     CHECK(dbls(oa, "pr") == dbls(ob, "pr"));
@@ -942,7 +1078,7 @@ namespace {
 struct RandomFrame {
     dstd::Vector<std::int64_t> p, o, vi;
     dstd::Vector<double> vf;
-    dstd::Vector<bool> p_ok, o_ok, vi_ok, vf_ok;
+    dstd::Vector<std::uint8_t> p_ok, o_ok, vi_ok, vf_ok;
 };
 
 RandomFrame random_frame(std::uint64_t seed, std::size_t n, bool order_nulls) {
@@ -975,15 +1111,15 @@ DataFrame to_frame(const RandomFrame& f) {
     return d;
 }
 
-Vals to_vals(const dstd::Vector<std::int64_t>& data,
-             const dstd::Vector<bool>& ok) {
+Vals to_vals(dstd::Span<const std::int64_t> data,
+             dstd::Span<const std::uint8_t> ok) {
     Vals out;
     for (std::size_t i = 0; i < data.size(); ++i)
         out.push_back(ok[i] ? Val{static_cast<double>(data[i])} : Val{});
     return out;
 }
 
-Vals to_vals(const dstd::Vector<double>& data, const dstd::Vector<bool>& ok) {
+Vals to_vals(dstd::Span<const double> data, dstd::Span<const std::uint8_t> ok) {
     Vals out;
     for (std::size_t i = 0; i < data.size(); ++i)
         out.push_back(ok[i] ? Val{data[i]} : Val{});
@@ -1123,7 +1259,7 @@ dstd::String bound(std::int64_t b) {
     return b == WINDOW_UNBOUNDED ? "u" : dstd::to_string(b);
 }
 
-dstd::String frame_name(WindowFunc func, const dstd::String& value,
+dstd::String frame_name(WindowFunc func, dstd::StringView value,
                         const FrameCase& fc, WindowFrameMode mode) {
     dstd::String tag;
     switch (func) {
@@ -1454,7 +1590,8 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
         }
 
         const DataFrame in = to_frame(f);
-        const DataFrame out = win(in, {"p"}, {"o"}, specs);
+        const DataFrame out = win(in, span_of<dstd::String>({"p"}),
+                                  span_of<dstd::String>({"o"}), specs);
         REQUIRE(out.num_rows() == static_cast<std::int64_t>(f.p.size()));
         REQUIRE(out.num_columns() == 4 + specs.size());
         check_passthrough(out, s, f);
@@ -1487,7 +1624,8 @@ TEST_CASE("window - randomized range frames match a naive per-row reference") {
             }
         }
         const DataFrame in = to_frame(f);
-        const DataFrame out = win(in, {"p"}, {"o"}, specs);
+        const DataFrame out = win(in, span_of<dstd::String>({"p"}),
+                                  span_of<dstd::String>({"o"}), specs);
         REQUIRE(out.num_rows() == static_cast<std::int64_t>(f.p.size()));
         REQUIRE(out.num_columns() == 4 + specs.size());
         check_passthrough(out, s, f);
@@ -1499,7 +1637,7 @@ namespace {
 
 using UCol = dstd::Vector<dstd::Optional<std::uint64_t>>;
 
-UCol uints(const DataFrame& d, const dstd::String& name) {
+UCol uints(const DataFrame& d, dstd::StringView name) {
     const Series c = column_of(d, name);
     REQUIRE(c.type() == TypeId::Uint64);
     UCol out;
@@ -1522,69 +1660,79 @@ constexpr std::uint64_t BIG = std::uint64_t{1} << 63;
 }  // namespace
 
 TEST_CASE("window - running_sum of uint64 values past 2^63 is exact") {
-    const DataFrame in = make3u({1, 1, 1}, {1, 2, 3}, {BIG, 1, 2});
+    const DataFrame in = make3u(span_of<std::int64_t>({1, 1, 1}),
+                                span_of<std::int64_t>({1, 2, 3}),
+                                span_of<std::uint64_t>({BIG, 1, 2}));
     const DataFrame out =
-        win(in, {"p"}, {"o"}, {spec(WindowFunc::RunningSum, "v", "s")});
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({spec(WindowFunc::RunningSum, "v", "s")}));
     CHECK(uints(out, "s") == UCol{BIG, BIG + 1, BIG + 3});
 }
 
 TEST_CASE("window - integer sums outside the type are errors, not wraps") {
-    const DataFrame u = make3u({1, 1}, {1, 2}, {UINT64_MAX, 1});
+    const DataFrame u =
+        make3u(span_of<std::int64_t>({1, 1}), span_of<std::int64_t>({1, 2}),
+               span_of<std::uint64_t>({UINT64_MAX, 1}));
     const dstd::String run = overflow_of(dataframe::window(
-        u, dftu_utils_test::span_of<dstd::String>({"p"}),
-        dftu_utils_test::span_of<dstd::String>({"o"}),
-        dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+        u, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+        span_of<dftracer::utils::dataframe::WindowColumn>(
             {spec(WindowFunc::RunningSum, "v", "s")})));
     CHECK(run.find("RUNNING_SUM") != dstd::String::npos);
     CHECK(run.find("uint64") != dstd::String::npos);
 
-    const DataFrame i = make3({1, 1}, {1, 2}, {INT64_MAX, 1});
+    const DataFrame i = make3(span_of<std::int64_t>({1, 1}),
+                              span_of<std::int64_t>({1, 2}), {INT64_MAX, 1});
     CHECK(overflow_of(dataframe::window(
-                          i, dftu_utils_test::span_of<dstd::String>({"p"}),
-                          dftu_utils_test::span_of<dstd::String>({"o"}),
-                          dftu_utils_test::span_of<
-                              dftracer::utils::dataframe::WindowColumn>(
+                          i, span_of<dstd::String>({"p"}),
+                          span_of<dstd::String>({"o"}),
+                          span_of<dftracer::utils::dataframe::WindowColumn>(
                               {spec(WindowFunc::RunningSum, "v", "s")})))
               .find("int64") != dstd::String::npos);
     CHECK(overflow_of(
               dataframe::window(
-                  i, dftu_utils_test::span_of<dstd::String>({"p"}),
-                  dftu_utils_test::span_of<dstd::String>({"o"}),
-                  dftu_utils_test::span_of<
-                      dftracer::utils::dataframe::WindowColumn>({frame_spec(
+                  i, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+                  span_of<dftracer::utils::dataframe::WindowColumn>({frame_spec(
                       WindowFunc::FrameSum, "v", "s", WINDOW_UNBOUNDED, 0)})))
               .find("FRAME_SUM") != dstd::String::npos);
 }
 
 TEST_CASE("window - frame_sum of uint64 values past 2^63 slides exactly") {
-    const DataFrame in = make3u({1, 1, 1, 1}, {1, 2, 3, 4}, {BIG, 5, 6, 7});
-    const DataFrame out = win(
-        in, {"p"}, {"o"}, {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 0)});
+    const DataFrame in = make3u(span_of<std::int64_t>({1, 1, 1, 1}),
+                                span_of<std::int64_t>({1, 2, 3, 4}),
+                                span_of<std::uint64_t>({BIG, 5, 6, 7}));
+    const DataFrame out =
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 0)}));
     CHECK(uints(out, "fs") == UCol{BIG, BIG + 5, 11, 13});
 }
 
 TEST_CASE("window - delta is exact int64 or an error") {
-    const DataFrame near = make3u({1, 1}, {1, 2}, {BIG + 5, BIG});
-    CHECK(ints(win(near, {"p"}, {"o"}, {spec(WindowFunc::Delta, "v", "d")}),
+    const DataFrame near =
+        make3u(span_of<std::int64_t>({1, 1}), span_of<std::int64_t>({1, 2}),
+               span_of<std::uint64_t>({BIG + 5, BIG}));
+    CHECK(ints(win(near, span_of<dstd::String>({"p"}),
+                   span_of<dstd::String>({"o"}),
+                   span_of<WindowColumn>({spec(WindowFunc::Delta, "v", "d")})),
                "d") == Col{dstd::nullopt, -5});
     for (const auto& values : {dstd::Vector<std::uint64_t>{0, UINT64_MAX},
                                dstd::Vector<std::uint64_t>{0, BIG}}) {
-        const DataFrame in = make3u({1, 1}, {1, 2}, values);
+        const DataFrame in = make3u(span_of<std::int64_t>({1, 1}),
+                                    span_of<std::int64_t>({1, 2}), values);
         const dstd::String e = overflow_of(dataframe::window(
-            in, dftu_utils_test::span_of<dstd::String>({"p"}),
-            dftu_utils_test::span_of<dstd::String>({"o"}),
-            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+            in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<dftracer::utils::dataframe::WindowColumn>(
                 {spec(WindowFunc::Delta, "v", "d")})));
         CHECK(e.find("DELTA") != dstd::String::npos);
     }
-    const DataFrame signed_in = make3({1, 1}, {1, 2}, {INT64_MIN, INT64_MAX});
-    CHECK(overflow_of(
-              dataframe::window(signed_in,
-                                dftu_utils_test::span_of<dstd::String>({"p"}),
-                                dftu_utils_test::span_of<dstd::String>({"o"}),
-                                dftu_utils_test::span_of<
-                                    dftracer::utils::dataframe::WindowColumn>(
-                                    {spec(WindowFunc::Delta, "v", "d")})))
+    const DataFrame signed_in =
+        make3(span_of<std::int64_t>({1, 1}), span_of<std::int64_t>({1, 2}),
+              {INT64_MIN, INT64_MAX});
+    CHECK(overflow_of(dataframe::window(
+                          signed_in, span_of<dstd::String>({"p"}),
+                          span_of<dstd::String>({"o"}),
+                          span_of<dftracer::utils::dataframe::WindowColumn>(
+                              {spec(WindowFunc::Delta, "v", "d")})))
               .find("DELTA") != dstd::String::npos);
 }
 
@@ -1608,8 +1756,9 @@ TEST_CASE("window - sliding integer sums equal a 128-bit reference") {
             return c;
         }());
         const DataFrame out =
-            win(in, {"p"}, {"o"},
-                {frame_spec(WindowFunc::FrameSum, "v", "fs", 2, 1)});
+            win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+                span_of<WindowColumn>(
+                    {frame_spec(WindowFunc::FrameSum, "v", "fs", 2, 1)}));
         __extension__ typedef __int128 Wide;
         for (int i = 0; i < 400; ++i) {
             Wide sum = 0;
@@ -1633,7 +1782,8 @@ static bool same(const DataFrame& a, const DataFrame& b, WindowFunc func) {
 }
 
 TEST_CASE("window - ABI range frames equal the C++ range results") {
-    const DataFrame in = make3({1, 1, 1, 1, 2, 2}, {10, 12, 12, 21, 5, 9},
+    const DataFrame in = make3(span_of<std::int64_t>({1, 1, 1, 1, 2, 2}),
+                               span_of<std::int64_t>({10, 12, 12, 21, 5, 9}),
                                {1, 2, dstd::nullopt, 4, 5, 6});
     for (const FrameCase& fc : RANGE_FRAMES) {
         CAPTURE(fc.preceding);
@@ -1646,20 +1796,24 @@ TEST_CASE("window - ABI range frames equal the C++ range results") {
             abi.param.frame = {fc.min_count, fc.preceding,
                                fc.following, DFTU_WINDOW_FRAME_RANGE,
                                0.0,          nullptr};
-            const DataFrame via_abi =
-                win(in, {"p"}, {"o"}, {dataframe::window_column(abi)});
-            const DataFrame want =
-                win(in, {"p"}, {"o"},
+            const DataFrame via_abi = win(
+                in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+                span_of<WindowColumn>({dataframe::window_column(abi)}));
+            const DataFrame want = win(
+                in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+                span_of<WindowColumn>(
                     {frame_spec(func, "v", "r", fc.preceding, fc.following,
-                                fc.min_count, WindowFrameMode::Range)});
+                                fc.min_count, WindowFrameMode::Range)}));
             CHECK(same(via_abi, want, func));
             abi.param.frame.mode = DFTU_WINDOW_FRAME_ROWS;
-            const DataFrame rows =
-                win(in, {"p"}, {"o"}, {dataframe::window_column(abi)});
-            const DataFrame rows_want =
-                win(in, {"p"}, {"o"},
+            const DataFrame rows = win(
+                in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+                span_of<WindowColumn>({dataframe::window_column(abi)}));
+            const DataFrame rows_want = win(
+                in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+                span_of<WindowColumn>(
                     {frame_spec(func, "v", "r", fc.preceding, fc.following,
-                                fc.min_count)});
+                                fc.min_count)}));
             CHECK(same(rows, rows_want, func));
         }
     }
@@ -1713,7 +1867,7 @@ Keys keys_of(const Series& column) {
 
 struct Extra {
     dstd::Vector<dstd::String> vs, bs;
-    dstd::Vector<bool> vs_ok, bs_ok, vb, vb_ok, bb, bb_ok, bi_ok;
+    dstd::Vector<std::uint8_t> vs_ok, bs_ok, vb, vb_ok, bb, bb_ok, bi_ok;
     dstd::Vector<std::int64_t> bi;
 };
 
@@ -1739,14 +1893,15 @@ Extra random_extra(std::uint64_t seed, std::size_t n) {
     return e;
 }
 
-Series text_series(const dstd::Vector<dstd::String>& v,
-                   const dstd::Vector<bool>& ok) {
+Series text_series(dstd::Span<const dstd::String> v,
+                   dstd::Span<const std::uint8_t> ok) {
     const dstd::Vector<dstd::StringView> views(v.begin(), v.end());
     const dstd::Vector<std::uint8_t> bits = bits_of(ok);
     return Series::strings(views, bits.data());
 }
 
-Series bool_series(const dstd::Vector<bool>& v, const dstd::Vector<bool>& ok) {
+Series bool_series(dstd::Span<const std::uint8_t> v,
+                   dstd::Span<const std::uint8_t> ok) {
     const dstd::Vector<std::uint8_t> data = bits_of(v);
     const dstd::Vector<std::uint8_t> bits = bits_of(ok);
     return Series::flat(TypeId::Bool, data.data(),
@@ -1765,14 +1920,14 @@ DataFrame stat_frame(const RandomFrame& f, const Extra& e) {
     return d;
 }
 
-WindowColumn stat_spec(WindowFunc func, const dstd::String& value,
+WindowColumn stat_spec(WindowFunc func, dstd::StringView value,
                        dstd::String out, const FrameCase& fc,
                        WindowFrameMode mode, double q = 0.0,
-                       const dstd::String& by = {}) {
-    WindowColumn w = frame_spec(func, value, std::move(out), fc.preceding,
-                                fc.following, fc.min_count, mode);
+                       dstd::StringView by = {}) {
+    WindowColumn w = frame_spec(func, dstd::String(value), std::move(out),
+                                fc.preceding, fc.following, fc.min_count, mode);
     w.params.frame.q = q;
-    if (!by.empty()) w.set_by(by);
+    if (!by.empty()) w.set_by(dstd::String(by));
     return w;
 }
 
@@ -1845,7 +2000,7 @@ double quantile_ref(dstd::Vector<double> x, double q) {
 
 double max_rel_error = 0.0;
 
-void check_close(const DataFrame& d, const dstd::String& name, const Vals& want,
+void check_close(const DataFrame& d, dstd::StringView name, const Vals& want,
                  double rel) {
     REQUIRE_MESSAGE(column_of(d, name).type() == TypeId::Float64, name);
     const Vals got = nums(d, name);
@@ -1866,8 +2021,7 @@ void check_close(const DataFrame& d, const dstd::String& name, const Vals& want,
     }
 }
 
-void check_keys(const DataFrame& d, const dstd::String& name,
-                const Keys& want) {
+void check_keys(const DataFrame& d, dstd::StringView name, const Keys& want) {
     const Keys got = keys_of(d.column(name));
     REQUIRE(got.size() == want.size());
     for (std::size_t i = 0; i < got.size(); ++i)
@@ -1879,7 +2033,7 @@ void check_keys(const DataFrame& d, const dstd::String& name,
 
 struct ByCase {
     dstd::String name;
-    dstd::Vector<bool> ok;
+    dstd::Vector<std::uint8_t> ok;
     dstd::Function<int(std::size_t, std::size_t)> cmp;
 };
 
@@ -1917,7 +2071,7 @@ void run_stat_frames(std::uint64_t seed, bool order_nulls, WindowFrameMode mode,
     dstd::Vector<WindowColumn> specs;
     dstd::Vector<dstd::Function<void(const DataFrame&)>> checks;
     int id = 0;
-    const auto uniq = [&id](const char* tag, const dstd::String& col) {
+    const auto uniq = [&id](dstd::StringView tag, dstd::StringView col) {
         return dstd::fmt<"{}_{}_{}">(tag, col, id++);
     };
 
@@ -2031,7 +2185,8 @@ void run_stat_frames(std::uint64_t seed, bool order_nulls, WindowFrameMode mode,
             }
         }
     }
-    const DataFrame out = win(in, {"p"}, {"o"}, specs);
+    const DataFrame out = win(in, span_of<dstd::String>({"p"}),
+                              span_of<dstd::String>({"o"}), specs);
     REQUIRE(out.num_rows() == static_cast<std::int64_t>(n));
     for (const auto& check : checks) check(out);
 }
@@ -2061,7 +2216,7 @@ TEST_CASE("window - new range frame functions treat null orders as peers") {
 
 namespace {
 
-DataFrame names_dur(const dstd::Vector<dstd::String>& names, const Col& dur) {
+DataFrame names_dur(dstd::Span<const dstd::String> names, const Col& dur) {
     DataFrame d;
     d.names = dstd::make_shared_strings({"p", "o", "name", "dur"});
     dstd::Vector<std::int64_t> p(names.size(), 1), o(names.size());
@@ -2076,51 +2231,64 @@ DataFrame names_dur(const dstd::Vector<dstd::String>& names, const Col& dur) {
 }  // namespace
 
 TEST_CASE("window - count_distinct over 3 rows of a, b, a, c") {
-    const DataFrame in = names_dur({"a", "b", "a", "c"}, {1, 2, 3, 4});
-    const DataFrame out =
-        win(in, {"p"}, {"o"},
-            {frame_spec(WindowFunc::FrameCountDistinct, "name", "cd", 2, 0)});
+    const DataFrame in =
+        names_dur(span_of<dstd::String>({"a", "b", "a", "c"}), {1, 2, 3, 4});
+    const DataFrame out = win(
+        in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+        span_of<WindowColumn>(
+            {frame_spec(WindowFunc::FrameCountDistinct, "name", "cd", 2, 0)}));
     CHECK(ints(out, "cd") == Col{1, 2, 2, 3});
 }
 
 TEST_CASE("window - arg_max over 2 rows takes the earliest row on a tie") {
-    const DataFrame in = names_dur({"n0", "n1", "n2", "n3"}, {5, 9, 9, 2});
+    const DataFrame in = names_dur(
+        span_of<dstd::String>({"n0", "n1", "n2", "n3"}), {5, 9, 9, 2});
     WindowColumn mx = frame_spec(WindowFunc::FrameArgMax, "name", "mx", 1, 0);
     mx.set_by("dur");
     WindowColumn mn = frame_spec(WindowFunc::FrameArgMin, "name", "mn", 1, 0);
     mn.set_by("dur");
-    const DataFrame out = win(in, {"p"}, {"o"}, {mx, mn});
+    const DataFrame out =
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({mx, mn}));
     CHECK(strs(out, "mx") == SCol{"n0", "n1", "n1", "n2"});
     CHECK(strs(out, "mn") == SCol{"n0", "n0", "n1", "n3"});
 }
 
 TEST_CASE("window - arg_max skips a null by and may return a null value") {
-    DataFrame in = names_dur({"x", "y", "z", "w"}, {5, dstd::nullopt, 9, 9});
+    DataFrame in = names_dur(span_of<dstd::String>({"x", "y", "z", "w"}),
+                             {5, dstd::nullopt, 9, 9});
     WindowColumn mx =
         frame_spec(WindowFunc::FrameArgMax, "name", "mx", WINDOW_UNBOUNDED, 0);
     mx.set_by("dur");
-    CHECK(strs(win(in, {"p"}, {"o"}, {mx}), "mx") == SCol{"x", "x", "z", "z"});
+    CHECK(strs(win(in, span_of<dstd::String>({"p"}),
+                   span_of<dstd::String>({"o"}), span_of<WindowColumn>({mx})),
+               "mx") == SCol{"x", "x", "z", "z"});
 
     DataFrame nullval;
     nullval.names = dstd::make_shared_strings({"p", "o", "v", "b"});
-    nullval.columns.push_back(plain({1, 1}));
-    nullval.columns.push_back(plain({1, 2}));
+    nullval.columns.push_back(plain(span_of<std::int64_t>({1, 1})));
+    nullval.columns.push_back(plain(span_of<std::int64_t>({1, 2})));
     nullval.columns.push_back(i64s(Col{dstd::nullopt, 7}));
-    nullval.columns.push_back(plain({9, 1}));
+    nullval.columns.push_back(plain(span_of<std::int64_t>({9, 1})));
     WindowColumn pick =
         frame_spec(WindowFunc::FrameArgMax, "v", "r", WINDOW_UNBOUNDED, 0);
     pick.set_by("b");
-    CHECK(ints(win(nullval, {"p"}, {"o"}, {pick}), "r") ==
-          Col{dstd::nullopt, dstd::nullopt});
+    CHECK(ints(win(nullval, span_of<dstd::String>({"p"}),
+                   span_of<dstd::String>({"o"}), span_of<WindowColumn>({pick})),
+               "r") == Col{dstd::nullopt, dstd::nullopt});
 }
 
 TEST_CASE("window - quantile over 3 rows is exact with interpolation") {
-    const DataFrame in = names_dur({"a", "b", "c", "d", "e"}, {4, 1, 3, 10, 2});
+    const DataFrame in = names_dur(
+        span_of<dstd::String>({"a", "b", "c", "d", "e"}), {4, 1, 3, 10, 2});
     const auto q = [&](double level, std::int64_t pre) {
         WindowColumn w =
             frame_spec(WindowFunc::FrameQuantile, "dur", "q", pre, 0);
         w.params.frame.q = level;
-        return dbls(win(in, {"p"}, {"o"}, {w}), "q");
+        return dbls(
+            win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+                span_of<WindowColumn>({w})),
+            "q");
     };
     const Vals half = q(0.5, 2);
     const dstd::Vector<double> want = {4.0, 2.5, 3.0, 3.0, 3.0};
@@ -2131,12 +2299,15 @@ TEST_CASE("window - quantile over 3 rows is exact with interpolation") {
 }
 
 TEST_CASE("window - collect lists present values in frame order") {
-    DataFrame in = names_dur({"x", "y", "z"}, {1, 2, 3});
-    in.columns[2] = text_series({"x", "", "z"}, {true, false, true});
-    const DataFrame out = win(
-        in, {"p"}, {"o"},
-        {frame_spec(WindowFunc::FrameCollect, "name", "c", WINDOW_UNBOUNDED, 0),
-         frame_spec(WindowFunc::FrameCollect, "name", "e", 0, 0)});
+    DataFrame in = names_dur(span_of<dstd::String>({"x", "y", "z"}), {1, 2, 3});
+    in.columns[2] = text_series(span_of<dstd::String>({"x", "", "z"}),
+                                span_of<std::uint8_t>({1, 0, 1}));
+    const DataFrame out =
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>(
+                {frame_spec(WindowFunc::FrameCollect, "name", "c",
+                            WINDOW_UNBOUNDED, 0),
+                 frame_spec(WindowFunc::FrameCollect, "name", "e", 0, 0)}));
     CHECK(keys_of(out.column("c")) == Keys{"x", "x", "x|z"});
     CHECK(keys_of(out.column("e")) == Keys{"x", "", "z"});
 }
@@ -2156,9 +2327,8 @@ TEST_CASE("window - collect past 2^27 values in all fails naming the frame") {
         for (const Series& c : in.columns)
             part.columns.push_back(c.slice(0, rows));
         return dataframe::window(
-            part, dftu_utils_test::span_of<dstd::String>({"p"}),
-            dftu_utils_test::span_of<dstd::String>({"o"}),
-            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+            part, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<dftracer::utils::dataframe::WindowColumn>(
                 {frame_spec(WindowFunc::FrameCollect, "v", "c",
                             WINDOW_UNBOUNDED, WINDOW_UNBOUNDED)}));
     };
@@ -2169,16 +2339,14 @@ TEST_CASE("window - collect past 2^27 values in all fails naming the frame") {
 }
 
 TEST_CASE("window - new frame functions refuse bad parameters") {
-    const DataFrame in = names_dur({"a", "b"}, {1, 2});
+    const DataFrame in = names_dur(span_of<dstd::String>({"a", "b"}), {1, 2});
     const auto quantile = [&](double level) {
         WindowColumn w = frame_spec(WindowFunc::FrameQuantile, "dur", "q",
                                     WINDOW_UNBOUNDED, 0);
         w.params.frame.q = level;
         return dataframe::window(
-            in, dftu_utils_test::span_of<dstd::String>({"p"}),
-            dftu_utils_test::span_of<dstd::String>({"o"}),
-            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
-                {w}));
+            in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<dftracer::utils::dataframe::WindowColumn>({w}));
     };
     dftu_utils_test::expect_error(
         quantile(-0.1), dftracer::utils::common::ErrorCode::InvalidArgument);
@@ -2192,9 +2360,8 @@ TEST_CASE("window - new frame functions refuse bad parameters") {
 
     dftu_utils_test::expect_error(
         dataframe::window(
-            in, dftu_utils_test::span_of<dstd::String>({"p"}),
-            dftu_utils_test::span_of<dstd::String>({"o"}),
-            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+            in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<dftracer::utils::dataframe::WindowColumn>(
                 {frame_spec(WindowFunc::FrameArgMax, "name", "r", 1, 0)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     WindowColumn unknown =
@@ -2202,35 +2369,30 @@ TEST_CASE("window - new frame functions refuse bad parameters") {
     unknown.set_by("nope");
     dftu_utils_test::expect_error(
         dataframe::window(
-            in, dftu_utils_test::span_of<dstd::String>({"p"}),
-            dftu_utils_test::span_of<dstd::String>({"o"}),
-            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
-                {unknown})),
+            in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<dftracer::utils::dataframe::WindowColumn>({unknown})),
         dftracer::utils::common::ErrorCode::NotFound);
     WindowColumn listed = frame_spec(WindowFunc::FrameArgMin, "dur", "r", 1, 0);
     listed.set_by("tags");
-    DataFrame with_tags = names_dur({"a", "b"}, {1, 2});
+    DataFrame with_tags = names_dur(span_of<dstd::String>({"a", "b"}), {1, 2});
     with_tags.names.push_back(dstd::SharedString{"tags"});
     with_tags.columns.push_back(tag_lists());
     dftu_utils_test::expect_error(
         dataframe::window(
-            with_tags, dftu_utils_test::span_of<dstd::String>({"p"}),
-            dftu_utils_test::span_of<dstd::String>({"o"}),
-            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
-                {listed})),
+            with_tags, span_of<dstd::String>({"p"}),
+            span_of<dstd::String>({"o"}),
+            span_of<dftracer::utils::dataframe::WindowColumn>({listed})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     dftu_utils_test::expect_error(
         dataframe::window(
-            in, dftu_utils_test::span_of<dstd::String>({"p"}),
-            dftu_utils_test::span_of<dstd::String>({"o"}),
-            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+            in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<dftracer::utils::dataframe::WindowColumn>(
                 {frame_spec(WindowFunc::FrameVar, "name", "r", 1, 0)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     dftu_utils_test::expect_error(
         dataframe::window(
-            in, dftu_utils_test::span_of<dstd::String>({"p"}),
-            dftu_utils_test::span_of<dstd::String>({"o"}),
-            dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+            in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<dftracer::utils::dataframe::WindowColumn>(
                 {frame_spec(WindowFunc::FrameQuantile, "name", "r", 1, 0)})),
         dftracer::utils::common::ErrorCode::InvalidArgument);
 }
@@ -2241,7 +2403,7 @@ TEST_CASE("window - frame variance near 1e9 matches a two-pass reference") {
     constexpr std::size_t PER = 400;
     dstd::Vector<std::int64_t> p, o;
     dstd::Vector<double> v;
-    dstd::Vector<bool> ok;
+    dstd::Vector<std::uint8_t> ok;
     for (std::size_t i = 0; i < 3 * PER; ++i) {
         p.push_back(static_cast<std::int64_t>(i / PER));
         o.push_back(static_cast<std::int64_t>((i % PER) / 2));
@@ -2268,7 +2430,8 @@ TEST_CASE("window - frame variance near 1e9 matches a two-pass reference") {
         dstd::Vector<WindowColumn> specs;
         specs.push_back(stat_spec(WindowFunc::FrameVar, "v", "var", fc, mode));
         specs.push_back(stat_spec(WindowFunc::FrameStd, "v", "std", fc, mode));
-        const DataFrame out = win(in, {"p"}, {"o"}, specs);
+        const DataFrame out = win(in, span_of<dstd::String>({"p"}),
+                                  span_of<dstd::String>({"o"}), specs);
         Vals want_var(p.size()), want_std(p.size());
         for (std::size_t i = 0; i < p.size(); ++i) {
             Vals cells;
@@ -2343,8 +2506,9 @@ TEST_CASE("window - ABI new frame functions equal the C++ results") {
             REQUIRE(got);
             const Series col(dftu_dataframe_column(got, "r"));
             REQUIRE(col.valid());
-            const DataFrame want =
-                win(in, {"p"}, {"o"}, {dataframe::window_column(abi)});
+            const DataFrame want = win(
+                in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+                span_of<WindowColumn>({dataframe::window_column(abi)}));
             CHECK(keys_of(col) == keys_of(want.column("r")));
             CHECK(col.type() == want.column("r").type());
             dftu_dataframe_free(got);
@@ -2368,7 +2532,7 @@ TEST_CASE("window - frame variance and std are exactly 0 on constant frames") {
     for (const double base : {0.0, 3.25, 1.0e9}) {
         dstd::Vector<std::int64_t> p, o;
         dstd::Vector<double> v;
-        dstd::Vector<bool> ok;
+        dstd::Vector<std::uint8_t> ok;
         std::mt19937_64 rng(5);
         std::uniform_real_distribution<double> noise(0.0, 10.0);
         for (int i = 0; i < 90; ++i) {
@@ -2390,10 +2554,11 @@ TEST_CASE("window - frame variance and std are exactly 0 on constant frames") {
                  {{4, 2, 0}, WindowFrameMode::Rows},
                  {{WINDOW_UNBOUNDED, 0, 0}, WindowFrameMode::Rows},
                  {{3, 3, 0}, WindowFrameMode::Range}}) {
-            const DataFrame out =
-                win(in, {"p"}, {"o"},
+            const DataFrame out = win(
+                in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+                span_of<WindowColumn>(
                     {stat_spec(WindowFunc::FrameVar, "v", "var", fc, mode),
-                     stat_spec(WindowFunc::FrameStd, "v", "std", fc, mode)});
+                     stat_spec(WindowFunc::FrameStd, "v", "std", fc, mode)}));
             Vals want_var(90), want_std(90);
             bool saw_constant = false;
             for (int i = 0; i < 90; ++i) {
@@ -2425,7 +2590,7 @@ TEST_CASE("window - frame variance of values drifting past 1e9 stays close") {
     std::uniform_real_distribution<double> noise(0.0, 1.0);
     dstd::Vector<std::int64_t> p, o;
     dstd::Vector<double> v;
-    dstd::Vector<bool> ok;
+    dstd::Vector<std::uint8_t> ok;
     for (int i = 0; i < 2000; ++i) {
         p.push_back(1);
         o.push_back(i);
@@ -2438,9 +2603,10 @@ TEST_CASE("window - frame variance of values drifting past 1e9 stays close") {
     in.columns.push_back(plain(o));
     in.columns.push_back(f64s(v, ok));
     const FrameCase fc{10, 0, 0};
-    const DataFrame out = win(in, {"p"}, {"o"},
-                              {stat_spec(WindowFunc::FrameVar, "v", "var", fc,
-                                         WindowFrameMode::Rows)});
+    const DataFrame out =
+        win(in, span_of<dstd::String>({"p"}), span_of<dstd::String>({"o"}),
+            span_of<WindowColumn>({stat_spec(WindowFunc::FrameVar, "v", "var",
+                                             fc, WindowFrameMode::Rows)}));
     const Vals all = to_vals(v, ok);
     Vals want(2000);
     for (int i = 0; i < 2000; ++i) {
@@ -2474,9 +2640,9 @@ TEST_CASE("lag and lead read the row `offset` back or ahead in the partition") {
         specs.push_back(
             offset_spec(WindowFunc::Lead, "v", dstd::fmt<"lead{}">(n), n));
     }
-    const DataFrame out = dftu_utils_test::ok(dataframe::window(
-        frame, dftu_utils_test::span_of<dstd::String>({"k"}),
-        dftu_utils_test::span_of<dstd::String>({"ord"}), specs));
+    const DataFrame out = dftu_utils_test::ok(
+        dataframe::window(frame, span_of<dstd::String>({"k"}),
+                          span_of<dstd::String>({"ord"}), specs));
     const auto start_of = [&](std::size_t r) { return r < 4 ? 0 : 4; };
     const auto size_of = [&](std::size_t r) { return r < 4 ? 4 : 3; };
     for (std::int64_t n : offsets) {

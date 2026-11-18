@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <sys/stat.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -53,8 +54,8 @@ void check_fails_on_read_only_dir(dstd::String env_name, dstd::String tool) {
     ReadOnlyDir read_only(env.dir());
     dftu_utils_test::set_test_library_path(binary);
     int rc = 0;
-    const auto output =
-        dftu_utils_test::run_process_capture(binary, {env.dir()}, true, &rc);
+    const auto output = dftu_utils_test::run_process_capture(
+        binary, dftu_utils_test::span_of<dstd::String>({env.dir()}), true, &rc);
     CHECK(rc == 1);
     CHECK(output.find("Error:") != dstd::String::npos);
 }

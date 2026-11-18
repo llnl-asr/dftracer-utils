@@ -59,7 +59,8 @@ Table random_table(Rng& rng, int n, int keys, int skew, std::int64_t scale) {
     return t;
 }
 
-DataFrame frame_of(const Table& t, const char* key, const char* value) {
+DataFrame frame_of(const Table& t, dstd::StringView key,
+                   dstd::StringView value) {
     dstd::Vector<std::int64_t> k;
     dstd::Vector<std::uint8_t> bits((t.key.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < t.key.size(); ++i) {
@@ -126,7 +127,7 @@ dstd::Vector<dstd::String> reference(const Table& l, const Table& r,
 
 dstd::Result<DataFrame> join_result(const DataFrame& l, const DataFrame& r,
                                     JoinHow how, std::uint64_t budget,
-                                    const dstd::String& suffix = "") {
+                                    dstd::StringView suffix = "") {
     const LazyFrame left =
         LazyFrame::scan(dstd::make_shared<InMemorySource>(
                             DataFrame{l.names,
@@ -144,12 +145,13 @@ dstd::Result<DataFrame> join_result(const DataFrame& l, const DataFrame& r,
                       return c;
                   }()}));
     return dftracer::utils::default_runtime()
-        .submit(left.join(right, {"lk"}, {"rk"}, how, suffix).collect(200))
+        .submit(left.join(right, {"lk"}, {"rk"}, how, dstd::String(suffix))
+                    .collect(200))
         .get();
 }
 
 DataFrame join(const DataFrame& l, const DataFrame& r, JoinHow how,
-               std::uint64_t budget, const dstd::String& suffix = "") {
+               std::uint64_t budget, dstd::StringView suffix = "") {
     return dftu_utils_test::ok(join_result(l, r, how, budget, suffix));
 }
 

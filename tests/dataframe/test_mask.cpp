@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/mask.h>
 #include <dftracer/utils/dataframe/plan.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/c_api.h>
@@ -40,14 +41,14 @@ dstd::String truth(const Series& m) {
     return out;
 }
 
-Series mask_of(const char* q, const DataFrame& b) {
+Series mask_of(dstd::StringView q, const DataFrame& b) {
     auto parsed = duql::Query::from_string(q);
     REQUIRE(parsed.has_value());
     return dftu_utils_test::ok(
         dataframe::evaluate_mask(duql::detail::QueryAccess::root(*parsed), b));
 }
 
-std::int64_t kept_rows(const char* q, const DataFrame& b) {
+std::int64_t kept_rows(dstd::StringView q, const DataFrame& b) {
     auto parsed = duql::Query::from_string(q);
     REQUIRE(parsed.has_value());
     dataframe::QueryPlan plan;

@@ -15,6 +15,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -311,7 +312,8 @@ TEST_SUITE("comm observation") {
             "DFTRACER_UTILS_EVENT_COUNT_PATH", "dftracer_event_count");
         REQUIRE_FALSE(binary.empty());
         const dstd::String counted = dftu_utils_test::run_process_capture(
-            binary, {"-f", files[0], files[1]});
+            binary,
+            dftu_utils_test::span_of<dstd::String>({"-f", files[0], files[1]}));
         dftu_utils_test::LineStream lines(counted);
         dstd::String line;
         dstd::String last;

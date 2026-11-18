@@ -49,7 +49,8 @@ benchmarks/hash_bench.cpp | ankerl | the old dstd::StringHash went through this 
 # Benchmark scaffolding that must not allocate from the heap under measurement.
 benchmarks/fmt_bench.cpp | string, to_string | the old std::string chain is counted at the global operator new
 benchmarks/heap_bench.cpp | thread, vector | scaffolding must not allocate from the heap under measurement
-benchmarks/memory_attribution_bench.cpp | vector | memory::detail::PoolStats is below dstd
+benchmarks/memory_probe.h | string_view | the probe is standalone and includes no dstd header
+benchmarks/memory_probe_test.cpp | string_view | the probe is standalone and includes no dstd header
 tests/runtime/test_task_pool.cpp | set, thread, vector | a dstd container or thread would charge the pool under test
 
 

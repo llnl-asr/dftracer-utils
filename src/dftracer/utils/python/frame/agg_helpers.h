@@ -5,6 +5,7 @@
 #include <Python.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -40,16 +41,16 @@ inline double parse_double(dftracer::utils::dstd::StringView text) {
 // `interp` the interpolation code of a quantile);
 // throws std::invalid_argument on a bad op or a bad param.
 inline dftracer::utils::dataframe::GroupAgg group_agg_from_spec(
-    const dftracer::utils::dstd::String& spec) {
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> parts;
+    dftracer::utils::dstd::StringView spec) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> parts;
     std::size_t start = 0;
     while (true) {
         const std::size_t colon = spec.find(':', start);
         parts.push_back(
-            spec.substr(start, colon == dftracer::utils::dstd::String::npos
-                                   ? dftracer::utils::dstd::String::npos
+            spec.substr(start, colon == dftracer::utils::dstd::StringView::npos
+                                   ? dftracer::utils::dstd::StringView::npos
                                    : colon - start));
-        if (colon == dftracer::utils::dstd::String::npos) break;
+        if (colon == dftracer::utils::dstd::StringView::npos) break;
         start = colon + 1;
     }
     dataframe::GroupAgg a;
@@ -61,9 +62,10 @@ inline dftracer::utils::dataframe::GroupAgg group_agg_from_spec(
         return a;
     }
     a.column = parts[1];
-    a.out = parts.size() > 2
-                ? parts[2]
-                : dftracer::utils::dstd::fmt<"{}_{}">(parts[0], a.column);
+    if (parts.size() > 2)
+        a.out = parts[2];
+    else
+        a.out = dftracer::utils::dstd::fmt<"{}_{}">(parts[0], a.column);
     if (parts.size() > 3) a.by = parts[3];
     if (parts.size() > 4 && !parts[4].empty()) a.param = parse_double(parts[4]);
     if (parts.size() > 5 && !parts[5].empty()) {
@@ -80,7 +82,7 @@ inline dftracer::utils::dataframe::GroupAgg group_agg_from_spec(
 // to hand back to the string group_by.
 inline dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
 reduce_spec_strings(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dataframe::GroupAgg>&
+    dftracer::utils::dstd::Span<const dftracer::utils::dataframe::GroupAgg>
         aggs) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
     out.reserve(aggs.size());

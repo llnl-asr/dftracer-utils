@@ -14,12 +14,14 @@
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -50,7 +52,7 @@ DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
     return out;
 }
 
-dstd::String key_of(const dstd::Vector<Series>& cols, std::int64_t r) {
+dstd::String key_of(dstd::Span<const Series> cols, std::int64_t r) {
     dftracer::utils::dataframe::KeyRefusal refusal;
     dstd::String key = dftracer::utils::dataframe::row_key(cols, r, refusal);
     REQUIRE_FALSE(refusal.refused());
@@ -1224,51 +1226,52 @@ TEST_SUITE("lazyframe") {
             df.columns.push_back(Series::flat(TypeId::Int32, u.data(), n));
             return df;
         };
-        auto offset_spec = [](dftu_window_func func, const char* value,
-                              const char* out, std::int64_t offset) {
+        auto offset_spec = [](dftu_window_func func, dstd::CStringView value,
+                              dstd::CStringView out, std::int64_t offset) {
             dftu_window_spec s{};
             s.func = func;
-            s.value = value;
-            s.out = out;
+            s.value = value.empty() ? nullptr : value.c_str();
+            s.out = out.c_str();
             s.param.offset = offset;
             return s;
         };
-        auto frame_spec = [](dftu_window_func func, const char* value,
-                             const char* out, std::int64_t pre,
+        auto frame_spec = [](dftu_window_func func, dstd::CStringView value,
+                             dstd::CStringView out, std::int64_t pre,
                              std::int64_t fol, bool range = false,
                              std::int64_t min_count = 0, double q = 0.5,
-                             const char* by = nullptr) {
+                             dstd::CStringView by = "") {
             dftu_window_spec s{};
             s.func = func;
-            s.value = value;
-            s.out = out;
+            s.value = value.empty() ? nullptr : value.c_str();
+            s.out = out.c_str();
             s.param.frame = {
                 min_count,
                 pre,
                 fol,
                 range ? DFTU_WINDOW_FRAME_RANGE : DFTU_WINDOW_FRAME_ROWS,
                 q,
-                by};
+                by.empty() ? nullptr : by.c_str()};
             return s;
         };
-        auto session_spec = [](const char* out, const char* time,
-                               const char* end, double gap, double span) {
+        auto session_spec = [](dstd::CStringView out, dstd::CStringView time,
+                               dstd::CStringView end, double gap, double span) {
             dftu_window_spec s{};
             s.func = DFTU_WINDOW_SESSIONIZE;
-            s.out = out;
-            s.param.session = {time, end, gap, span};
+            s.out = out.c_str();
+            s.param.session = {time.c_str(),
+                               end.empty() ? nullptr : end.c_str(), gap, span};
             return s;
         };
         const std::int64_t ALL = DFTU_WINDOW_UNBOUNDED;
         using Specs = dstd::Vector<dftu_window_spec>;
         const dstd::Vector<dstd::Pair<dstd::String, Specs>> groups = {
             {"ranks",
-             {offset_spec(DFTU_WINDOW_NTILE, nullptr, "nt", 4),
-              offset_spec(DFTU_WINDOW_ROW_NUMBER, nullptr, "rn", 0),
-              offset_spec(DFTU_WINDOW_RANK, nullptr, "rk", 0),
-              offset_spec(DFTU_WINDOW_DENSE_RANK, nullptr, "dr", 0),
-              offset_spec(DFTU_WINDOW_PERCENT_RANK, nullptr, "pr", 0),
-              offset_spec(DFTU_WINDOW_CUME_DIST, nullptr, "cd", 0)}},
+             {offset_spec(DFTU_WINDOW_NTILE, "", "nt", 4),
+              offset_spec(DFTU_WINDOW_ROW_NUMBER, "", "rn", 0),
+              offset_spec(DFTU_WINDOW_RANK, "", "rk", 0),
+              offset_spec(DFTU_WINDOW_DENSE_RANK, "", "dr", 0),
+              offset_spec(DFTU_WINDOW_PERCENT_RANK, "", "pr", 0),
+              offset_spec(DFTU_WINDOW_CUME_DIST, "", "cd", 0)}},
             {"whole",
              {frame_spec(DFTU_WINDOW_FRAME_COUNT, "v", "wc", ALL, ALL),
               frame_spec(DFTU_WINDOW_FRAME_MIN, "u", "wmin", ALL, ALL),
@@ -1277,7 +1280,7 @@ TEST_SUITE("lazyframe") {
               frame_spec(DFTU_WINDOW_FRAME_SUM, "u", "wusum", ALL, ALL, false,
                          3)}},
             {"sessions",
-             {session_spec("s1", "t", nullptr, 3.0, 0.0),
+             {session_spec("s1", "t", "", 3.0, 0.0),
               session_spec("s2", "t", "f", 1.0, 20.0)}},
             {"float frames",
              {frame_spec(DFTU_WINDOW_FRAME_SUM, "f", "fs", 2, 1),
@@ -1399,23 +1402,23 @@ TEST_SUITE("lazyframe") {
             df.columns.push_back(Series::flat(TypeId::Float32, h.data(), n));
             return df;
         };
-        auto offset_spec = [](dftu_window_func func, const char* value,
-                              const char* out, std::int64_t offset) {
+        auto offset_spec = [](dftu_window_func func, dstd::CStringView value,
+                              dstd::CStringView out, std::int64_t offset) {
             dftu_window_spec s{};
             s.func = func;
-            s.value = value;
-            s.out = out;
+            s.value = value.empty() ? nullptr : value.c_str();
+            s.out = out.c_str();
             s.param.offset = offset;
             return s;
         };
-        auto frame_spec = [](dftu_window_func func, const char* value,
-                             const char* out, std::int64_t pre,
+        auto frame_spec = [](dftu_window_func func, dstd::CStringView value,
+                             dstd::CStringView out, std::int64_t pre,
                              std::int64_t fol, bool range = false,
                              std::int64_t min_count = 0) {
             dftu_window_spec s{};
             s.func = func;
-            s.value = value;
-            s.out = out;
+            s.value = value.empty() ? nullptr : value.c_str();
+            s.out = out.c_str();
             s.param.frame = {
                 min_count,
                 pre,
@@ -1507,8 +1510,8 @@ TEST_SUITE("lazyframe") {
               frame_spec(DFTU_WINDOW_FRAME_SUM, "v", "ts", ALL, 1),
               offset_spec(DFTU_WINDOW_NTH_VALUE, "s", "tn", 4),
               offset_spec(DFTU_WINDOW_LAST_VALUE, "f", "tl", 0),
-              offset_spec(DFTU_WINDOW_NTILE, nullptr, "tt", 5),
-              offset_spec(DFTU_WINDOW_ROW_NUMBER, nullptr, "tr", 0)}},
+              offset_spec(DFTU_WINDOW_NTILE, "", "tt", 5),
+              offset_spec(DFTU_WINDOW_ROW_NUMBER, "", "tr", 0)}},
             {"text extremes from the start",
              "o",
              true,
@@ -1664,12 +1667,12 @@ TEST_SUITE("lazyframe") {
         df.columns.push_back(Series::flat_i64(o.data(), n));
         df.columns.push_back(Series::flat_i64(v.data(), n));
         df.columns.push_back(Series::strings(s));
-        auto spec = [](dftu_window_func func, const char* value,
-                       const char* out, std::int64_t offset) {
+        auto spec = [](dftu_window_func func, dstd::CStringView value,
+                       dstd::CStringView out, std::int64_t offset) {
             dftu_window_spec w{};
             w.func = func;
-            w.value = value;
-            w.out = out;
+            w.value = value.empty() ? nullptr : value.c_str();
+            w.out = out.c_str();
             w.param.offset = offset;
             return w;
         };
@@ -1684,10 +1687,10 @@ TEST_SUITE("lazyframe") {
                              0.5,
                              nullptr};
         const dstd::Vector<dftu_window_spec> specs = {
-            spec(DFTU_WINDOW_NTILE, nullptr, "nt", 4),
-            spec(DFTU_WINDOW_PERCENT_RANK, nullptr, "pr", 0),
-            spec(DFTU_WINDOW_CUME_DIST, nullptr, "cd", 0),
-            spec(DFTU_WINDOW_ROW_NUMBER, nullptr, "rn", 0), whole};
+            spec(DFTU_WINDOW_NTILE, "", "nt", 4),
+            spec(DFTU_WINDOW_PERCENT_RANK, "", "pr", 0),
+            spec(DFTU_WINDOW_CUME_DIST, "", "cd", 0),
+            spec(DFTU_WINDOW_ROW_NUMBER, "", "rn", 0), whole};
         const char* pc[] = {"p"};
         const char* oc[] = {"o"};
         OpArgs args;
@@ -2257,7 +2260,7 @@ TEST_SUITE("lazyframe") {
         df.columns.push_back(Series::flat_f64(k.data(), n));
         df.columns.push_back(Series::flat_f64(v.data(), n));
         df.columns.push_back(Series::flat_f64(w.data(), n));
-        const auto column = [](const DataFrame& f, const char* name) {
+        const auto column = [](const DataFrame& f, dstd::StringView name) {
             const auto at =
                 std::find(f.names.begin(), f.names.end(), dstd::String(name));
             REQUIRE(at != f.names.end());

@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/kernels/string_match.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -133,7 +134,7 @@ duql::PatternPtr must(duql::PatternResult r) {
     return std::move(*r);
 }
 
-void check_variant(const StringMatch& k, const char* label) {
+void check_variant(const StringMatch& k, dstd::CStringView label) {
     const Rows rows = make_rows();
     const dstd::String long_a(70, 'a');
     const struct {
@@ -141,7 +142,7 @@ void check_variant(const StringMatch& k, const char* label) {
     } likes[] = {{"read"},   {"MPI_%"},  {"%write"}, {"%Memcpy%"}, {"%p%e%d%"},
                  {"_write"}, {"%a%a_%"}, {""},       {"%"}};
     for (const Column& c : columns(rows)) {
-        CAPTURE(label);
+        CAPTURE(label.c_str());
         CAPTURE(c.name);
         for (const auto& l : likes) {
             CAPTURE(l.like);

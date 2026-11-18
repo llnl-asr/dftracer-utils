@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/domains/workload/genesis/genesis.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -35,10 +36,10 @@ namespace dftu::memory_workloads {
 template <class T>
 inline void require_ok(const dftracer::utils::dstd::Expected<
                            T, dftracer::utils::dstd::Error>& result,
-                       const char* what) {
+                       dftracer::utils::dstd::CStringView what) {
     if (result.has_value()) return;
     const auto& error = result.error();
-    std::fprintf(stderr, "%s failed: %.*s %.*s\n", what,
+    std::fprintf(stderr, "%s failed: %.*s %.*s\n", what.c_str(),
                  static_cast<int>(error.name().size()), error.name().data(),
                  static_cast<int>(error.message().size()),
                  error.message().data());
@@ -177,8 +178,8 @@ inline dftracer::utils::coro::CoroTask<void> genesis_run(
     }
 }
 
-inline void write_gz(const dftracer::utils::dstd::String& path,
-                     const dftracer::utils::dstd::String& content) {
+inline void write_gz(dftracer::utils::dstd::StringView path,
+                     dftracer::utils::dstd::StringView content) {
     require_ok(dftracer::utils::dstd::fs::create_directories(
                    dftracer::utils::dstd::PathView(path).parent()),
                "create_directories");
@@ -199,14 +200,18 @@ inline void write_gz(const dftracer::utils::dstd::String& path,
 }
 
 inline dftracer::utils::dstd::String genesis_line(
-    std::int64_t pid, const dftracer::utils::dstd::String& name,
-    std::int64_t ts, std::int64_t dur, const char* cat = "CPP_APP") {
-    return R"({"name":")" + name + R"(","cat":")" + cat + R"(","pid":)" +
-           dftracer::utils::dstd::to_string(pid) + R"(,"tid":)" +
-           dftracer::utils::dstd::to_string(pid) + R"(,"ts":)" +
-           dftracer::utils::dstd::to_string(ts) + R"(,"dur":)" +
-           dftracer::utils::dstd::to_string(dur) +
-           R"(,"ph":1,"args":{"hhash":"h1"}})" + "\n";
+    std::int64_t pid, dftracer::utils::dstd::StringView name, std::int64_t ts,
+    std::int64_t dur, dftracer::utils::dstd::StringView cat = "CPP_APP") {
+    dftracer::utils::dstd::String line = R"({"name":")";
+    line += name;
+    line += R"(","cat":")";
+    line += cat;
+    line += R"(","pid":)" + dftracer::utils::dstd::to_string(pid) +
+            R"(,"tid":)" + dftracer::utils::dstd::to_string(pid) + R"(,"ts":)" +
+            dftracer::utils::dstd::to_string(ts) + R"(,"dur":)" +
+            dftracer::utils::dstd::to_string(dur) +
+            R"(,"ph":1,"args":{"hhash":"h1"}})" + "\n";
+    return line;
 }
 
 inline dftracer::utils::dstd::String genesis_text(std::int64_t calls) {

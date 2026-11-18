@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
 
@@ -56,24 +57,30 @@ TEST_SUITE("testing utilities") {
     }
 
     TEST_CASE("run_process reports the child's exit code") {
-        CHECK(run_process("/bin/sh", {"-c", "exit 0"}) == 0);
-        CHECK(run_process("/bin/sh", {"-c", "exit 7"}) == 7);
+        CHECK(run_process("/bin/sh", span_of<dstd::String>({"-c", "exit 0"})) ==
+              0);
+        CHECK(run_process("/bin/sh", span_of<dstd::String>({"-c", "exit 7"})) ==
+              7);
         CHECK(run_process("/nonexistent/binary", {}) == 127);
     }
 
     TEST_CASE("run_process_capture reads stdout, and stderr only when asked") {
         int rc = -99;
-        CHECK(run_process_capture("/bin/sh", {"-c", "echo out; echo err 1>&2"},
-                                  false, &rc) == "out\n");
+        CHECK(run_process_capture(
+                  "/bin/sh",
+                  span_of<dstd::String>({"-c", "echo out; echo err 1>&2"}),
+                  false, &rc) == "out\n");
         CHECK(rc == 0);
 
         const dstd::String both = run_process_capture(
-            "/bin/sh", {"-c", "echo out; echo err 1>&2"}, true, &rc);
+            "/bin/sh", span_of<dstd::String>({"-c", "echo out; echo err 1>&2"}),
+            true, &rc);
         CHECK(both.find("out") != dstd::String::npos);
         CHECK(both.find("err") != dstd::String::npos);
         CHECK(rc == 0);
 
-        run_process_capture("/bin/sh", {"-c", "exit 3"}, false, &rc);
+        run_process_capture("/bin/sh", span_of<dstd::String>({"-c", "exit 3"}),
+                            false, &rc);
         CHECK(rc == 3);
     }
 
@@ -82,7 +89,9 @@ TEST_SUITE("testing utilities") {
         // waiting before draining would deadlock rather than fail.
         int rc = -99;
         const dstd::String out = run_process_capture(
-            "/bin/sh", {"-c", "yes abcdefghij | head -n 40000"}, false, &rc);
+            "/bin/sh",
+            span_of<dstd::String>({"-c", "yes abcdefghij | head -n 40000"}),
+            false, &rc);
         CHECK(rc == 0);
         CHECK(out.size() == 40000 * 11);
     }

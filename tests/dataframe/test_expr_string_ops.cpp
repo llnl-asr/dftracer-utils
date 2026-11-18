@@ -57,7 +57,9 @@ void check_inferred(const Expr& e, const Series& in) {
     dstd::Vector<const Series*> ins{&in};
     Series out = dftu_utils_test::eval_ok(e, ins);
     REQUIRE(out.valid());
-    DataType dt = dftu_utils_test::infer_type_ok(e, {in.data_type()});
+    DataType dt = dftu_utils_test::infer_type_ok(
+        e, dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+               {in.data_type()}));
     CHECK(dt.id == out.type());
 }
 
@@ -221,10 +223,12 @@ TEST_SUITE("expr string ops") {
         dstd::Vector<std::int64_t> set{1};
         CHECK(dftu_utils_test::is_invalid(dftracer::utils::dataframe::eval(
             expr_is_in(expr_col(0), Series::flat_i64(set.data(), 1)), sin)));
-        CHECK(dftu_utils_test::infer_type_ok(
-                  expr_str_size(expr_col(0), false),
-                  {dftracer::utils::dataframe::scalar(TypeId::Unknown)})
-                  .id == TypeId::Unknown);
+        CHECK(
+            dftu_utils_test::infer_type_ok(
+                expr_str_size(expr_col(0), false),
+                dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                    {dftracer::utils::dataframe::scalar(TypeId::Unknown)}))
+                .id == TypeId::Unknown);
     }
 
     TEST_CASE("planner accessors and column remap keep the pattern and set") {

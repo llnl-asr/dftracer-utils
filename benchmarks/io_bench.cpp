@@ -24,6 +24,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -203,9 +204,10 @@ using Run = std::uint64_t (*)(const Config&, Runtime&, Shared&);
 
 template <class T>
 void require_ok(const dstd::Expected<T, dstd::Error>& result,
-                const char* what) {
+                dstd::CStringView what) {
     if (result.has_value()) return;
-    std::fprintf(stderr, "%s failed: %s\n", what, result.error().c_str());
+    std::fprintf(stderr, "%s failed: %s\n", what.c_str(),
+                 result.error().c_str());
     std::exit(1);
 }
 

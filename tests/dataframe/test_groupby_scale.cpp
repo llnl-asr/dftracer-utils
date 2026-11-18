@@ -135,8 +135,8 @@ const Input& packed_input() {
 // result depends on the order rows reach a group, and the driver that streams
 // blocks refuses it (specs_with_arg_max).
 dstd::Vector<AggSpec> specs() {
-    auto s = [](AggOp op, std::int32_t col, const char* out, double param = 0.0,
-                std::int32_t by = -1) {
+    auto s = [](AggOp op, std::int32_t col, dstd::StringView out,
+                double param = 0.0, std::int32_t by = -1) {
         AggSpec sp;
         sp.op = op;
         sp.value_col = col;
@@ -177,8 +177,8 @@ dstd::Vector<AggSpec> specs_with_arg_max() {
 
 // A single-threaded fold of the whole frame: the reference every driver must
 // equal.
-DataFrame reference(const dstd::Vector<const Series*>& keys, const Input& in,
-                    const dstd::Vector<dstd::String>& key_names,
+DataFrame reference(dstd::Span<const Series* const> keys, const Input& in,
+                    dstd::Span<const dstd::String> key_names,
                     dstd::Vector<AggSpec> with = specs()) {
     dataframe::AggStatePtr st = dataframe::agg_new(std::move(with));
     dftu_utils_test::ok(dataframe::agg_accumulate(*st, keys, in.values()));
@@ -191,7 +191,7 @@ DataFrame reference(const dstd::Vector<const Series*>& keys, const Input& in,
 // sketch built from rows in another order differ from the fold in the tail
 // bins.
 void expect_equal(const DataFrame& a, const DataFrame& b,
-                  const dstd::Vector<dstd::String>& skip = {}) {
+                  dstd::Span<const dstd::String> skip = {}) {
     REQUIRE(a.num_rows() == b.num_rows());
     REQUIRE(a.columns.size() == b.columns.size());
     for (std::size_t c = 0; c < a.columns.size(); ++c) {
@@ -295,21 +295,24 @@ bool bit_equal(const DataFrame& a, const DataFrame& b, dstd::String* why) {
 
 // The same group-by REPEATS times on the thread pool and once serial: the bits
 // must not change with the scheduling or with the number of threads.
-void expect_deterministic(const dstd::Vector<const Series*>& keys,
-                          const Input& in, const dstd::Vector<AggSpec>& with,
-                          const dstd::Vector<dstd::String>& names) {
-    const DataFrame first = dftu_utils_test::ok(
-        dataframe::group_agg(keys, in.values(), with, names));
+void expect_deterministic(dstd::Span<const Series* const> keys, const Input& in,
+                          dstd::Span<const AggSpec> with,
+                          dstd::Span<const dstd::String> names) {
+    const DataFrame first = dftu_utils_test::ok(dataframe::group_agg(
+        keys, in.values(), dstd::Vector<AggSpec>(with.begin(), with.end()),
+        names));
     dstd::String why;
     for (int run = 0; run < REPEATS; ++run) {
-        const DataFrame again = dftu_utils_test::ok(
-            dataframe::group_agg(keys, in.values(), with, names));
+        const DataFrame again = dftu_utils_test::ok(dataframe::group_agg(
+            keys, in.values(), dstd::Vector<AggSpec>(with.begin(), with.end()),
+            names));
         INFO("run " << run << ": " << why);
         REQUIRE(bit_equal(first, again, &why));
     }
     dataframe::set_parallel_backend(nullptr, nullptr);  // serial
-    const DataFrame serial = dftu_utils_test::ok(
-        dataframe::group_agg(keys, in.values(), with, names));
+    const DataFrame serial = dftu_utils_test::ok(dataframe::group_agg(
+        keys, in.values(), dstd::Vector<AggSpec>(with.begin(), with.end()),
+        names));
     dataframe::install_runtime_parallel_backend();
     INFO("serial: " << why);
     REQUIRE(bit_equal(first, serial, &why));
@@ -329,7 +332,11 @@ TEST_CASE("many groups on a long string key equal the one-thread fold") {
         dftu_utils_test::span_of<dstd::String>({"proc", "t"})));
     REQUIRE(dataframe::parallel_backend_installed());
     CHECK(got.num_rows() > in.groups * 2 / 3);
-    expect_equal(got, reference(keys, in, {"proc", "t"}), {"p50_x"});
+    expect_equal(
+        got,
+        reference(keys, in,
+                  dftu_utils_test::span_of<dstd::String>({"proc", "t"})),
+        dftu_utils_test::span_of<dstd::String>({"p50_x"}));
 }
 
 TEST_CASE("many groups on an integer key equal the one-thread fold") {
@@ -339,7 +346,11 @@ TEST_CASE("many groups on an integer key equal the one-thread fold") {
         keys, in.values(), specs(),
         dftu_utils_test::span_of<dstd::String>({"big", "t"})));
     CHECK(got.num_rows() > in.groups * 2 / 3);
-    expect_equal(got, reference(keys, in, {"big", "t"}), {"p50_x"});
+    expect_equal(
+        got,
+        reference(keys, in,
+                  dftu_utils_test::span_of<dstd::String>({"big", "t"})),
+        dftu_utils_test::span_of<dstd::String>({"p50_x"}));
 }
 
 TEST_CASE("null keys form one group and equal the one-thread fold") {
@@ -348,7 +359,11 @@ TEST_CASE("null keys form one group and equal the one-thread fold") {
     DataFrame got = dftu_utils_test::ok(dataframe::group_agg(
         keys, in.values(), specs(),
         dftu_utils_test::span_of<dstd::String>({"proc", "t"})));
-    expect_equal(got, reference(keys, in, {"proc", "t"}), {"p50_x"});
+    expect_equal(
+        got,
+        reference(keys, in,
+                  dftu_utils_test::span_of<dstd::String>({"proc", "t"})),
+        dftu_utils_test::span_of<dstd::String>({"p50_x"}));
     // the null string key is one group per time bucket, not one per partition
     std::int64_t nulls = 0;
     for (std::int64_t i = 0; i < got.columns[0].length(); ++i)
@@ -369,7 +384,9 @@ TEST_CASE("a float key keeps the existing path and still equals the fold") {
     // The quantile sketch is left out: its 128 collapsing bins make a merge of
     // per-thread partial sketches differ from one sketch run to run (a
     // separate, existing limitation).
-    expect_equal(got, reference(keys, in, {"f"}), {"p50_x"});
+    expect_equal(
+        got, reference(keys, in, dftu_utils_test::span_of<dstd::String>({"f"})),
+        dftu_utils_test::span_of<dstd::String>({"p50_x"}));
 }
 
 TEST_CASE("arg_max over many groups equals the fold, the first row on a tie") {
@@ -379,20 +396,30 @@ TEST_CASE("arg_max over many groups equals the fold, the first row on a tie") {
         keys, in.values(), specs_with_arg_max(),
         dftu_utils_test::span_of<dstd::String>({"proc", "t"})));
     // The sketch quantile is left out for the reason given above.
-    expect_equal(got, reference(keys, in, {"proc", "t"}, specs_with_arg_max()),
-                 {"p50_x"});
+    expect_equal(
+        got,
+        reference(keys, in,
+                  dftu_utils_test::span_of<dstd::String>({"proc", "t"}),
+                  specs_with_arg_max()),
+        dftu_utils_test::span_of<dstd::String>({"p50_x"}));
 }
 
 TEST_CASE("many groups give the same bits on every run and thread count") {
     const Input& in = input();
     SUBCASE("long string key") {
-        expect_deterministic({&in.nkey, &in.tkey}, in, specs(), {"proc", "t"});
+        expect_deterministic(
+            dftu_utils_test::span_of<const Series*>({&in.nkey, &in.tkey}), in,
+            specs(), dftu_utils_test::span_of<dstd::String>({"proc", "t"}));
     }
     SUBCASE("integer key") {
-        expect_deterministic({&in.bkey, &in.tkey}, in, specs(), {"big", "t"});
+        expect_deterministic(
+            dftu_utils_test::span_of<const Series*>({&in.bkey, &in.tkey}), in,
+            specs(), dftu_utils_test::span_of<dstd::String>({"big", "t"}));
     }
     SUBCASE("short string key, float sums") {
-        expect_deterministic({&in.shortkey}, in, specs(), {"k"});
+        expect_deterministic(
+            dftu_utils_test::span_of<const Series*>({&in.shortkey}), in,
+            specs(), dftu_utils_test::span_of<dstd::String>({"k"}));
     }
     SUBCASE("short string key, order-free aggregates (the packed driver)") {
         const Input& big = packed_input();
@@ -401,13 +428,17 @@ TEST_CASE("many groups give the same bits on every run and thread count") {
             if (a.op == AggOp::Count || a.op == AggOp::Min ||
                 a.op == AggOp::Max || (a.op == AggOp::Sum && a.value_col == Y))
                 sp.push_back(a);
-        expect_deterministic({&big.shortkey}, big, sp, {"k"});
+        expect_deterministic(
+            dftu_utils_test::span_of<const Series*>({&big.shortkey}), big, sp,
+            dftu_utils_test::span_of<dstd::String>({"k"}));
     }
 }
 
 TEST_CASE("few groups give the same bits on every run and thread count") {
     const Input& in = input();
-    expect_deterministic({&in.tkey}, in, specs(), {"t"});
+    expect_deterministic(dftu_utils_test::span_of<const Series*>({&in.tkey}),
+                         in, specs(),
+                         dftu_utils_test::span_of<dstd::String>({"t"}));
 }
 
 TEST_CASE("the group-by of many groups equals the serial one-pass sum") {
@@ -418,7 +449,8 @@ TEST_CASE("the group-by of many groups equals the serial one-pass sum") {
     DataFrame got = dftu_utils_test::ok(
         dataframe::group_agg(keys, in.values(), specs(),
                              dftu_utils_test::span_of<dstd::String>({"big"})));
-    DataFrame ref = reference(keys, in, {"big"});
+    DataFrame ref =
+        reference(keys, in, dftu_utils_test::span_of<dstd::String>({"big"}));
     dstd::String why;
     // Only the columns whose bits do not depend on how partials merge.
     const dstd::Vector<dstd::String> same{"n",     "nx",      "sum_y",
@@ -467,19 +499,21 @@ dstd::Vector<AggSpec> light_specs() {
 
 // The group-by once in place and once with the stitch path forced (the test
 // switch), bit for bit: values, null masks, key columns, group order.
-void expect_in_place_equals_stitch(const dstd::Vector<const Series*>& keys,
+void expect_in_place_equals_stitch(dstd::Span<const Series* const> keys,
                                    const Input& in,
-                                   const dstd::Vector<AggSpec>& with,
-                                   const dstd::Vector<dstd::String>& names,
+                                   dstd::Span<const AggSpec> with,
+                                   dstd::Span<const dstd::String> names,
                                    bool in_place) {
     const std::uint64_t before = dataframe::agg_in_place_finalizes();
-    const DataFrame got = dftu_utils_test::ok(
-        dataframe::group_agg(keys, in.values(), with, names));
+    const DataFrame got = dftu_utils_test::ok(dataframe::group_agg(
+        keys, in.values(), dstd::Vector<AggSpec>(with.begin(), with.end()),
+        names));
     CHECK((dataframe::agg_in_place_finalizes() > before) == in_place);
     REQUIRE(setenv("DFTRACER_UTILS_GROUPBY_STITCH", "1", 1) == 0);
     const std::uint64_t mid = dataframe::agg_in_place_finalizes();
-    const DataFrame ref = dftu_utils_test::ok(
-        dataframe::group_agg(keys, in.values(), with, names));
+    const DataFrame ref = dftu_utils_test::ok(dataframe::group_agg(
+        keys, in.values(), dstd::Vector<AggSpec>(with.begin(), with.end()),
+        names));
     unsetenv("DFTRACER_UTILS_GROUPBY_STITCH");
     CHECK(dataframe::agg_in_place_finalizes() == mid);
     CHECK(got.num_rows() > 1000);
@@ -496,33 +530,44 @@ void expect_in_place_equals_stitch(const dstd::Vector<const Series*>& keys,
 TEST_CASE("the in-place finalize writes the bits of the stitch path") {
     const Input& in = input();
     SUBCASE("long string key and an integer key") {
-        expect_in_place_equals_stitch({&in.skey, &in.tkey}, in, light_specs(),
-                                      {"proc", "t"}, true);
+        expect_in_place_equals_stitch(
+            dftu_utils_test::span_of<const Series*>({&in.skey, &in.tkey}), in,
+            light_specs(),
+            dftu_utils_test::span_of<dstd::String>({"proc", "t"}), true);
     }
     SUBCASE("integer keys") {
-        expect_in_place_equals_stitch({&in.bkey, &in.tkey}, in, light_specs(),
-                                      {"big", "t"}, true);
+        expect_in_place_equals_stitch(
+            dftu_utils_test::span_of<const Series*>({&in.bkey, &in.tkey}), in,
+            light_specs(), dftu_utils_test::span_of<dstd::String>({"big", "t"}),
+            true);
     }
     SUBCASE("a single long string key") {
-        expect_in_place_equals_stitch({&in.skey}, in, light_specs(), {"proc"},
-                                      true);
+        expect_in_place_equals_stitch(
+            dftu_utils_test::span_of<const Series*>({&in.skey}), in,
+            light_specs(), dftu_utils_test::span_of<dstd::String>({"proc"}),
+            true);
     }
     SUBCASE("every aggregate, text and list columns included, falls back") {
-        expect_in_place_equals_stitch({&in.skey, &in.tkey}, in, specs(),
-                                      {"proc", "t"}, false);
+        expect_in_place_equals_stitch(
+            dftu_utils_test::span_of<const Series*>({&in.skey, &in.tkey}), in,
+            specs(), dftu_utils_test::span_of<dstd::String>({"proc", "t"}),
+            false);
     }
     SUBCASE("arg_max is order-dependent state and falls back") {
-        expect_in_place_equals_stitch({&in.skey, &in.tkey}, in,
-                                      specs_with_arg_max(), {"proc", "t"},
-                                      false);
+        expect_in_place_equals_stitch(
+            dftu_utils_test::span_of<const Series*>({&in.skey, &in.tkey}), in,
+            specs_with_arg_max(),
+            dftu_utils_test::span_of<dstd::String>({"proc", "t"}), false);
     }
 }
 
 TEST_CASE(
     "the in-place finalize keeps the null key groups and the null cells") {
     const Input& in = input();
-    expect_in_place_equals_stitch({&in.nkey, &in.tkey}, in, light_specs(),
-                                  {"proc", "t"}, true);
+    expect_in_place_equals_stitch(
+        dftu_utils_test::span_of<const Series*>({&in.nkey, &in.tkey}), in,
+        light_specs(), dftu_utils_test::span_of<dstd::String>({"proc", "t"}),
+        true);
 }
 
 TEST_CASE("the in-place finalize handles the packed driver's short keys") {
@@ -532,5 +577,7 @@ TEST_CASE("the in-place finalize handles the packed driver's short keys") {
         if (a.op == AggOp::Count || a.op == AggOp::Min || a.op == AggOp::Max ||
             (a.op == AggOp::Sum && a.value_col == Y))
             order_free.push_back(a);
-    expect_in_place_equals_stitch({&in.shortkey}, in, order_free, {"k"}, true);
+    expect_in_place_equals_stitch(
+        dftu_utils_test::span_of<const Series*>({&in.shortkey}), in, order_free,
+        dftu_utils_test::span_of<dstd::String>({"k"}), true);
 }

@@ -201,7 +201,9 @@ TEST_SUITE("dataframe_large_types_compute") {
     TEST_CASE(
         "LargeList<int64>: child data survives materialize/take at "
         "64-bit offsets") {
-        Series s = make_large_list_i64({{1, 2, 3}, {}, {4, 5}});
+        Series s = make_large_list_i64(
+            dftu_utils_test::span_of<dstd::Vector<std::int64_t>>(
+                {{1, 2, 3}, {}, {4, 5}}));
         REQUIRE(s.valid());
         CHECK(s.type() == TypeId::LargeList);
         CHECK(is_wide_offset_type(s.type()));
@@ -231,8 +233,9 @@ TEST_SUITE("dataframe_large_types_compute") {
     TEST_CASE(
         "Nested large_list<large_utf8>: both levels are wide-offset "
         "and the string data survives") {
-        Series s =
-            make_large_list({0, 2, 3, 3}, make_large_utf8({"a", "bb", "ccc"}));
+        Series s = make_large_list(
+            dftu_utils_test::span_of<std::int64_t>({0, 2, 3, 3}),
+            make_large_utf8({"a", "bb", "ccc"}));
         REQUIRE(s.valid());
         CHECK(s.type() == TypeId::LargeList);
         CHECK(is_wide_offset_type(s.type()));

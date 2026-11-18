@@ -640,13 +640,18 @@ TEST_CASE("Expr operators build and evaluate a fused expression") {
     Series b = i64({10, 20, 30, 40});
     // (a + b) evaluated over [a, b]
     dataframe::Expr e = dataframe::col(0) + dataframe::col(1);
-    Series r = dftu_utils_test::eval_ok(e, {&a, &b});
+    Series r = dftu_utils_test::eval_ok(
+        e, dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+               {&a, &b}));
     REQUIRE(r.length() == 4);
     CHECK(r.data<std::int64_t>()[0] == 11);
     CHECK(r.data<std::int64_t>()[3] == 44);
     // a comparison expression yields a Bool mask
     dataframe::Expr mask = dataframe::col(0) > std::int64_t(2);
-    Series m = dftu_utils_test::eval_ok(mask, {&a});
+    Series m = dftu_utils_test::eval_ok(
+        mask,
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&a}));
     CHECK(((m.data<std::uint8_t>()[0] >> 0) & 1) == 0);  // 1 > 2 = false
     CHECK(((m.data<std::uint8_t>()[0] >> 3) & 1) == 1);  // 4 > 2 = true
 }
@@ -657,7 +662,8 @@ TEST_CASE("Expr unary math / clip / cast evaluate") {
 
     Series fl = dftu_utils_test::eval_ok(
         dataframe::expr_unary(dataframe::UnaryOp::Floor, dataframe::col(0)),
-        {&x});
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&x}));
     CHECK(fl.data<double>()[0] == doctest::Approx(-4.0));
     CHECK(fl.data<double>()[3] == doctest::Approx(9.0));
 
@@ -665,20 +671,24 @@ TEST_CASE("Expr unary math / clip / cast evaluate") {
         dataframe::expr_clip(dataframe::col(0),
                              dataframe::detail::expr_scalar_d(-2.0),
                              dataframe::detail::expr_scalar_d(5.0)),
-        {&x});
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&x}));
     CHECK(cl.data<double>()[0] == doctest::Approx(-2.0));
     CHECK(cl.data<double>()[3] == doctest::Approx(5.0));
 
     Series n = i64({1, 2, 3, 4});
     Series cf = dftu_utils_test::eval_ok(
         dataframe::expr_cast(dataframe::TypeId::Float64, dataframe::col(0)),
-        {&n});
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&n}));
     CHECK(cf.type() == dataframe::TypeId::Float64);
     CHECK(cf.data<double>()[2] == doctest::Approx(3.0));
 
     auto unary = [&](dataframe::UnaryOp op, Series& in) {
         return dftu_utils_test::eval_ok(
-            dataframe::expr_unary(op, dataframe::col(0)), {&in});
+            dataframe::expr_unary(op, dataframe::col(0)),
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&in}));
     };
 
     dstd::Vector<double> pv{1.0, 4.0, 9.0, 16.0};
@@ -742,7 +752,8 @@ TEST_CASE("Expr engine is null-aware: fillna and null-preserving ops") {
     Series filled = dftu_utils_test::eval_ok(
         dataframe::expr_fillna(dataframe::col(0),
                                dataframe::detail::expr_scalar_i(-7)),
-        {&nul});
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&nul}));
     CHECK(filled.data<std::int64_t>()[0] == 5);
     CHECK(filled.data<std::int64_t>()[1] == -7);
     CHECK(filled.data<std::int64_t>()[2] == 7);
@@ -752,7 +763,8 @@ TEST_CASE("Expr engine is null-aware: fillna and null-preserving ops") {
     // A math op over a nullable column preserves the null positions.
     Series abs_nul = dftu_utils_test::eval_ok(
         dataframe::expr_unary(dataframe::UnaryOp::Abs, dataframe::col(0)),
-        {&nul});
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&nul}));
     CHECK(abs_nul.null_count() == 2);
 
     // fillna after abs closes the nulls.
@@ -760,7 +772,8 @@ TEST_CASE("Expr engine is null-aware: fillna and null-preserving ops") {
         dataframe::expr_fillna(
             dataframe::expr_unary(dataframe::UnaryOp::Abs, dataframe::col(0)),
             dataframe::detail::expr_scalar_i(0)),
-        {&nul});
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&nul}));
     CHECK(both.null_count() == 0);
     CHECK(both.data<std::int64_t>()[1] == 0);
 }

@@ -13,6 +13,7 @@
 #include <task_result.h>
 
 #include <cstdint>
+#include <initializer_list>
 #include <stdexcept>
 #include <utility>
 
@@ -29,21 +30,22 @@ DataFrame run(dftracer::utils::coro::CoroTask<dstd::Result<DataFrame>> t) {
     return out;
 }
 
-DataFrame two_ints(const dstd::Vector<std::int64_t>& a,
-                   const dstd::Vector<std::uint8_t>& av,
-                   const dstd::Vector<std::int64_t>& b,
-                   const dstd::Vector<std::uint8_t>& bv) {
+DataFrame two_ints(std::initializer_list<std::int64_t> a,
+                   std::initializer_list<std::uint8_t> av,
+                   std::initializer_list<std::int64_t> b,
+                   std::initializer_list<std::uint8_t> bv) {
     DataFrame d;
     d.names = dstd::make_shared_strings({"a", "b"});
     const auto n = static_cast<std::int64_t>(a.size());
     d.columns.push_back(
-        Series::flat_i64(a.data(), n, av.empty() ? nullptr : av.data()));
+        Series::flat_i64(a.begin(), n, av.size() == 0 ? nullptr : av.begin()));
     d.columns.push_back(
-        Series::flat_i64(b.data(), n, bv.empty() ? nullptr : bv.data()));
+        Series::flat_i64(b.begin(), n, bv.size() == 0 ? nullptr : bv.begin()));
     return d;
 }
 
-dstd::Vector<std::int64_t> column_of(const DataFrame& d, const char* name) {
+dstd::Vector<std::int64_t> column_of(const DataFrame& d,
+                                     dstd::StringView name) {
     const Series& s = d.column(name);
     return {s.data<std::int64_t>(), s.data<std::int64_t>() + s.length()};
 }

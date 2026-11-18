@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -273,7 +274,10 @@ TEST_SUITE("DFTracerEventCount") {
                 binary, {dir.str(), "--index-dir", idx_dir});
             CHECK(parse_event_count(cold) == expected);
             const auto warned = dftu_utils_test::run_process_capture(
-                binary, {dir.str(), "--index-dir", idx_dir}, true);
+                binary,
+                dftu_utils_test::span_of<dstd::String>(
+                    {dir.str(), "--index-dir", idx_dir}),
+                true);
             CHECK(warned.find("2 line(s) could not be read in full") !=
                   dstd::String::npos);
             CHECK(!dstd::fs::exists(idx_dir).value());
@@ -281,8 +285,10 @@ TEST_SUITE("DFTracerEventCount") {
 
             int exit_code = -1;
             dftu_utils_test::run_process_capture(
-                index_binary, {dir.str(), "--index-dir", idx_dir}, false,
-                &exit_code);
+                index_binary,
+                dftu_utils_test::span_of<dstd::String>(
+                    {dir.str(), "--index-dir", idx_dir}),
+                false, &exit_code);
             REQUIRE(exit_code == 0);
             REQUIRE(dstd::fs::exists(idx_dir).value());
 
@@ -339,8 +345,10 @@ TEST_SUITE("DFTracerEventCount") {
 
         int exit_code = -1;
         dftu_utils_test::run_process_capture(
-            index_binary, {dir.str(), "--index-dir", idx_dir}, false,
-            &exit_code);
+            index_binary,
+            dftu_utils_test::span_of<dstd::String>(
+                {dir.str(), "--index-dir", idx_dir}),
+            false, &exit_code);
         REQUIRE(exit_code == 0);
         auto warm = run_event_count_capture(
             binary, {dir.str(), "--index-dir", idx_dir});

@@ -39,7 +39,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-dftu_status register_node(const char* name, const dftu_node_vt* vt,
+dftu_status register_node(dstd::StringView name, const dftu_node_vt* vt,
                           void* self) {
     auto registered = plugins::host::register_node_vtable(name, vt, self);
     return registered ? DFTU_OK

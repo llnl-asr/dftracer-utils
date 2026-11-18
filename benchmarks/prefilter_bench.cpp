@@ -10,6 +10,8 @@
 
 #include <bench_ok.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -60,10 +62,10 @@ dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> make_lines(
     return out;
 }
 
-void run(
-    const char* label, const dftracer::utils::dstd::String& query,
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& lines,
-    int rounds) {
+void run(dftracer::utils::dstd::CStringView label,
+         dftracer::utils::dstd::StringView query,
+         dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> lines,
+         int rounds) {
     auto parsed = duql::Query::from_string(query);
     if (!parsed) dftu::bench::fail(parsed.error());
     const Prefilter p(std::move(*parsed));
@@ -84,8 +86,8 @@ void run(
                      static_cast<double>(lines.size()));
     }
     std::sort(ns.begin(), ns.end());
-    std::printf("%-8s needles=%2zu passed=%7zu  median %8.1f ns/line\n", label,
-                needles, passed, ns[ns.size() / 2]);
+    std::printf("%-8s needles=%2zu passed=%7zu  median %8.1f ns/line\n",
+                label.c_str(), needles, passed, ns[ns.size() / 2]);
 }
 
 }  // namespace

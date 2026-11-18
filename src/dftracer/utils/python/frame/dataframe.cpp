@@ -118,7 +118,7 @@ void DataFrame_dealloc(DataFrameObject* self) {
 }
 
 std::int64_t index_of(const DataFrameObject* self,
-                      const dftracer::utils::dstd::String& name) {
+                      dftracer::utils::dstd::StringView name) {
     for (std::size_t i = 0; i < self->names.size(); ++i)
         if (self->names[i] == name) return static_cast<std::int64_t>(i);
     return -1;

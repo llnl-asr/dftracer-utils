@@ -27,6 +27,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function_ref.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -68,10 +69,10 @@ namespace {
 template <class T>
 void require_ok(const dftracer::utils::dstd::Expected<
                     T, dftracer::utils::dstd::Error>& result,
-                const char* what) {
+                dftracer::utils::dstd::CStringView what) {
     if (result.has_value()) return;
     const auto& error = result.error();
-    std::fprintf(stderr, "%s failed: %.*s %.*s\n", what,
+    std::fprintf(stderr, "%s failed: %.*s %.*s\n", what.c_str(),
                  static_cast<int>(error.name().size()), error.name().data(),
                  static_cast<int>(error.message().size()),
                  error.message().data());
@@ -152,9 +153,12 @@ std::uint64_t peak_rss_bytes() {
 #endif
 }
 
-dstd::Vector<dstd::String> trace_files(const dstd::String& input) {
+dstd::Vector<dstd::String> trace_files(dstd::StringView input) {
     dstd::Vector<dstd::String> files;
-    if (dstd::fs::is_regular_file(input).value()) return {input};
+    if (dstd::fs::is_regular_file(input).value()) {
+        files.emplace_back(input);
+        return files;
+    }
     require_ok(dstd::fs::walk(
                    input,
                    [&](dstd::PathView path, dstd::fs::FileKind kind) {
@@ -384,15 +388,16 @@ struct Result {
     dstd::Map<dstd::String, std::int64_t> rows;
 };
 
-View open_view(const dstd::String& input, const dstd::String& index_dir) {
+View open_view(dstd::StringView input, dstd::StringView index_dir) {
     View v = dstd::fs::is_regular_file(input).value()
-                 ? View::from_file(input, index_dir)
-                 : run(View::from_directory(input, index_dir));
+                 ? View::from_file(dstd::String(input), dstd::String(index_dir))
+                 : run(View::from_directory(dstd::String(input),
+                                            dstd::String(index_dir)));
     return v;
 }
 
-Result measure(const Options& opt, const dstd::String& input,
-               const dstd::String& index_dir) {
+Result measure(const Options& opt, dstd::StringView input,
+               dstd::StringView index_dir) {
     Result r;
     const auto files = trace_files(input);
     r.files = files.size();
@@ -430,7 +435,8 @@ Result measure(const Options& opt, const dstd::String& input,
                        }),
         "walk");
     if (index_path.empty()) {
-        std::fprintf(stderr, "no index built under %s\n", index_dir.c_str());
+        std::fprintf(stderr, "no index built under %.*s\n",
+                     static_cast<int>(index_dir.size()), index_dir.data());
         std::exit(1);
     }
     r.index_bytes = dir_bytes(index_dir);
@@ -666,7 +672,7 @@ Samples samples_of(simdjson::dom::element e) {
 // Prints one line per metric; returns true when any regressed.
 bool compare(simdjson::dom::object base, simdjson::dom::object cur) {
     bool regressed = false;
-    auto check_times = [&](const dstd::String& label, simdjson::dom::element b,
+    auto check_times = [&](dstd::StringView label, simdjson::dom::element b,
                            simdjson::dom::element c) {
         const Samples bs = samples_of(b);
         const Samples cs = samples_of(c);
@@ -674,18 +680,19 @@ bool compare(simdjson::dom::object base, simdjson::dom::object cur) {
         const auto [lo, hi] = ratio_ci(cs, bs);
         const bool bad = lo > 1.0 + MAX_SLOWDOWN;
         regressed = regressed || bad;
-        std::printf("  %-28s new/base %6.3f  [%6.3f, %6.3f]%s\n", label.c_str(),
-                    median(cs) / median(bs), lo, hi, bad ? "  SLOWER" : "");
+        std::printf("  %-28s new/base %6.3f  [%6.3f, %6.3f]%s\n",
+                    dstd::String(label).c_str(), median(cs) / median(bs), lo,
+                    hi, bad ? "  SLOWER" : "");
     };
-    auto check_value = [&](const char* key) {
+    auto check_value = [&](dstd::CStringView key) {
         std::uint64_t b = 0, c = 0;
-        if (base[key].get(b) != simdjson::SUCCESS ||
-            cur[key].get(c) != simdjson::SUCCESS || b == 0)
+        if (base[key.view()].get(b) != simdjson::SUCCESS ||
+            cur[key.view()].get(c) != simdjson::SUCCESS || b == 0)
             return;
         const double ratio = static_cast<double>(c) / static_cast<double>(b);
         const bool bad = ratio > 1.0 + MAX_SLOWDOWN;
         regressed = regressed || bad;
-        std::printf("  %-28s new/base %6.3f%s\n", key, ratio,
+        std::printf("  %-28s new/base %6.3f%s\n", key.c_str(), ratio,
                     bad ? "  LARGER" : "");
     };
     check_times("build_s", base["build_s"], cur["build_s"]);
@@ -706,9 +713,9 @@ bool compare(simdjson::dom::object base, simdjson::dom::object cur) {
     return regressed;
 }
 
-dstd::String write_smoke_trace(const dstd::String& dir) {
+dstd::String write_smoke_trace(dstd::StringView dir) {
     require_ok(dstd::fs::create_directories(dir), "create_directories");
-    const dstd::String gz = dir + "/smoke.pfw.gz";
+    const dstd::String gz = dstd::String(dir) + "/smoke.pfw.gz";
     dstd::String lines;
     const char* names[] = {"read", "write", "open", "close"};
     for (int i = 0; i < 2000; ++i) {
@@ -736,10 +743,10 @@ dstd::String write_smoke_trace(const dstd::String& dir) {
 }
 
 template <class T>
-T parse_number(dstd::StringView text, const char* flag) {
+T parse_number(dstd::StringView text, dstd::CStringView flag) {
     const auto value = dstd::from_chars<T>(text);
     if (!value) {
-        std::fprintf(stderr, "invalid value for %s\n", flag);
+        std::fprintf(stderr, "invalid value for %s\n", flag.c_str());
         std::exit(2);
     }
     return *value;

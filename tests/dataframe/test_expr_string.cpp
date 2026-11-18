@@ -172,8 +172,10 @@ TEST_SUITE("expr string comparisons") {
         Expr stdio_eq = expr_cmp(CmpOp::Eq, expr_col(0),
                                  dftracer::utils::dataframe::str("STDIO"));
 
-        dstd::Vector<Series> outs =
-            dftu_utils_test::eval_many_ok({posix_eq, stdio_eq}, in);
+        dstd::Vector<Series> outs = dftu_utils_test::eval_many_ok(
+            dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                {posix_eq, stdio_eq}),
+            in);
         REQUIRE(outs.size() == 2);
         REQUIRE(outs[0].valid());
         REQUIRE(outs[1].valid());

@@ -10,6 +10,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
@@ -30,7 +31,7 @@ namespace {
 
 constexpr std::uint32_t RANKS = 3;
 
-dstd::Error wrong(const char* what) {
+dstd::Error wrong(dstd::StringView what) {
     return dstd::Error{dstd::Condition::Internal, what};
 }
 
@@ -39,7 +40,7 @@ dstd::Error wrong(const char* what) {
 // succeeded. A rank is a coroutine, so the ranks of one run share the
 // executor of the runtime.
 template <class Body>
-bool run_ranks(Runtime& rt, const char* name, Body body) {
+bool run_ranks(Runtime& rt, dstd::CStringView name, Body body) {
     dstd::Vector<dstd::Optional<dstd::Error>> errors(RANKS);
     auto driver = coro::with_scope(
         [&body, &errors](coro::Scope& scope) -> coro::CoroTask<void> {
@@ -55,11 +56,11 @@ bool run_ranks(Runtime& rt, const char* name, Body body) {
     bool ok = result.has_value();
     for (std::uint32_t rank = 0; rank < RANKS; ++rank) {
         if (!errors[rank]) continue;
-        std::printf("%s: rank %u failed: %s\n", name, rank,
+        std::printf("%s: rank %u failed: %s\n", name.c_str(), rank,
                     errors[rank]->format().c_str());
         ok = false;
     }
-    if (ok) std::printf("%s: ok\n", name);
+    if (ok) std::printf("%s: ok\n", name.c_str());
     return ok;
 }
 // [run_ranks]

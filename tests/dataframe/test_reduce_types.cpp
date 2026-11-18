@@ -14,6 +14,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <initializer_list>
 
 using namespace dftracer::utils;
 
@@ -25,33 +26,35 @@ dataframe::Series i64(dstd::Vector<std::int64_t> v) {
 }
 
 // A Bool column; `valid` (when non-empty) marks the non-null slots.
-dataframe::Series bools(const dstd::Vector<bool>& v,
-                        const dstd::Vector<bool>& valid = {}) {
+dataframe::Series bools(std::initializer_list<bool> v,
+                        std::initializer_list<bool> valid = {}) {
     const std::size_t nbytes = (v.size() + 7) / 8;
     dstd::Vector<std::uint8_t> bits(nbytes, 0);
     dstd::Vector<std::uint8_t> vbits(nbytes, 0);
     for (std::size_t i = 0; i < v.size(); ++i) {
-        if (v[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-        if (valid.empty() || valid[i])
+        if (v.begin()[i])
+            bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+        if (valid.size() == 0 || valid.begin()[i])
             vbits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     }
     return dataframe::Series::flat(dataframe::TypeId::Bool, bits.data(),
                                    static_cast<std::int64_t>(v.size()),
-                                   valid.empty() ? nullptr : vbits.data());
+                                   valid.size() == 0 ? nullptr : vbits.data());
 }
 
-dataframe::Series strs(const dstd::Vector<dstd::StringView>& v,
-                       const dstd::Vector<bool>& valid = {}) {
+dataframe::Series strs(std::initializer_list<dstd::StringView> v,
+                       std::initializer_list<bool> valid = {}) {
     dstd::Vector<std::uint8_t> vbits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
-        if (valid.empty() || valid[i])
+        if (valid.size() == 0 || valid.begin()[i])
             vbits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-    return dataframe::Series::strings(dstd::Span<const dstd::StringView>(v),
-                                      valid.empty() ? nullptr : vbits.data());
+    return dataframe::Series::strings(
+        dstd::Span<const dstd::StringView>(v.begin(), v.size()),
+        valid.size() == 0 ? nullptr : vbits.data());
 }
 
-dataframe::Series timestamps(const dstd::Vector<std::int64_t>& v) {
-    return dataframe::Series::flat(dataframe::TypeId::Timestamp, v.data(),
+dataframe::Series timestamps(std::initializer_list<std::int64_t> v) {
+    return dataframe::Series::flat(dataframe::TypeId::Timestamp, v.begin(),
                                    static_cast<std::int64_t>(v.size()));
 }
 
@@ -62,9 +65,9 @@ dstd::String error_text(dftu_scalar s) {
     return s.value.err->message;
 }
 
-bool names(const dstd::String& text, const char* a, const char* b) {
-    return text.find(a) != dstd::String::npos &&
-           text.find(b) != dstd::String::npos;
+bool names(dstd::StringView text, dstd::StringView a, dstd::StringView b) {
+    return text.find(a) != dstd::StringView::npos &&
+           text.find(b) != dstd::StringView::npos;
 }
 
 }  // namespace

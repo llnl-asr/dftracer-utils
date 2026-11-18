@@ -572,7 +572,8 @@ TEST_CASE("string predicates take a column needle") {
     CHECK(dftu_utils_test::infer_type_ok(
               dftu_utils_test::built(
                   dataframe::expr_str_pred_col(P::Contains, c0(), c1())),
-              {s.data_type(), n.data_type()})
+              dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                  {s.data_type(), n.data_type()}))
               .id == TypeId::Bool);
 }
 
@@ -648,8 +649,10 @@ TEST_CASE("round takes a column of digits") {
     CHECK(as_dbls(run(
               dataframe::expr_round_col(c0(), dataframe::lit(std::int64_t{2})),
               {&d})) == as_dbls(run(dataframe::expr_round(c0(), 2), {&d})));
-    CHECK(dftu_utils_test::infer_type_ok(dataframe::expr_round_col(c0(), c1()),
-                                         {n.data_type(), dg2.data_type()})
+    CHECK(dftu_utils_test::infer_type_ok(
+              dataframe::expr_round_col(c0(), c1()),
+              dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                  {n.data_type(), dg2.data_type()}))
               .id == TypeId::Int64);
 }
 
@@ -1072,12 +1075,14 @@ TEST_CASE("date_part and format_time: types, CSE and refusals") {
     CHECK(dftu_utils_test::infer_type_ok(
               dftu_utils_test::built(
                   dataframe::expr_date_part(c0(), DFTU_DT_HOUR, 1000)),
-              {i.data_type()})
+              dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                  {i.data_type()}))
               .id == TypeId::Int64);
     CHECK(dftu_utils_test::infer_type_ok(
               dftu_utils_test::built(
                   dataframe::expr_format_time(c0(), "%F", 1000)),
-              {i.data_type()})
+              dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                  {i.data_type()}))
               .id == TypeId::String);
     CHECK(
         dftu_utils_test::is_invalid(dataframe::expr_date_part(c0(), 99, 1000)));

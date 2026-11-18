@@ -8,11 +8,13 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
+#include <initializer_list>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
@@ -35,11 +37,11 @@ dftu_scalar i64_scalar(std::int64_t v) {
 }
 
 // A two-column frame: "k" keys, "v" values.
-dftu_dataframe* make_frame(const dstd::Vector<std::int64_t>& k,
-                           const dstd::Vector<std::int64_t>& v) {
+dftu_dataframe* make_frame(std::initializer_list<std::int64_t> k,
+                           std::initializer_list<std::int64_t> v) {
     dftu_series* cols[2] = {
-        i64_col(k.data(), static_cast<std::int64_t>(k.size())),
-        i64_col(v.data(), static_cast<std::int64_t>(v.size()))};
+        i64_col(k.begin(), static_cast<std::int64_t>(k.size())),
+        i64_col(v.begin(), static_cast<std::int64_t>(v.size()))};
     const char* names[2] = {"k", "v"};
     return dftu_dataframe_new(names, cols, 2);
 }
@@ -74,8 +76,8 @@ void check_same(dftu_dataframe* a, dftu_dataframe* b) {
     }
 }
 
-void check_kind_and_arity(const char* name, std::uint32_t expect_arity) {
-    const dftu_op_desc* op = dftu_op_find(name);
+void check_kind_and_arity(dstd::CStringView name, std::uint32_t expect_arity) {
+    const dftu_op_desc* op = dftu_op_find(name.c_str());
     REQUIRE(op != nullptr);
     CHECK(dftu_op_kind_of(op->sig) == DFTU_OP_KIND_LAZY);
     CHECK(dftu_op_arity(op->sig) == expect_arity);
@@ -83,9 +85,9 @@ void check_kind_and_arity(const char* name, std::uint32_t expect_arity) {
 
 // Runs `name` through the registry against `lf1` and directly via `direct`
 // against `lf2`, collects both, and checks they agree.
-dftu_dataframe* run_registry(const char* name, const dftu_lazyframe* lf,
+dftu_dataframe* run_registry(dstd::CStringView name, const dftu_lazyframe* lf,
                              const dftu_op_arg* a) {
-    const dftu_op_desc* op = dftu_op_find(name);
+    const dftu_op_desc* op = dftu_op_find(name.c_str());
     REQUIRE(op != nullptr);
     const dftu_lazyframe* in[1] = {lf};
     dftu_lazyframe* out = dftu_op_run_lazy(op, in, 1, a);

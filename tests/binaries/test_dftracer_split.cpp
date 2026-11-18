@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -242,8 +243,9 @@ TEST_SUITE("DFTracerSplit") {
         int rc = -1;
         const dstd::String text = dftu_utils_test::run_process_capture(
             binary,
-            {input_dir(env), "-o", out, "--chunk-size", "4",
-             "--disable-watchdog"},
+            dftu_utils_test::span_of<dstd::String>({input_dir(env), "-o", out,
+                                                    "--chunk-size", "4",
+                                                    "--disable-watchdog"}),
             true, &rc);
         INFO(text);
         CHECK(rc != 0);
@@ -431,8 +433,9 @@ TEST_SUITE("DFTracerSplit") {
         int rc = 0;
         const dstd::String out = dftu_utils_test::run_process_capture(
             binary,
-            {input_dir(env), "-o", env.dir() + "/split_plain",
-             "--disable-watchdog"},
+            dftu_utils_test::span_of<dstd::String>({input_dir(env), "-o",
+                                                    env.dir() + "/split_plain",
+                                                    "--disable-watchdog"}),
             true, &rc);
         CHECK(rc != 0);
         CHECK(out.find("No trace files found") != dstd::String::npos);

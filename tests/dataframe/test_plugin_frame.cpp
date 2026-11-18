@@ -88,7 +88,7 @@ struct ViewStrings {
 };
 
 /// A frame over one owned copy of `s`, kept by `names` for the frame's life.
-OwnedDataFrame frame_of(Column&& column, const char* name) {
+OwnedDataFrame frame_of(Column&& column, dstd::StringView name) {
     FrameBuilder builder;
     builder.add(name, std::move(column));
     dstd::Result<OwnedDataFrame> frame = builder.build();

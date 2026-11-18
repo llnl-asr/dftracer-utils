@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -12,6 +13,7 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/macros.h>
@@ -55,7 +57,7 @@ using namespace dftracer::utils;
 namespace {
 
 PyObject* str_list_dstd(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& v) {
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> v) {
     PyObject* list = PyList_New(static_cast<Py_ssize_t>(v.size()));
     if (!list) return nullptr;
     for (std::size_t i = 0; i < v.size(); ++i) {
@@ -70,7 +72,7 @@ PyObject* str_list_dstd(
     return list;
 }
 
-dftracer::utils::dstd::String DS(const dftracer::utils::dstd::String& v) {
+dftracer::utils::dstd::String DS(dftracer::utils::dstd::StringView v) {
     return dftracer::utils::dstd::String(v.data(), v.size());
 }
 
@@ -180,13 +182,13 @@ class FileSink : public trace::views::ExportSink {
 // "fn(key)" or "fn(key, 'a', 'b')" -> transform + inner key text; false when
 // `t` is not a call, leaving `t` to parse as a plain key.
 bool split_transform(
-    const dftracer::utils::dstd::String& t, GroupKey::Transform& tf,
+    dftracer::utils::dstd::StringView t, GroupKey::Transform& tf,
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& targs,
     dftracer::utils::dstd::String& inner) {
     const auto lp = t.find('(');
-    if (lp == dftracer::utils::dstd::String::npos || t.back() != ')')
+    if (lp == dftracer::utils::dstd::StringView::npos || t.back() != ')')
         return false;
-    const dftracer::utils::dstd::String fn = t.substr(0, lp);
+    const dftracer::utils::dstd::StringView fn = t.substr(0, lp);
     if (fn == "dirname")
         tf = GroupKey::Transform::Dirname;
     else if (fn == "basename")
@@ -208,12 +210,12 @@ bool split_transform(
         }
     }
     parts.push_back(cur);
-    auto trim = [](const dftracer::utils::dstd::String& x) {
+    auto trim = [](dftracer::utils::dstd::StringView x) {
         const auto b = x.find_first_not_of(" \t'\"");
         const auto e = x.find_last_not_of(" \t'\"");
-        return b == dftracer::utils::dstd::String::npos
+        return b == dftracer::utils::dstd::StringView::npos
                    ? dftracer::utils::dstd::String()
-                   : x.substr(b, e - b + 1);
+                   : dftracer::utils::dstd::String(x.substr(b, e - b + 1));
     };
     inner = trim(parts[0]);
     for (std::size_t i = 1; i < parts.size(); ++i)
@@ -224,8 +226,8 @@ bool split_transform(
 // name | cat | pid | tid | fhash | hhash | io_cat | acc_pat | rank |
 // file_path | file_name | host_name | arg:<key> | any other field, each
 // optionally wrapped in a transform call.
-GroupKey parse_group_key(const dftracer::utils::dstd::String& s) {
-    dftracer::utils::dstd::String t = s;
+GroupKey parse_group_key(dftracer::utils::dstd::StringView s) {
+    dftracer::utils::dstd::StringView t = s;
     GroupKey::Transform tf = GroupKey::Transform::None;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> targs;
     dftracer::utils::dstd::String inner;
@@ -268,17 +270,18 @@ GroupKey parse_group_key(const dftracer::utils::dstd::String& s) {
 // "count" is the group row count; "count:field" counts the rows where the
 // field is present.
 dftracer::utils::dstd::Optional<AggSpec> parse_agg_spec(
-    const dftracer::utils::dstd::String& t) {
+    dftracer::utils::dstd::StringView t) {
     auto c1 = t.find(':');
-    dftracer::utils::dstd::String op = t.substr(0, c1);
-    dftracer::utils::dstd::String field, by;
-    if (c1 != dftracer::utils::dstd::String::npos) {
-        dftracer::utils::dstd::String rest = t.substr(c1 + 1);
+    dftracer::utils::dstd::StringView op = t.substr(0, c1);
+    dftracer::utils::dstd::StringView field, by;
+    if (c1 != dftracer::utils::dstd::StringView::npos) {
+        dftracer::utils::dstd::StringView rest = t.substr(c1 + 1);
         auto c2 = rest.find(':');
         field = rest.substr(0, c2);
-        if (c2 != dftracer::utils::dstd::String::npos) by = rest.substr(c2 + 1);
+        if (c2 != dftracer::utils::dstd::StringView::npos)
+            by = rest.substr(c2 + 1);
     }
-    const dftracer::utils::dstd::String occ = field.empty() ? "dur" : field;
+    const dftracer::utils::dstd::StringView occ = field.empty() ? "dur" : field;
     if (op == "count") return AggSpec(AggOp::Count, DS(field), "", "");
     if (op == "sum") return AggSpec(AggOp::Sum, DS(field));
     if (op == "sumsq") return AggSpec(AggOp::SumSq, DS(field));
@@ -307,7 +310,8 @@ dftracer::utils::dstd::Optional<AggSpec> parse_agg_spec(
                 return dftracer::utils::dstd::nullopt;
             denom *= 10.0;
         }
-        return AggSpec(AggOp::Pct, DS(field), DS(op + "_" + field), "",
+        return AggSpec(AggOp::Pct, DS(field),
+                       dftracer::utils::dstd::fmt<"{}_{}">(op, field), "",
                        python::frame::parse_double(op.substr(1)) / denom);
     }
     return dftracer::utils::dstd::nullopt;

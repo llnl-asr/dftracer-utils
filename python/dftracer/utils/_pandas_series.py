@@ -46,6 +46,7 @@ from ._series_index import (
     to_frame,
     with_levels,
 )
+from ._time_index import TimeIndexMixin
 from .enums import DType
 
 if TYPE_CHECKING:
@@ -285,7 +286,7 @@ def replace_in(
     return out
 
 
-class SeriesPandasMixin(LabelAlignMixin, LevelsMixin):
+class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
     """``self`` is a :class:`Series`."""
 
     __slots__ = ()
@@ -633,6 +634,9 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin):
             upper = label <= hi
             keep = upper if keep is None else keep & upper
         return s if keep is None else s.filter(keep)
+
+    def _rows_where(self, mask: Series) -> Series:
+        return self._s().filter(mask)
 
     def first_valid_index(self) -> int | None:
         return valid_edge(self._s().notna(), first=True)

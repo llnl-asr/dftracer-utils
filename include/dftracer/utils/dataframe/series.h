@@ -624,7 +624,9 @@ class Series {
     /// Bin values by the ascending `breaks` edges (count of breaks <= x) ->
     /// Int32; a null input row yields a null bin. `flags` is DFTU_CUT_RIGHT
     /// (count the breaks < x: right-closed intervals) and/or DFTU_CUT_INNER
-    /// (null outside the interior intervals, bins numbered from 0).
+    /// (null outside the interior intervals, bins numbered from 0). Integer,
+    /// Bool and temporal values with integer breaks compare exactly as int64;
+    /// any float on either side compares as doubles.
     Series cut(const Series& breaks, std::int32_t flags = 0) const;
     /// Bin values by the column's `q`-quantile edges -> Int32 (bins 0..q-1).
     Series qcut(std::int32_t q) const;

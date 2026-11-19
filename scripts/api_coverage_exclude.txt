@@ -27,10 +27,7 @@ pandas DataFrame.to_stata | out-of-scope | foreign I/O (D3b out-of-scope); call 
 pandas DataFrame.to_timestamp | needs-index | needs a (multi-/Datetime/Period) index; waits for the row index step (D3b point 4)
 pandas DataFrame.to_xarray | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas DataFrame.to_xml | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
-pandas Series.asfreq | needs-index | selects or resamples by a DatetimeIndex; waits for the row index step (D3b point 4)
-pandas Series.at_time | needs-index | selects or resamples by a DatetimeIndex; waits for the row index step (D3b point 4)
 pandas Series.attrs | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
-pandas Series.between_time | needs-index | selects or resamples by a DatetimeIndex; waits for the row index step (D3b point 4)
 pandas Series.bool | deprecated-upstream | removed or deprecated in pandas 3 (still present in pandas 2)
 pandas Series.cat | needs-kernel | categorical dtype and the .cat accessor (codes, categories): the engine has no categorical column type
 pandas Series.combine | python-semantics | calls a two-argument Python function per element pair; use apply with a traced function or an expression
@@ -39,7 +36,6 @@ pandas Series.hist | out-of-scope | plotting (D3b out-of-scope); call to_pandas(
 pandas Series.info | python-semantics | prints a text summary to a buffer; DataFrame.info is the engine's summary
 pandas Series.plot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
 pandas Series.ravel | deprecated-upstream | removed or deprecated in pandas 3 (still present in pandas 2)
-pandas Series.resample | needs-index | acts on a DatetimeIndex (the values go through s.dt.tz_convert / tz_localize); waits for the row index step
 pandas Series.set_flags | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
 pandas Series.sparse | out-of-scope | sparse arrays (D3b out-of-scope)
 pandas Series.struct | needs-kernel | the .struct accessor (field, explode, rename_fields): DType.STRUCT has no accessor kernel
@@ -54,8 +50,6 @@ pandas Series.to_pickle | out-of-scope | foreign I/O (D3b out-of-scope); call to
 pandas Series.to_sql | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas Series.to_timestamp | needs-index | needs a (multi-/Datetime/Period) index; waits for the row index step (D3b point 4)
 pandas Series.to_xarray | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
-pandas Series.tz_convert | needs-index | acts on a DatetimeIndex (the values go through s.dt.tz_convert / tz_localize); waits for the row index step
-pandas Series.tz_localize | needs-index | acts on a DatetimeIndex (the values go through s.dt.tz_convert / tz_localize); waits for the row index step
 pandas Series.view | deprecated-upstream | removed or deprecated in pandas 3 (still present in pandas 2)
 pandas DataFrameGroupBy.a | python-semantics | a column read as an attribute of the group-by (g.a); use g['a']
 pandas DataFrameGroupBy.boxplot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()

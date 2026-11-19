@@ -507,6 +507,13 @@ PY_ALLOWLIST = {
         "nlevels",
         "get_level_values",
         "set_names",
+        # Time on the index: bins, a grid, a row filter and a retype of the labels.
+        "asfreq",
+        "at_time",
+        "between_time",
+        "resample",
+        "tz_convert",
+        "tz_localize",
         "reindex",
         "reindex_like",
         "align",

@@ -398,7 +398,8 @@ def test_wrappers_run_without_arrow():
     assert diff == {"index": [1], "self": [2], "other": [5]}
     same = dftu.Series.from_list([1, 2]).compare(dftu.Series.from_list([1, 2])).to_dict()
     assert same == {"index": [], "self": [], "other": []}
-    grid = dftu.DataFrame.from_dict({"t": [1, 4], "v": [1.0, 2.0]}).asfreq(1, on="t")
-    assert grid["t"].to_list() == [1, 2, 3, 4]
+    days = dftu.Series.from_list([dt.datetime(2021, 1, 1), dt.datetime(2021, 1, 4)])
+    grid = dftu.DataFrame.from_dict({"t": days, "v": [1.0, 2.0]}).set_index("t").asfreq("D")
+    assert len(grid) == 4 and grid["v"].to_list() == [1.0, None, None, 2.0]
     dummies = dftu.Series.from_list(["a|b", "b", None]).str.get_dummies().to_dict()
     assert dummies["b"] == [1, 1, 0]

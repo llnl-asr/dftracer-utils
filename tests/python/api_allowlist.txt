@@ -19,9 +19,12 @@ Series.apply | python-semantics | pandas container API on the Series, not an op
 Series.arg_sort | python-semantics | pandas or polars semantics written over several native calls
 Series.argsort | needs-token:FLAG | -
 Series.array | conversion | array gives the data in another form
+Series.asfreq | python-semantics | pandas container API on the Series, written over the label reindex, not an op
 Series.asof | python-semantics | pandas or polars semantics written over several native calls
+Series.at_time | python-semantics | pandas container API on the Series, a row filter on the time of day of the index, not an op
 Series.autocorr | python-semantics | pandas or polars semantics written over several native calls
 Series.axes | python-semantics | accessor property of the Series, not an op
+Series.between_time | python-semantics | pandas container API on the Series, a row filter on the time of day of the index, not an op
 Series.bottom_k | needs-token:I64_ARG | -
 Series.case_when | python-semantics | pandas container API on the Series, not an op
 Series.cast | needs-token:DTYPE | -
@@ -138,6 +141,7 @@ Series.rename_axis | python-semantics | pandas container API on the Series, edit
 Series.reorder_levels | python-semantics | pandas container API on the Series, edits the row labels, not an op
 Series.repeat | python-semantics | pandas or polars semantics written over several native calls
 Series.replace | python-semantics | pandas or polars semantics written over several native calls
+Series.resample | python-semantics | pandas container API on the Series, bins by the index and one group-by, not an op
 Series.reset_index | python-semantics | pandas container API on the Series, not an op
 Series.rfloordiv | python-semantics | Python logic around native calls
 Series.rmod | python-semantics | Python logic around native calls
@@ -221,6 +225,8 @@ Series.transpose | python-semantics | pandas container API on the Series, not an
 Series.truediv | python-semantics | the polars name of true division; takes a Series or a scalar, integers widen to Float64
 Series.truncate | python-semantics | pandas or polars semantics written over several native calls
 Series.type | python-semantics | metadata property read from the column, not an op
+Series.tz_convert | python-semantics | pandas container API on the Series, retypes the index, not an op
+Series.tz_localize | python-semantics | pandas container API on the Series, retypes the index, not an op
 Series.unique | needs-token:FLAG | -
 Series.unique_mask | python-semantics | pandas or polars semantics written over several native calls
 Series.unstack | python-semantics | pandas container API on the Series, written over the native sort, take and pivot

@@ -15,6 +15,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -1031,36 +1032,109 @@ Series ewm_std(const Series& v, double alpha) {
     return Series::flat(TypeId::Float64, out.data(), n, valid.data());
 }
 
+namespace {
+
+// True when the column reads exactly as int64 (signed integers, Bool and the
+// Int64-backed temporal types), so a cut can compare without a double.
+bool exact_int_column(const Series& c) {
+    switch (physical_type(c.type())) {
+        case TypeId::Bool:
+        case TypeId::Int8:
+        case TypeId::Int16:
+        case TypeId::Int32:
+        case TypeId::Int64:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// The bin of each value: the count of breaks below it (right-closed) or at or
+// below it. Values that arrive in ascending order walk one pointer along the
+// sorted edges; a value below its predecessor falls back to a binary search.
+template <class T, class Read>
+Series cut_with(const Series& v, dstd::Span<const T> edges, bool right,
+                bool inner, Read read) {
+    const std::int64_t n = v.length();
+    const std::int64_t nb = static_cast<std::int64_t>(edges.size());
+    dstd::Vector<std::int32_t> out(static_cast<std::size_t>(n), -1);
+    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
+    const bool has_nulls = v.null_count() > 0;
+    std::int64_t at = 0;
+    bool have_prev = false;
+    T prev{};
+    std::uint8_t acc = 0;
+    for (std::int64_t i = 0; i < n; ++i) {
+        if (!(has_nulls && v.is_null(i))) {
+            const T x = read(v, i);
+            if (have_prev && x >= prev) {
+                if (right)
+                    while (at < nb && edges[static_cast<std::size_t>(at)] < x)
+                        ++at;
+                else
+                    while (at < nb && edges[static_cast<std::size_t>(at)] <= x)
+                        ++at;
+            } else {
+                auto it = right
+                              ? std::lower_bound(edges.begin(), edges.end(), x)
+                              : std::upper_bound(edges.begin(), edges.end(), x);
+                at = it - edges.begin();
+            }
+            prev = x;
+            have_prev = true;
+            std::int32_t bin = static_cast<std::int32_t>(at);
+            bool in_range = true;
+            if (inner) {
+                in_range = bin >= 1 && bin < static_cast<std::int32_t>(nb);
+                --bin;
+            }
+            if (in_range) {
+                out[static_cast<std::size_t>(i)] = bin;
+                acc |= static_cast<std::uint8_t>(1u << (i & 7));
+            }
+        }
+        if ((i & 7) == 7) {
+            valid[static_cast<std::size_t>(i >> 3)] = acc;
+            acc = 0;
+        }
+    }
+    if ((n & 7) != 0) valid[static_cast<std::size_t>(n >> 3)] = acc;
+    return Series::flat(TypeId::Int32, out.data(), n, valid.data());
+}
+
+}  // namespace
+
 Series cut(const Series& v, const Series& breaks, std::int32_t flags) {
     if (refuse_non_numeric("cut", v.type())) return Series{};
     if ((flags & ~(DFTU_CUT_RIGHT | DFTU_CUT_INNER)) != 0) return Series{};
     const bool right = (flags & DFTU_CUT_RIGHT) != 0;
     const bool inner = (flags & DFTU_CUT_INNER) != 0;
-    const std::int64_t n = v.length();
     const std::int64_t nb = breaks.length();
+    if (exact_int_column(v) && exact_int_column(breaks)) {
+        dstd::Vector<std::int64_t> edges(static_cast<std::size_t>(nb));
+        for (std::int64_t k = 0; k < nb; ++k)
+            edges[static_cast<std::size_t>(k)] = read_i64(breaks, k);
+        std::sort(edges.begin(), edges.end());
+        const dstd::Span<const std::int64_t> span(edges.data(), edges.size());
+        if (physical_type(v.type()) == TypeId::Int64 &&
+            v.encoding() == Encoding::Flat) {
+            const std::int64_t* raw = v.data<std::int64_t>();
+            return cut_with(
+                v, span, right, inner,
+                [raw](const Series&, std::int64_t i) { return raw[i]; });
+        }
+        return cut_with(
+            v, span, right, inner,
+            [](const Series& c, std::int64_t i) { return read_i64(c, i); });
+    }
     dstd::Vector<double> edges(static_cast<std::size_t>(nb));
     for (std::int64_t k = 0; k < nb; ++k)
         edges[static_cast<std::size_t>(k)] = read_f64(breaks, k);
     std::sort(edges.begin(), edges.end());
-    dstd::Vector<std::int32_t> out(static_cast<std::size_t>(n), -1);
-    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
-    const bool has_nulls = v.null_count() > 0;
-    for (std::int64_t i = 0; i < n; ++i) {
-        if (has_nulls && v.is_null(i)) continue;
-        const double x = read_f64(v, i);
-        // The count of breaks below x (right-closed) or at or below it.
-        auto it = right ? std::lower_bound(edges.begin(), edges.end(), x)
-                        : std::upper_bound(edges.begin(), edges.end(), x);
-        std::int32_t bin = static_cast<std::int32_t>(it - edges.begin());
-        if (inner) {
-            if (bin < 1 || bin >= static_cast<std::int32_t>(nb)) continue;
-            --bin;
-        }
-        out[static_cast<std::size_t>(i)] = bin;
-        valid[static_cast<std::size_t>(i >> 3)] |=
-            static_cast<std::uint8_t>(1u << (i & 7));
-    }
-    return Series::flat(TypeId::Int32, out.data(), n, valid.data());
+    const dstd::Span<const double> span(edges.data(), edges.size());
+    return cut_with(v, span, right, inner, [](const Series& c, std::int64_t i) {
+        return read_f64(c, i);
+    });
 }
 
 Series qcut(const Series& v, std::int32_t q) {

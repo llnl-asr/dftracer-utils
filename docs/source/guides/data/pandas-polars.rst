@@ -541,6 +541,70 @@ native sort, take, unpivot and pivot.
    wide = df.set_index(["a", "b"])["v"].unstack("b")              # a is the index
    long = wide.stack()                                           # (a, column) -> v
 
+Time on the index
+~~~~~~~~~~~~~~~~~
+
+``resample``, ``asfreq``, ``at_time``, ``between_time``, ``tz_localize`` and
+``tz_convert`` act on a Timestamp index level, as on a pandas ``DatetimeIndex``,
+for a ``DataFrame`` and a ``Series``. A MultiIndex takes ``level=`` (a name, a
+position or a negative position), and ``resample`` takes ``on=`` for a column;
+an index that is not a Timestamp (a default index, integers, several levels
+with no ``level=``) is a ``TypeError``, as pandas.
+
+``resample(rule, closed, label, on, level, origin, offset)`` takes a fixed width
+(``"5s"``, ``"30min"``, ``"2h"``, ``"1D"``, any count of them) and a calendar
+rule (``"W"``, ``"W-WED"``, ``"ME"``, ``"MS"``, ``"QE"``, ``"QS"``, ``"YE"``,
+``"YS"``, with a count: ``"2ME"``), with the pandas defaults for ``closed`` and
+``label`` (right for ``W``, ``ME``, ``QE``, ``YE``) and for ``origin``
+(``start_day``; ``epoch``, ``start``, ``end``, ``end_day`` and a timestamp also
+work) and ``offset``. The result has one row per bin from the first to the last,
+so a bin with no row is listed: ``sum``, ``count``, ``size`` and ``nunique`` give
+0 there, ``prod`` 1 and the rest null. It is indexed by the bin label, and the
+index name is that of the index. The aggregations are ``sum``, ``prod``, ``mean``,
+``median``, ``min``, ``max``, ``count``, ``size``, ``first``, ``last``, ``std``,
+``var``, ``nunique``, ``ohlc`` and ``agg`` (a name, a list, a dict or
+``out=(column, name)``), and ``r["a"]`` and ``r[["a", "b"]]`` pick columns. Each is
+one group-by over the bin number, joined onto the grid of bins. Not done: a
+function in place of a name, ``ddof`` other than 1, ``apply``, ``ffill`` and
+``interpolate`` of the resampler, ``B`` and the other business-day rules, and a
+Timedelta or Period index. ``ohlc`` of a frame names its columns ``<column>_open``,
+``<column>_high``, ``<column>_low`` and ``<column>_close`` where pandas has two column
+levels, and a list of names in ``agg`` of a frame likewise gives ``<column>_<name>``.
+A frame with an Int64 index or ``on=`` column (DFTracer timestamps) still takes the
+old form: ``unit="us"``, ``group_by_dynamic`` with fixed left-closed bins.
+
+``asfreq(freq, method, how, normalize, fill_value)`` is a reindex onto
+``date_range(first, last, freq)`` by the same label lookup as ``reindex``: a grid
+instant takes the row at exactly that time, ``method="ffill"`` / ``"bfill"`` and
+``fill_value`` fill only the rows the grid adds (a row that is there keeps its own
+nulls), and ``normalize`` moves the labels to midnight. The index must hold each
+instant once.
+
+``at_time(time)`` and ``between_time(start, end, inclusive)`` take a
+``datetime.time`` or text (``"09:30"``, ``"9:30:15.5"``, ``"9:30AM"``) and keep the
+index; they compare at microseconds as pandas does, so an instant is cut to
+microseconds first (a time of ``09:30:00.0000009`` is ``09:30:00``); an end before the start wraps past midnight. They compute the time of day
+from the ticks with integer arithmetic, so no new kernel.
+
+``tz_localize`` and ``tz_convert`` check the zone at the call with the same error
+kinds as pandas (``KeyError`` for an unknown name, ``IndexError`` for an empty one,
+``ValueError`` for ``"UTC+1"``), and take every spelling of UTC that pandas
+treats as zero offset (``UCT``, ``Etc/GMT``, ``Zulu``, ``Greenwich`` and the
+rest). They change the type of the index level: the engine
+has no zone database, so ``tz_localize`` marks a naive index as UTC or strips a
+zone (``None``), a name of any other zone is a ``ValueError``, and ``tz_convert``
+changes only the name the type shows (the ``.dt`` parts stay UTC). ``ambiguous``
+and ``nonexistent`` change nothing for UTC.
+
+.. code-block:: python
+
+   ts = df.set_index("time")
+   ts.resample("1h").sum()                           # empty hours are 0
+   ts["bytes"].resample("5min", label="right").ohlc()
+   ts.resample("ME").agg(total=("bytes", "sum"))
+   ts.between_time("09:00", "17:00", inclusive="left")
+   ts.asfreq("1min", method="ffill")
+
 Several columns can be assigned at once from a frame or a list of Series. The
 targets and the value's columns pair by position (the value's own names are
 ignored, as in pandas), a target that does not exist is added, and a count or
@@ -622,7 +686,7 @@ Left out, and why
 
 - ``to_period``: a Period is a span, not an instant; ``dt.floor``,
   ``resample`` and the calendar parts give the same buckets.
-- ``tz_localize`` with a non-UTC zone on a naive column: a wall-time shift
+- ``tz_localize`` with a non-UTC zone on a naive column or index: a wall-time shift
   needs a zone database the engine does not have.
 - ``dt.strftime`` takes the directives of ``Series.dt_format`` only, and
   formats in UTC. Other directives raise ``ValueError``.

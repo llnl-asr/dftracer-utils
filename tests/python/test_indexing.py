@@ -284,8 +284,10 @@ def test_resample_matches_pandas():
     # A different column unit.
     ns = DataFrame({"ts": [0, 4_000_000_000, 5_000_000_000], "v": [1, 2, 3]})
     assert _d(ns.resample("5s", on="ts", unit="ns").sum())["v"] == [3, 3]
-    with pytest.raises(ValueError, match="set_index"):
+    with pytest.raises(TypeError, match="RangeIndex"):
         t.resample("5s")
+    with pytest.raises(NotImplementedError, match="Timestamp column"):
+        t.resample("5s", on="ts", closed="right")
     with pytest.raises(ValueError, match="whole number"):
         t.resample("1ns", on="ts")
     with pytest.raises(ValueError, match="cannot parse"):
@@ -327,7 +329,7 @@ def test_several_index_columns_match_pandas_multiindex():
         d.loc[(1, 10, 99)]
     with pytest.raises(KeyError, match="levels"):
         d.loc[[(1, 10, 99)]]
-    with pytest.raises(ValueError, match="columns"):
+    with pytest.raises(TypeError, match="MultiIndex"):
         d.resample("5s")
 
     # Writes through a tuple label.

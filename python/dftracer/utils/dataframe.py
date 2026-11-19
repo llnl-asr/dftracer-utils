@@ -13,6 +13,7 @@ See :mod:`dftracer.utils.series` for the column counterpart.
 
 from __future__ import annotations
 
+import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -61,6 +62,7 @@ if TYPE_CHECKING:
     from typing_extensions import Self
 
     from ._loc import At, ILoc, Loc, Resampler
+    from ._time_index import TimeResampler
     from .dftracer_utils_ext import Scalar
     from .groupby import GroupBy
     from .lazyframe import LazyFrame
@@ -410,18 +412,49 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         else:
             raise TypeError("assign to a column name, a list of names or a Bool mask")
 
-    def resample(self, rule: int | str, on: str | None = None, unit: str = "us") -> Resampler:
-        """Tumbling time windows of ``rule`` (``"5s"``, ``"100ms"``, ``"1min"``,
-        or an int of the column's own units) over the index column or ``on``,
-        with the aggregate family (``.sum()``, ``.agg(...)``, ``.size()``);
-        ``unit`` is the time column's unit (dftracer timestamps are ``us``).
-        Each call is one ``group_by_dynamic`` over the time-sorted frame."""
+    def resample(
+        self,
+        rule: int | str | datetime.timedelta,
+        closed: Literal["left", "right"] | None = None,
+        label: Literal["left", "right"] | None = None,
+        on: str | None = None,
+        level: int | str | None = None,
+        origin: str | datetime.datetime = "start_day",
+        offset: str | datetime.timedelta | None = None,
+        group_keys: bool = False,
+        *,
+        unit: str = "us",
+    ) -> Resampler | TimeResampler:
+        """Time bins of ``rule`` over a Timestamp index level, ``level`` of a
+        MultiIndex or the column ``on`` (pandas ``resample``): ``rule`` is
+        ``"5s"``, ``"1min"``, ``"D"`` or a calendar rule (``"W"``, ``"ME"``,
+        ``"MS"``, ``"QE"``, ``"QS"``, ``"YE"``, ``"YS"``), ``closed``, ``label``,
+        ``origin`` and ``offset`` as pandas. The result has one row per bin
+        between the first and the last, empty bins included (sum 0, mean
+        NaN, count 0), indexed by the bin label. The aggregations are ``sum``,
+        ``prod``, ``mean``, ``median``, ``min``, ``max``, ``count``, ``size``,
+        ``first``, ``last``, ``std``, ``var``, ``nunique``, ``ohlc`` and
+        ``agg``. An Int64 column (DFTracer timestamps) is read in ``unit``
+        (``"us"`` by default) with the width ``rule`` and fixed left-closed
+        bins; each call is one ``group_by_dynamic`` over the time-sorted
+        frame."""
         from ._loc import Resampler
+        from ._time_index import is_timestamp, resample
 
-        time = on if on is not None else single_index(self.index_names(), "resample")
-        if time not in self:
-            raise KeyError(f"resample: no column named {time!r}")
-        return Resampler(self, time, rule_to_units(rule, unit))
+        names = self.index_names()
+        legacy = on if on is not None else (names[0] if len(names) == 1 else None)
+        if level is None and legacy is not None and legacy in self:
+            column = self[legacy]
+            if not is_timestamp(column) and column.dtype == DType.INT64:
+                if isinstance(rule, datetime.timedelta):
+                    raise TypeError("resample: a timedelta rule needs a Timestamp index")
+                if closed or label or origin != "start_day" or offset is not None:
+                    raise NotImplementedError(
+                        "resample: an Int64 column takes rule, on and unit only; "
+                        "closed, label, origin and offset need a Timestamp column"
+                    )
+                return Resampler(self, legacy, rule_to_units(rule, unit))
+        return resample(self, rule, closed, label, on, level, origin, offset)
 
     @classmethod
     def from_arrow(cls, table: pa.Table) -> DataFrame:

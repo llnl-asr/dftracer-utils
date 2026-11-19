@@ -22,7 +22,6 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
-from ._convert import _like
 from ._label_align import LabelAlignMixin
 from ._levels import (
     LevelArg,
@@ -35,6 +34,7 @@ from ._levels import (
 from ._pandas_series import OMITTED, Omitted, replace_in, replace_pairs, valid_edge
 from ._reshape import stack_frame, unstack_frame
 from ._series_index import default_name, internal_name, positions, public_name, renamed_names
+from ._time_index import TimeIndexMixin
 from ._value_counts import frame_value_counts, native_counts
 from .enums import DType, rule_to_units
 from .series import Series
@@ -72,7 +72,7 @@ def column_series(frame: DataFrame, name: str) -> Series:
     return _ext.DataFrame.__getitem__(frame, name)
 
 
-class FramePandasMixin(LabelAlignMixin, LevelsMixin, _ext.DataFrame):
+class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFrame):
     """pandas spellings over the engine's Series kernels, one column at a
     time. ``self`` is a :class:`DataFrame`."""
 
@@ -1221,62 +1221,10 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, _ext.DataFrame):
         return name, self._col(name)
 
     @staticmethod
-    def _time_of_day(text: str) -> int:
-        """``"HH:MM"`` or ``"HH:MM:SS"`` as seconds since midnight."""
-        parts = text.split(":")
-        if len(parts) not in (2, 3) or not all(p.isdigit() for p in parts):
-            raise ValueError(f"expected a time as HH:MM or HH:MM:SS, got {text!r}")
-        h, m = int(parts[0]), int(parts[1])
-        sec = int(parts[2]) if len(parts) == 3 else 0
-        if h > 23 or m > 59 or sec > 59:
-            raise ValueError(f"time out of range: {text!r}")
-        return h * 3600 + m * 60 + sec
-
-    @staticmethod
-    def _seconds_of_day(s: Series) -> Series:
-        dt = s.dt
-        return dt.hour * 3600 + dt.minute * 60 + dt.second
-
-    @staticmethod
     def _unit_of(s: Series) -> str:
         return s.dt._unit
 
-    def tz_localize(self, tz: str | None, on: str | None = None) -> DataFrame:
-        """The index column (or ``on``) marked as zone ``tz`` (pandas
-        ``DataFrame.tz_localize``; UTC only, see ``Series.dt.tz_localize``)."""
-        name, s = self._time_column(on, "tz_localize")
-        return self._frame().with_column(name, s.dt.tz_localize(tz))
-
-    def tz_convert(self, tz: str | None, on: str | None = None) -> DataFrame:
-        """The index column (or ``on``) shown in zone ``tz`` (pandas
-        ``DataFrame.tz_convert``); the instants stay."""
-        name, s = self._time_column(on, "tz_convert")
-        return self._frame().with_column(name, s.dt.tz_convert(tz))
-
-    def at_time(self, time: str, on: str | None = None) -> DataFrame:
-        """The rows whose time of day is exactly ``time`` (``"HH:MM[:SS]"``),
-        by the index column or ``on`` (pandas ``at_time``)."""
-        _, s = self._time_column(on, "at_time")
-        return self._frame().filter(self._seconds_of_day(s).eq(self._time_of_day(time)))
-
-    def between_time(
-        self,
-        start_time: str,
-        end_time: str,
-        inclusive: str = "both",
-        on: str | None = None,
-    ) -> DataFrame:
-        """The rows whose time of day lies in ``[start_time, end_time]`` (an
-        end before the start wraps past midnight), ``inclusive`` as pandas:
-        ``both``, ``neither``, ``left``, ``right``."""
-        _, s = self._time_column(on, "between_time")
-        lo, hi = self._time_of_day(start_time), self._time_of_day(end_time)
-        secs = self._seconds_of_day(s)
-        if inclusive not in ("both", "neither", "left", "right"):
-            raise ValueError("between_time: inclusive must be both, neither, left or right")
-        after = secs.ge(lo) if inclusive in ("both", "left") else secs.gt(lo)
-        before = secs.le(hi) if inclusive in ("both", "right") else secs.lt(hi)
-        mask = after.logical(0, before) if lo <= hi else after.logical(1, before)
+    def _rows_where(self, mask: Series) -> DataFrame:
         return self._frame().filter(mask)
 
     def first(self, offset: int | str, on: str | None = None) -> DataFrame:
@@ -1293,52 +1241,6 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, _ext.DataFrame):
         span = rule_to_units(offset, self._unit_of(s))
         ticks = s.astype("int64")
         return self._frame().filter(ticks > int(cast(int, ticks.max())) - span)
-
-    def asfreq(
-        self,
-        freq: int | str,
-        method: str | None = None,
-        on: str | None = None,
-        fill_value: int | float | None = None,
-    ) -> DataFrame:
-        """The frame on a regular grid of ``freq`` from the earliest to the
-        latest time: each grid instant takes the row at exactly that time,
-        else nulls, filled forward / backward with ``method="ffill"`` /
-        ``"bfill"``, or with ``fill_value`` (pandas ``asfreq``). The time
-        column must hold each instant once."""
-        from .dataframe import DataFrame
-
-        name, s = self._time_column(on, "asfreq")
-        frame = self._frame()
-        if len(frame) == 0:
-            return frame
-        if s.nunique() != len(frame) - s.null_count:
-            raise ValueError("asfreq: the time column holds an instant more than once")
-        every = rule_to_units(freq, self._unit_of(s))
-        ticks = s.astype("int64")
-        lo, hi = int(cast(int, ticks.min())), int(cast(int, ticks.max()))
-        grid = DataFrame(
-            {name: _like(Series.from_list(list(range(lo, hi + 1, every)), DType.INT64), s)}
-        )
-        out = grid.join(frame, on=name, how="left")
-        others = [c for c in out.columns if c != name]
-        if method in ("ffill", "pad"):
-            out = out.ffill()
-        elif method in ("bfill", "backfill"):
-            out = out.bfill()
-        elif method is not None:
-            raise ValueError("asfreq: method must be ffill, bfill or None")
-        if fill_value is not None:
-            for c in others:
-                if is_numeric_series(self._col_of(out, c)):
-                    out = out.with_column(c, self._col_of(out, c).fillna(fill_value))
-        return _ext.DataFrame.with_index(
-            _ext.DataFrame.select(out, *frame._names()), frame.index_names()
-        )
-
-    @staticmethod
-    def _col_of(frame: DataFrame, name: str) -> Series:
-        return column_series(frame, name)
 
     # -- exports through pandas / pyarrow -----------------------------------------
     def _writes_index(self, index: bool | None) -> bool:

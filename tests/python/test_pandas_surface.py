@@ -730,8 +730,9 @@ def test_groupby_apply_and_filter_trace_into_the_engine(caplog):
 def test_datetime_index_methods_match_pandas():
     us = 1_000_000
     ts = [0, 30 * us, 60 * us, 45_000 * us, 45_030 * us, 86_430 * us, 172_800 * us]
-    df = DataFrame({"ts": ts, "v": list(range(7))}).set_index("ts")
-    p = pd.DataFrame({"v": list(range(7))}, index=pd.to_datetime(ts, unit="us"))
+    stamps = pd.to_datetime(ts, unit="us").astype("datetime64[us]")
+    p = pd.DataFrame({"v": list(range(7))}, index=pd.Index(stamps, name="ts"))
+    df = DataFrame.from_pandas(p)
     assert _d(df.at_time("00:00:30"))["v"] == p.at_time("00:00:30")["v"].tolist() == [1, 5]
     assert _d(df.at_time("12:30"))["v"] == p.at_time("12:30")["v"].tolist()
     assert (
@@ -750,15 +751,17 @@ def test_datetime_index_methods_match_pandas():
     )
     assert _d(df.first("1min"))["v"] == [0, 1]
     assert _d(df.last("1D"))["v"] == [5, 6]
-    assert _d(df.reset_index().at_time("00:00:30", on="ts"))["v"] == [1, 5]
     with pytest.raises(ValueError):
         df.at_time("25:00")
-    with pytest.raises(ValueError):
-        df.reset_index().at_time("00:00")  # no index column and no on=
+    with pytest.raises(TypeError):
+        df.reset_index().at_time("00:00")  # no index
 
-    small = DataFrame({"ts": [0, 2 * us, 3 * us], "v": [1.0, 2.0, 3.0]}).set_index("ts")
-    ps = pd.DataFrame({"v": [1.0, 2.0, 3.0]}, index=pd.to_datetime([0, 2 * us, 3 * us], unit="us"))
-    assert _d(small.asfreq("1s")) == {"ts": [0, us, 2 * us, 3 * us], "v": [1.0, None, 2.0, 3.0]}
+    ps = pd.DataFrame(
+        {"v": [1.0, 2.0, 3.0]},
+        index=pd.Index(pd.to_datetime([0, 2 * us, 3 * us], unit="us").astype("datetime64[us]")),
+    )
+    small = DataFrame.from_pandas(ps)
+    assert _d(small.asfreq("1s"))["v"] == [1.0, None, 2.0, 3.0]
     assert (
         _d(small.asfreq("1s", method="ffill"))["v"] == ps.asfreq("1s", method="ffill")["v"].tolist()
     )
@@ -766,17 +769,14 @@ def test_datetime_index_methods_match_pandas():
         _d(small.asfreq("1s", method="bfill"))["v"] == ps.asfreq("1s", method="bfill")["v"].tolist()
     )
     assert _d(small.asfreq("1s", fill_value=0))["v"] == ps.asfreq("1s", fill_value=0)["v"].tolist()
-    assert small.asfreq("1s").index_names() == ["ts"]
-    with pytest.raises(ValueError, match="more than once"):
-        DataFrame({"ts": [0, 0], "v": [1, 2]}).set_index("ts").asfreq("1s")
-    # A typed Timestamp column brings its own unit and type.
-    typed = DataFrame(
-        {"ts": pa.array(pd.to_datetime([0, 2 * us, 3 * us], unit="us")), "v": [1.0, 2.0, 3.0]}
-    ).set_index("ts")
-    assert _d(typed.asfreq("1s", method="bfill"))["v"] == [1.0, 2.0, 2.0, 3.0]
-    assert typed.asfreq("1s")["ts"].dtype == typed["ts"].dtype
-    assert _d(typed.first("2s"))["v"] == [1.0]
-    assert _d(typed.at_time("00:00:02"))["v"] == [2.0]
+    assert small.asfreq("1s").index_names() == small.index_names()
+    with pytest.raises(ValueError, match="duplicate"):
+        DataFrame.from_pandas(
+            pd.DataFrame({"v": [1, 2]}, index=pd.to_datetime([0, 0], unit="us"))
+        ).asfreq("1s")
+    assert small.asfreq("1s")[small.index_names()[0]].dtype == small[small.index_names()[0]].dtype
+    assert _d(small.first("2s"))["v"] == [1.0]
+    assert _d(small.at_time("00:00:02"))["v"] == [2.0]
 
 
 def test_groupby_fills_rolling_take_sample_resample_match_pandas():
@@ -905,9 +905,8 @@ def test_tz_localize_and_tz_convert_match_pandas():
         paris.to_pandas().index.tolist()
         == pdf.tz_localize("UTC").tz_convert("Europe/Paris").index.tolist()
     )
-    assert df.reset_index().tz_localize("UTC", on="ts")["ts"].dt.tz == "UTC"
-    with pytest.raises(ValueError):
-        df.reset_index().tz_localize("UTC")
+    with pytest.raises(TypeError):
+        df.reset_index().tz_localize("UTC")  # no Timestamp index
 
 
 def test_groupby_prod_cumprod_median_quantile_match_pandas():

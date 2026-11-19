@@ -199,7 +199,6 @@ frame.to_html#1[N] | semantics | [values] <table border="1" class="dataframe">  
 frame.ewm#1[N] | semantics | [values] <dftracer.utils._pandas_frame._FrameWindow object at 0x10ebe5d20> vs ExponentialMovingWindow [alpha=0.5,min_periods=1,adjust=True,ignore_na=False,method=single]
 frame.expanding#1[N] | semantics | [values] <dftracer.utils._pandas_frame._FrameWindow object at 0x1108ade70> vs Expanding [min_periods=1,method=single]
 frame.rolling#1[N] | semantics | [values] <dftracer.utils._pandas_frame._FrameWindow object at 0x10f9f5390> vs Rolling [window=2,center=False,method=single]
-frame.resample#1[N] | semantics | [raises] pandas raised TypeError, ours ValueError: resample: set_index(time) first, or pass on=
 frame.add#3[N] | keyword | [error] ours raised TypeError: _FramePandasMixin.add() got an unexpected keyword argument 'fill_value'
 frame.dot#1[N] | shape | [shape] columns ['column', '0', '1', '2', '3', '4'] vs ['0', '1', '2', '3', '4']
 frame.dtypes#1[M] | needs-index | [type] ours list (seq), library Series (series)

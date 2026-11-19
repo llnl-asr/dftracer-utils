@@ -832,7 +832,10 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         (0 to ``len(breaks)``). ``right=True`` closes each interval on the right,
         ``(a, b]``. ``outer=False`` gives null for a value outside the interior
         intervals and numbers them from 0; ``cut(breaks, right=True, outer=False)``
-        equals ``pandas.cut(labels=False)``. A null value gives a null bin."""
+        equals ``pandas.cut(labels=False)``. A null value gives a null bin. Integer,
+        Bool and temporal values with integer ``breaks`` compare exactly as 64-bit
+        integers; with float values or float breaks the comparison is in doubles,
+        as pandas does."""
         flags = (1 if right else 0) | (0 if outer else 2)
         return super().cut(breaks, flags)
 

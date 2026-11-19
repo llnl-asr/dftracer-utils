@@ -79,8 +79,10 @@ struct Prod {
 /// type, and is converted to a float once; past the type's range it goes on as
 /// a float, as @ref Prod does, in place of wrapping to a wrong integer.
 struct ProdI64 {
-    std::int64_t acc = 1;
-    double wide = 1.0;
+    union {
+        std::int64_t acc = 1;
+        double wide;
+    };
     bool overflowed = false;
     void mul(std::int64_t v) {
         if (!overflowed) {
@@ -99,8 +101,10 @@ struct ProdI64 {
     }
 };
 struct ProdU64 {
-    std::uint64_t acc = 1;
-    double wide = 1.0;
+    union {
+        std::uint64_t acc = 1;
+        double wide;
+    };
     bool overflowed = false;
     void mul(std::uint64_t v) {
         if (!overflowed) {
@@ -118,6 +122,8 @@ struct ProdU64 {
         return overflowed ? wide : static_cast<double>(acc);
     }
 };
+static_assert(sizeof(ProdI64) <= 16 && sizeof(ProdU64) <= 16,
+              "a product state must fit the transform's 16 byte step");
 
 /// RUNNING_MIN and RUNNING_MAX: the extreme value so far. The first of equal
 /// values wins; a float is ordered by compare_doubles (NaN greatest). The value

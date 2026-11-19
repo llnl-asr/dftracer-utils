@@ -47,6 +47,8 @@ struct TransformCell {
     std::int64_t seen = 0;   // rows of the group so far
     bool last_ok = false;    // the previous row is present
 };
+static_assert(sizeof(TransformCell::Step) <= 16,
+              "a step of the group transform grew past 16 bytes");
 
 // The group-wise transforms over numeric columns, one morsel at a time: each
 // group keeps its state (an accumulator, the previous row, a ring of the last

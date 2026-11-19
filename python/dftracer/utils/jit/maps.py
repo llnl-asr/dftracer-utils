@@ -582,20 +582,13 @@ def own_annotations(cls: type) -> dict[str, object]:
     get = getattr(inspect, "get_annotations", None)
     if get is None:
         return dict(cls.__dict__.get("__annotations__", {}))
-    annotationlib = _import_annotationlib()
-    if annotationlib is not None:
+    if sys.version_info >= (3, 14):
+        # Python 3.14 evaluates annotations lazily (PEP 649), so a class has no
+        # "__annotations__" entry in its __dict__.
+        import annotationlib
+
         return dict(get(cls, format=annotationlib.Format.FORWARDREF))
     return dict(get(cls))
-
-
-def _import_annotationlib() -> types.ModuleType | None:
-    # Python 3.14 evaluates annotations lazily (PEP 649), so a class has no
-    # "__annotations__" entry in its __dict__.
-    if sys.version_info < (3, 14):
-        return None
-    import annotationlib
-
-    return annotationlib
 
 
 def state_fields(cls: type) -> tuple[dict[str, PlainField], dict[str, StoreField]]:

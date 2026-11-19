@@ -1222,18 +1222,18 @@ def _sort_frame():
 def test_groupby_sorts_by_default():
     df = _sort_frame()
     gb = df.groupby("app")
-    assert gb.size()["app"].to_list() == ["a", "b", "c"]
-    assert gb.size()["size"].to_list() == [2, 2, 1]
+    assert gb.size().index.to_list() == ["a", "b", "c"]
+    assert gb.size().to_list() == [2, 2, 1]
     assert gb.sum()["v"].to_list() == [7.0, 4.0, 6.0]
     assert gb.agg(total=("v", "sum"))["app"].to_list() == ["a", "b", "c"]
     assert gb.median()["app"].to_list() == ["a", "b", "c"]
     keep = df.groupby("app", dropna=False).size()
-    assert keep["app"].to_list() == ["a", "b", "c", None]
+    assert keep.index.to_list() == ["a", "b", "c", None]
 
 
 def test_groupby_sorts_numeric_and_composite_keys():
     df = _sort_frame()
-    out = df.groupby(["app", "n"]).size()
+    out = df.groupby(["app", "n"]).size().reset_index()
     assert list(zip(out["app"].to_list(), out["n"].to_list())) == [
         ("a", 1),
         ("a", 2),
@@ -1247,8 +1247,8 @@ def test_groupby_sorts_numeric_and_composite_keys():
 def test_groupby_sort_false_keeps_engine_order():
     df = _sort_frame()
     expected = df.group_by("app").size()
-    for sort_false in (df.groupby("app", sort=False).size(), df.groupby("app", sort=False).sum()):
-        assert sort_false["app"].to_list() == expected["app"].to_list()
+    assert df.groupby("app", sort=False).size().index.to_list() == expected["app"].to_list()
+    assert df.groupby("app", sort=False).sum()["app"].to_list() == expected["app"].to_list()
     assert df.group_by("app").size()["app"].to_list() == expected["app"].to_list()
 
 

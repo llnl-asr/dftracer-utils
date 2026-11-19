@@ -282,3 +282,12 @@ TEST_CASE("the per-column C sort refuses null arrays and bad sizes") {
     dftu_dataframe_free(sorted);
     dftu_dataframe_free(h);
 }
+
+TEST_CASE("argsort and topk_indices read a selection like the flat column") {
+    const dataframe::Series selected = ints(X, V).drop_nulls();
+    REQUIRE(selected.encoding() == dataframe::Encoding::Selection);
+    using I = dstd::Vector<std::int64_t>;
+    CHECK(values_of(dataframe::argsort(selected, false, true)) ==
+          I{1, 4, 0, 2, 3});
+    CHECK(values_of(dataframe::topk_indices(selected, 2, true)) == I{0, 2});
+}

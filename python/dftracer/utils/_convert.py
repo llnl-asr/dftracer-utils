@@ -598,6 +598,17 @@ def _indices(indices: Series | Sequence[int]) -> list[int]:
     return [int(i) for i in indices]
 
 
+def _row_indices(indices: Series | Sequence[int]) -> Series | list[int]:
+    """``indices`` for a native take: an Int64 Series without nulls goes in as
+    it is (the native side reads its buffer), anything else as a list."""
+    raw: object = indices
+    if isinstance(raw, _ext.Series):
+        column = cast("Series", raw)
+        if column.dtype == DType.INT64 and column.null_count == 0:
+            return column
+    return _indices(indices)
+
+
 def _like(ints: Series, template: Series) -> Series:
     """The int64 column ``ints`` read as the type of ``template``: a timestamp,
     duration, time or date keeps its unit and zone."""

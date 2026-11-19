@@ -143,7 +143,7 @@ def take(g: GroupBy, indices: Sequence[int]) -> DataFrame:
     rest = [c for c in frame._names() if c not in g._keys]
     if not indices:
         return frame.head(0).select(*rest)
-    smallest = int(cast("int", g.size()["size"].min()))
+    smallest = int(cast("int", g._size_frame()["size"].min()))
     for i in indices:
         if not -smallest <= int(i) < smallest:
             raise IndexError("indices are out-of-bounds")

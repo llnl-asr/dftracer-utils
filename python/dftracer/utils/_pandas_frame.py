@@ -33,6 +33,7 @@ from ._levels import (
     sorted_positions,
 )
 from ._pandas_series import OMITTED, Omitted, replace_in, replace_pairs, valid_edge
+from ._reshape import stack_frame, unstack_frame
 from ._series_index import default_name, internal_name, positions, public_name, renamed_names
 from ._value_counts import frame_value_counts, native_counts
 from .enums import DType, rule_to_units
@@ -530,6 +531,47 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, _ext.DataFrame):
         ``dropna=False`` keeps the rows with a null key."""
         keys = list(subset) if subset else self.columns
         return frame_value_counts(self._frame(), keys, normalize, sort, ascending, dropna)
+
+    def stack(
+        self,
+        level: LevelArg = -1,
+        dropna: bool | Omitted = OMITTED,
+        sort: bool | Omitted = OMITTED,
+        future_stack: bool = True,
+    ) -> Series:
+        """The pandas ``stack``: the columns become the innermost index level
+        of a Series, row by row (each row's columns in column order), under the
+        existing index levels (the positions for a frame with no index). The
+        default is pandas 3's implementation (``future_stack=True``), which keeps
+        every cell, null ones too, and refuses ``dropna`` and ``sort``; with
+        ``future_stack=False`` null cells are dropped unless ``dropna=False``
+        (``sort`` has no effect on flat column names). The columns must share a
+        type or all be numeric. The column names are one level, so ``level`` is
+        0, -1 or ``[0]``; pandas 2 differs by defaulting to ``future_stack=False``.
+        A frame has no MultiIndex columns, so the result is never a frame."""
+        return cast(
+            "Series",
+            stack_frame(
+                self._frame(),
+                level,
+                None if isinstance(dropna, Omitted) else dropna,
+                None if isinstance(sort, Omitted) else sort,
+                future_stack,
+            ),
+        )
+
+    def unstack(
+        self, level: LevelArg = -1, fill_value: object = None, sort: bool = True
+    ) -> Series | DataFrame:
+        """The pandas ``unstack``: with a MultiIndex the row-label ``level`` (a
+        name, a position, a negative position or a list) becomes columns, one for
+        each shown column and label, named with the text of the tuple
+        ``(column, label)`` (a MultiIndex column of pandas); the other levels are
+        the result's index, sorted, and a missing cell is null or ``fill_value``.
+        With one index level (or none) the result is a Series labelled by the
+        column name and the old label. ``ValueError`` for a label pair that
+        occurs twice. The name of the column level is lost."""
+        return unstack_frame(self._frame(), level, fill_value, sort)
 
     # -- shape, iteration, conveniences -------------------------------------------
     @property

@@ -335,8 +335,8 @@ def test_group_by_keys_negative_zero_and_nans_as_pandas_and_polars():
     grouped = ours.group_by("k").agg(col("v").count().alias("n")).to_dict()
     got = {("nan" if k != k else k): n for k, n in zip(grouped["k"], grouped["n"])}
     assert got == {0.0: 3, 1.5: 2, "nan": 2}
-    sized = ours.groupby("k").size().to_dict()
-    assert sorted(sized["size"]) == [2, 3]  # the pandas groupby drops the NaN key
+    sized = ours.groupby("k").size().to_list()
+    assert sorted(sized) == [2, 3]  # the pandas groupby drops the NaN key
     pl = pytest.importorskip("polars")
     ref = pl.DataFrame({"k": values}).group_by("k").len().to_dict(as_series=False)
     assert sorted(ref["len"]) == [2, 2, 3]

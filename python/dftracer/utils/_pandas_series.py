@@ -30,6 +30,7 @@ from ._levels import (
     sort_plan,
     sorted_positions,
 )
+from ._reshape import unstack_series
 from ._series_index import (
     default_name,
     drop_levels,
@@ -492,6 +493,19 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin):
         column name that repeats raises ``ValueError`` (a frame has no duplicate
         names, so ``allow_duplicates`` is not offered)."""
         return reset(self._s(), level, drop, name)
+
+    def unstack(
+        self, level: LevelArg = -1, fill_value: object = None, sort: bool = True
+    ) -> DataFrame:
+        """The pandas ``unstack``: the row-label ``level`` (a name, a position,
+        a negative position or a list) becomes the columns, one for each distinct
+        label, named with its text (the text of the tuple for a list). The other
+        levels are the result's index, sorted; a cell the Series has no value
+        for is null, or ``fill_value``. ``sort=False`` keeps the order of first
+        appearance (pandas 2 returns wrong values for it). ``ValueError`` for a
+        Series with fewer than two levels and for a label pair that occurs
+        twice. The name of the column level is lost."""
+        return cast("DataFrame", unstack_series(self._s(), level, fill_value, sort))
 
     def reindex(
         self,

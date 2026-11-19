@@ -418,6 +418,14 @@ Series argsort_simd(const Series& v, bool descending, std::int64_t k) {
     }
 }
 
+// A chunked column, and a selection, view or constant of numbers, is read
+// through its data pointer, which only a flat column has; a string column
+// reads every encoding through its handle.
+bool needs_flat(const Series& v) {
+    return v.encoding() == Encoding::Chunked ||
+           (v.encoding() != Encoding::Flat && !is_string_column(*v.handle()));
+}
+
 }  // namespace
 
 int compare_rows(const Series& v, std::int64_t a, std::int64_t b) {
@@ -425,8 +433,7 @@ int compare_rows(const Series& v, std::int64_t a, std::int64_t b) {
 }
 
 Series argsort(const Series& v, bool descending, bool nulls_last) {
-    if (v.encoding() == Encoding::Chunked)
-        return argsort(v.materialize(), descending, nulls_last);
+    if (needs_flat(v)) return argsort(v.materialize(), descending, nulls_last);
     if (refuse_nested_value("argsort", v.type())) return Series{};
     Series simd = argsort_simd(v, descending, -1);
     if (simd.valid()) return simd;
@@ -434,8 +441,7 @@ Series argsort(const Series& v, bool descending, bool nulls_last) {
 }
 
 Series topk_indices(const Series& v, std::int64_t k, bool largest) {
-    if (v.encoding() == Encoding::Chunked)
-        return topk_indices(v.materialize(), k, largest);
+    if (needs_flat(v)) return topk_indices(v.materialize(), k, largest);
     if (refuse_nested_value("top_k", v.type())) return Series{};
     const std::int64_t n = v.length();
     k = k < 0 ? 0 : (k > n ? n : k);

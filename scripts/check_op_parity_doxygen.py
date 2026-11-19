@@ -501,6 +501,8 @@ PY_ALLOWLIST = {
         "reorder_levels",
         "add_prefix",
         "add_suffix",
+        # The row labels moved into the columns, over the native sort and pivot.
+        "unstack",
         "names",
         "nlevels",
         "get_level_values",
@@ -576,6 +578,9 @@ PY_ALLOWLIST = {
         "nlevels",
         "get_level_values",
         "set_names",
+        # Columns into the row labels and back, over the native sort, unpivot and pivot.
+        "stack",
+        "unstack",
         # Handles, shape, iteration and exports (through pandas / pyarrow).
         "copy",
         "pipe",

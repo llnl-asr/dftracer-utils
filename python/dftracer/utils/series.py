@@ -35,13 +35,13 @@ from ._aliases import install as _install_aliases
 from ._convert import (
     NeedsArrow,
     _arrow_native,
-    _indices,
     _native_numpy,
     _pandas_default,
     _pandas_nullable,
     _polars_native,
     _polars_via_arrow,
     _require_pyarrow,
+    _row_indices,
     _to_pandas,
     numpy_to_native,
     pandas_to_native,
@@ -881,7 +881,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
     def gather(self, indices: Series | Sequence[int]) -> Self:
         """The rows at ``indices`` (a Series or a list; any order, repeats
         allowed); ``take`` is the pandas name."""
-        return super().take(_indices(indices))
+        return super().take(_row_indices(indices))
 
     @property
     def is_unique(self) -> bool:
@@ -1064,7 +1064,9 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         if names_of(self):
             return self.gather(indices)
         out = self.gather(indices)
-        return with_levels(out, [default_name(0)], [Series.from_list(_indices(indices))])
+        rows = _row_indices(indices)
+        label = Series.from_list(rows) if isinstance(rows, list) else drop_levels(rows)
+        return with_levels(out, [default_name(0)], [label])
 
     # ``s.str``: string methods under both spellings, pandas (``s.str.lower()``,
     # ``s.str.contains("x")``, ``s.str.len()``) and polars

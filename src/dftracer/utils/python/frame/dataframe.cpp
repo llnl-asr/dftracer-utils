@@ -23,6 +23,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/errc.h>
@@ -60,7 +61,6 @@ namespace {
 
 using dataframe::DataFrame;
 using dataframe::Series;
-using dftracer::utils::python::core::parse_int_seq;
 using dftracer::utils::python::core::parse_seq;
 using dftracer::utils::python::core::parse_string_seq;
 using dftracer::utils::python::frame::aggs_from_seq;
@@ -523,8 +523,11 @@ PyObject* DataFrame_with_column(PyObject* self, PyObject* args) {
 PyObject* DataFrame_take(PyObject* self, PyObject* seq) {
     DataFrameObject* b = as_native<DataFrameObject>(self);
     if (!b) return nullptr;
-    dftracer::utils::dstd::Vector<std::int64_t> idx;
-    if (!parse_int_seq(seq, "take() expects a sequence of ints", idx))
+    Series holder;
+    dstd::Vector<std::int64_t> parsed;
+    dstd::Span<const std::int64_t> idx;
+    if (!dftracer::utils::python::frame::row_indices_from_py(
+            seq, "take() expects a sequence of ints", holder, parsed, idx))
         return nullptr;
     // A take past the end would read outside the columns.
     const std::int64_t rows = to_dataframe(b).num_rows();

@@ -365,7 +365,7 @@ def test_groupby_agg_and_quantile_leave_the_input_index_out():
     )
     flat = ours.groupby("g", as_index=False).sum()
     assert flat.columns == ["g", "v", "w"] and flat.index_names() == []
-    assert ours.groupby("g").size().columns == ["size"]
+    assert ours.groupby("g").size().reset_index().columns == ["g", "0"]
     assert "k" not in ours.groupby("g").nunique().to_pandas().columns
     assert ours.groupby("g").describe().columns[0].startswith("v_")
 

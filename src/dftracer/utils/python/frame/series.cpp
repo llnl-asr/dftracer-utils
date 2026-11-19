@@ -16,6 +16,7 @@
 #include <dftracer/utils/python/core/api_methods.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/method.h>
+#include <dftracer/utils/python/core/seq_helpers.h>
 #include <dftracer/utils/python/core/type_helpers.h>
 #include <dftracer/utils/python/frame/series.h>
 #include <dftracer/utils/python/frame/series_detail.h>
@@ -1034,6 +1035,24 @@ bool series_list_from_py(PyObject* seq, const char* what,
         out.push_back(s->share());
     }
     Py_DECREF(fast);
+    return true;
+}
+
+bool row_indices_from_py(PyObject* obj, const char* what,
+                         dataframe::Series& holder,
+                         dstd::Vector<std::int64_t>& parsed,
+                         dstd::Span<const std::int64_t>& out) {
+    const dataframe::Series* column = unwrap_vec_column(obj);
+    if (column && column->type() == dataframe::TypeId::Int64 &&
+        column->null_count() == 0) {
+        holder = column->materialize();
+        out = dstd::Span<const std::int64_t>(
+            holder.data<std::int64_t>(),
+            static_cast<std::size_t>(holder.length()));
+        return true;
+    }
+    if (!core::parse_int_seq(obj, what, parsed)) return false;
+    out = dstd::Span<const std::int64_t>(parsed.data(), parsed.size());
     return true;
 }
 

@@ -200,8 +200,17 @@ class GroupBy(GroupTransforms[DataFrame]):
     def last(self) -> DataFrame:
         return self.reduce("last")
 
-    def size(self) -> DataFrame:
-        """The row count per group, as one Int64 column ``size``."""
+    def size(self) -> DataFrame | Series:
+        """The row count per group, as one Int64 column ``size``. A pandas
+        ``groupby`` that keeps the keys as the index (``as_index=True``) gives
+        the counts as an unnamed Series under that index, so ``.unstack()`` reads
+        it; the Polars ``group_by`` and ``as_index=False`` give the frame."""
+        out = self._size_frame()
+        if self._as_index and self._keys:
+            return out["size"].rename(None)
+        return out
+
+    def _size_frame(self) -> DataFrame:
         return self.agg(Agg("count", None, "size"))
 
     # The group-wise transforms (cumsum, shift, rank, head, ...): the engine's
@@ -609,7 +618,7 @@ class GroupBy(GroupTransforms[DataFrame]):
 
     @property
     def ngroups(self) -> int:
-        return len(self.size())
+        return len(self._size_frame())
 
     def get_group(self, key: GroupKey) -> DataFrame:
         """The rows of one group, by its key value (a tuple for several
@@ -635,7 +644,7 @@ class GroupBy(GroupTransforms[DataFrame]):
             frame.with_row_index(row) if self._rows is None else frame.with_column(row, self._rows)
         )
         order = cast("List[int]", marked.sort_values(self._keys)[row].to_list())
-        sizes = self.size().sort_by_multi(self._keys)
+        sizes = self._size_frame().sort_by_multi(self._keys)
         labels = [
             sizes[k].astype(DType.BOOL).to_list()
             if frame[k].dtype == DType.BOOL
@@ -663,7 +672,7 @@ class GroupBy(GroupTransforms[DataFrame]):
         out: DataFrame | None = None
         for c in [n for n in frame._names() if n not in self._keys]:
             present = frame.filter(self._col(frame, c).notna())
-            pairs = GroupBy(present, self._keys + [c]).size()
+            pairs = GroupBy(present, self._keys + [c])._size_frame()
             counts = GroupBy(pairs, self._keys).agg(Agg("count", None, c))
             out = counts if out is None else out.join(counts, on=self._keys)
         if out is None:
@@ -777,7 +786,7 @@ class GroupBy(GroupTransforms[DataFrame]):
             if pandas_named(self) and self._col(frame, c).dtype.is_float:
                 frame = frame.filter(self._col(frame, c).is_nan().logical_not())
         if self._sort or not pandas_named(self):
-            out = GroupBy(frame, self._keys + cols).size().rename({"size": "count"})
+            out = GroupBy(frame, self._keys + cols)._size_frame().rename({"size": "count"})
             out = out.sort_values(
                 self._keys + ["count"], ascending=[True] * len(self._keys) + [ascending]
             )

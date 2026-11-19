@@ -6,8 +6,11 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/core/type_helpers.h>
+
+#include <cstdint>
 
 namespace dftracer::utils::python::frame {
 
@@ -38,6 +41,15 @@ dftracer::utils::dataframe::Series column_from_arrow(PyObject* arrow_array);
 bool series_list_from_py(
     PyObject* seq, const char* what,
     dftracer::utils::dstd::Vector<dftracer::utils::dataframe::Series>& out);
+
+// The row indices a take reads from `obj`: an Int64 Series without nulls is
+// read in place (`holder` keeps its flat column alive), any other sequence of
+// ints is parsed into `parsed`. `out` views whichever holds them. False with a
+// Python error set.
+bool row_indices_from_py(PyObject* obj, const char* what,
+                         dftracer::utils::dataframe::Series& holder,
+                         dftracer::utils::dstd::Vector<std::int64_t>& parsed,
+                         dftracer::utils::dstd::Span<const std::int64_t>& out);
 
 // The label lookup results as Python values: `(positions, missing)`, two lists
 // of ints; `(offset, length)`. A failed lookup sets the Python exception its

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/core/seq_helpers.h>
 #include <dftracer/utils/python/frame/dataframe.h>
 #include <dftracer/utils/python/frame/frame_op_helpers.h>
+#include <dftracer/utils/python/frame/series.h>
 #include <dftracer/utils/python/frame/series_detail.h>
 
 #include <cstdint>
@@ -310,8 +312,11 @@ PyObject* Series_take(PyObject* self, PyObject* seq) {
     Held held_a(self);
     Series* a = held_a.get();
     if (!a) return nullptr;
-    dstd::Vector<std::int64_t> idx;
-    if (!core::parse_int_seq(seq, "take() expects a sequence of ints", idx))
+    Series holder;
+    dstd::Vector<std::int64_t> parsed;
+    dstd::Span<const std::int64_t> idx;
+    if (!frame::row_indices_from_py(seq, "take() expects a sequence of ints",
+                                    holder, parsed, idx))
         return nullptr;
     Series out = kernel(*a, [&] { return a->take(idx); });
     if (!out.valid()) {

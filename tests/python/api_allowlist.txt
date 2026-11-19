@@ -223,6 +223,7 @@ Series.truncate | python-semantics | pandas or polars semantics written over sev
 Series.type | python-semantics | metadata property read from the column, not an op
 Series.unique | needs-token:FLAG | -
 Series.unique_mask | python-semantics | pandas or polars semantics written over several native calls
+Series.unstack | python-semantics | pandas container API on the Series, written over the native sort, take and pivot
 Series.update | python-semantics | pandas container API on the Series, not an op
 Series.value_counts | python-semantics | pandas or polars semantics written over several native calls
 Series.values | conversion | values gives the data in another form
@@ -687,6 +688,7 @@ DataFrame.sort_by | python-semantics | frame method written in Python over nativ
 DataFrame.sort_by_multi | python-semantics | frame method written in Python over native calls
 DataFrame.sort_index | python-semantics | pandas container API on the frame, written over native calls
 DataFrame.squeeze | python-semantics | pandas container API on the frame, written over native calls
+DataFrame.stack | python-semantics | pandas container API on the frame, written over the native sort, take and unpivot
 DataFrame.std | python-semantics | frame method written in Python over native calls
 DataFrame.sub | python-semantics | pandas container API on the frame, written over native calls
 DataFrame.sum | python-semantics | frame method written in Python over native calls
@@ -723,6 +725,7 @@ DataFrame.union | python-semantics | frame method written in Python over native 
 DataFrame.unique | python-semantics | frame method written in Python over native calls
 DataFrame.unnest | python-semantics | frame method written in Python over native calls
 DataFrame.unpivot | python-semantics | frame method written in Python over native calls
+DataFrame.unstack | python-semantics | pandas container API on the frame, written over the native sort, take, pivot and unpivot
 DataFrame.update | python-semantics | pandas container API on the frame, written over native calls
 DataFrame.value_counts | python-semantics | pandas container API on the frame, written over native calls
 DataFrame.values | conversion | values gives the data in another form

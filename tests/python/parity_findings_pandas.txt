@@ -208,7 +208,6 @@ frame.dtypes#1[E] | needs-index | [type] ours list (seq), library Series (series
 frame.values#1[N] | semantics | [values] [[1.0, 1.5], [nan, nan], [3.0, 3.0], [2.0, -2.5], [2.0, 3.0]] vs [[1, 1.5], [None, None], [3, 3.0], [2, -2.5], [2, 3.0]]
 frame.T#1[N] | shape | [shape] columns ['column', '0', '1', '2', '3', '4'] vs ['0', '1', '2', '3', '4']
 groupby.prod#1[G] | semantics | [dtype] a: float64 vs int64
-groupby.size#1[G] | shape | [shape] columns ['k', 'size'] vs ['k', '0']
 groupby.skew#1[G] | semantics | [values] a: [0.0, nan] vs [0.0, None]
 groupby.sum#2[G] | keyword | [error] ours raised TypeError: GroupBy.sum() got an unexpected keyword argument 'min_count'
 groupby.std#2[G] | keyword | [error] ours raised TypeError: GroupBy.std() got an unexpected keyword argument 'ddof'

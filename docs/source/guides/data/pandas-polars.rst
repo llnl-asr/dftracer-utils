@@ -481,6 +481,59 @@ order of first appearance, as pandas; the lazy group-by is unchanged.
    df.sort_index(level="n", ascending=False)
    df.reset_index().groupby("g")["v"].nlargest(1)   # Series under (g, position)
 
+Reshape
+~~~~~~~
+
+``stack`` and ``unstack`` move columns into the row labels and back, on the
+native sort, take, unpivot and pivot.
+
+- ``df.stack()`` makes the columns the innermost index level of a Series, row by
+  row (each row's columns in column order), under the existing levels (or the
+  positions for a frame with no index). The default is pandas 3's implementation
+  (``future_stack=True``): every cell is kept, null ones too, and ``dropna`` and
+  ``sort`` raise ``ValueError``. ``future_stack=False`` drops null cells unless
+  ``dropna=False``. Pandas 2 defaults to ``future_stack=False``, so pass the
+  keyword to get the same on both. The columns must share a type or all be
+  numeric (pandas gives an object Series for text and numbers; this raises).
+  A frame has flat column names, so ``level`` is 0, -1 or ``[0]``, and the result
+  is never a frame.
+- ``s.unstack(level=-1, fill_value=None, sort=True)`` moves a level (a name, a
+  position, a negative position or a list) into the columns. The other levels are
+  the sorted index; each label of the level is a column, named with its text (the
+  text of a tuple for a list of levels, which come in order of first appearance).
+  A cell the Series has no value for is null, or ``fill_value`` (a null the Series
+  itself holds stays null; text takes a text fill and numbers a number).
+  ``sort=False`` keeps the order of first appearance, as pandas 3.1 does (earlier
+  pandas returns values under the wrong labels). A label pair that occurs twice
+  is ``ValueError("Index contains duplicate entries, cannot reshape")`` and a
+  Series with fewer than two levels is a ``ValueError`` too.
+- ``df.unstack(...)`` does the same for each column of a frame with a MultiIndex.
+  A frame cannot hold two-level column names, so a column is named with the text
+  of the tuple ``(column, label)``, the name ``from_pandas`` gives a MultiIndex
+  column. A frame with one index level (or none), or with every level named,
+  gives a Series labelled by the column name and the old labels, as pandas.
+- ``unstack`` is the pandas method. The Polars ``DataFrame.unstack(step, how,
+  columns, fill_values)``, which cuts a column into a frame of ``step`` rows, is
+  not offered under that name; the coverage check cannot list a name that exists
+  as excluded.
+- ``fill_value`` takes a number for number columns, a string for text and a
+  ``bool`` for Bool columns; any other kind is a ``TypeError`` (pandas mixes the
+  kinds in an object column). A frame whose columns are all null next to numbers
+  is stacked as pandas stacks it, the null column taking the numbers' type.
+- The name of the column level is lost: ``s.unstack().stack()`` has an unnamed
+  last level where pandas keeps the level's name.
+- The pandas ``groupby(keys).size()`` is a Series under the keys, so
+  ``df.groupby(["a", "b"]).size().unstack()`` works as in pandas. A reduction of
+  one column, ``g["c"].sum()``, is still a one-column frame: use
+  ``g["c"].sum()["c"].unstack()``.
+
+.. code-block:: python
+
+   df = DataFrame({"a": [1, 1, 2], "b": ["x", "y", "x"], "v": [1.0, 2.0, 3.0]})
+   counts = df.groupby(["a", "b"]).size().unstack(fill_value=0)   # columns x, y
+   wide = df.set_index(["a", "b"])["v"].unstack("b")              # a is the index
+   long = wide.stack()                                           # (a, column) -> v
+
 Several columns can be assigned at once from a frame or a list of Series. The
 targets and the value's columns pair by position (the value's own names are
 ignored, as in pandas), a target that does not exist is added, and a count or

@@ -12,7 +12,6 @@ pandas DataFrame.isetitem | python-semantics | assigns a column in place by posi
 pandas DataFrame.plot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
 pandas DataFrame.set_flags | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
 pandas DataFrame.sparse | out-of-scope | sparse arrays (D3b out-of-scope)
-pandas DataFrame.stack | needs-index | needs a (multi-/Datetime/Period) index; waits for the row index step (D3b point 4)
 pandas DataFrame.style | out-of-scope | Styler (D3b out-of-scope)
 pandas DataFrame.to_clipboard | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas DataFrame.to_excel | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
@@ -28,7 +27,6 @@ pandas DataFrame.to_stata | out-of-scope | foreign I/O (D3b out-of-scope); call 
 pandas DataFrame.to_timestamp | needs-index | needs a (multi-/Datetime/Period) index; waits for the row index step (D3b point 4)
 pandas DataFrame.to_xarray | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas DataFrame.to_xml | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
-pandas DataFrame.unstack | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas Series.asfreq | needs-index | selects or resamples by a DatetimeIndex; waits for the row index step (D3b point 4)
 pandas Series.at_time | needs-index | selects or resamples by a DatetimeIndex; waits for the row index step (D3b point 4)
 pandas Series.attrs | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
@@ -58,7 +56,6 @@ pandas Series.to_timestamp | needs-index | needs a (multi-/Datetime/Period) inde
 pandas Series.to_xarray | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas Series.tz_convert | needs-index | acts on a DatetimeIndex (the values go through s.dt.tz_convert / tz_localize); waits for the row index step
 pandas Series.tz_localize | needs-index | acts on a DatetimeIndex (the values go through s.dt.tz_convert / tz_localize); waits for the row index step
-pandas Series.unstack | needs-index | labels and (multi-)index alignment; waits for the row index step (D3b point 4)
 pandas Series.view | deprecated-upstream | removed or deprecated in pandas 3 (still present in pandas 2)
 pandas DataFrameGroupBy.a | python-semantics | a column read as an attribute of the group-by (g.a); use g['a']
 pandas DataFrameGroupBy.boxplot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
@@ -105,7 +102,6 @@ polars DataFrame.to_init_repr | python-semantics | source text of a constructor 
 polars DataFrame.to_jax | out-of-scope | torch and jax export (D3b out-of-scope)
 polars DataFrame.to_struct | needs-kernel | struct column construction, reshape of a column into a frame, and upsampling over a time column; none has a kernel
 polars DataFrame.to_torch | out-of-scope | torch and jax export (D3b out-of-scope)
-polars DataFrame.unstack | needs-kernel | struct column construction, reshape of a column into a frame, and upsampling over a time column; none has a kernel
 polars DataFrame.upsample | needs-kernel | struct column construction, reshape of a column into a frame, and upsampling over a time column; none has a kernel
 polars DataFrame.write_avro | out-of-scope | foreign I/O or engine integration (D3b out-of-scope); call to_polars() or to_pandas()
 polars DataFrame.write_clipboard | out-of-scope | foreign I/O or engine integration (D3b out-of-scope); call to_polars() or to_pandas()

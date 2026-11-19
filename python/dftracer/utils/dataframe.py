@@ -33,11 +33,11 @@ from ._aliases import install as _install_aliases
 from ._convert import (
     _apply_index,
     _arrow_native,
-    _indices,
     _pandas_default,
     _pandas_nullable,
     _polars_via_arrow,
     _require_pyarrow,
+    _row_indices,
     _to_pandas,
     index_columns,
 )
@@ -1344,7 +1344,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
     def gather(self, indices: Series | Sequence[int]) -> DataFrame:
         """The rows at ``indices`` (a Series or a list; any order, repeats
         allowed); ``take`` is the pandas name."""
-        return _bound(_ext.DataFrame.take(self, _indices(indices)))
+        return _bound(_ext.DataFrame.take(self, _row_indices(indices)))
 
     def head(self, n: int = 5) -> DataFrame:
         return _bound(_ext.DataFrame.head(self, n))

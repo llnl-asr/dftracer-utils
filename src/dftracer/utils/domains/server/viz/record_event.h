@@ -19,16 +19,21 @@
 #include <simdjson.h>
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 
 namespace dftracer::utils::domains::server {
 
-// Parse the text of `s` in place. Grows the capacity of `s` to hold the
-// simdjson padding, so simdjson never copies the text.
+// Parse the text of `s` in place. Appends the simdjson padding as zero bytes
+// for the parse and removes it after, so simdjson never copies the text and
+// never reads unwritten bytes.
 template <class Parser>
 inline auto parse_string(Parser& parser, dstd::String& s) {
-    s.reserve(s.size() + simdjson::SIMDJSON_PADDING);
-    return parser.parse(s.data(), s.size(), false);
+    const std::size_t n = s.size();
+    s.append(simdjson::SIMDJSON_PADDING, '\0');
+    auto result = parser.parse(s.data(), n, false);
+    s.resize(n);
+    return result;
 }
 
 // The value at dotted `path` under `root`.

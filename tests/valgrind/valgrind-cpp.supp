@@ -56,18 +56,6 @@
    fun:hs_scan
 }
 
-# --- simdjson: stage 2 reads string padding in whole vectors -----------------
-# A dstd::String is parsed in place when its spare capacity covers the simdjson
-# padding, as simdjson does for a std::string. That capacity is never written,
-# and the string scan loads it in vector reads and masks it, so Memcheck sees a
-# branch on bytes past the input.
-{
-   simdjson-stage2-padding-cond
-   Memcheck:Cond
-   ...
-   fun:*dom_parser_implementation*stage2*
-}
-
 # --- derive_io_size: GCC reads the payload of an empty optional ---------------
 # GCC turns each `opt && *opt > 0` check into a branch-free AND that loads the
 # payload even when the optional is empty. The result cannot depend on that

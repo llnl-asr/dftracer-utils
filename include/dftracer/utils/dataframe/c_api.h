@@ -883,6 +883,13 @@ DFTU_EXPORT dftu_series* dftu_series_dt_time(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_with_timezone(const dftu_series* v,
                                                    const char* tz,
                                                    int32_t tz_len);
+/** Sets the directories searched for time zone files first, as `paths`
+ * (`len` bytes, not NUL terminated) separated by ':'. The library then also
+ * searches DFTRACER_UTILS_TZDIR, TZDIR and the system zoneinfo directories. A
+ * NULL `paths` or a `len` of 0 or less clears the list. Zones already loaded
+ * stay as they are. The text is copied, so the caller keeps ownership. Thread
+ * safe. */
+DFTU_EXPORT void dftu_tz_set_search_path(const char* paths, int32_t len);
 /** Each row's List<String> joined with `sep` into one String; a null list
  * stays null. NULL unless `v` is a FLAT List of strings. */
 DFTU_EXPORT dftu_series* dftu_series_list_join(const dftu_series* v,

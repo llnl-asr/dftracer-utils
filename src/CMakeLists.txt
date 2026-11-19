@@ -1104,6 +1104,11 @@ set(DFTRACER_UTILS_VEC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/parallel_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/batch_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/c_api_tz.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/tz/database.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/tz/footer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/tz/tzif.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/tz/zone.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/validate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/frame_native.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/grace_join.cpp
@@ -3034,6 +3039,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/window_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/group_transform_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/frame_index_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/tz_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/memory_attribution_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/counter_contention_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/heap_bench.cpp
@@ -3083,7 +3089,8 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
             fold_read_bench
             duql_eval_bench
             group_transform_bench
-            frame_index_bench)
+            frame_index_bench
+            tz_bench)
       add_test(NAME ${bench}_smoke COMMAND ${bench} --smoke)
       set_tests_properties(${bench}_smoke PROPERTIES LABELS bench_smoke)
     endforeach()
@@ -3151,7 +3158,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
     set_tests_properties(
       view_api_bench_smoke view_batch_bench_smoke index_bench_smoke
       fold_read_bench_smoke duql_eval_bench_smoke group_transform_bench_smoke
-      frame_index_bench_smoke
+      frame_index_bench_smoke tz_bench_smoke
       bench_smoke/memory_attribution bench_smoke/counter_contention
       bench_smoke/heap bench_smoke/coro bench_smoke/channel bench_smoke/fs
       bench_smoke/pool bench_smoke/io bench_smoke/fmt bench_smoke/log

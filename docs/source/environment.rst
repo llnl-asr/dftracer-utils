@@ -112,6 +112,14 @@ Memory and kernels
        stores them raw. ``auto``, unset or any other value compresses only
        when the spill file is on a network file system, where the bytes
        written cost more than the compression.
+   * - ``DFTRACER_UTILS_TZDIR``
+     - unset
+     - Directories, separated by ``:``, searched for time zone files (TZif)
+       such as ``America/New_York``. They come after the directories the host
+       program set and before ``TZDIR`` and the system zoneinfo directories
+       (``/usr/share/zoneinfo``, ``/usr/lib/zoneinfo``,
+       ``/usr/share/lib/zoneinfo``, ``/etc/zoneinfo``). The first directory
+       that holds the zone wins.
    * - ``DFTRACER_UTILS_MEMORY_BACKEND``
      - the build option
      - ``page_heap`` or ``system``. Picks the allocator backend, read once

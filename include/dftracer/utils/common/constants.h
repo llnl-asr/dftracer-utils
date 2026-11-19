@@ -20,6 +20,10 @@ inline constexpr const char* SPILL_DIR_ENV = "DFTRACER_UTILS_SPILL_DIR";
 /// compression.
 inline constexpr const char* SPILL_COMPRESS_ENV =
     "DFTRACER_UTILS_SPILL_COMPRESS";
+/// Directories, separated by ':', searched for time zone files after the list
+/// the host set and before TZDIR and the system directories. A zone name is a
+/// path below one of them, such as "America/New_York".
+inline constexpr const char* TZDIR_ENV = "DFTRACER_UTILS_TZDIR";
 
 namespace dataframe {
 /// The rows of one batch of a DataFrame Arrow stream, and of a scan handed no

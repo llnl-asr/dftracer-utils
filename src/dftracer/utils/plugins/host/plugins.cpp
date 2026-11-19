@@ -183,6 +183,27 @@ struct PluginsInternalAccess {
     static const Plugins::Impl& impl(const Plugins& set) { return *set.impl_; }
 };
 
+// A plugin built against the dataframe C ABI (a jit plugin builds columns
+// with dftu_series_new_flat and frames with dftu_dataframe_new) resolves
+// those symbols at load. On macOS a two-level-namespace lookup finds them in
+// the loaded dylib; on Linux a library a Python extension pulled in sits in
+// its local scope, so the plugin's RTLD_NOW dlopen would fail on the first
+// dftu_* symbol. Promote the library that holds the ABI to the global scope
+// once (RTLD_NOLOAD | RTLD_GLOBAL re-opens an already loaded library without
+// loading it again); no plugin links the host, as section 17 requires.
+void expose_dataframe_abi() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    Dl_info info{};
+    if (dladdr(reinterpret_cast<const void*>(&dftu_dataframe_new), &info) ==
+            0 ||
+        !info.dli_fname)
+        return;
+    // Promotes the loaded library to RTLD_GLOBAL; the handle is never closed.
+    dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
+}
+
 namespace {
 
 // The path's file stem (drop directory and the final extension), used to tag
@@ -307,27 +328,6 @@ dstd::Result<ConfigTree> parse_config_json(dstd::StringView path,
         return common::make_error<"plugin '{}' config does not parse: {}">(
             common::ErrorCode::Parse, path, parsed.error().message());
     return parsed;
-}
-
-// A plugin built against the dataframe C ABI (a jit plugin builds columns
-// with dftu_series_new_flat and frames with dftu_dataframe_new) resolves
-// those symbols at load. On macOS a two-level-namespace lookup finds them in
-// the loaded dylib; on Linux a library a Python extension pulled in sits in
-// its local scope, so the plugin's RTLD_NOW dlopen would fail on the first
-// dftu_* symbol. Promote the library that holds the ABI to the global scope
-// once (RTLD_NOLOAD | RTLD_GLOBAL re-opens an already loaded library without
-// loading it again); no plugin links the host, as section 17 requires.
-void expose_dataframe_abi() {
-    static bool done = false;
-    if (done) return;
-    done = true;
-    Dl_info info{};
-    if (dladdr(reinterpret_cast<const void*>(&dftu_dataframe_new), &info) ==
-            0 ||
-        !info.dli_fname)
-        return;
-    // Promotes the loaded library to RTLD_GLOBAL; the handle is never closed.
-    dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
 }
 
 dstd::Result<Plugins::Impl::Loaded> load_plugin(dstd::CStringView path,

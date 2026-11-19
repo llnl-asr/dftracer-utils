@@ -28,6 +28,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/host/plugins_internal.h>
 #include <dftracer/utils/python/frame/udf_python.h>
 #include <dlfcn.h>
 
@@ -510,6 +511,7 @@ PyObject* udf_register_batch(PyObject* /*self*/, PyObject* args) {
 PyObject* udf_register_library(PyObject* /*self*/, PyObject* arg) {
     const char* path = PyUnicode_AsUTF8(arg);
     if (path == nullptr) return nullptr;
+    dftracer::utils::plugins::host::expose_dataframe_abi();
     void* handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (handle == nullptr) {
         const char* why = dlerror();

@@ -582,6 +582,17 @@ def peek_default_runtime() -> Runtime | None:
     return _default_wrapper
 
 
+def _forget_default_wrapper() -> None:
+    # A fork copies the wrapper without the threads of its native runtime, and the
+    # native side makes the child its own runtime on first use.
+    global _default_wrapper
+    _default_wrapper = None
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_forget_default_wrapper)
+
+
 @atexit.register
 def _shutdown_default_runtime() -> None:
     # Wait for this handle's tasks and stop its Python threads while the

@@ -521,6 +521,7 @@ set(TEST_CPP_SOURCES
     common/test_spill_dir.cpp
     common/test_str_format.cpp
     common/test_hw_concurrency.cpp
+    common/test_cpu_limits.cpp
     # Pipeline tests
 
     runtime/scheduler/test_dynamic_workers.cpp

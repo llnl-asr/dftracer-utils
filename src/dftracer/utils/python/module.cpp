@@ -6,8 +6,10 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/memory_config.h>
+#include <dftracer/utils/common/worker_share.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/memory/config.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/plugins/abi_version.h>
 #include <dftracer/utils/python/core/arrow_batch_capsule.h>
@@ -90,6 +92,52 @@ PyObject* py_memory_budget_advice(PyObject*, PyObject* args, PyObject* kwds) {
         (unsigned long long)a.peak_bytes, "available_bytes",
         (unsigned long long)a.available_bytes, "suggested_nodes",
         (unsigned long long)a.suggested_nodes, "warning", warning.c_str());
+}
+
+// _worker_share(workers, pin=False) -> (threads, io_threads, memory_budget)
+PyObject* py_worker_share(PyObject*, PyObject* args) {
+    unsigned long long workers = 0;
+    int pin = 0;
+    if (!PyArg_ParseTuple(args, "K|p:_worker_share", &workers, &pin))
+        return nullptr;
+    const auto share = dftracer::utils::common::worker_share(
+        static_cast<std::size_t>(workers), pin != 0);
+    if (!share) {
+        dftracer::utils::python::core::set_py_error(share.error());
+        return nullptr;
+    }
+    return Py_BuildValue("(KKK)", (unsigned long long)share->threads,
+                         (unsigned long long)share->io_threads,
+                         (unsigned long long)share->memory_budget);
+}
+
+// _apply_worker_share(threads, io_threads, memory_budget) -> None: the memory
+// budget takes `memory_budget`, and the process runtime, when it exists, takes
+// the thread counts (a runtime made later reads the environment).
+PyObject* py_apply_worker_share(PyObject*, PyObject* args) {
+    unsigned long long threads = 0, io_threads = 0, memory_budget = 0;
+    if (!PyArg_ParseTuple(args, "KKK:_apply_worker_share", &threads,
+                          &io_threads, &memory_budget))
+        return nullptr;
+    auto config = dftracer::utils::common::memory_config_from_env();
+    if (!config) {
+        dftracer::utils::python::core::set_py_error(config.error());
+        return nullptr;
+    }
+    config->budget = static_cast<std::size_t>(memory_budget);
+    dftracer::utils::memory::configure(*config);
+    if (auto rt = dftracer::utils::peek_default_runtime()) {
+        dftracer::utils::RuntimeSettings settings;
+        settings.threads = static_cast<std::size_t>(threads);
+        settings.io_threads = static_cast<std::size_t>(io_threads);
+        rt->configure(settings);
+    }
+    Py_RETURN_NONE;
+}
+
+// _process_memory_budget() -> int: the memory budget now in effect, in bytes.
+PyObject* py_process_memory_budget(PyObject*, PyObject*) {
+    return PyLong_FromSize_t(dftracer::utils::memory::config().budget);
 }
 
 // scan_file(path, index_dir="", format="") -> LazyFrame: a deferred scan over
@@ -188,6 +236,16 @@ PyMethodDef dftracer_utils_methods[] = {
      "{fits, required_bytes, peak_bytes, available_bytes, suggested_nodes,\n"
      "warning}: peak is PEAK_MEMORY_FACTOR x required; `warning` is a ready\n"
      "message (empty when it fits)."},
+    {"_worker_share", py_worker_share, METH_VARARGS,
+     "_worker_share(workers: int, pin: bool = False) -> tuple[int, int, "
+     "int]\n\n"
+     "(threads, io_threads, memory_budget) of one of `workers` processes."},
+    {"_apply_worker_share", py_apply_worker_share, METH_VARARGS,
+     "_apply_worker_share(threads: int, io_threads: int, memory_budget: int) "
+     "-> None\n\n"
+     "Set the memory budget and the process runtime's thread counts."},
+    {"_process_memory_budget", py_process_memory_budget, METH_NOARGS,
+     "_process_memory_budget() -> int\n\nThe memory budget in effect, bytes."},
     {"set_log_level", py_set_log_level, METH_VARARGS,
      "set_log_level(level: str) -> None\n\n"
      "Set the C++ logger level (trace|debug|info|warn|error|off)."},

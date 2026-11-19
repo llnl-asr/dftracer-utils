@@ -60,6 +60,7 @@ from .runtime import Runtime, TaskHandle, get_default_runtime, peek_default_runt
 from .series import Series  # noqa: F401
 from .store import Store  # noqa: F401
 from .trace import Containment, LiveFileStatus, LiveTraceViewer, TraceViewer  # noqa: F401
+from .workers import WorkerShare, apply_worker_share, worker_share  # noqa: F401
 
 try:
     from ._version import __version__
@@ -120,6 +121,9 @@ __all__ = [
     "TaskHandle",
     "get_default_runtime",
     "peek_default_runtime",
+    "WorkerShare",
+    "apply_worker_share",
+    "worker_share",
     "get_log_level",
     "set_log_color",
     "set_log_level",

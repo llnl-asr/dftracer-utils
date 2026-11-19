@@ -94,6 +94,7 @@ set(DFTRACER_UTILS_MEMORY_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/arena.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/budget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/cgroup.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/debug.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap_page.cpp
@@ -139,6 +140,8 @@ set(DFTRACER_UTILS_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/spill_file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/env.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/cpu_features.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/cpu_limits.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/worker_share.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/intern_table.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/timer.cpp)
 

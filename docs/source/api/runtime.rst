@@ -46,6 +46,19 @@ Module-level Functions
 
 .. autofunction:: dftracer.utils.peek_default_runtime
 
+Worker Processes
+----------------
+
+Several worker processes on one host split it with these (see
+:doc:`../environment`).
+
+.. autofunction:: dftracer.utils.worker_share
+
+.. autofunction:: dftracer.utils.apply_worker_share
+
+.. autoclass:: dftracer.utils.WorkerShare
+   :members:
+
 Submitting Tasks
 ----------------
 

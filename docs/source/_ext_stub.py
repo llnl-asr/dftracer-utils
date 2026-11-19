@@ -2010,6 +2010,22 @@ def memory_budget_advice(required_bytes: int, available_bytes: int = ...) -> dic
     ...
 
 
+def _worker_share(workers: int, pin: bool = ..., /) -> tuple[int, int, int]:
+    """(threads, io_threads, memory_budget) of one of `workers` processes that split
+    this host. `pin` divides the budget the process had before any pinned call."""
+    ...
+
+
+def _apply_worker_share(threads: int, io_threads: int, memory_budget: int, /) -> None:
+    """Set the memory budget and, when the process runtime exists, its thread counts."""
+    ...
+
+
+def _process_memory_budget() -> int:
+    """The memory budget in effect, in bytes."""
+    ...
+
+
 _EXPORTS = (
     "_T",
     "T_co",
@@ -2115,6 +2131,9 @@ _EXPORTS = (
     "_load_plugin",
     "_unload_plugin",
     "memory_budget_advice",
+    "_worker_share",
+    "_apply_worker_share",
+    "_process_memory_budget",
 )
 
 

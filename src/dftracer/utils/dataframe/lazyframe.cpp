@@ -3573,6 +3573,22 @@ LazyFrame without_index_columns(const LazyFrame& lf,
     return lf.select(std::move(names));
 }
 
+// `lf` without the hidden default label columns of its index, and no index.
+LazyFrame without_hidden_index_columns(const LazyFrame& lf) {
+    const IndexList index = plan_index(lf);
+    if (index.empty()) return lf;
+    dstd::Vector<dstd::String> names;
+    for (const dstd::String& n : lf.schema()) {
+        bool is_hidden = false;
+        for (const dstd::String& i : index)
+            if (i == n && is_hidden_index_name(n)) is_hidden = true;
+        if (!is_hidden) names.push_back(n);
+    }
+    auto bare = lf.select(std::move(names)).with_index({});
+    if (!bare) return detail::PlanAccess::failed(lf, bare.error());
+    return std::move(*bare);
+}
+
 const Field* find_field(const Schema& s, dstd::StringView name) {
     for (const Field& f : s.fields)
         if (f.name == name) return &f;
@@ -5732,6 +5748,9 @@ dstd::Optional<LazyFrame> native_group_transform(
 LazyFrame LazyFrame::compare_agg(LazyFrame variant, std::int64_t n_key) const {
     if (auto variant_status = variant.status(); !variant_status)
         return failed(variant_status.error());
+    if (!plan_index(*this).empty() || !plan_index(variant).empty())
+        return without_hidden_index_columns(*this).compare_agg(
+            without_hidden_index_columns(variant), n_key);
     if (n_key < 1)
         return failed(invalid_argument<"compare_agg: n_key < 1">().error());
     const dstd::Vector<Field> lhs = output_schema().fields;

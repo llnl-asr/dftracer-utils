@@ -89,6 +89,8 @@ void apply_index_drop(const DataFrame& in, DataFrame& out);
 /// index: the operand of an op that drops the index.
 DataFrame without_index_columns(const DataFrame& in,
                                 dstd::Span<const dstd::String> keep);
+/// Whether `name` is a hidden default label, `__index_level_<digits>__`.
+bool is_hidden_index_name(dstd::StringView name);
 /// `in` without the hidden default label columns (`__index_level_<i>__`) of
 /// its index, and no index: the operand of an op that drops the index but
 /// keeps the columns a user named, as `reset_index` does.

@@ -379,6 +379,15 @@ def test_a_named_index_column_survives_compare_agg_and_gap_fill():
     assert "w" in filled.columns
 
 
+def test_lazy_compare_agg_keeps_a_metric_that_is_the_index():
+    base = DataFrame({"k": ["a", "b", "c"], "m": [1.0, 2.0, 3.0], "n": [1, 2, 3]})
+    variant = DataFrame({"k": ["a", "b", "c"], "m": [2.0, 2.0, 6.0], "n": [1, 2, 3]})
+    eager = base.set_index("m").compare_agg(variant.set_index("m"), 1)
+    lazy = base.set_index("m").lazy().compare_agg(variant.set_index("m").lazy(), 1).collect()
+    assert list(lazy.columns) == list(eager.columns)
+    assert "delta_m" in lazy.columns
+
+
 def test_lazy_compare_agg_drops_the_key_index_as_the_eager_op_does():
     d = DataFrame({"k": ["a", "a", "b"], "m": [1.0, 2.0, 3.0]})
     g = d.groupby("k").agg(m=("m", "sum"))

@@ -441,3 +441,29 @@ TEST_CASE("a plan declares its index with with_index") {
         plain.with_index(dstd::Vector<dstd::String>{K1, K1}),
         common::ErrorCode::InvalidArgument);
 }
+
+TEST_CASE("without_hidden_index_columns drops only __index_level_<digits>__") {
+    CHECK(is_hidden_index_name("__index_level_0__"));
+    CHECK(is_hidden_index_name("__index_level_12__"));
+    CHECK_FALSE(is_hidden_index_name("__index_level_x"));
+    CHECK_FALSE(is_hidden_index_name("__index_level___"));
+    CHECK_FALSE(is_hidden_index_name("__index_level_1x__"));
+    CHECK_FALSE(is_hidden_index_name("user"));
+
+    DataFrame df;
+    df.names = dstd::make_shared_strings(
+        {"user", "__index_level_0__", "__index_level_x", "m"});
+    df.columns.push_back(i64s({1, 2}));
+    df.columns.push_back(i64s({3, 4}));
+    df.columns.push_back(i64s({5, 6}));
+    df.columns.push_back(i64s({7, 8}));
+    const dstd::StringView index[] = {"__index_level_0__", "__index_level_x",
+                                      "m"};
+    const DataFrame indexed = ok(df.with_index(index));
+    const DataFrame bare = without_hidden_index_columns(indexed);
+    CHECK(bare.row_index == nullptr);
+    REQUIRE(bare.names.size() == 3);
+    CHECK(dstd::StringView(bare.names[0]) == "user");
+    CHECK(dstd::StringView(bare.names[1]) == "__index_level_x");
+    CHECK(dstd::StringView(bare.names[2]) == "m");
+}

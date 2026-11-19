@@ -80,6 +80,17 @@ DataFrame without_index_columns(const DataFrame& in,
     return out;
 }
 
+bool is_hidden_index_name(dstd::StringView name) {
+    constexpr dstd::StringView PREFIX = "__index_level_";
+    constexpr dstd::StringView SUFFIX = "__";
+    if (name.size() <= PREFIX.size() + SUFFIX.size() ||
+        !name.starts_with(PREFIX) || !name.ends_with(SUFFIX))
+        return false;
+    for (std::size_t i = PREFIX.size(); i + SUFFIX.size() < name.size(); ++i)
+        if (name[i] < '0' || name[i] > '9') return false;
+    return true;
+}
+
 DataFrame without_hidden_index_columns(const DataFrame& in) {
     if (!in.row_index) return in.share();
     DataFrame out;
@@ -87,7 +98,7 @@ DataFrame without_hidden_index_columns(const DataFrame& in) {
         bool is_hidden = false;
         for (const dstd::SharedString& n : in.row_index->names)
             if (dstd::StringView(n) == dstd::StringView(in.names[i]) &&
-                dstd::StringView(n).starts_with("__index_level_"))
+                is_hidden_index_name(n))
                 is_hidden = true;
         if (is_hidden) continue;
         out.names.push_back(in.names[i]);

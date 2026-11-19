@@ -27,6 +27,7 @@ from ..dftracer_utils_ext import plan_lpt_partition as _plan_lpt_partition
 from ..dftracer_utils_ext import scan_files as _scan_files
 from ..enums import coerce_bytes
 from ..index import AggregationConfig, Indexer
+from ._workers import _require_workers
 from .progress import ProgressAggregator, worker_progress_forwarder
 
 
@@ -203,7 +204,8 @@ def distributed_index(
 
     n_workers = 1
     if client is not None:
-        n_workers = len(client.nthreads()) or 1
+        _require_workers(client)
+        n_workers = len(client.nthreads())
     _log.info("distributed_index: %d workers visible", n_workers)
 
     all_paths = [p for (p, _) in entries]

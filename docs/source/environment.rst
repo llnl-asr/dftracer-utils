@@ -252,6 +252,11 @@ Index storage and indexing
    * - Variable
      - Default
      - Effect
+   * - ``DFTRACER_UTILS_DASK_WORKER_TIMEOUT``
+     - ``60``
+     - Seconds ``distributed_index``, the Dask viewer and ``DaskFrame`` wait for a
+       first Dask worker when the cluster has none. Then they raise
+       ``TimeoutError`` naming the scheduler. Read by the Python package only.
    * - ``DFTRACER_UTILS_INDEX_STORE_REFRESH_MS``
      - ``1000``
      - The shortest time in milliseconds between two looks for the data files

@@ -35,6 +35,7 @@ from ..agg import UdafAgg
 from ..dataframe import DataFrame, JoinHow
 from ..expr import Agg, Expr, col
 from ..series import Series
+from ._workers import _require_workers
 
 if TYPE_CHECKING:
     from dask.distributed import Client, Future
@@ -420,12 +421,10 @@ class DaskFrame:
     @classmethod
     def from_frames(cls, frames: Sequence[DataFrame], client: Client | None = None) -> DaskFrame:
         frames = list(frames)
-        parts = (
-            cast(List[DataFrame], client.scatter(frames, hash=False))
-            if client is not None
-            else frames
-        )
-        return cls(parts, client)
+        if client is None:
+            return cls(frames, client)
+        _require_workers(client)
+        return cls(cast(List[DataFrame], client.scatter(frames, hash=False)), client)
 
     @classmethod
     def from_function(
@@ -443,10 +442,14 @@ class DaskFrame:
     def _submit(self, fn: Callable[_P, _R], *args: _P.args, **kwargs: _P.kwargs) -> _R:
         if self._client is None:
             return fn(*args, **kwargs)
+        _require_workers(self._client)
         return cast(_R, self._client.submit(fn, *args, pure=False, **kwargs))
 
     def _gather(self, items: list[_R]) -> list[_R]:
-        return list(items) if self._client is None else self._client.gather(items)
+        if self._client is None:
+            return list(items)
+        _require_workers(self._client)
+        return cast(List[_R], self._client.gather(items))
 
     def _like(self, parts: list[DataFrame]) -> DaskFrame:
         return DaskFrame(parts, self._client)
@@ -619,7 +622,11 @@ class DaskFrame:
                     "side would repeat on every partition; use strategy='shuffle'"
                 )
             right = other if isinstance(other, DataFrame) else other.to_frame()
-            ref = self._client.scatter(right, broadcast=True) if self._client is not None else right
+            if self._client is not None:
+                _require_workers(self._client)
+                ref = self._client.scatter(right, broadcast=True)
+            else:
+                ref = right
             return self._like([self._submit(_join, p, ref, on, how, kw) for p in self._parts])
         right_frame = (
             other if isinstance(other, DaskFrame) else DaskFrame.from_frames([other], self._client)

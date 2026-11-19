@@ -17,6 +17,7 @@ from ..dataframe import DataFrame, PhaseArg, TimeUnitArg
 from ..dftracer_utils_ext import NUM_SHARDS
 from ..enums import coerce_bytes, coerce_duration
 from ..trace.viewer import TraceViewer
+from ._workers import _require_workers
 
 
 class QueryPage(NamedTuple):
@@ -323,10 +324,13 @@ class DaskTraceViewer:
 
     def _resolve_client(self) -> Client:
         if self._client is not None:
-            return self._client
-        from dask.distributed import get_client
+            client = self._client
+        else:
+            from dask.distributed import get_client
 
-        return get_client()
+            client = get_client()
+        _require_workers(client)
+        return client
 
     def collect(self) -> DataFrame:
         """Distributed group_by+agg -> one native DataFrame.

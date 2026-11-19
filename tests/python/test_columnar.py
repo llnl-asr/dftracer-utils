@@ -6,7 +6,8 @@ only when the test asks for it, via VecColumn.to_arrow()."""
 
 import pytest
 
-from dftracer.utils import F, col, columnar, lit, where
+from dftracer.utils import F, col, lit, where
+from dftracer.utils._eval import Columnar
 
 pa = pytest.importorskip("pyarrow")
 pytest.importorskip("numpy")
@@ -94,7 +95,7 @@ def test_columnar_fillna_null_aware():
 
 
 def test_columnar_integer_arithmetic():
-    out = columnar(F.dur + F.cnt).apply(_table())
+    out = Columnar(F.dur + F.cnt).apply(_table())
     assert _list(out) == [1001, 2002, 3003, 4004]
     assert _type(out) == pa.int64()
 
@@ -108,71 +109,71 @@ def test_columnar_eval_many_matches_individual():
     e3 = F.ts * lit(0.5)  # reads a different column
     outs = eval_many([e1, e2, e3], t)
     assert len(outs) == 3
-    assert _list(outs[0]) == _list(columnar(e1).apply(t))
-    assert _list(outs[1]) == _list(columnar(e2).apply(t))
-    assert _list(outs[2]) == _list(columnar(e3).apply(t))
+    assert _list(outs[0]) == _list(Columnar(e1).apply(t))
+    assert _list(outs[1]) == _list(Columnar(e2).apply(t))
+    assert _list(outs[2]) == _list(Columnar(e3).apply(t))
     assert _list(outs[0]) == [1001, 2002, 3003, 4004]
     assert _list(outs[1]) == [2002, 4004, 6006, 8008]
 
 
 def test_columnar_subtract_columns():
-    out = columnar(F.dur - F.cnt).apply(_table())
+    out = Columnar(F.dur - F.cnt).apply(_table())
     assert _list(out) == [999, 1998, 2997, 3996]
 
 
 def test_columnar_scalar_broadcast():
-    out = columnar(F.dur * lit(2)).apply(_table())
+    out = Columnar(F.dur * lit(2)).apply(_table())
     assert _list(out) == [2000, 4000, 6000, 8000]
 
 
 def test_columnar_scalar_on_left_commutes():
-    out = columnar(lit(3) * F.cnt).apply(_table())
+    out = Columnar(lit(3) * F.cnt).apply(_table())
     assert _list(out) == [3, 6, 9, 12]
 
 
 def test_columnar_mixed_promotes_to_float():
-    out = columnar(F.dur * lit(0.001) + F.ts).apply(_table())
+    out = Columnar(F.dur * lit(0.001) + F.ts).apply(_table())
     assert _list(out) == [11.0, 22.0, 33.0, 44.0]
     assert _type(out) == pa.float64()
 
 
 def test_columnar_primitive_ilog2():
-    out = columnar(F.dur.ilog2()).apply(_table())
+    out = Columnar(F.dur.ilog2()).apply(_table())
     assert _list(out) == [(d).bit_length() - 1 for d in [1000, 2000, 3000, 4000]]
     assert _type(out) == pa.int64()
 
 
 def test_columnar_primitive_popcount():
-    out = columnar(F.cnt.popcount()).apply(_table())
+    out = Columnar(F.cnt.popcount()).apply(_table())
     assert _list(out) == [bin(x).count("1") for x in [1, 2, 3, 4]]
 
 
 def test_columnar_primitive_over_an_expression():
     # ilog2 of a derived column: cast + prim, still one vec pipeline.
-    out = columnar((F.dur + F.cnt).ilog2()).apply(_table())
+    out = Columnar((F.dur + F.cnt).ilog2()).apply(_table())
     assert _list(out) == [
         (d + c).bit_length() - 1 for d, c in zip([1000, 2000, 3000, 4000], [1, 2, 3, 4])
     ]
 
 
 def test_columnar_col_and_F_are_equivalent():
-    a = columnar(col("dur") + lit(1)).apply(_table())
-    b = columnar(F.dur + lit(1)).apply(_table())
+    a = Columnar(col("dur") + lit(1)).apply(_table())
+    b = Columnar(F.dur + lit(1)).apply(_table())
     assert _list(a) == _list(b)
 
 
 def test_columnar_reports_input_columns():
-    assert columnar(F.dur * lit(2) + F.ts).columns == ["dur", "ts"]
+    assert Columnar(F.dur * lit(2) + F.ts).columns == ["dur", "ts"]
 
 
 def test_columnar_division_columns():
-    out = columnar(F.dur / F.cnt).apply(_table())
+    out = Columnar(F.dur / F.cnt).apply(_table())
     assert _list(out) == [1000.0, 1000.0, 1000.0, 1000.0]
     assert _type(out) == pa.float64()
 
 
 def test_columnar_division_by_scalar():
-    out = columnar(F.dur / lit(2)).apply(_table())
+    out = Columnar(F.dur / lit(2)).apply(_table())
     assert _list(out) == [500.0, 1000.0, 1500.0, 2000.0]
     assert _type(out) == pa.float64()
 
@@ -194,18 +195,18 @@ def test_dataframe_apply_rejects_non_expr():
 
 
 def test_columnar_comparison_makes_a_bool_mask():
-    out = columnar(F.dur > lit(2000)).apply(_table())
+    out = Columnar(F.dur > lit(2000)).apply(_table())
     assert _list(out) == [False, False, True, True]
     assert _type(out) == pa.bool_()
 
 
 def test_columnar_logical_and():
-    out = columnar((F.dur > lit(1000)) & (F.cnt < lit(4))).apply(_table())
+    out = Columnar((F.dur > lit(1000)) & (F.cnt < lit(4))).apply(_table())
     assert _list(out) == [False, True, True, False]
 
 
 def test_columnar_invert():
-    out = columnar(~(F.dur > lit(2000))).apply(_table())
+    out = Columnar(~(F.dur > lit(2000))).apply(_table())
     assert _list(out) == [True, True, False, False]
 
 
@@ -233,7 +234,7 @@ def test_columnar_over_view_batch_stays_in_vec():
         assert set(["cat", "count", "sum_dur", "mean_dur"]).issubset(batch.keys())
 
         # A derived metric computed on the vec batch: sum/count == mean.
-        avg = columnar(F.sum_dur / F.count).apply(batch)
+        avg = Columnar(F.sum_dur / F.count).apply(batch)
         mean = batch["mean_dur"].to_arrow()
         for a, m in zip(avg.to_arrow().to_pylist(), mean.to_pylist()):
             assert abs(a - m) <= 1e-6 * max(1.0, abs(m))
@@ -309,7 +310,7 @@ def test_vecbatch_native_frame_ops():
         assert "n" in rn.keys() and "count" not in rn.keys()
         assert rn.num_rows == batch.num_rows
 
-        avg = columnar(F.sum_dur / F.count).apply(batch)
+        avg = Columnar(F.sum_dur / F.count).apply(batch)
         wc = batch.with_column("avg_dur", avg)
         assert "avg_dur" in wc.keys()
         assert wc["avg_dur"].to_arrow().to_pylist() == avg.to_arrow().to_pylist()
@@ -692,13 +693,13 @@ def test_columnar_fused_parallel_large_input():
     b = (np.arange(n, dtype=np.int64) * 3) % 7
     tbl = pa.table({"a": pa.array(a), "b": pa.array(b)})
 
-    out = columnar((F.a + F.b) * lit(2)).apply(tbl).to_arrow()
+    out = Columnar((F.a + F.b) * lit(2)).apply(tbl).to_arrow()
     assert out.to_pylist() == ((a + b) * 2).tolist()
 
-    fout = columnar(F.a / lit(2) + F.b).apply(tbl).to_arrow()
+    fout = Columnar(F.a / lit(2) + F.b).apply(tbl).to_arrow()
     assert np.allclose(fout.to_numpy(), a / 2 + b)
 
-    mask = columnar(F.a > lit(100000)).apply(tbl).to_arrow()
+    mask = Columnar(F.a > lit(100000)).apply(tbl).to_arrow()
     assert mask.to_pylist() == (a > 100000).tolist()
 
 
@@ -1238,8 +1239,8 @@ def test_columnar_null_aware():
     # A null-bearing column flows through the engine; the op preserves the null
     # position, and fillna can close it.
     tbl = pa.table({"dur": pa.array([1, None, 3], pa.int64())})
-    assert _list(columnar(F.dur + lit(1)).apply(tbl)) == [2, None, 4]
-    assert _list(columnar((F.dur + lit(1)).fillna(0)).apply(tbl)) == [2, 0, 4]
+    assert _list(Columnar(F.dur + lit(1)).apply(tbl)) == [2, None, 4]
+    assert _list(Columnar((F.dur + lit(1)).fillna(0)).apply(tbl)) == [2, 0, 4]
 
 
 def test_dataframe_tail_reverse_row_index_sample():
@@ -1466,7 +1467,7 @@ def test_series_value_counts():
 
 
 def test_columnar_expr_apply_direct_no_wrapper():
-    # (expr).apply(source) works without the columnar() wrapper.
+    # (expr).apply(source) works without the Columnar() wrapper.
     t = _table()
     out = (F.dur + F.cnt).apply(t)
     assert _list(out) == [1001, 2002, 3003, 4004]

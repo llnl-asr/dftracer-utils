@@ -11,6 +11,10 @@ from pathlib import Path
 from . import _build, jit
 from .jit.package import build, is_jit_plugin, provided_names
 
+__all__ = [
+    "main",
+]
+
 
 def _ident(name: str) -> str:
     s = "".join(c if c.isalnum() else "_" for c in name)

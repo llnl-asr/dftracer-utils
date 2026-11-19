@@ -76,6 +76,17 @@ if TYPE_CHECKING:
     _P = ParamSpec("_P")
     _R = TypeVar("_R")
 
+__all__ = [
+    "BoundColumn",
+    "LazyFrame",
+    "LazyGroupBy",
+    "LazyResult",
+    "LazyScalar",
+    "SinkSummary",
+    "collect_all",
+    "lazy",
+    "scan_file",
+]
 Value = Union[int, float]
 
 

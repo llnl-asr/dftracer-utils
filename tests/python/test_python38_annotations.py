@@ -43,7 +43,7 @@ for info in pkgutil.walk_packages(pkg.__path__, "dftracer.utils."):
         bad.append("import %s: %s: %s" % (info.name, type(e).__name__, str(e)[:200]))
 modules.append(pkg)
 loaded = {m.__name__ for m in modules}
-for needed in ("dfanalyzer.frames", "dfanalyzer.partials", "dask.worker"):
+for needed in ("dask.worker",):
     if "dftracer.utils." + needed not in loaded:
         bad.append("not checked: " + needed)
 seen = set()

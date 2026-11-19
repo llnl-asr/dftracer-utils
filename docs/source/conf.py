@@ -141,7 +141,7 @@ if ON_READTHEDOCS:
     install_extension_stub()
     # Mock the heavy optional deps. pandas hard-imports pyarrow (reads
     # pa.__version__), so pandas/numpy must be mocked whenever pyarrow is,
-    # or importing dftracer.utils.dfanalyzer for autodoc fails.
+    # or importing dftracer.utils for autodoc fails.
     autodoc_mock_imports = [
         "numpy",
         "pandas",

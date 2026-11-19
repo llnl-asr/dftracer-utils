@@ -22,31 +22,6 @@ PyObject *wrap_arrow_result(Batch result) {
     return (PyObject *)cap;
 }
 
-PyObject *wrap_arrow_table(PyObject *batch_list) {
-    if (!batch_list) {
-        PyErr_SetString(PyExc_RuntimeError, "batch_list is NULL");
-        return NULL;
-    }
-
-    PyObject *mod = PyImport_ImportModule("dftracer.utils.arrow");
-    if (!mod) {
-        Py_DECREF(batch_list);
-        return NULL;
-    }
-
-    PyObject *cls = PyObject_GetAttrString(mod, "ArrowTable");
-    Py_DECREF(mod);
-    if (!cls) {
-        Py_DECREF(batch_list);
-        return NULL;
-    }
-
-    PyObject *table = PyObject_CallFunctionObjArgs(cls, batch_list, NULL);
-    Py_DECREF(cls);
-    Py_DECREF(batch_list);
-    return table;
-}
-
 namespace {
 
 void stream_capsule_destructor(PyObject *cap) {

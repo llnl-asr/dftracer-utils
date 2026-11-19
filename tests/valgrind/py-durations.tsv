@@ -4,13 +4,11 @@
 test_dask_frame	2156.2
 test_groupby_bounded	857.7
 test_trace_viewer	463.5
-test_dfanalyzer_view_parity	288.3
 test_expression_string_methods	264.0
 test_dask	235.1
 test_duql_asof	230.7
 test_variance_stable	203.5
 test_trace_viewer_plan	202.7
-test_view_partials_stable_std	198.6
 test_duql_correlated	173.9
 test_plugin_jit_keys	154.8
 test_plugin_vfold	151.8
@@ -22,15 +20,12 @@ test_schemas	129.4
 test_plugin_map	128.9
 test_plugin_jit_session	128.8
 test_duql_builder	127.4
-test_view_partials_dask	127.3
 test_distributed_manifest	126.1
 test_dask_plugin	117.1
 test_parquet_interchange	113.1
 test_groupby_scale	111.5
 test_compare_view	110.5
 test_indexer	110.1
-test_dfanalyzer_contract	109.3
-test_view_partials_merge	108.8
 test_duql	108.0
 test_pandas_surface	106.1
 test_string_layouts	105.0
@@ -111,3 +106,5 @@ test_polars_surface	48.0
 test_jit_typing	43.6
 test_wheel_contents	41.2
 test_ops_typing	40.9
+test_view_stats_parity	288.3
+test_view_var_std_stable	198.6

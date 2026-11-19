@@ -15,6 +15,14 @@ import re
 from enum import Enum, IntEnum
 from typing import Dict, Optional, Tuple, Union
 
+__all__ = [
+    "Phase",
+    "GroupKey",
+    "AggOp",
+    "TimeUnit",
+    "DType",
+]
+
 
 class Phase(str, Enum):
     """Which records a view scans."""
@@ -238,7 +246,7 @@ _DURATION_SPELLINGS = {
 _DURATION_SECONDS = {"": 1.0, **{k: UNIT_NS[v] / 1e9 for k, v in _DURATION_SPELLINGS.items()}}
 
 
-def parse_bytes(text: str) -> Optional[int]:
+def _parse_bytes(text: str) -> Optional[int]:
     """Parse a size such as ``"512"``, ``"64KB"``, ``"1.5GiB"``, ``"8kb"`` into
     a byte count, or return None on malformed input."""
     match = _NUM.match(text)
@@ -265,7 +273,7 @@ def parse_bytes(text: str) -> Optional[int]:
     return int(result)
 
 
-def parse_duration_seconds(text: str) -> Optional[float]:
+def _parse_duration_seconds(text: str) -> Optional[float]:
     """Parse a duration such as ``"30"``, ``"500ms"``, ``"1.5h"`` into seconds
     (a bare number is seconds), or return None on malformed input."""
     match = _NUM.match(text)
@@ -286,7 +294,7 @@ def coerce_bytes(value: Bytes, name: str = "value") -> int:
     Raises ValueError on a malformed string.
     """
     if isinstance(value, str):
-        parsed = parse_bytes(value)
+        parsed = _parse_bytes(value)
         if parsed is None:
             raise ValueError(
                 f"Invalid byte size for {name}: {value!r} (use e.g. 65536, 64KB, 1.5GB)"
@@ -303,7 +311,7 @@ def coerce_duration(value: Duration, native_per_second: float, name: str = "valu
     for milliseconds. Raises ValueError on a malformed string.
     """
     if isinstance(value, str):
-        seconds = parse_duration_seconds(value)
+        seconds = _parse_duration_seconds(value)
         if seconds is None:
             raise ValueError(f"Invalid duration for {name}: {value!r} (use e.g. 30, 30s, 5m, 1.5h)")
         return seconds * native_per_second

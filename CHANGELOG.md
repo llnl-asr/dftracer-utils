@@ -271,6 +271,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Without `append`, `DataFrame.set_index` drops the old index columns, as pandas.
   The Polars `group_by` and the lazy group-by keep their shapes.
 - Read a pandas frame whose `RangeIndex` does not start at 0 or has a step as row labels, where it was dropped; `DataFrame.from_arrow` does the same for the range in the pandas metadata.
+- Cut the Python names that were public by accident, and give every public module an explicit `__all__` with exactly its public API. `tests/python/test_public_names.py` checks each public module: the list exists, each name resolves, none is a module, a type variable or an imported name, and each is in the docs or listed with a reason.
+  `dftracer.utils.columnar` (the function) is gone: call `Expr.apply(source)` or `DataFrame.apply`; `eval_many` and `where` stay.
+  `dftracer.utils.runtime`, `index`, `dataframe`, `lazyframe`, `series`, `enums` and `plugin_cli` had no `__all__`, so every import in them (`os`, `json`, `Callable`, `TypeVar`, `coerce_duration` and the like) looked public; each now lists only its API.
+  `dftracer.utils.dask.__all__` adds `distributed_index`, `DistributedIndexResult`, `QueryPage`, `distributed_write_trace` and `DFTracerUtilsDaskWorkerPlugin`. `dftracer.utils.enums.parse_bytes` and `parse_duration_seconds` are now `_parse_bytes` and `_parse_duration_seconds`; `coerce_bytes` and `coerce_duration` do the same job for callers. The test also fails on a public class or function that a module defines and leaves out of its `__all__`.
+  `dftracer.utils.jit.ops` is no longer in `dftracer.utils.jit.__all__` (import it as before). `dftracer.utils.jit.emit` the module is `dftracer.utils.jit._emit`, so `jit.emit` is always the function that `@jit.finalize` bodies call and never the module.
 - Split the index into summaries and feeders. A summary (zonemap, bloom, counts, postings) knows only the algorithm: it takes typed values (int64, uint64, double, string, null) and writes its payload, and `Summary::compile` prepares a filter leaf against it.
   A feeder owns the format: the JSON feeder reads the events the scan already parsed, with no second parse and no frame per line, and the column feeder (`ColumnFeeder`) takes one frame per chunk with a path per column, so a reader that has no JSON line can feed the same summaries.
   The stored bloom, counts and postings bytes are the same as before.
@@ -876,6 +881,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   It adds a line reader over plain and gzip files (`lines_open`, `lines_next`, `lines_close`), a chunk reader, a gzip line writer (`gz_open`, `gz_append`, `gz_close`), whole-file `compress` and `decompress`, and the file helpers `logical_path`, `mtime`, `size` and `sampled_hash`.
   The C++ SDK gets `Host::fileio()` with `LineReader`, `ChunkReader` and `GzWriter`, and the fileio library gets a plain-file line source, `async_streaming_plain_lines`.
   `dftu_task_run` now returns the task's status, so a `DFTU_END` task status reaches the caller.
+
+### Removed
+
+- Remove `dftracer.utils.dfanalyzer`; it moves to the DFAnalyzer project. With it go `DaskTraceViewer.collect_typed_ipc_futures`, `dftracer.utils.arrow` (`ArrowTable`, `ipc_to_table`, `decode_dictionary_columns`) and `dftracer.utils.index.open_readonly_indexer`, which only it used.
 
 ### Added
 

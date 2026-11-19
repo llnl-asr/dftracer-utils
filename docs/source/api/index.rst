@@ -19,7 +19,6 @@ This section contains the Python API documentation for dftracer utilities.
    errors
    indexer
    schemas
-   dfanalyzer
    jit
    plugins
 
@@ -42,4 +41,3 @@ The dftracer utilities Python package provides the following main modules:
 - :doc:`plugins` - ``load_plugin`` and ``PluginHandle``, which load a compiled plugin for a block of code
 - :doc:`indexer` - Indexing and searching capabilities
 - :doc:`schemas` - Record schemas: declare, register, detect and explain record formats
-- :doc:`dfanalyzer` - dfanalyzer bridge: View-based HLM, Arrow IPC, index build

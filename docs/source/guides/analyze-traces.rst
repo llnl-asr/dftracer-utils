@@ -32,12 +32,6 @@ Roll events up, measure distributions, compare runs and hand results to other to
 
       Move results to pandas, polars, Arrow, NumPy or Parquet.
 
-   .. grid-item-card:: Use the dfanalyzer bridge
-      :link: tools/dfanalyzer
-      :link-type: doc
-
-      Feed dfanalyzer the frames it expects.
-
 .. toctree::
    :hidden:
 
@@ -45,4 +39,3 @@ Roll events up, measure distributions, compare runs and hand results to other to
    analysis/statistics
    analysis/comparison
    analysis/export
-   tools/dfanalyzer

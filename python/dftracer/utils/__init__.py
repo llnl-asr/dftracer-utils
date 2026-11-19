@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 from . import schemas  # noqa: F401
-from ._eval import columnar, eval_many, where  # noqa: F401
+from ._eval import eval_many, where  # noqa: F401
 from .agg import Udaf, count, udaf  # noqa: F401
 from .dataframe import DataFrame  # noqa: F401
 from .dftracer_utils_ext import (  # noqa: F401
@@ -78,7 +78,6 @@ __all__ = [
     "Expr",
     "col",
     "lit",
-    "columnar",
     "F",
     "where",
     "Udaf",

@@ -11,14 +11,12 @@ from typing import TYPE_CHECKING, Iterator, Literal, NamedTuple, Optional, Seque
 if TYPE_CHECKING:
     import pyarrow as pa
     from dask.distributed import Client
-    from distributed import Future
 
 
 from ..dataframe import DataFrame, PhaseArg, TimeUnitArg
 from ..dftracer_utils_ext import NUM_SHARDS
 from ..enums import coerce_bytes, coerce_duration
 from ..trace.viewer import TraceViewer
-from .progress import worker_progress_forwarder
 
 
 class QueryPage(NamedTuple):
@@ -193,43 +191,6 @@ def _dv_collect_typed_task(
         k: (pa.table(typed[k]) if typed.get(k) is not None else None)
         for k in ("regular", "aggregated", "counters")
     }
-
-
-def _dv_typed_ipc_task(
-    files: list[str],
-    index_dir: str,
-    time_granularity: float,
-    time_resolution: float,
-    query: str | None,
-    shard_begin: int,
-    shard_end: int,
-    group_keys: tuple[str, ...] | None = None,
-    drop_file_patterns: tuple[str, ...] = (),
-) -> dict[str, bytes | None]:
-    """Worker: one CF shard range read + mapped to the dfanalyzer frame schema,
-    returned as ``{events, profiles, system}`` Arrow IPC bytes. Time columns are
-    absolute (origin 0); the HLM derives the global origin and rebuckets
-    ``time_range``. The read + schema mapping lives in the dialect module so this
-    stays the viewer's one distributed typed-read path."""
-    from ..dfanalyzer.frames import typed_read_to_ipc
-
-    if not shard_end or shard_end <= 0:
-        shard_end = NUM_SHARDS
-    # Per-shard progress from the C++ scan, tagged with the "Reading traces"
-    # phase so the coordinator's ProgressAggregator can drive the read bar.
-    forward = worker_progress_forwarder("Reading traces", f"{shard_begin}_{shard_end}")
-    return typed_read_to_ipc(
-        files,
-        index_dir,
-        time_granularity,
-        time_resolution,
-        query,
-        shard_begin=shard_begin,
-        shard_end=shard_end,
-        group_keys=group_keys,
-        drop_file_patterns=drop_file_patterns,
-        progress=forward,
-    )
 
 
 def _slice_rows(df: DataFrame, plan: _Plan) -> DataFrame:
@@ -447,56 +408,6 @@ class DaskTraceViewer:
             return pa.concat_tables(tables, promote_options="permissive") if tables else None
 
         return {k: cat(k) for k in ("regular", "aggregated", "counters")}
-
-    def collect_typed_ipc_futures(
-        self,
-        time_granularity: float,
-        time_resolution: float,
-        group_keys: tuple[str, ...] | None = None,
-        drop_file_patterns: tuple[str, ...] = (),
-    ) -> tuple[list[Future[dict[str, bytes | None]]], list[str | None]]:
-        """Distributed typed read as per-worker IPC futures.
-
-        Fans the CF shard space across the cluster (the index-wide tier can't be
-        file-sharded); each worker produces ``{events, profiles, system}`` Arrow
-        IPC bytes in the dfanalyzer schema for its shard range. Returns
-        ``(futures, worker_addrs)`` - ungathered and worker-pinned - for a
-        distributed reducer to consume. This is the View's one distributed
-        typed-read path.
-        """
-
-        client = self._resolve_client()
-        # nthreads() works for both a real Client and the in-process NullClient
-        # (scheduler_info is Client-only), giving one addr per worker.
-        workers = list((client.nthreads() or {}).keys())
-        n = max(1, len(workers))
-        span = (NUM_SHARDS + n - 1) // n
-        query = " and ".join(self._plan.filters) if self._plan.filters else None
-        futures, addrs = [], []
-        for i in range(n):
-            sb = min(NUM_SHARDS, i * span)
-            se = min(NUM_SHARDS, (i + 1) * span)
-            if sb >= se:
-                continue
-            addr = workers[i % len(workers)] if workers else None
-            futures.append(
-                client.submit(
-                    _dv_typed_ipc_task,
-                    self._files,
-                    self._index_dir,
-                    time_granularity,
-                    time_resolution,
-                    query,
-                    sb,
-                    se,
-                    group_keys,
-                    drop_file_patterns,
-                    workers=[addr] if addr else None,
-                    pure=False,
-                )
-            )
-            addrs.append(addr)
-        return futures, addrs
 
     def _coordinator(self) -> TraceViewer:
         # Single-node viewer over the same files and aggregation, without

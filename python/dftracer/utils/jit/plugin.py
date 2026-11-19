@@ -21,10 +21,10 @@ from . import ops as _ops
 from ._batch import HELPERS, lower_batch
 from ._channels import Channel, Latest, Phase, Receiver, Sender
 from ._channels import PortDecl as _PortDecl
+from ._emit import RAW_ROWS_PER_EVENT, emit_plugin, raw_body, referenced_ops
 from ._flow import FlowFn as _FlowFn
 from ._flow import TaskSig as _TaskSig
 from .compiler import ALL_FIXED_FIELDS, Compiler
-from .emit import RAW_ROWS_PER_EVENT, emit_plugin, raw_body, referenced_ops
 from .maps import (
     PORT_ID_CHARS,
     RESERVED_NAMESPACE,

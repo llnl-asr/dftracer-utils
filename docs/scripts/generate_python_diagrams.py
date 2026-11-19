@@ -34,14 +34,13 @@ class PyClass:
 
 # api page -> the class short-names it documents (from the .rst autodoc targets).
 PAGE_CLASSES = {
-    "columnar": ["Expr", "Columnar", "Agg", "GroupBy"],
+    "columnar": ["Expr", "Agg", "GroupBy"],
     "dataframe": ["DataFrame"],
     "series": ["Series"],
     "trace_viewer": ["TraceViewer", "Session", "Handle", "Containment"],
     "duql": ["Field", "Expr"],
     "runtime": ["Runtime", "TaskHandle"],
     "indexer": ["Indexer", "AggregationConfig", "IndexStatus", "CheckpointIndexer"],
-    "dfanalyzer": ["DFAnalyzerAggregatedTraceViewer", "HLMConfig"],
 }
 
 # Which module files back each page's classes.
@@ -53,7 +52,6 @@ PAGE_MODULE = {
     "duql": ("col", "pipe"),
     "runtime": ("runtime",),
     "indexer": ("index",),
-    "dfanalyzer": ("frames",),
 }
 
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")

@@ -83,6 +83,9 @@ else:
     # The checkers read T_co (covariant, defaulting to Scalar) from the stub.
     T_co = TypeVar("T_co", covariant=True)
 
+__all__ = [
+    "Series",
+]
 # Python types and the NumPy names that differ from a DType member name.
 _PY_DTYPES: dict[type, DType] = {
     str: DType.STRING,

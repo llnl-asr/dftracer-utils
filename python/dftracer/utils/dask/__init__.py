@@ -29,9 +29,14 @@ __all__ = [
     "DaskFrame",
     "DaskTraceViewer",
     "DaskAggregatedTraceViewer",
+    "DFTracerUtilsDaskWorkerPlugin",
+    "DistributedIndexResult",
     "ProgressAggregator",
+    "QueryPage",
     "register_auto_thread_plugin",
     "assign_files_by_pid",
+    "distributed_index",
+    "distributed_write_trace",
 ]
 
 _SUBMODULE = {

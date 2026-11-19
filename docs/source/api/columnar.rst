@@ -59,16 +59,8 @@ integer-column expression, e.g. ``F.hhash.mix64()``.
 Evaluating
 -----------
 
-.. autofunction:: dftracer.utils.columnar
-
-.. autoclass:: dftracer.utils._eval.Columnar
-   :members: apply, columns
-
-``columnar(expr)`` is optional - call ``.apply(source)`` directly on a
-``Expr``, or use the frame-first spelling
-:meth:`DataFrame.apply <dftracer.utils.DataFrame.apply>`. Wrapping with
-``columnar()`` first is useful when you want to inspect ``.columns`` (the
-input column names an expression reads) before evaluating.
+Call ``.apply(source)`` directly on an ``Expr``, or use the frame-first
+spelling :meth:`DataFrame.apply <dftracer.utils.DataFrame.apply>`.
 
 ``source`` for ``.apply()`` is a native ``DataFrame`` (e.g. from
 ``view.collect()``), a ``{name: Series}`` mapping, or a ``pyarrow.Table``

@@ -66,6 +66,9 @@ if TYPE_CHECKING:
     from .lazyframe import LazyFrame
 
 
+__all__ = [
+    "DataFrame",
+]
 # Finite value sets for the viewer builder args (kept as reusable aliases so the
 # wrappers, the dask plan, and the stub share one definition).
 PhaseArg = Literal["events", "counters", "aggregated", "metadata", "any"]

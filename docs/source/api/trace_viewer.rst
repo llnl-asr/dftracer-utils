@@ -368,9 +368,7 @@ Distributed use
 ---------------
 
 For Dask, :class:`~dftracer.utils.dask.DaskTraceViewer` fans the same builder
-API across workers; the dfanalyzer bridge builds its high-level metrics on
-:class:`~dftracer.utils.dfanalyzer.DFAnalyzerAggregatedTraceViewer`, a subclass
-that composes the HLM as one View aggregation. See :doc:`dfanalyzer`.
+API across workers.
 
 Reference
 ---------

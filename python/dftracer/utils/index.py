@@ -32,6 +32,19 @@ from .schemas import RecordSchema, schema_id
 if TYPE_CHECKING:
     from .dftracer_utils_ext import IndexStatusDict
 
+__all__ = [
+    "AggregationConfig",
+    "BloomConfig",
+    "ExplainEntry",
+    "ExplainExtension",
+    "ExplainSummary",
+    "Index",
+    "IndexStatus",
+    "Indexer",
+    "ManifestEntry",
+    "ManifestExtension",
+    "hash_value",
+]
 DEFAULT_CHECKPOINT_SIZE = 32 * 1024 * 1024  # 32MB
 
 FileInfo = Dict[str, Set[int]]
@@ -575,18 +588,3 @@ def hash_value(x: Union[None, bool, int, float, str, bytes]) -> int:
         TypeError: Any other type.
     """
     return _hash_value(x)
-
-
-def open_readonly_indexer(
-    files: "Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]]", index_dir: str
-) -> "Indexer":
-    """Open an Indexer that only reads existing index tiers (never builds).
-
-    Used by the distributed read paths where the index is already built.
-    """
-    return Indexer(
-        files,
-        index_dir=index_dir,
-        require_checkpoint=False,
-        require_bloom=False,
-    )

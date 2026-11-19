@@ -31,7 +31,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _ALLOWLIST = Path(__file__).parent / "api_allowlist.txt"
 # Duplicate-code findings of `pylint --enable=duplicate-code python/` today. It
 # only goes down.
-_DUPLICATE_CODE_FINDINGS = 18
+_DUPLICATE_CODE_FINDINGS = 16
 _PYLINT_VERSION = "4.1.4"
 
 

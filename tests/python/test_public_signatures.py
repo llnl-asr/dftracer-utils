@@ -32,7 +32,6 @@ _ANY_ALLOWED = {
 # The count may only go down; lower it when a signature gets a precise type.
 _OBJECT_BASELINE = {
     "utils/dataframe.py": 1,
-    "utils/dfanalyzer/partials.py": 2,
     "utils/dftracer_utils_ext.pyi": 13,
     "utils/expr.py": 3,
     "utils/groupby.py": 3,

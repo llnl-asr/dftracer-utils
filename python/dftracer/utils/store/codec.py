@@ -473,4 +473,12 @@ def decode(data: BytesLike) -> object:
     return value
 
 
-__all__ = ["MAX_DEPTH", "decode", "encode", "encode_prefix", "matches_prefix", "register_type"]
+__all__ = [
+    "encode",
+    "decode",
+    "encode_prefix",
+    "matches_prefix",
+    "register_type",
+    "StoreAware",
+    "MAX_DEPTH",
+]

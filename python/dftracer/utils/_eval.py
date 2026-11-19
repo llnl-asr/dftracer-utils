@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 
     from .dataframe import DataFrame
 
-__all__ = ["Columnar", "columnar", "eval_many", "where"]
+__all__ = ["Columnar", "eval_many", "where"]
 
 
 class AstOp(NamedTuple):
@@ -100,14 +100,6 @@ _UINT64 = int(DType.UINT64)
 _FLOAT64 = int(DType.FLOAT64)
 
 
-def columnar(expr: Expr) -> Columnar:
-    """Wrap a value expression; call ``apply(source)`` to evaluate it on the
-    DataFrame engine and get a native ``Series``."""
-    if not isinstance(expr, Expr):
-        raise TypeError("columnar() expects an expression (col()/F./lit())")
-    return Columnar(expr)
-
-
 def where(table: Frame, pred: Expr | str) -> Frame:
     """Keep the rows where ``pred`` is true.
 
@@ -124,7 +116,7 @@ def where(table: Frame, pred: Expr | str) -> Frame:
         import pyarrow as pa
 
         return pa.table(_arrow_native("_dataframe_from_arrow")(native).query(pred))
-    mask = columnar(pred).apply(native)  # a wrapped Series
+    mask = Columnar(pred).apply(native)  # a wrapped Series
     if isinstance(native, _ext.DataFrame):
         return _ext.DataFrame.filter(native, mask)
     import pyarrow as pa
@@ -235,7 +227,7 @@ def eval_many(exprs: list[Expr | Columnar], source: Source) -> list[Series]:
     CSE spans all of them, so a subexpression shared across outputs is computed
     once. Returns one :class:`Series` per input expression, aligned to `exprs`.
     `source` is a native vec batch or a pyarrow Table, as for :meth:`Columnar.apply`."""
-    cs = [e if isinstance(e, Columnar) else columnar(e) for e in exprs]
+    cs = [e if isinstance(e, Columnar) else Columnar(e) for e in exprs]
     union: list[str] = []
     seen = set()
     for c in cs:

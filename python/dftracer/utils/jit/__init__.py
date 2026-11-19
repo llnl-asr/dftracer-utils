@@ -499,7 +499,6 @@ __all__ = [
     "Value",
     "Op",
     "op",
-    "ops",
     "compile_op",
     "run_op",
     "plugin",

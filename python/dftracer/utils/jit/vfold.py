@@ -14,8 +14,8 @@ from typing import (
 
 from .._c_text import c_str_literal as _c_str_literal
 from .._jit_errors import JitError, Source, class_error
+from ._emit import emit_name_lists, quantile_name
 from .compiler import unwrap_index
-from .emit import emit_name_lists, quantile_name
 from .maps import AnyMap, EachBatch, Map
 from .monoids import Counter, Monoid, Quantiles
 from .plugin import JitPlugin

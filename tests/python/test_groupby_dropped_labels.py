@@ -165,6 +165,25 @@ def test_cumprod_of_integers_is_not_silently_wrong():
         assert column.iloc[power - 1] == pytest.approx(3.0**power, rel=1e-15)
 
 
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("dtype", ["int64", "uint64"])
+def test_cumprod_of_integers_is_the_exact_integer_product(lazy, dtype):
+    # 3**39 fits int64 but its float running product rounds at every step past
+    # 3**33. The result is the integer product converted to float64 once, as
+    # pandas gives it while the product fits; past the range it goes on as a float.
+    raw = {"k": [1] * 45 + [2] * 3, "v": [3] * 45 + [5, 7, 11]}
+    frame = DataFrame(raw).cast({"v": dtype}) if dtype != "int64" else DataFrame(raw)
+    group = frame.lazy().group_by("k") if lazy else frame.group_by("k")
+    got = group.cumprod()
+    got = (got.collect() if lazy else got).to_pandas()["v"]
+    want = pd.DataFrame(raw).astype({"v": dtype}).groupby("k")["v"].cumprod().astype("float64")
+    assert str(got.dtype) == "float64"
+    in_range = [i for i in range(45) if i < 39] + [45, 46, 47]
+    assert [got.iloc[i] for i in in_range] == [want.iloc[i] for i in in_range]
+    assert got.iloc[38] == float(3**39)
+    assert got.iloc[39] == pytest.approx(3.0**40, rel=1e-15)
+
+
 SHIFT_RAW = {
     "k": [1, 1, 2, 2],
     "n": pd.array([1, None, 3, 4], dtype="Int64"),

@@ -302,11 +302,27 @@ dstd::Result<Series> running(const Layout& lay, const Series& column,
                 return ok.error();
             Column<double> out(lay.n);
             for (const auto& [p, q] : lay.parts) {
-                steps::Prod prod;
-                for (std::int64_t r = p; r < q; ++r) {
-                    const std::int64_t g = lay.row(r);
-                    if (!v.is_null(g)) prod.mul(v.get_double(g));
-                    out.set(r, prod.acc);
+                if (v.kind() == Kind::Float) {
+                    steps::Prod prod;
+                    for (std::int64_t r = p; r < q; ++r) {
+                        const std::int64_t g = lay.row(r);
+                        if (!v.is_null(g)) prod.mul(v.get_double(g));
+                        out.set(r, prod.acc);
+                    }
+                } else if (v.kind() == Kind::Unsigned) {
+                    steps::ProdU64 prod;
+                    for (std::int64_t r = p; r < q; ++r) {
+                        const std::int64_t g = lay.row(r);
+                        if (!v.is_null(g)) prod.mul(v.get_uint(g));
+                        out.set(r, prod.value());
+                    }
+                } else {
+                    steps::ProdI64 prod;
+                    for (std::int64_t r = p; r < q; ++r) {
+                        const std::int64_t g = lay.row(r);
+                        if (!v.is_null(g)) prod.mul(v.get_int(g));
+                        out.set(r, prod.value());
+                    }
                 }
             }
             return out.series(TypeId::Float64);

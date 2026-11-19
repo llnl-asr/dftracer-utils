@@ -39,6 +39,8 @@ struct TransformCell {
         steps::SumU64 sum_u;
         steps::SumF64 sum_f;
         steps::Prod prod;
+        steps::ProdI64 prod_i;
+        steps::ProdU64 prod_u;
         steps::FillForward<std::uint64_t> fill;
     } step;
     std::uint64_t last = 0;  // the previous row's value
@@ -148,7 +150,12 @@ class GroupTransformCore {
                     std::construct_at(&s.sum_f);
                 break;
             case GroupwiseOp::CumProd:
-                std::construct_at(&s.prod);
+                if (cls == NumClass::Signed)
+                    std::construct_at(&s.prod_i);
+                else if (cls == NumClass::Unsigned)
+                    std::construct_at(&s.prod_u);
+                else
+                    std::construct_at(&s.prod);
                 break;
             case GroupwiseOp::CumMax:
             case GroupwiseOp::CumMin:
@@ -198,15 +205,16 @@ class GroupTransformCore {
                     out_ok = 0;
                     return NumClass::Float;
                 }
-                const double v = cls == NumClass::Float
-                                     ? x
-                                     : (cls == NumClass::Signed
-                                            ? static_cast<double>(
-                                                  static_cast<std::int64_t>(b))
-                                            : static_cast<double>(b));
-                s.prod.mul(v);
-                const double d = cls == NumClass::Float ? (x - x) : 0.0;
-                out = dstd::double_bits(s.prod.acc + d);
+                if (cls == NumClass::Signed) {
+                    s.prod_i.mul(static_cast<std::int64_t>(b));
+                    out = dstd::double_bits(s.prod_i.value());
+                } else if (cls == NumClass::Unsigned) {
+                    s.prod_u.mul(b);
+                    out = dstd::double_bits(s.prod_u.value());
+                } else {
+                    s.prod.mul(x);
+                    out = dstd::double_bits(s.prod.acc + (x - x));
+                }
                 return NumClass::Float;
             }
             case GroupwiseOp::CumMax:

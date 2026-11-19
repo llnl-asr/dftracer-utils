@@ -28,9 +28,8 @@ The exclusion file has one line per name:
 
 Reason kinds: out-of-scope (plotting, style, sparse, foreign I/O, sql, torch
 and jax, remote, plan serialization), python-semantics (the name has no
-meaning for a typed columnar engine), needs-index (waits for the row index
-step), needs-kernel (an engine kernel is missing; the detail names it),
-deprecated-upstream (deprecated or removed upstream).
+meaning for a typed columnar engine), needs-kernel (an engine kernel or dtype is
+missing; the detail names it), deprecated-upstream (deprecated or removed upstream).
 """
 
 from __future__ import annotations
@@ -46,7 +45,6 @@ EXCLUDE = Path(__file__).resolve().parent / "api_coverage_exclude.txt"
 KINDS = (
     "out-of-scope",
     "python-semantics",
-    "needs-index",
     "needs-kernel",
     "deprecated-upstream",
 )

@@ -4,7 +4,19 @@ resamples and traces that run per group."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, List, Optional, Sequence, Tuple, TypeVar, Union, cast
+import functools
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
 
 from . import dftracer_utils_ext as _ext
 from ._aliases import install as _install_aliases
@@ -12,6 +24,7 @@ from ._apply import trace_errors, uses_identity_test, warn_fallback
 from ._group_labels import (
     apply_pieces,
     group_frame,
+    labelled_frame,
     labelled_series,
     pandas_named,
     top,
@@ -39,7 +52,7 @@ if TYPE_CHECKING:
     from .dftracer_utils_ext import Scalar
     from .lazyframe import LazyFrame, LazyGroupBy
 
-__all__ = ["GroupBy"]
+__all__ = ["GroupBy", "SeriesGroupBy"]
 
 _T = TypeVar("_T")
 
@@ -73,6 +86,10 @@ class GroupBy(GroupTransforms[DataFrame]):
     def keys(self) -> list[str]:
         return list(self._keys)
 
+    @overload
+    def __getitem__(self, columns: str) -> SeriesGroupBy: ...
+    @overload
+    def __getitem__(self, columns: Sequence[str]) -> GroupBy: ...
     def __getitem__(self, columns: str | Sequence[str]) -> GroupBy:
         """``groupby(k)["v"]`` / ``groupby(k)[["v", "w"]]``: the same groups
         over only those value columns (the pandas column selection). With
@@ -83,7 +100,8 @@ class GroupBy(GroupTransforms[DataFrame]):
         for c in picked:
             if c not in frame:
                 raise KeyError(f"groupby: no column named {c!r}")
-        out = GroupBy(
+        kind = SeriesGroupBy if isinstance(columns, str) else GroupBy
+        out = kind(
             frame.select(self._keys + [c for c in picked if c not in self._keys]), self._keys
         )
         out._single = picked[0] if len(picked) == 1 else None
@@ -341,7 +359,7 @@ class GroupBy(GroupTransforms[DataFrame]):
         kept = DataFrame({"__dftu_at__": rows, "__dftu_to__": row_positions(len(rows))})
         joined = slots.join(kept, on="__dftu_at__", how="left").sort_by("__dftu_at__")
         to = self._col(joined, "__dftu_to__")
-        out = out.take(to.fill_null(-1))
+        out = out.gather(to.fill_null(-1))
         if fill is not None:
             present = to.is_null().logical_not()
             for name in out._names():
@@ -727,10 +745,10 @@ class GroupBy(GroupTransforms[DataFrame]):
             raise ValueError("get_group: the group-by has no keys")
         rows = self._group_rows(key)
         if rows is None:
-            out = self._frame().set_index(self._keys).loc[key, :]
+            out = self._frame().set_index(self._keys).loc[[key], :]
             assert isinstance(out, DataFrame)
             return out.reset_index()
-        return self._labelled(self._frame().take(rows), rows)
+        return self._labelled(self._frame().gather(rows), rows)
 
     def _group_rows(self, key: GroupKey) -> list[int] | None:
         """The rows (of the kept frame) of the group named ``key``; a missing
@@ -765,7 +783,7 @@ class GroupBy(GroupTransforms[DataFrame]):
         marked = (
             frame.with_row_index(row) if self._rows is None else frame.with_column(row, self._rows)
         )
-        order = cast("List[int]", marked.sort_values(self._keys)[row].to_list())
+        order = cast("List[int]", marked._sort_values(self._keys)[row].to_list())
         sizes = self._size_frame().sort_by_multi(self._keys)
         labels = [
             sizes[k].astype(DType.BOOL).to_list()
@@ -796,6 +814,11 @@ class GroupBy(GroupTransforms[DataFrame]):
             present = frame.filter(self._col(frame, c).notna())
             pairs = GroupBy(present, self._keys + [c])._size_frame()
             counts = GroupBy(pairs, self._keys).agg(Agg("count", None, c))
+            every = GroupBy(frame, self._keys)._size_frame().select(*self._keys)
+            if len(counts) < len(every):
+                # A group whose values are all missing has no pair: zero values.
+                counts = every.join(counts, on=self._keys, how="left", nulls_equal=True)
+                counts = counts.with_column(c, self._col(counts, c).fillna(0))
             out = counts if out is None else out.join(counts, on=self._keys)
         if out is None:
             raise ValueError("nunique: no columns besides the keys")
@@ -909,7 +932,7 @@ class GroupBy(GroupTransforms[DataFrame]):
                 frame = frame.filter(self._col(frame, c).is_nan().logical_not())
         if self._sort or not pandas_named(self):
             out = GroupBy(frame, self._keys + cols)._size_frame().rename({"size": "count"})
-            out = out.sort_values(
+            out = out._sort_values(
                 self._keys + ["count"], ascending=[True] * len(self._keys) + [ascending]
             )
         else:
@@ -919,7 +942,7 @@ class GroupBy(GroupTransforms[DataFrame]):
             out = GroupBy(indexed, self._keys + cols).agg(
                 Agg("count", None, "count"), Agg("min", Col(row), first)
             )
-            out = out.sort_values(["count", first], ascending=[ascending, True])
+            out = out._sort_values(["count", first], ascending=[ascending, True])
             out = out.select(*self._keys, *cols, "count")
         if self._as_index is True:
             return out.set_index(self._keys + cols)["count"]
@@ -946,7 +969,7 @@ class GroupBy(GroupTransforms[DataFrame]):
                 broadcast = self._col(frame, c).full_like(v)
                 out = out.with_column(c, broadcast)
             return self._labelled(out.select(*cols), None)
-        joined = indexed.join(grouped, on=self._keys, nulls_equal=True).sort_values(row)
+        joined = indexed.join(grouped, on=self._keys, nulls_equal=True)._sort_values(row)
         for c in cols:
             joined = joined.with_column(c, self._col(joined, f"__dftu_t_{c}__"))
         return self._labelled(joined.select(*cols), self._col(joined, row), spread=True)
@@ -1017,7 +1040,7 @@ class GroupBy(GroupTransforms[DataFrame]):
         row = "__dftu_row__"
         indexed = frame.with_row_index(row)
         joined = (
-            indexed.join(grouped, on=self._keys, nulls_equal=True).sort_values(row)
+            indexed.join(grouped, on=self._keys, nulls_equal=True)._sort_values(row)
             if self._keys
             else indexed
         )
@@ -1063,7 +1086,7 @@ class GroupBy(GroupTransforms[DataFrame]):
             return self._labelled(frame if len(keep) else frame.head(0), None if len(keep) else [])
         row = "__dftu_row__"
         indexed = frame.with_row_index(row)
-        out = indexed.join(keep.select(*self._keys), on=self._keys, nulls_equal=True).sort_values(
+        out = indexed.join(keep.select(*self._keys), on=self._keys, nulls_equal=True)._sort_values(
             row
         )
         return self._labelled(out.select(*frame._names()), self._col(out, row))
@@ -1089,7 +1112,7 @@ class GroupBy(GroupTransforms[DataFrame]):
         by_key = pandas_named(self)
         results: list[tuple[object, object]] = []
         for label, rows in self._groups_in_order():
-            group = group_frame(self, rows) if by_key else self._labelled(frame.take(rows), rows)
+            group = group_frame(self, rows) if by_key else self._labelled(frame.gather(rows), rows)
             results.append((label, func(group)))
         if not results:
             return frame.head(0)
@@ -1121,10 +1144,134 @@ class GroupBy(GroupTransforms[DataFrame]):
         frame = self._frame()
         keep: list[int] = []
         for _, rows in self._groups_in_order():
-            if func(frame.take(rows)):
+            if func(frame.gather(rows)):
                 keep.extend(rows)
         kept = sorted(keep)
-        return self._labelled(frame.take(kept), kept)
+        return self._labelled(frame.gather(kept), kept)
+
+
+_SERIES_FORM = (
+    "sum",
+    "mean",
+    "min",
+    "max",
+    "count",
+    "first",
+    "last",
+    "median",
+    "prod",
+    "sem",
+    "skew",
+    "kurt",
+    "var",
+    "std",
+    "nunique",
+    "any",
+    "all",
+    "idxmax",
+    "idxmin",
+    "quantile",
+    "cumsum",
+    "cummax",
+    "cummin",
+    "cumprod",
+    "cumcount",
+    "ngroup",
+    "shift",
+    "diff",
+    "pct_change",
+    "rank",
+    "head",
+    "tail",
+    "nth",
+    "ffill",
+    "bfill",
+)
+
+
+class SeriesGroupBy(GroupBy):
+    """``groupby(keys)["column"]``: the pandas ``SeriesGroupBy``. The
+    reductions and transforms of :class:`GroupBy` give the one value column as
+    a :class:`Series` (named by the column, under the group keys or the row
+    labels), where ``groupby(keys)[["column"]]`` gives a frame. With
+    ``as_index=False`` the keys are columns, so the result is a frame."""
+
+    def _single_series(self, out: DataFrame) -> DataFrame | Series:
+        columns = out.columns
+        return _ext.DataFrame.__getitem__(out, columns[0]) if len(columns) == 1 else out
+
+    def agg(self, *specs: AggForm, **named: AggKeyword) -> DataFrame | Series:
+        """As :meth:`GroupBy.agg`; one aggregate name or function is a Series,
+        a list of names, a mapping or keywords a frame."""
+        out = super().agg(*specs, **named)
+        if len(specs) == 1 and not named and isinstance(specs[0], str):
+            return self._single_series(out)
+        return out
+
+    if TYPE_CHECKING:
+
+        def sum(self) -> Series: ...
+        def mean(self) -> Series: ...
+        def min(self) -> Series: ...
+        def max(self) -> Series: ...
+        def count(self) -> Series: ...
+        def var(self) -> Series: ...
+        def std(self) -> Series: ...
+        def skew(self) -> Series: ...
+        def kurt(self) -> Series: ...
+        def first(self) -> Series: ...
+        def last(self) -> Series: ...
+        def median(self) -> Series: ...
+        def prod(self) -> Series: ...
+        def sem(self) -> Series: ...
+        def nunique(self) -> Series: ...
+        def any(self) -> Series: ...
+        def all(self) -> Series: ...
+        def idxmax(self) -> Series: ...
+        def idxmin(self) -> Series: ...
+        def quantile(self, q: float = 0.5, interpolation: str = "linear") -> Series: ...
+        def cumsum(self) -> Series: ...
+        def cummax(self) -> Series: ...
+        def cummin(self) -> Series: ...
+        def cumprod(self) -> Series: ...
+        def cumcount(self) -> Series: ...
+        def ngroup(self) -> Series: ...
+        def shift(
+            self, periods: int = 1, fill_value: int | float | str | bool | None = None
+        ) -> Series: ...
+        def diff(self) -> Series: ...
+        def pct_change(self) -> Series: ...
+        def rank(self, method: str = "average", ascending: bool = True) -> Series: ...
+        def head(self, n: int = 5) -> Series: ...
+        def tail(self, n: int = 5) -> Series: ...
+        def nth(self, n: int | Sequence[int]) -> Series: ...
+        def ffill(self) -> Series: ...
+        def bfill(self) -> Series: ...
+
+
+def _series_form(name: str) -> Callable[..., object]:
+    method = getattr(GroupBy, name)
+
+    @functools.wraps(method)
+    def call(self: SeriesGroupBy, *args: object, **kwargs: object) -> object:
+        out = method(self, *args, **kwargs)
+        return self._single_series(out) if isinstance(out, DataFrame) else out
+
+    return call
+
+
+for _name in _SERIES_FORM:
+    setattr(SeriesGroupBy, _name, _series_form(_name))
+
+
+def _windowed(grouped: object, out: DataFrame) -> DataFrame | Series:
+    """A window result of the pandas ``groupby``: the rows in group order under
+    the keys and the row labels (``(key, row)``), a Series for ``["column"]``.
+    The Polars ``group_by`` keeps the input order and no labels."""
+    if not isinstance(grouped, GroupBy) or not pandas_named(grouped):
+        return out
+    labelled = labelled_frame(grouped, out)
+    return grouped._single_series(labelled) if isinstance(grouped, SeriesGroupBy) else labelled
 
 
 class GroupRolling:
@@ -1139,31 +1286,35 @@ class GroupRolling:
         self._grouped = grouped
         self._window = window
 
-    def sum(self) -> DataFrame | LazyFrame:
-        return self._grouped._transform("rolling_sum", self._window)
+    def sum(self) -> DataFrame | Series | LazyFrame:
+        return self._roll("rolling_sum")
 
-    def mean(self) -> DataFrame | LazyFrame:
-        return self._grouped._transform("rolling_mean", self._window)
+    def mean(self) -> DataFrame | Series | LazyFrame:
+        return self._roll("rolling_mean")
 
-    def min(self) -> DataFrame | LazyFrame:
-        return self._grouped._transform("rolling_min", self._window)
+    def min(self) -> DataFrame | Series | LazyFrame:
+        return self._roll("rolling_min")
 
-    def max(self) -> DataFrame | LazyFrame:
-        return self._grouped._transform("rolling_max", self._window)
+    def max(self) -> DataFrame | Series | LazyFrame:
+        return self._roll("rolling_max")
 
-    def var(self) -> DataFrame:
+    def var(self) -> DataFrame | Series:
         return self._series_kernel(lambda s: s.rolling_var(self._window))
 
-    def std(self) -> DataFrame:
+    def std(self) -> DataFrame | Series:
         return self._series_kernel(lambda s: s.rolling_std(self._window))
 
-    def median(self) -> DataFrame:
+    def median(self) -> DataFrame | Series:
         return self._series_kernel(lambda s: s.rolling_median(self._window))
 
-    def quantile(self, q: float) -> DataFrame:
+    def quantile(self, q: float) -> DataFrame | Series:
         return self._series_kernel(lambda s: s.rolling_quantile(self._window, q))
 
-    def _series_kernel(self, kernel: Callable[[Series], Series]) -> DataFrame:
+    def _roll(self, kind: str) -> DataFrame | Series | LazyFrame:
+        out = self._grouped._transform(kind, self._window)
+        return _windowed(self._grouped, out) if isinstance(out, DataFrame) else out
+
+    def _series_kernel(self, kernel: Callable[[Series], Series]) -> DataFrame | Series:
         # The Series rolling kernel over the frame sorted by group (stable, so
         # each group keeps its input order), then the rows back in input order.
         if not isinstance(self._grouped, GroupBy):
@@ -1180,7 +1331,7 @@ class GroupRolling:
         for c in cols:
             m = g._col(mask, c)
             out = out.with_column(c, kernel(g._col(ordered, c)) + (m - m))
-        return out.sort_by(row).select(*cols)
+        return _windowed(g, out.sort_by(row).select(*cols))
 
 
 class _GroupSeriesWindow:
@@ -1194,46 +1345,46 @@ class _GroupSeriesWindow:
         self._grouped = grouped
         self._window = window
 
-    def _reduce(self, name: str) -> DataFrame:
+    def _reduce(self, name: str) -> DataFrame | Series:
         g = self._grouped
         frame = g._frame()
         cols = g._value_columns()
         row = "__dftu_group_row__"
         parts: list[DataFrame] = []
         for _, rows in g._groups_in_order():
-            part = frame.take(rows).with_column(row, Series.from_list(rows))
+            part = frame.gather(rows).with_column(row, Series.from_list(rows))
             for c in cols:
                 part = part.with_column(c, getattr(self._window(g._col(part, c)), name)())
             parts.append(part.select(row, *cols))
         if not parts:
-            return frame.select(*cols)
+            return _windowed(g, frame.select(*cols))
         out = parts[0].concat(*parts[1:]) if len(parts) > 1 else parts[0]
         out = out.sort_by(row).select(*cols)
         # An integer column's window is float64, as pandas gives it.
         for c in cols:
             if g._col(out, c).dtype.is_integer:
                 out = out.with_column(c, g._col(out, c).astype("float64"))
-        return out
+        return _windowed(g, out)
 
-    def sum(self) -> DataFrame:
+    def sum(self) -> DataFrame | Series:
         return self._reduce("sum")
 
-    def mean(self) -> DataFrame:
+    def mean(self) -> DataFrame | Series:
         return self._reduce("mean")
 
-    def min(self) -> DataFrame:
+    def min(self) -> DataFrame | Series:
         return self._reduce("min")
 
-    def max(self) -> DataFrame:
+    def max(self) -> DataFrame | Series:
         return self._reduce("max")
 
-    def count(self) -> DataFrame:
+    def count(self) -> DataFrame | Series:
         return self._reduce("count")
 
-    def var(self) -> DataFrame:
+    def var(self) -> DataFrame | Series:
         return self._reduce("var")
 
-    def std(self) -> DataFrame:
+    def std(self) -> DataFrame | Series:
         return self._reduce("std")
 
 

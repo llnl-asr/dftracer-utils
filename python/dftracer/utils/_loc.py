@@ -509,10 +509,12 @@ def _apply_rows(df: DataFrame, rows: Rows) -> DataFrame:
     if rows.kind == "all":
         return df
     if rows.kind == "slice":
-        return df.slice(rows.offset, rows.length)
+        if rows.offset == 0:
+            return df.slice(rows.offset, rows.length)
+        return df._selecting(lambda f: f.slice(rows.offset, rows.length), True)
     if rows.kind == "take":
         return df.take(rows.positions)
-    return df.filter(_eager_mask(df, rows.mask))
+    return df._selecting(lambda f: f.filter(_eager_mask(df, rows.mask)), True)
 
 
 def _mask_of(df: DataFrame, rows: Rows) -> Series | None:
@@ -683,12 +685,12 @@ class ILoc:
         cols, one_col = columns_by_position(df.columns, ck)
         out = _apply_rows(df, rows)
         if one_row and one_col:
-            return out[cols[0]][0]
+            return out[cols[0]].item(0)
         if one_row:
-            return Row({c: out[c][0] for c in cols})
+            return Row({c: out[c].item(0) for c in cols})
         if one_col:
             return out[cols[0]]
-        return out.select(*cols, *df.index_names()) if ck is not None else out
+        return out.select(*cols, *out.index_names()) if ck is not None else out
 
     def __setitem__(self, key: object, value: object) -> None:
         df = self._df
@@ -724,18 +726,138 @@ class Loc:
 
     def __getitem__(self, key: object) -> object:
         df = self._df
-        rows, ck, labels = self._rows(key)
+        labels = Labels(df)
+        rk, ck = _split(key, labels.depth, df.columns)
+        rows = rows_by_label(labels, rk)
         cols, one_col = columns_by_name(df.columns, ck)
         out = drop_index_levels(_apply_rows(df, rows), labels.names, rows.drop)
+        # A label that one row holds reads as pandas does: a value for a
+        # column, a Series over the columns for the row. A repeated label
+        # gives its rows.
+        if rows.one and len(out) == 1:
+            if one_col:
+                return out[cols[0]].item(0)
+            return _row_series(out, cols, rk)
         if one_col:
             return out[cols[0]]
         return out.select(*cols, *out.index_names()) if ck is not None else out
 
     def __setitem__(self, key: object, value: object) -> None:
         df = self._df
-        rows, ck, _ = self._rows(key)
+        try:
+            rows, ck, _ = self._rows(key)
+        except KeyError:
+            label, ck = _split(key, Labels(df).depth, df.columns)
+            if not _is_one_label(label, Labels(df).depth):
+                raise
+            columns, _ = columns_by_name(df.columns, ck)
+            enlarge(df, label, columns, value)
+            return
         cols, _ = columns_by_name(df.columns, ck, new_ok=True)
         assign_rows(df, rows, cols, value)
+
+
+def _row_series(out: DataFrame, cols: list[str], label: object) -> Series | Row:
+    """The one row of ``out`` as a Series of its values under the column names
+    (the pandas row of ``loc``), named by the label when that is text. A row
+    whose columns share no type has no Series in this engine (no object
+    dtype) and comes back as a :class:`Row`."""
+    from ._series_index import default_name, with_levels
+
+    values = [out[c].item(0) for c in cols]
+    try:
+        row = Series.from_list(values)
+    except ValueError:
+        return Row(dict(zip(cols, values)))
+    named = with_levels(row, [default_name(0)], [Series.from_list(cols)])
+    return named.rename(label if isinstance(label, str) else None)
+
+
+def _is_one_label(key: object, depth: int) -> bool:
+    """Whether ``key`` names one whole row label: a value, or a tuple with a
+    value for every index level."""
+    if isinstance(key, tuple):
+        return len(key) == depth and not any(
+            isinstance(k, (list, tuple, dict, Series, builtins.slice)) for k in key
+        )
+    return depth == 1 and not isinstance(key, (list, dict, Series, Expr, builtins.slice))
+
+
+def _row_values(columns: list[str], value: object) -> dict[str, object]:
+    """What each of ``columns`` gets of the ``value`` of a new row: a mapping
+    by name, a list or tuple by position, any other value for all of them."""
+    if isinstance(value, dict) or isinstance(value, Row):
+        unknown = [str(n) for n in value if n not in columns]
+        if unknown:
+            raise KeyError(f"{unknown} are not among the columns {columns}")
+        return {n: value[n] for n in columns if n in value}
+    if isinstance(value, Series):
+        value = value.to_list()
+    if isinstance(value, (list, tuple)):
+        if len(value) != len(columns):
+            raise ValueError(
+                f"cannot set a row with mismatched columns: {len(value)} values "
+                f"for {len(columns)} columns"
+            )
+        return dict(zip(columns, value))
+    return {n: value for n in columns}
+
+
+def enlarge(df: DataFrame, label: object, columns: list[str], value: object) -> None:
+    """``df.loc[label, columns] = value`` for a label the index does not have
+    (pandas' setting with enlargement): one row at the end, the label in the
+    index columns, ``value`` in ``columns`` and null in the rest. A frame with
+    no index is labelled by its positions first, so the label must fit an
+    Int64. The handle is rebound to the new frame."""
+    from .dataframe import DataFrame
+
+    base = df._labelled()
+    names = _ext.DataFrame.index_names(base)
+    given = _row_values(columns, value)
+    parts = list(label) if isinstance(label, tuple) else [label]
+    at_index = dict(zip(names, parts))
+    cells: dict[str, Series] = {}
+    for name in base.column_names:
+        existing = _ext.DataFrame.__getitem__(base, name)
+        if name in at_index:
+            try:
+                cells[name] = _broadcast(at_index[name], 1, existing)
+            except (TypeError, ValueError) as e:
+                raise TypeError(
+                    f"cannot add the label {label!r} to an index of "
+                    f"{existing.dtype.name.lower()} values: {e}"
+                ) from None
+        else:
+            cells[name] = _broadcast(given.get(name), 1, existing)
+    row = _ext.DataFrame.with_index(DataFrame.from_dict(cells), names)
+    joined = _ext.DataFrame.concat(base, row)
+    _ext.DataFrame._replace(df, joined)
+
+
+_IMMUTABLE = "a Series is immutable; assign through df.loc[rows, column] = value"
+_VALUE = "__dftu_value__"
+
+
+def set_series_label(s: Series, key: object, value: object) -> None:
+    """``s[label] = value`` and ``s.loc[label] = value``: for a label the
+    Series does not have, one row added at the end (pandas' setting with
+    enlargement) and the handle rebound to the longer column. A label it has
+    is a ``TypeError``: a Series holds its values."""
+    from ._series_index import to_frame
+
+    labels = Labels(s)
+    if not _is_one_label(key, labels.depth):
+        raise TypeError(_IMMUTABLE)
+    try:
+        rows_by_label(labels, key)
+    except KeyError:
+        pass
+    else:
+        raise TypeError(_IMMUTABLE)
+    frame = to_frame(s, _VALUE)
+    enlarge(frame, key, [_VALUE], value)
+    grown = _ext.DataFrame.__getitem__(frame, _VALUE).rename(s.name)
+    _ext.Series._replace(s, grown)
 
 
 class At:
@@ -910,6 +1032,17 @@ def _reads_row(mask: object) -> bool:
     return isinstance(mask, Expr) and _ROW in collect_columns(mask)
 
 
+def _numbered(lf: LazyFrame) -> LazyFrame:
+    """``lf`` with the hidden row position column, its index kept (a plan op
+    that numbers rows drops the index and its columns)."""
+
+    names = lf.index_names()
+    if not names:
+        return lf.with_row_index(_ROW)
+    plain = lf._new(_ext.LazyFrame.with_index(lf, []))
+    return plain.with_row_index(_ROW).set_index(names)
+
+
 def _lazy_mask_expr(lf: LazyFrame, rows: Rows) -> tuple[LazyFrame, Expr | None]:
     """The plan (with a row index when the selection is positional) and the
     Expr mask the selection names; None for every row."""
@@ -918,11 +1051,11 @@ def _lazy_mask_expr(lf: LazyFrame, rows: Rows) -> tuple[LazyFrame, Expr | None]:
         return lf, None
     if rows.kind == "slice":
         last = rows.offset + rows.length - 1
-        return lf.with_row_index(_ROW), col(_ROW).is_between(rows.offset, last)
+        return _numbered(lf), col(_ROW).is_between(rows.offset, last)
     if rows.kind == "take":
-        return lf.with_row_index(_ROW), col(_ROW).is_in(rows.positions)
+        return _numbered(lf), col(_ROW).is_in(rows.positions)
     if isinstance(rows.mask, Expr):
-        return (lf.with_row_index(_ROW) if _reads_row(rows.mask) else lf), rows.mask
+        return (_numbered(lf) if _reads_row(rows.mask) else lf), rows.mask
     raise TypeError("a lazy assignment takes its rows as labels or an expression, not a Series")
 
 
@@ -1029,7 +1162,7 @@ class LazyLoc:
         # With no index column the labels are row positions: a hidden row
         # index feeds the mask and is projected away again.
         needs_row = rows.kind == "mask" and _reads_row(rows.mask)
-        plan = lf.with_row_index(_ROW) if needs_row else lf
+        plan = _numbered(lf) if needs_row else lf
         out = _lazy_rows(plan, rows)
         return out.select(*cols) if (ck is not None or needs_row) else out
 

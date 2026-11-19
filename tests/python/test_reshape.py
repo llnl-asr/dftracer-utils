@@ -297,7 +297,7 @@ def test_unstack_of_a_group_by_size():
         pf.groupby(["a", "b"]).size().unstack(fill_value=0),
     )
     _same(
-        ours.groupby(["a", "b"])["c"].sum()["c"].unstack(),
+        ours.groupby(["a", "b"])["c"].sum().unstack(),
         pf.groupby(["a", "b"])["c"].sum().unstack(),
     )
 

@@ -157,8 +157,8 @@ def test_windows_leave_dropped_key_rows_out(window, kind):
     got = WINDOWS[window](DataFrame(data).groupby("k"))
     got = got.to_pandas()
     column = got.iloc[:, 0] if isinstance(got, pd.DataFrame) else got
-    want = ref.droplevel(0).sort_index().tolist()
-    assert [_norm(x) for x in column.tolist()] == [_norm(x) for x in want]
+    assert got.index.tolist() == ref.index.tolist()
+    assert [_norm(x) for x in column.tolist()] == [_norm(x) for x in ref.tolist()]
 
 
 @pytest.mark.parametrize("kind", ["nan", "null"])

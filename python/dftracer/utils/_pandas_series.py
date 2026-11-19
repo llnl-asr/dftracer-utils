@@ -994,5 +994,10 @@ class _SeriesLabelLoc(_SeriesILoc):
 
         return series_by_label(self._s, key)
 
+    def __setitem__(self, key: object, value: object) -> None:
+        from ._loc import set_series_label
+
+        set_series_label(self._s, key, value)
+
 
 __all__ = ["SeriesPandasMixin", "_SeriesILoc", "_SeriesLabelLoc"]

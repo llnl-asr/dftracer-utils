@@ -992,11 +992,12 @@ def test_query_string_filter():
     )
     batch = _dataframe_from_arrow(tbl)
 
-    got = batch.query("dur > 100 and cat == 'io'").to_arrow().to_pydict()
-    assert got == {"dur": [200], "cat": ["io"]}
+    kept = batch.query("dur > 100 and cat == 'io'")
+    assert kept.reset_index(drop=True).to_arrow().to_pydict() == {"dur": [200], "cat": ["io"]}
+    assert kept.index.to_list() == [2]
 
     # in-list
-    got2 = batch.query("cat in ['io', 'net']").to_arrow().to_pydict()
+    got2 = batch.query("cat in ['io', 'net']").reset_index(drop=True).to_arrow().to_pydict()
     assert got2["cat"] == ["io", "io", "io", "net"]
 
     # where() accepts the string form on an arrow table.
@@ -1004,7 +1005,11 @@ def test_query_string_filter():
     assert wr["dur"] == [150, 200, 300]
 
     # Patterns run on the columns.
-    assert batch.query("cat ~ '^i'").to_arrow().to_pydict()["dur"] == [50, 200, 80]
+    assert batch.query("cat ~ '^i'").reset_index(drop=True).to_arrow().to_pydict()["dur"] == [
+        50,
+        200,
+        80,
+    ]
 
     # A predicate with no columnar lowering raises the typed query error.
     with pytest.raises(DFTUtilsDuqlError):

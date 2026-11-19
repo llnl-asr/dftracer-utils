@@ -540,6 +540,18 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
                 return super().take(list(range(start, stop)))
         return cast("Self | T_co | None", self.loc[key])
 
+    def __setitem__(self, key: object, value: object) -> None:
+        """``s[label] = value`` adds a row for a label the Series does not
+        have (pandas' setting with enlargement); a label it has is a
+        ``TypeError``, as a Series is immutable. Two limits differ from
+        pandas: it raises ``BufferError`` while a numpy array or memoryview
+        over the Series is alive (the enlarged column cannot move under it),
+        and it raises ``TypeError`` for a value of another type than the
+        Series holds, where pandas upcasts."""
+        from ._loc import set_series_label
+
+        set_series_label(self, key, value)
+
     def item(self, i: int | None = None) -> T_co | None:
         """The element at row ``i``; with no ``i`` the only element of a
         one-element Series (pandas ``item()``)."""
@@ -694,8 +706,8 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         self, other: Series, keep_shape: bool = False, keep_equal: bool = False
     ) -> DataFrame:
         """The rows where this Series and ``other`` differ, as a frame with
-        ``index`` (the row position), ``self`` and ``other`` columns, as pandas
-        ``Series.compare``. ``keep_shape`` keeps every row; ``keep_equal``
+        ``self`` and ``other`` columns under the row labels (the positions when
+        there are none), as pandas ``Series.compare``. ``keep_shape`` keeps every row; ``keep_equal``
         keeps the equal values instead of nulling them. The engine's
         ``compare(op, scalar)`` kernel is ``s.ops.series.compare``."""
         from .dataframe import DataFrame
@@ -704,14 +716,19 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             raise TypeError("compare() expects a Series; the scalar kernel is s.ops.series.compare")
         if len(self) != len(other):
             raise ValueError("compare() needs two Series of the same length")
-        frame = DataFrame({"self": self, "other": other}).with_row_index("index")
+        labelled = positional(self)
+        names = names_of(labelled)
+        frame = DataFrame({"self": drop_levels(self), "other": drop_levels(other)})
+        for name, level in zip(names, levels_of(labelled)):
+            frame = frame.with_column(name, level)
+        frame = frame.set_index(names)
         mask = differs(self, other)
         if not keep_shape:
             frame = frame.filter(mask)
         left, right = frame["self"], frame["other"]
         if keep_shape and not keep_equal:
             left, right = left.where(mask), right.where(mask)
-        return DataFrame({"index": frame["index"], "self": left, "other": right})
+        return frame.with_column("self", left).with_column("other", right)
 
     def __and__(self, other: Series) -> Series[bool]:
         return self.logical(_LOGICAL_AND, other)
@@ -1036,21 +1053,36 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             raise ValueError("na_position must be 'first' or 'last'")
         return positional(self).sort(descending=not ascending, nulls_last=na_position == "last")
 
-    def nlargest(self, n: int = 5) -> Self:
+    def nlargest(self, n: int = 5, keep: builtins.str = "first") -> Self:
         """The pandas ``nlargest``: :meth:`top_k` with ``n``, labelled as
-        :meth:`sort_values` is."""
-        return positional(self).top_k(n)
+        :meth:`sort_values` is. ``keep`` settles a tie at the ``n``-th value:
+        ``"first"`` keeps the earlier rows, ``"last"`` the later ones and
+        ``"all"`` every row that ties (more than ``n`` rows)."""
+        return self._extreme(n, keep, True)
 
-    def nsmallest(self, n: int = 5) -> Self:
+    def nsmallest(self, n: int = 5, keep: builtins.str = "first") -> Self:
         """The pandas ``nsmallest``: :meth:`bottom_k` with ``n``, labelled as
-        :meth:`sort_values` is."""
-        return positional(self).bottom_k(n)
+        :meth:`sort_values` is, and ``keep`` as :meth:`nlargest`."""
+        return self._extreme(n, keep, False)
+
+    def _extreme(self, n: int, keep: builtins.str, largest: bool) -> Self:
+        if keep not in ("first", "last", "all"):
+            raise ValueError('keep must be either "first", "last" or "all"')
+        s = positional(self)
+        if keep == "last":
+            s = s.reverse()
+        best = s.top_k(n) if largest else s.bottom_k(n)
+        if keep != "all" or n <= 0 or len(best) < n:
+            return best
+        edge = cast("float", best.item(len(best) - 1))
+        tied = s.filter(s.ge(edge) if largest else s.le(edge))
+        return tied.sort(descending=largest, nulls_last=True)
 
     def tail(self, n: int = 5) -> Self:
         """The last ``n`` rows (all but the first ``-n`` for a negative ``n``).
         The rows keep their labels; a positional Series is labelled by the
         positions it kept, as pandas."""
-        out = super().tail(n)
+        out = super().tail(n if n >= 0 else max(len(self) + n, 0))
         if names_of(self):
             return out
         return with_levels(out, [default_name(0)], [positions(len(out), len(self) - len(out))])

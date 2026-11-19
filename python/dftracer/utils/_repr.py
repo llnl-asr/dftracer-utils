@@ -159,10 +159,22 @@ def series_repr(series: "Series") -> str:
     if n == 0:
         return f"Series([], {name}dtype: {dtype})"
     cut, _ = _shown(n)
-    labels = _row_labels(n, cut)
+    from ._series_index import levels_of, names_of, public_name
+
+    level_names = names_of(series)
+    if level_names:
+        parts = [_column(level, cut) for level in levels_of(series)]
+        widths = [max(len(c) for c in part) for part in parts]
+        labels = [" ".join(c.ljust(w) for c, w in zip(row, widths)) for row in zip(*parts)]
+    else:
+        labels = _row_labels(n, cut)
     cells = _column(series, cut)
     lw = max(len(s) for s in labels)
     vw = max(len(s) for s in cells)
     lines = [f"{a.ljust(lw)}    {b.rjust(vw)}" for a, b in zip(labels, cells)]
+    shown = [public_name(name) or "" for name in level_names]
+    if any(shown):
+        header = " ".join(h.ljust(w) for h, w in zip(shown, widths))
+        lines.insert(0, header.rstrip())
     footer = f"{name}Length: {n}, dtype: {dtype}" if cut else f"{name}dtype: {dtype}"
     return "\n".join(lines + [footer])

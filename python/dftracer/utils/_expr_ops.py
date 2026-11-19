@@ -211,7 +211,7 @@ def _eager_agg_over(columns: dict[str, Series], spec: ColumnOp) -> Series:
     joined = (
         frame.with_row_index(row)
         .join(grouped, on=keys, how="left", nulls_equal=True)
-        .sort_values(row)
+        ._sort_values(row)
     )
     return joined[value]
 

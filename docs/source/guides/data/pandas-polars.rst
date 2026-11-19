@@ -383,6 +383,27 @@ pandas spellings ``sort_values``, ``nlargest``, ``nsmallest``, ``tail``,
 positional Series by the positions they keep, as pandas shows the original row
 of each; the Polars names give a positional Series no labels.
 
+The pandas spellings of a frame do the same: ``dropna``, ``drop_duplicates``,
+``sort_values``, ``nlargest``, ``nsmallest``, ``tail``, ``take``, ``sample``,
+``query``, ``df[mask]`` and the rows picked by ``loc`` and ``iloc`` give a frame
+with no index an Int64 index of the positions it kept (an op that keeps every
+row in order makes none), and the Polars names (``drop_nulls``, ``unique``,
+``sort``, ``top_k``, ``gather``, ``filter``, every ``LazyFrame`` op) stay
+positional. ``df.loc[label]`` of a label one row holds is a Series over the
+columns named by the label when that is text (a row of text and numbers is a
+``Row``, as this engine has no object column), ``df.loc[label, column]`` is the
+value, and a repeated label gives a frame. ``df.loc[new] = values``,
+``df.loc[new, column] = value``, ``s[new] = value`` and ``s.loc[new] = value`` add
+a row for a label the index does not have (pandas' setting with enlargement); the
+other columns are null, a label that does not fit the index type is a
+``TypeError``, and setting a label a Series already has is a ``TypeError``, as a
+Series is immutable.
+``s[new] = value`` also raises ``BufferError`` while a numpy array or memoryview
+over the Series is alive, and ``TypeError`` for a value of another type than the
+Series holds, where pandas upcasts. ``DataFrame.query`` takes the duql
+expression language, not the pandas one: there is no ``@var`` for a Python
+variable and no backticks around a column name.
+
 Arithmetic between two Series aligns on the labels, as pandas does. Labels that
 are equal, level for level and in order, leave the rows in place. Otherwise the
 result is the outer join of the labels, sorted, with a null where a side has no
@@ -460,6 +481,16 @@ changing the list of level names and the label columns: no row moves except in
   listed levels only, as pandas), ``na_position``, ``ignore_index`` and ``key`` (a
   function of each level) work as in pandas, and the sort is stable. A single
   level ignores ``level``, as pandas.
+
+``groupby(keys)["column"]`` is the pandas ``SeriesGroupBy``: its reductions
+(``sum``, ``mean``, ``min``, ``max``, ``count``, ``first``, ``last``, ``median``,
+``nunique`` and the rest), ``agg`` with one name, and its transforms (``cumsum``,
+``shift``, ``rank``, ``head`` and the rest) give a Series named by the column,
+under the group keys or the row labels, where ``groupby(keys)[["column"]]``, a
+list of aggregate names and ``as_index=False`` give a frame.
+``groupby(...).rolling(n)``, ``expanding()`` and ``ewm(alpha)`` give the rows in
+group order under the ``(key, row)`` index, as pandas; the Polars ``group_by`` keeps
+the input order and no index.
 
 The group-by results that pandas labels with the group keys in front
 (``group_keys=True``) are labelled the same way by the pandas ``groupby``:
@@ -725,9 +756,8 @@ Which names exist
 ``scripts/api_coverage.py`` compares the public names of the installed
 pandas and Polars classes with ours and fails on a name that is neither ours
 nor in ``scripts/api_coverage_exclude.txt``. Each line of that file gives one
-reason: ``out-of-scope``, ``python-semantics``, ``needs-index`` (waits for the
-row index), ``needs-kernel`` (names the missing engine kernel) or
-``deprecated-upstream``. ``scripts/api_coverage.py --report`` prints the
+reason: ``out-of-scope``, ``python-semantics``, ``needs-kernel`` (names the
+missing engine kernel or dtype) or ``deprecated-upstream``. ``scripts/api_coverage.py --report`` prints the
 table per class. ``tests/python/test_pandas_parity.py`` and
 ``tests/python/test_polars_parity.py`` run each method we have in the library
 and in ours on the same data; the methods whose result differs are listed with

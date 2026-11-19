@@ -128,13 +128,23 @@ def labelled_series(g: GroupBy, values: Series) -> Series:
     return with_levels(drop_levels(values.gather(order)), names, levels)
 
 
+def labelled_frame(g: GroupBy, values: DataFrame) -> DataFrame:
+    """``values`` (one row for each row of the grouped frame, in input order, the
+    value columns only) in group order under the keys (with ``as_index``) and
+    the row labels: the shape of a pandas ``groupby(...).rolling(...)``."""
+    order = group_order(g)
+    names, levels = leading_levels(g, order)
+    plain = values.select(*values.columns)
+    return attach(plain.gather(order), names, levels)
+
+
 def group_frame(g: GroupBy, rows: list[int]) -> DataFrame:
     """The rows ``rows`` of the grouped frame without the key columns, under
     the labels they had."""
     inner = g._frame().select(*[c for c in g._frame()._names() if c not in g._keys])
     positions = Series.from_list(rows)
     names, levels = row_labels(g, positions)
-    return attach(inner.take(rows), names, levels)
+    return attach(inner.gather(rows), names, levels)
 
 
 def take(g: GroupBy, indices: Sequence[int]) -> DataFrame:

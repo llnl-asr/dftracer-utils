@@ -25,6 +25,11 @@ pytestmark = pytest.mark.skipif(
 D = decimal.Decimal
 
 
+def _with_index(frame):
+    """The columns of a compare result and, as ``index``, its row labels."""
+    return {"index": frame.index.to_list(), **frame.to_dict()}
+
+
 def _pa():
     return pytest.importorskip("pyarrow")
 
@@ -394,9 +399,9 @@ def test_wrappers_run_without_arrow():
     days = dftu.Series.from_list([dt.datetime(2021, 1, 4), dt.datetime(2020, 12, 31)])
     iso = days.dt.isocalendar().to_dict()
     assert iso["year"] == [2021, 2020] and iso["week"] == [1, 53] and iso["day"] == [1, 4]
-    diff = dftu.Series.from_list([1, 2, 3]).compare(dftu.Series.from_list([1, 5, 3])).to_dict()
+    diff = _with_index(dftu.Series.from_list([1, 2, 3]).compare(dftu.Series.from_list([1, 5, 3])))
     assert diff == {"index": [1], "self": [2], "other": [5]}
-    same = dftu.Series.from_list([1, 2]).compare(dftu.Series.from_list([1, 2])).to_dict()
+    same = _with_index(dftu.Series.from_list([1, 2]).compare(dftu.Series.from_list([1, 2])))
     assert same == {"index": [], "self": [], "other": []}
     days = dftu.Series.from_list([dt.datetime(2021, 1, 1), dt.datetime(2021, 1, 4)])
     grid = dftu.DataFrame.from_dict({"t": days, "v": [1.0, 2.0]}).set_index("t").asfreq("D")

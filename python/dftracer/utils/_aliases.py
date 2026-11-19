@@ -157,6 +157,7 @@ ADAPTERS = {
         "dropna",
         "fillna",
         "drop_duplicates",
+        "take",
     ),
     "LazyFrame": ("sort_values",),
 }

@@ -11,6 +11,11 @@ import pytest
 from dftracer.utils import DataFrame, DType, Series
 
 
+def _with_index(frame):
+    """The columns of a compare result and, as ``index``, its row labels."""
+    return {"index": frame.index.to_list(), **frame.to_dict()}
+
+
 def test_import_loads_neither_metadata_nor_asyncio():
     code = (
         "import sys, dftracer.utils;"
@@ -72,13 +77,13 @@ class TestEqualsAndCompare:
     def test_compare_nulls_and_flags(self):
         a = Series.from_list([1, None, 3, None, 5])
         b = Series.from_list([1, 2, 4, None, 5])
-        assert a.compare(b).to_dict() == {"index": [1, 2], "self": [None, 3], "other": [2, 4]}
-        assert a.compare(b, keep_shape=True).to_dict() == {
+        assert _with_index(a.compare(b)) == {"index": [1, 2], "self": [None, 3], "other": [2, 4]}
+        assert _with_index(a.compare(b, keep_shape=True)) == {
             "index": [0, 1, 2, 3, 4],
             "self": [None, None, 3, None, None],
             "other": [None, 2, 4, None, None],
         }
-        assert a.compare(b, keep_shape=True, keep_equal=True).to_dict()["self"] == [
+        assert _with_index(a.compare(b, keep_shape=True, keep_equal=True))["self"] == [
             1,
             None,
             3,
@@ -89,10 +94,14 @@ class TestEqualsAndCompare:
     def test_compare_bool_and_string(self):
         a = Series.from_list([True, False, None])
         b = Series.from_list([True, True, None])
-        assert a.compare(b).to_dict()["index"] == [1]
+        assert _with_index(a.compare(b))["index"] == [1]
         s = Series.from_list(["a", "b", None])
         t = Series.from_list(["a", "c", "d"])
-        assert s.compare(t).to_dict() == {"index": [1, 2], "self": ["b", None], "other": ["c", "d"]}
+        assert _with_index(s.compare(t)) == {
+            "index": [1, 2],
+            "self": ["b", None],
+            "other": ["c", "d"],
+        }
 
 
 class TestGroups:
@@ -151,7 +160,7 @@ class TestCompareKeepsEveryDtype:
     )
     def test_nested_and_decimal_columns(self, left, right):
         a, b = Series.from_list(left), Series.from_list(right)
-        out = a.compare(b).to_dict()
+        out = _with_index(a.compare(b))
         want = [i for i, (x, y) in enumerate(zip(a.to_list(), b.to_list())) if x != y]
         assert out["index"] == want
         assert out["self"] == [a.to_list()[i] for i in want]
@@ -161,14 +170,18 @@ class TestCompareKeepsEveryDtype:
     def test_numeric_against_string_differs_everywhere_but_null_with_null(self):
         a = Series.from_list([1, 2, 3])
         b = Series.from_list(["1", "2", "x"])
-        assert a.compare(b).to_dict() == {
+        assert _with_index(a.compare(b)) == {
             "index": [0, 1, 2],
             "self": [1, 2, 3],
             "other": ["1", "2", "x"],
         }
         c = Series.from_list([1.0, None, 3.0])
         d = Series.from_list(["a", None, "x"])
-        assert c.compare(d).to_dict() == {"index": [0, 2], "self": [1.0, 3.0], "other": ["a", "x"]}
+        assert _with_index(c.compare(d)) == {
+            "index": [0, 2],
+            "self": [1.0, 3.0],
+            "other": ["a", "x"],
+        }
 
     @pytest.mark.parametrize(
         "left, right", [([1, 2, 3], ["1", "2", "x"]), ([1.0, None, 3.0], ["a", None, "x"])]
@@ -176,7 +189,7 @@ class TestCompareKeepsEveryDtype:
     def test_matches_pandas(self, left, right):
         pd = pytest.importorskip("pandas")
         want = pd.Series(left).compare(pd.Series(right))
-        got = Series.from_list(left).compare(Series.from_list(right)).to_dict()
+        got = _with_index(Series.from_list(left).compare(Series.from_list(right)))
         assert got["index"] == list(want.index)
         assert got["self"] == want["self"].tolist()
         assert got["other"] == want["other"].tolist()
@@ -192,26 +205,26 @@ class TestTemporalUnits:
     def test_duration_units_differ_with_the_same_ints(self):
         s, ms = _typed([1, 2], DType.DURATION, 0), _typed([1, 2], DType.DURATION, 1)
         assert not s.equals(ms)
-        assert s.compare(ms).to_dict()["index"] == [0, 1]
+        assert _with_index(s.compare(ms))["index"] == [0, 1]
 
     def test_timestamp_units_equal_at_the_same_instants(self):
         us, ms = _typed([1000, 2000], DType.TIMESTAMP, 2), _typed([1, 2], DType.TIMESTAMP, 1)
         assert us.equals(ms)
-        assert us.compare(ms).to_dict() == {"index": [], "self": [], "other": []}
+        assert _with_index(us.compare(ms)) == {"index": [], "self": [], "other": []}
         other = _typed([1, 3], DType.TIMESTAMP, 1)
-        assert us.compare(other).to_dict()["index"] == [1]
+        assert _with_index(us.compare(other))["index"] == [1]
 
     def test_aware_differs_from_naive(self):
         naive, aware = _typed([1, 2], DType.TIMESTAMP, 2), _typed([1, 2], DType.TIMESTAMP, 2, "UTC")
         assert not naive.equals(aware)
-        assert naive.compare(aware).to_dict()["index"] == [0, 1]
+        assert _with_index(naive.compare(aware))["index"] == [0, 1]
 
     @pytest.mark.parametrize("kind", [DType.DURATION, DType.TIME64])
     def test_units_below_a_microsecond_are_exact(self, kind):
         ns = _typed([1500, 1000, 2000, 7], kind, 3)
         us = _typed([1, 1, 2, 0], kind, 2)
-        assert ns.compare(us)["index"].to_list() == [0, 3]
-        assert us.compare(ns)["index"].to_list() == [0, 3]
+        assert ns.compare(us).index.to_list() == [0, 3]
+        assert us.compare(ns).index.to_list() == [0, 3]
         assert not ns.equals(us)
         assert _typed([1000, 2000], kind, 3).equals(_typed([1, 2], kind, 2))
 
@@ -219,7 +232,7 @@ class TestTemporalUnits:
         big = 2**62
         ns, s = _typed([big], DType.DURATION, 3), _typed([big], DType.DURATION, 0)
         assert not ns.equals(s)
-        assert ns.compare(s)["index"].to_list() == [0]
+        assert ns.compare(s).index.to_list() == [0]
 
     def test_unit_mismatch_keeps_nulls(self):
         ns = _typed([1000, None], DType.DURATION, 3)
@@ -271,4 +284,4 @@ class TestNaNParity:
         got = Series.from_list([1.0, nan, nan, None]).compare(
             Series.from_list([1.0, nan, 2.0, nan])
         )
-        assert got.to_dict()["index"] == [2, 3]
+        assert got.index.to_list() == [2, 3]

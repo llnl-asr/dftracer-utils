@@ -82,6 +82,13 @@ void apply_index_names(dstd::Span<const dstd::String> names, DataFrame& out);
 void apply_index_keep(const DataFrame& in, DataFrame& out);
 /// Drop: no index.
 void apply_index_drop(DataFrame& out);
+/// Drop for an op whose result still holds the columns of `in`: no index, and
+/// the columns that were `in`'s index leave `out` with it.
+void apply_index_drop(const DataFrame& in, DataFrame& out);
+/// `in` without the columns of its index that are not in `keep`, and no
+/// index: the operand of an op that drops the index.
+DataFrame without_index_columns(const DataFrame& in,
+                                dstd::Span<const dstd::String> keep);
 /// Rebuild by keys (group_by, group_by_dynamic, pivot): when `in`
 /// is indexed, `keys` become the index of `out`.
 void apply_index_keys(const DataFrame& in, dstd::Span<const dstd::String> keys,
@@ -110,6 +117,12 @@ template <dstd::FixedString OP>
 void index_drop(DataFrame& out) {
     static_assert(index_rule<OP>() == IndexRule::Drop);
     apply_index_drop(out);
+}
+
+template <dstd::FixedString OP>
+void index_drop(const DataFrame& in, DataFrame& out) {
+    static_assert(index_rule<OP>() == IndexRule::Drop);
+    apply_index_drop(in, out);
 }
 
 template <dstd::FixedString OP>

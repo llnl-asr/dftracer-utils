@@ -1125,7 +1125,9 @@ def test_groupby_column_selection_and_series_key_match_pandas():
     ours = _d(df.groupby("k")["b"].agg(["sum", "mean"]))
     ref = pdf.groupby("k")["b"].agg(["sum", "mean"])
     assert ours == {"k": ["x", "y"], "sum": ref["sum"].tolist(), "mean": ref["mean"].tolist()}
-    assert _d(df.groupby("k")["b"].sum())["b"] == pdf.groupby("k")["b"].sum().tolist()
+    one = df.groupby("k")["b"].sum()
+    assert one.name == "b" and one.index.to_list() == ["x", "y"]
+    assert one.to_list() == pdf.groupby("k")["b"].sum().tolist()
     kept = df.groupby("k")[["a"]].agg("max")
     assert list(kept.columns) == ["a"] and kept.index_names() == ["k"]
     # A Series key: the group column is named `key`, groups sorted as pandas.

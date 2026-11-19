@@ -52,9 +52,9 @@ def _counted(
         if out[name].dtype != frame[k].dtype:
             out = out.with_column(name, out[name].astype(frame[k].dtype))
     if sort:
-        out = out.sort_values([_COUNT, _ROW], ascending=[ascending, True])
+        out = out._sort_values([_COUNT, _ROW], ascending=[ascending, True])
     else:
-        out = out.sort_values(_ROW)
+        out = out._sort_values(_ROW)
     return out[_COUNT], [out[name] for name in inner]
 
 

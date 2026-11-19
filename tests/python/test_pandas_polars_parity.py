@@ -41,7 +41,9 @@ def test_dataframe_properties_and_indexing():
     assert df.dtypes == [DType.INT64, DType.FLOAT64]
     assert df.schema == {"a": DType.INT64, "b": DType.FLOAT64}
     assert _dict(df[["b", "a"]]) == {"b": [1.5, None, 3.5], "a": [1, 2, 3]}
-    assert _dict(df[df["a"] > 1]) == {"a": [2, 3], "b": [None, 3.5]}
+    kept = df[df["a"] > 1]
+    assert _dict(kept.reset_index(drop=True)) == {"a": [2, 3], "b": [None, 3.5]}
+    assert kept.index.to_list() == [1, 2]
     assert _dict(df.limit(1)) == _dict(df.head(1)) == {"a": [1], "b": [1.5]}
     assert _dict(df.head()) == _dict(df)
     assert df.to_dict() == {"a": [1, 2, 3], "b": [1.5, None, 3.5]}
@@ -49,7 +51,8 @@ def test_dataframe_properties_and_indexing():
 
 def test_dataframe_pandas_spellings_match_native():
     df = _df({"a": [3, 1, 2, 1], "b": [1.5, None, 3.5, 4.0], "c": ["x", "y", "x", "z"]})
-    assert _dict(df.dropna()) == _dict(df.drop_nulls())
+    assert _dict(df.dropna().reset_index(drop=True)) == _dict(df.drop_nulls())
+    assert df.dropna().index.to_list() == [0, 2, 3]
     assert _dict(df.fillna(0)) == _dict(df.fill_null(0))
     assert _lst(df.duplicated(keep=False)) == _lst(df.is_duplicated())
     assert _dict(df.drop("b")) == _dict(df.select("a", "c"))
@@ -57,13 +60,17 @@ def test_dataframe_pandas_spellings_match_native():
     with pytest.raises(KeyError):
         df.drop("nope")
     assert _dict(df.rename(columns={"a": "A"})) == _dict(df.rename({"a": "A"}))
-    assert _dict(df.nlargest(2, "a")) == _dict(df.topk("a", 2))
-    assert _dict(df.nsmallest(2, "a")) == _dict(df.topk("a", 2, largest=False))
-    assert _dict(df.sort_values("a")) == _dict(df.sort_by("a"))
-    assert _dict(df.sort_values(["a", "b"], ascending=[False, True])) == _dict(
-        df.sort_by_multi(["a", "b"], descending=[True, False])
+    assert _dict(df.nlargest(2, "a").reset_index(drop=True)) == _dict(df.topk("a", 2))
+    assert _dict(df.nsmallest(2, "a").reset_index(drop=True)) == _dict(
+        df.topk("a", 2, largest=False)
     )
-    assert _dict(df.gather(Series([0, 0]))) == _dict(df.take(Series([0, 0])))
+    assert _dict(df.sort_values("a").reset_index(drop=True)) == _dict(df.sort_by("a"))
+    assert df.sort_values("a").index.to_list() == [1, 3, 2, 0]
+    assert _dict(
+        df.sort_values(["a", "b"], ascending=[False, True]).reset_index(drop=True)
+    ) == _dict(df.sort_by_multi(["a", "b"], descending=[True, False]))
+    assert _dict(df.gather(Series([0, 0]))) == _dict(df.take(Series([0, 0])).reset_index(drop=True))
+    assert df.take(Series([0, 0])).index.to_list() == [0, 0]
     idx = df.with_row_index()
     assert idx.columns[0] == "index"
     assert _dict(df.sample(2, random_state=7)) == _dict(df.sample(2, seed=7))
@@ -203,7 +210,7 @@ def test_lazyframe_polars_spellings():
         df.sort_by_multi(["a", "b"], descending=True)
     )
     assert _dict(lf.sort_values("a", ascending=False).collect()) == _dict(df.sort_by("a", True))
-    assert _dict(lf.gather([2, 0]).collect()) == _dict(df.take(Series([2, 0])))
+    assert _dict(lf.gather([2, 0]).collect()) == _dict(df.gather(Series([2, 0])))
     assert _dict(lf.filter(col("s").is_in(["x", "z"])).collect()) == {
         "a": [3, 2],
         "b": [1, 3],
@@ -259,7 +266,8 @@ def test_unique_subset_eager_and_lazy():
     by_k = {"k": [1, 2, 3], "v": [1, 3, 4]}
     assert _dict(df.unique("k")) == by_k
     assert _dict(df.unique(subset=["k"])) == by_k
-    assert _dict(df.drop_duplicates(subset="k")) == by_k
+    assert _dict(df.drop_duplicates(subset="k").reset_index(drop=True)) == by_k
+    assert df.drop_duplicates(subset="k").index.to_list() == [0, 2, 4]
     assert _dict(df.unique(subset="k")) == by_k
     lazy = df.lazy().unique(subset="k")
     assert "unique [k]" in lazy.explain()
@@ -476,14 +484,14 @@ def test_pandas_semantics_rulings():
     # Series.compare diffs two Series; is_unique is a bool; mode is a Series.
     a = Series([1, 2, 3, 4])
     b = Series([1, 9, 3, 8])
-    assert _dict(a.compare(b)) == {"index": [1, 3], "self": [2, 4], "other": [9, 8]}
-    assert _dict(a.compare(b, keep_shape=True)) == {
-        "index": [0, 1, 2, 3],
+    assert a.compare(b).index.to_list() == [1, 3]
+    assert _dict(a.compare(b).reset_index(drop=True)) == {"self": [2, 4], "other": [9, 8]}
+    assert a.compare(b, keep_shape=True).index.to_list() == [0, 1, 2, 3]
+    assert _dict(a.compare(b, keep_shape=True).reset_index(drop=True)) == {
         "self": [None, 2, None, 4],
         "other": [None, 9, None, 8],
     }
-    assert _dict(a.compare(b, keep_shape=True, keep_equal=True)) == {
-        "index": [0, 1, 2, 3],
+    assert _dict(a.compare(b, keep_shape=True, keep_equal=True).reset_index(drop=True)) == {
         "self": [1, 2, 3, 4],
         "other": [1, 9, 3, 8],
     }

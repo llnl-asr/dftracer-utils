@@ -1,6 +1,6 @@
 # Names of pandas and Polars that we neither have nor will have as such, one line per name:
 #   lib Class.name | reason-kind | detail
-# Reason kinds: out-of-scope, python-semantics, needs-index, needs-kernel, deprecated-upstream.
+# Reason kinds: out-of-scope, python-semantics, needs-kernel, deprecated-upstream.
 # scripts/api_coverage.py reads this file; a name that appears in the library and is neither ours nor here fails.
 # A line for a name that we now have fails too, so the list only shrinks.
 pandas DataFrame.attrs | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
@@ -20,11 +20,11 @@ pandas DataFrame.to_hdf | out-of-scope | foreign I/O (D3b out-of-scope); call to
 pandas DataFrame.to_iceberg | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas DataFrame.to_latex | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas DataFrame.to_orc | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
-pandas DataFrame.to_period | needs-index | needs a (multi-/Datetime/Period) index; waits for the row index step (D3b point 4)
+pandas DataFrame.to_period | needs-kernel | deferred: needs a Period dtype
 pandas DataFrame.to_pickle | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas DataFrame.to_sql | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas DataFrame.to_stata | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
-pandas DataFrame.to_timestamp | needs-index | needs a (multi-/Datetime/Period) index; waits for the row index step (D3b point 4)
+pandas DataFrame.to_timestamp | needs-kernel | deferred: needs a Period dtype
 pandas DataFrame.to_xarray | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas DataFrame.to_xml | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas Series.attrs | python-semantics | per-object metadata dict (attrs, flags) with no engine meaning; frames and Series are immutable handles
@@ -45,15 +45,15 @@ pandas Series.to_excel | out-of-scope | foreign I/O (D3b out-of-scope); call to_
 pandas Series.to_hdf | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas Series.to_latex | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas Series.to_markdown | python-semantics | text export that prints the index column; use to_frame().to_markdown()
-pandas Series.to_period | needs-index | needs a (multi-/Datetime/Period) index; waits for the row index step (D3b point 4)
+pandas Series.to_period | needs-kernel | deferred: needs a Period dtype
 pandas Series.to_pickle | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas Series.to_sql | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
-pandas Series.to_timestamp | needs-index | needs a (multi-/Datetime/Period) index; waits for the row index step (D3b point 4)
+pandas Series.to_timestamp | needs-kernel | deferred: needs a Period dtype
 pandas Series.to_xarray | out-of-scope | foreign I/O (D3b out-of-scope); call to_pandas() and write from there
 pandas Series.view | deprecated-upstream | removed or deprecated in pandas 3 (still present in pandas 2)
 pandas DataFrameGroupBy.a | python-semantics | a column read as an attribute of the group-by (g.a); use g['a']
 pandas DataFrameGroupBy.boxplot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
-pandas DataFrameGroupBy.dtypes | needs-index | a frame of the column dtypes per group, indexed by the group keys
+pandas DataFrameGroupBy.dtypes | needs-kernel | an object column of dtypes for each group; the engine has no object column, and every group of a typed frame has the dtypes of the frame
 pandas DataFrameGroupBy.fillna | deprecated-upstream | deprecated in pandas 2 and removed in pandas 3; use groupby().ffill() or transform
 pandas DataFrameGroupBy.hist | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
 pandas DataFrameGroupBy.ndim | python-semantics | constant 2 of the pandas object model
@@ -64,7 +64,7 @@ pandas SeriesGroupBy.hist | out-of-scope | plotting (D3b out-of-scope); call to_
 pandas SeriesGroupBy.ndim | python-semantics | constant 1 of the pandas object model
 pandas SeriesGroupBy.plot | out-of-scope | plotting (D3b out-of-scope); call to_pandas() or to_polars()
 pandas Series.dt.freq | python-semantics | frequency of a DatetimeIndex, or the unit of the dtype as text; read s.time_unit
-pandas Series.dt.to_period | needs-index | Period dtype; waits for the row index step
+pandas Series.dt.to_period | needs-kernel | deferred: needs a Period dtype
 pandas Series.dt.to_pydatetime | python-semantics | an object array of datetime values; use s.to_list()
 pandas Series.dt.unit | python-semantics | frequency of a DatetimeIndex, or the unit of the dtype as text; read s.time_unit
 polars DataFrame.deserialize | out-of-scope | plan or object serialization (D3b out-of-scope)

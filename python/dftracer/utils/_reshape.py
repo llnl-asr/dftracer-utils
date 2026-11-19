@@ -47,7 +47,7 @@ def _first_rows(levels: Sequence[Series], sort: bool) -> tuple[Series, Series, i
     n = len(levels[0])
     keys = [f"k{i}" for i in range(len(levels))]
     table = DataFrame.from_dict({**dict(zip(keys, map(drop_levels, levels))), "pos": positions(n)})
-    ordered = table.sort_values(keys, ascending=[True] * len(keys), na_position="first")
+    ordered = table._sort_values(keys, ascending=[True] * len(keys), na_position="first")
     perm = drop_levels(ordered["pos"])
     begins = positions(n).eq(0)
     for key in keys:
@@ -60,16 +60,16 @@ def _first_rows(levels: Sequence[Series], sort: bool) -> tuple[Series, Series, i
     numbers = begins.cast(DType.INT64).cumsum() - 1
     first = drop_levels(perm.filter(begins))
     count = len(first)
-    rows = DataFrame.from_dict({"pos": perm, "number": numbers}).sort_values("pos")
+    rows = DataFrame.from_dict({"pos": perm, "number": numbers})._sort_values("pos")
     ids = drop_levels(rows["number"])
     if not sort and count > 1:
         order = drop_levels(
-            DataFrame.from_dict({"first": first, "group": positions(count)}).sort_values("first")[
+            DataFrame.from_dict({"first": first, "group": positions(count)})._sort_values("first")[
                 "group"
             ]
         )
         renumber = drop_levels(
-            DataFrame.from_dict({"group": order, "new": positions(count)}).sort_values("group")[
+            DataFrame.from_dict({"group": order, "new": positions(count)})._sort_values("group")[
                 "new"
             ]
         )

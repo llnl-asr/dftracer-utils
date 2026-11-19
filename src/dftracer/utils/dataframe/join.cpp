@@ -1160,6 +1160,15 @@ dstd::Result<DataFrame> join(const DataFrame& left, const DataFrame& right,
                              dstd::Span<const dstd::String> right_on,
                              JoinHow how, dstd::StringView suffix,
                              bool nulls_equal) {
+    if (!index_join_keeps(left.index_names(), right.index_names(), left_on,
+                          right_on) &&
+        (left.row_index || right.row_index)) {
+        // The index is dropped, so its columns go with it.
+        const DataFrame bare_left = without_index_columns(left, left_on);
+        const DataFrame bare_right = without_index_columns(right, right_on);
+        return join_raw(bare_left, bare_right, left_on, right_on, how, suffix,
+                        nulls_equal);
+    }
     dstd::Result<DataFrame> out =
         join_raw(left, right, left_on, right_on, how, suffix, nulls_equal);
     if (out) index_joined<"join">(left, right, left_on, right_on, *out);

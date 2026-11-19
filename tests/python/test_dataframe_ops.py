@@ -920,7 +920,7 @@ def test_sort_nulls_first_select_expr_and_with_columns():
         assert [list(r) for r in zip(_col(ours, "a"), _col(ours, "b"))] == exp, ascending
         assert ours.columns == ["a", "b"]
         lazy = two.lazy().sort_values(["a", "b"], ascending=ascending, na_position="first")
-        assert _dict(lazy.collect()) == _dict(ours)
+        assert _dict(lazy.collect()) == _dict(ours.reset_index(drop=True))
     with pytest.raises(ValueError, match="descending must be empty"):
         two.sort(["a", "b"], descending=[True, False, True], nulls_last=False)
 

@@ -143,7 +143,7 @@ class FramePolarsMixin:
         if n < 1:
             raise ValueError("gather_every: n must be at least 1")
         f = self._frame()
-        return f.take(list(range(offset, len(f), n)))
+        return f.gather(list(range(offset, len(f), n)))
 
     def partition_by(
         self, by: str | Sequence[str], *, as_dict: bool = False
@@ -156,7 +156,7 @@ class FramePolarsMixin:
         f = self._frame()
         keys = [by] if isinstance(by, str) else list(by)
         groups = GroupBy(f, keys).groups
-        parts = {label: f.take(rows) for label, rows in groups.items()}
+        parts = {label: f.gather(rows) for label, rows in groups.items()}
         return parts if as_dict else list(parts.values())
 
     def join_asof(

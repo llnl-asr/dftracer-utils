@@ -43,6 +43,43 @@ dstd::Optional<IndexRule> index_rule_of(dstd::StringView op) {
 
 void apply_index_drop(DataFrame& out) { out.row_index.reset(); }
 
+void apply_index_drop(const DataFrame& in, DataFrame& out) {
+    if (in.row_index) {
+        DataFrame kept;
+        for (std::size_t i = 0; i < out.names.size(); ++i) {
+            bool is_label = false;
+            for (const dstd::SharedString& n : in.row_index->names)
+                if (dstd::StringView(n) == dstd::StringView(out.names[i]))
+                    is_label = true;
+            if (is_label) continue;
+            kept.names.push_back(out.names[i]);
+            kept.columns.push_back(std::move(out.columns[i]));
+        }
+        out.names = std::move(kept.names);
+        out.columns = std::move(kept.columns);
+    }
+    out.row_index.reset();
+}
+
+DataFrame without_index_columns(const DataFrame& in,
+                                dstd::Span<const dstd::String> keep) {
+    if (!in.row_index) return in.share();
+    DataFrame out;
+    for (std::size_t i = 0; i < in.names.size(); ++i) {
+        bool is_label = false;
+        for (const dstd::SharedString& n : in.row_index->names)
+            if (dstd::StringView(n) == dstd::StringView(in.names[i]))
+                is_label = true;
+        for (const dstd::String& k : keep)
+            if (dstd::StringView(k) == dstd::StringView(in.names[i]))
+                is_label = false;
+        if (is_label) continue;
+        out.names.push_back(in.names[i]);
+        out.columns.push_back(in.columns[i].share());
+    }
+    return out;
+}
+
 void apply_index_names(dstd::Span<const dstd::String> names, DataFrame& out) {
     IndexNames kept;
     kept.reserve(names.size());

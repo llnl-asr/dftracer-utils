@@ -177,7 +177,34 @@ int Series_getbuffer(PyObject* self, Py_buffer* view, int flags) {
     view->strides = &obj->buf_stride;
     view->suboffsets = nullptr;
     view->internal = nullptr;
+    ++obj->exports;
     return 0;
+}
+
+void Series_releasebuffer(PyObject* self, Py_buffer*) {
+    --reinterpret_cast<SeriesObject*>(self)->exports;
+}
+
+// _replace(other): this Series takes the column, the name and the labels of
+// `other`, in place (setting with enlargement). A numpy array or memoryview
+// over the old buffers would dangle, so it is a BufferError while one is live.
+// A kernel that runs with the GIL released reads the column through `Held`, a
+// share taken under the GIL, so this swap cannot free what it reads.
+PyObject* Series_replace(PyObject* self, PyObject* other) {
+    auto* a = reinterpret_cast<SeriesObject*>(self);
+    Series* o = as_native<Series>(other);
+    if (!as_native<Series>(self) || !o) return nullptr;
+    if (a == reinterpret_cast<SeriesObject*>(other)) Py_RETURN_NONE;
+    if (a->exports > 0) {
+        PyErr_SetString(PyExc_BufferError,
+                        "cannot replace a Series whose buffer is exported "
+                        "(a numpy array or memoryview over it is alive)");
+        return nullptr;
+    }
+    return guard([&]() -> PyObject* {
+        a->col = o->share();
+        Py_RETURN_NONE;
+    });
 }
 
 // ---- getters -------------------------------------------------------------
@@ -354,7 +381,8 @@ PyObject* Series_with_index(PyObject* self, PyObject* args) {
 // _locate(keys) -> (positions, missing): the rows whose labels equal the key
 // columns, one per level (see Series::locate).
 PyObject* Series_locate(PyObject* self, PyObject* keys_obj) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::Vector<Series> keys;
     if (!frame::series_list_from_py(keys_obj, "_locate: keys must be Series",
@@ -367,7 +395,8 @@ PyObject* Series_locate(PyObject* self, PyObject* keys_obj) {
 // _locate_range(start, stop) -> (offset, length): the rows between two label
 // bounds, each a list of one-row Series per level, empty for an open end.
 PyObject* Series_locate_range(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* start_obj = nullptr;
     PyObject* stop_obj = nullptr;
@@ -405,7 +434,8 @@ bool reindex_options(int method, long long limit, double tolerance,
 // label key Series (one per level) as dataframe::Series::reindex; `fill` is a
 // one-row Series or None.
 PyObject* Series_reindex(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* keys_obj = nullptr;
     PyObject* fill_obj = nullptr;
@@ -445,12 +475,14 @@ PyObject* Series_reindex(PyObject* self, PyObject* args) {
 // (see dataframe::align_labels); how is a JoinHow (0 inner, 1 left, 2 right,
 // 3 outer).
 PyObject* Series_align(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* other_obj = nullptr;
     int how = 0;
     if (!PyArg_ParseTuple(args, "Oi", &other_obj, &how)) return nullptr;
-    Series* b = as_native<Series>(other_obj);
+    Held held_b(other_obj);
+    Series* b = held_b.get();
     if (!b) return nullptr;
     auto r = core::without_gil(a->length() + b->length(), [&] {
         return dataframe::align_labels(*a, *b,
@@ -744,6 +776,9 @@ PyMethodDef Series_methods[] = {
      "_align(other, how) -> (left, right) on the joined labels; how is 0 "
      "inner, "
      "1 left, 2 right, 3 outer."},
+    {"_replace", Series_replace, METH_O,
+     "_replace(other) -> None: this Series takes the column, name and labels "
+     "of `other` in place; BufferError while a buffer export is live."},
     {"_with_index", Series_with_index, METH_VARARGS,
      "_with_index(names, levels) -> Series sharing this column's buffers "
      "whose row labels are the level Series; empty lists drop them."},
@@ -1126,6 +1161,7 @@ int init_series(PyObject* m) {
     SeriesType.tp_as_number = &Series_as_number;
     SeriesType.tp_richcompare = Series_richcompare;
     Series_as_buffer.bf_getbuffer = Series_getbuffer;
+    Series_as_buffer.bf_releasebuffer = Series_releasebuffer;
     SeriesType.tp_as_buffer = &Series_as_buffer;
     SeriesType.tp_methods = Series_methods;
     SeriesType.tp_getset = Series_getset;

@@ -105,7 +105,8 @@ def _check(ours, ref):
         pd.testing.assert_series_equal(
             ours, ref, check_dtype=False, check_index_type=False, check_names=False
         )
-        assert ours.name == ref.name
+        # A row Series is named by its label; a name here is text or none.
+        assert ours.name == (ref.name if isinstance(ref.name, str) or ref.name is None else None)
     else:
         assert ours == ref or (ours != ours and ref != ref), (ours, ref)
 
@@ -121,9 +122,8 @@ def _case(p, fn, pfn=None):
 def _cases(name, frame):
     """(id, ours, pandas or None) for every form on the index `name`."""
     a, b, c = LABELS[name]
-    row = (lambda p: p.loc[[a]]) if frame else None
-    yield "scalar", (lambda s: s.loc[a]), row
-    yield "scalar missing", (lambda s: s.loc[b]), ((lambda p: p.loc[[b]]) if frame else None)
+    yield "scalar", (lambda s: s.loc[a]), None
+    yield "scalar missing", (lambda s: s.loc[b]), None
     yield "scalar of another type", (lambda s: s.loc[c]), None
     yield "list", (lambda s: s.loc[[a, a]]), None
     yield "list with a missing label", (lambda s: s.loc[[a, b]]), None
@@ -136,9 +136,9 @@ def _cases(name, frame):
     yield "mask", ((lambda s: s.loc[s["a"] > 1.0]) if frame else (lambda s: s.loc[s > 1.0])), None
     yield "at", ((lambda s: s.at[a, "a"]) if frame else (lambda s: s.at[a])), None
     yield "at missing", ((lambda s: s.at[b, "a"]) if frame else (lambda s: s.at[b])), None
-    yield "xs", (lambda s: s.xs(a)), row
+    yield "xs", (lambda s: s.xs(a)), None
     if frame:
-        yield "loc column", (lambda s: s.loc[a, "b"]), (lambda p: p.loc[[a], "b"])
+        yield "loc column", (lambda s: s.loc[a, "b"]), None
         yield "loc columns", (lambda s: s.loc[[a], ["b", "a"]]), None
         yield "loc all rows", (lambda s: s.loc[:, "a"]), None
     else:
@@ -156,21 +156,13 @@ def _cases(name, frame):
     if name == "text":
         yield "slice of text", (lambda s: s.loc["a":"c"]), None
     if name == "nan":
-        yield "NaN label", (lambda s: s.loc[NAN]), ((lambda p: p.loc[[NAN]]) if frame else None)
+        yield "NaN label", (lambda s: s.loc[NAN]), None
         yield "NaN in a list", (lambda s: s.loc[[NAN, 3.0]]), None
     if name in ("unsorted", "sorted"):
-        yield (
-            "float for an integer label",
-            (lambda s: s.loc[30.0]),
-            ((lambda p: p.loc[[30.0]]) if frame else None),
-        )
+        yield "float for an integer label", (lambda s: s.loc[30.0]), None
         yield "float that is no label", (lambda s: s.loc[30.5]), None
     if name == "float":
-        yield (
-            "integer for a float label",
-            (lambda s: s.loc[3]),
-            ((lambda p: p.loc[[3]]) if frame else None),
-        )
+        yield "integer for a float label", (lambda s: s.loc[3]), None
 
 
 def _params():
@@ -189,8 +181,7 @@ def test_label_lookup_matches_pandas(frame, name, fn, pfn):
 
 
 def _multi_cases(frame):
-    row = lambda p: p.loc[[("a", 1)]]  # noqa: E731
-    yield "full key", (lambda s: s.loc[("a", 1)]), row if frame else None
+    yield "full key", (lambda s: s.loc[("a", 1)]), None
     yield "partial key", (lambda s: s.loc["a"]), None
     yield "partial tuple", (lambda s: s.loc[("b",)]), None
     yield "missing full key", (lambda s: s.loc[("z", 1)]), None
@@ -261,9 +252,10 @@ def test_assignment_through_labels_rebinds_the_frame():
     p.loc[[10, 30], "a"] = -1.0
     assert d["a"].to_list() == p["a"].tolist()
     with pytest.raises(KeyError, match="99"):
-        d.loc[99, "a"] = 1.0
-    with pytest.raises(KeyError, match="99"):
         d.at[99, "a"] = 1.0
+    d.loc[99, "a"] = 1.0
+    p.loc[99, "a"] = 1.0
+    assert d.index.to_list() == p.index.tolist() and d["a"].to_list() == p["a"].tolist()
 
 
 def test_a_timestamp_index_looks_up_by_datetime():
@@ -277,7 +269,8 @@ def test_a_timestamp_index_looks_up_by_datetime():
     with pytest.raises(KeyError):
         s.loc[datetime.datetime(2021, 1, 1)]
     f = DataFrame.from_pandas(p.to_frame("a"))
-    assert f.loc[when]["a"].to_list() == [2.0]
+    assert f.loc[when, "a"] == 2.0
+    assert f.loc[when].to_list() == [2.0]
 
 
 def test_a_list_of_mixed_label_types_finds_what_each_label_finds():
@@ -326,7 +319,7 @@ def test_a_float_key_is_cast_to_a_float32_label_type():
     _case(p, lambda x: x.loc[0.2])
     _case(p, lambda x: x.loc[[0.1]])  # a list is not cast, as pandas
     d = DataFrame.from_pandas(p.rename("a").to_frame())
-    assert d.loc[0.2]["a"].to_list() == [2.0]
+    assert d.loc[0.2, "a"] == 2.0
 
 
 def test_none_finds_null_labels_of_a_text_level_only():

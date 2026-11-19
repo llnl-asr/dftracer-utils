@@ -2606,7 +2606,7 @@ DataFrame sample(const DataFrame& b, std::int64_t n, std::uint64_t seed) {
 
 DataFrame with_row_index(const DataFrame& b, dstd::StringView name) {
     DataFrame out = with_row_index_raw(b, name);
-    index_drop<"with_row_index">(out);
+    index_drop<"with_row_index">(b, out);
     return out;
 }
 
@@ -2618,7 +2618,7 @@ DataFrame describe(const DataFrame& b) {
 
 DataFrame null_count(const DataFrame& b) {
     DataFrame out = null_count_raw(b);
-    index_drop<"null_count">(out);
+    index_drop<"null_count">(b, out);
     return out;
 }
 

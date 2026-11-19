@@ -33,6 +33,9 @@ struct SeriesObject {
     // are constant and every export can point at them (no per-export alloc).
     Py_ssize_t buf_shape;
     Py_ssize_t buf_stride;
+    // Live buffer exports: `_replace` refuses while a reader points into the
+    // column's buffers.
+    Py_ssize_t exports;
 };
 
 // What s.str, s.dt and s.list hold: the Series they read. Defined in

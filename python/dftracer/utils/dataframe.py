@@ -46,7 +46,7 @@ from ._eval import Columnar
 from ._levels import LevelArg, pick_levels
 from ._pandas_frame import FramePandasMixin
 from ._polars_frame import FramePolarsMixin
-from ._series_index import default_name, shown_name
+from ._series_index import default_name, positions, shown_name
 from ._window_spec import norm_window_spec
 from .agg import AggForm, AggKeyword, select_aggs
 from .enums import DType, rule_to_units
@@ -248,6 +248,11 @@ def _nan_keys(frame: DataFrame, given: list[str | Series]) -> tuple[DataFrame, l
     return frame, keys
 
 
+def _keeps_every_row(mask: Series, rows: int) -> bool:
+    """Whether the Bool Series ``mask`` is true on all ``rows`` rows."""
+    return len(mask) == rows and mask.null_count == 0 and bool(mask.all())
+
+
 def _bound(native: _ext.DataFrame) -> DataFrame:
     """A native result as the public class: the native factories build it."""
     return cast("DataFrame", native)
@@ -278,6 +283,30 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         pass
 
     # -- the index: named columns, or the row position -------------------------
+    def _labelled(self) -> DataFrame:
+        """This frame with the row positions as its index when it has none:
+        what a pandas op that selects rows keeps, so the rows it keeps say
+        where they came from."""
+        if _ext.DataFrame.index_names(self):
+            return self
+        first = default_name(0)
+        numbered = _ext.DataFrame.with_row_index(self, first)
+        with_labels = _ext.DataFrame.select(numbered, *self._names(), first)
+        return _bound(_ext.DataFrame.with_index(with_labels, [first]))
+
+    def _selecting(
+        self, run: Callable[[DataFrame], DataFrame], in_order: bool = False
+    ) -> DataFrame:
+        """``run`` on this frame under row labels (see :meth:`_labelled`). With
+        ``in_order`` (the op only drops rows) a result that kept every row
+        has no labels to show and comes back as a frame with no index."""
+        if _ext.DataFrame.index_names(self):
+            return run(self)
+        out = run(self._labelled())
+        if in_order and len(out) == len(self):
+            return _bound(_ext.DataFrame.select(out, *self._names()))
+        return out
+
     @property
     def index(self) -> Series | DataFrame:
         """The index column set by :meth:`set_index` as a Series (several
@@ -691,7 +720,53 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
                 if missing:
                     raise KeyError(f"None of {missing} are in the columns")
                 return cast("Self", _bound(_ext.DataFrame.select(self, *key, *index)))
+        if isinstance(key, Series) and not _ext.DataFrame.index_names(self):
+            if _keeps_every_row(key, len(self)):
+                return cast("Self", _bound(_ext.DataFrame.share(self)))
+            return cast("Self", self._selecting(lambda f: _ext.DataFrame.__getitem__(f, key), True))
         return _ext.DataFrame.__getitem__(self, key)
+
+    def query(
+        self,
+        dsl: str | None = None,
+        *,
+        group_by: str | None = None,
+        aggs: list[str] | None = None,
+        select: list[str] | None = None,
+        order_by: str | None = None,
+        descending: bool = False,
+        limit: int | None = None,
+    ) -> DataFrame:
+        """A query plan over the batch (filter, group-by, select, sort, limit).
+        A plan that is only a predicate is the pandas ``query``: the rows it
+        keeps keep their labels, and a frame with no index is labelled by the
+        positions kept. ``dsl`` is the duql expression language, not the
+        pandas ``query`` one: there is no ``@var`` for a Python variable and no
+        backticks around a column name."""
+
+        def run(f: DataFrame) -> DataFrame:
+            return _bound(
+                _ext.DataFrame.query(
+                    f,
+                    dsl,
+                    group_by=group_by,
+                    aggs=aggs,
+                    select=select,
+                    order_by=order_by,
+                    descending=descending,
+                    limit=limit,
+                )
+            )
+
+        if (
+            group_by is None
+            and aggs is None
+            and select is None
+            and order_by is None
+            and limit is None
+        ):
+            return self._selecting(run, True)
+        return run(self)
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -829,7 +904,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
             return _ext.DataFrame.is_duplicated(frame)
         if keep == "last":
             back = list(range(frame.num_rows - 1, -1, -1))
-            return frame.take(back).duplicated(keep="first").take(back)
+            return frame.gather(back).duplicated(keep="first").take(back)
         if keep != "first":
             raise ValueError(f"duplicated: keep must be 'first', 'last' or False, not {keep!r}")
         return frame.groupby(cols, dropna=False, as_index=False).cumcount()["cumcount"] > 0
@@ -898,11 +973,11 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
 
     def nlargest(self, n: int, columns: str) -> DataFrame:
         """The pandas ``nlargest``: the ``n`` rows with the largest ``columns``."""
-        return _bound(_ext.DataFrame.topk(self, columns, n, True))
+        return self._selecting(lambda f: _bound(_ext.DataFrame.topk(f, columns, n, True)))
 
     def nsmallest(self, n: int, columns: str) -> DataFrame:
         """The pandas ``nsmallest``: the ``n`` rows with the smallest ``columns``."""
-        return _bound(_ext.DataFrame.topk(self, columns, n, False))
+        return self._selecting(lambda f: _bound(_ext.DataFrame.topk(f, columns, n, False)))
 
     def pivot_table(
         self,
@@ -924,8 +999,8 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         row = "__dftu_pivot_row__"
         cells = cells.assign(**{row: cells.groupby(keys, as_index=False).ngroup()["ngroup"]})
         wide = cells[[row, columns, values]].pivot(row, columns, values, "first")
-        names = cells[[row] + keys].drop_duplicates()
-        out = names.merge(wide, on=row).sort_values(keys)
+        names = cells[[row] + keys].unique()
+        out = names.merge(wide, on=row)._sort_values(keys)
         return out.drop(columns=[row])
 
     def to_dict(self) -> dict[str, list[Scalar | None]]:
@@ -1261,7 +1336,17 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
     ) -> DataFrame:
         """The pandas ``sort_values``: :meth:`sort` with ``ascending`` (a flag
         or one per column in ``by``) and ``na_position`` (nulls last by
-        default, unlike :meth:`sort`)."""
+        default, unlike :meth:`sort`). The rows keep their labels; a frame with
+        no index is labelled by the positions, as pandas' index shows where
+        each row came from."""
+        return self._selecting(lambda f: f._sort_values(by, ascending, na_position))
+
+    def _sort_values(
+        self,
+        by: str | Sequence[str],
+        ascending: bool | Sequence[bool] = True,
+        na_position: Literal["first", "last"] = "last",
+    ) -> DataFrame:
         if na_position not in ("first", "last"):
             raise ValueError("na_position must be 'first' or 'last'")
         if isinstance(ascending, bool):
@@ -1291,8 +1376,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
     def union(self, *others: DataFrame) -> DataFrame:
         """Vertically concatenate with ``others`` and drop duplicate rows (SQL
         UNION); use :meth:`concat` for UNION ALL (keep duplicates)."""
-        cat = _ext.DataFrame.concat(self, *[o for o in others])
-        return cat.unique()
+        return self.concat(*others).unique()
 
     # -- native engine ops (SIMD/relational kernels, wrapped from the C extension) --
     def filter(
@@ -1388,7 +1472,22 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         return _bound(_ext.DataFrame.head(self, n))
 
     def tail(self, n: int = 5) -> DataFrame:
-        return _bound(_ext.DataFrame.tail(self, n))
+        """The last ``n`` rows (all but the first ``-n`` for a negative ``n``).
+        The rows keep their labels; a frame with no index is labelled by the
+        positions it kept, as pandas."""
+        out = _bound(_ext.DataFrame.tail(self, n if n >= 0 else max(len(self) + n, 0)))
+        if _ext.DataFrame.index_names(self) or len(out) == len(self):
+            return out
+        first = default_name(0)
+        kept = positions(len(out), len(self) - len(out))
+        return _bound(
+            _ext.DataFrame.with_index(_ext.DataFrame.with_column(out, first, kept), [first])
+        )
+
+    def take(self, indices: Sequence[int] | Series) -> DataFrame:
+        """The pandas ``take``: :meth:`gather`. The rows keep their labels; a
+        frame with no index is labelled by the positions taken."""
+        return self._selecting(lambda f: f.gather(indices))
 
     def reverse(self) -> DataFrame:
         return _bound(_ext.DataFrame.reverse(self))
@@ -1424,9 +1523,12 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         first occurrence and the index with its row. A ``subset`` name that is
         not a shown column is a ``KeyError``."""
         names = self._shown_subset(subset, "drop_duplicates")
-        if names is None and _ext.DataFrame.index_names(self):
-            names = self.columns
-        return _bound(_ext.DataFrame.unique(self, names))
+
+        def run(f: DataFrame) -> DataFrame:
+            keyed = f.columns if names is None and _ext.DataFrame.index_names(f) else names
+            return _bound(_ext.DataFrame.unique(f, keyed))
+
+        return self._selecting(run, True)
 
     def dropna(
         self,
@@ -1476,7 +1578,13 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         if names is None:
             names = self.columns
             if not index and how is None and thresh is None:
-                return _bound(_ext.DataFrame.drop_nulls(self))
+                with_nulls = [c for c in names if self._col(c).null_count]
+                if not with_nulls:
+                    return _bound(_ext.DataFrame.share(self))
+                mask = self._col(with_nulls[0]).notna()
+                for c in with_nulls[1:]:
+                    mask = mask & self._col(c).notna()
+                return self._keep_rows(mask)
         if not names:
             return self
         counts: Series | None = None
@@ -1490,7 +1598,26 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
             mask = counts >= 1
         else:
             mask = counts == len(names)
-        return self.filter(mask)
+        if not index and _keeps_every_row(mask, len(self)):
+            return _bound(_ext.DataFrame.share(self))
+        return self._keep_rows(mask)
+
+    def _keep_rows(self, mask: Series) -> DataFrame:
+        """The rows where ``mask`` is true, under their row labels in one
+        pass: the mask over the columns, then one gather of columns and
+        positions. A frame with an index keeps it."""
+        if _ext.DataFrame.index_names(self):
+            return self.filter(mask)
+        first = default_name(0)
+        names = self._names()
+        positions = _ext.DataFrame.with_row_index(
+            _ext.DataFrame.select(self, names[0]), first
+        )._col(first)
+        body = _ext.DataFrame.with_column(self, first, positions)
+        kept = body.filter(mask)
+        if len(kept) == len(self):
+            return _bound(_ext.DataFrame.share(self))
+        return _bound(_ext.DataFrame.with_index(kept, [first]))
 
     def fillna(
         self,
@@ -1547,7 +1674,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         spelling of ``seed``)."""
         if random_state is not None:
             seed = random_state
-        return _bound(_ext.DataFrame.sample(self, n, seed))
+        return self._selecting(lambda f: _bound(_ext.DataFrame.sample(f, n, seed)))
 
     def with_row_index(self, name: str = "index") -> DataFrame:
         return _bound(_ext.DataFrame.with_row_index(self, name))
@@ -1581,7 +1708,10 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         """Vertically concatenate with ``others`` (UNION ALL). ``how='vertical'``
         requires a shared schema; ``how='diagonal'`` unions columns, null-filling
         those absent from a part and promoting a mixed-numeric column to float."""
-        return _bound(_ext.DataFrame.concat(self, *[x for x in others], how=how))
+        parts = [self, *others]
+        if any(_ext.DataFrame.index_names(p) for p in parts):
+            parts = [p._labelled() for p in parts]
+        return _bound(_ext.DataFrame.concat(parts[0], *parts[1:], how=how))
 
     def unpivot(
         self,
@@ -1886,7 +2016,6 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
     if TYPE_CHECKING:
         aggregate = agg
         astype = cast
-        take = gather
         divide = FramePandasMixin.div
         truediv = FramePandasMixin.div
         multiply = FramePandasMixin.mul

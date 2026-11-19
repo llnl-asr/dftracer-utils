@@ -107,7 +107,8 @@ def test_memory_budget_is_chainable():
 def test_take_filter_mask_reverse_sort_by_multi_match_eager():
     df = _df({"a": [3, 1, 2, 1], "b": [10, 20, 30, 40]})
 
-    assert _dict(df.lazy().take([3, 0, 0]).collect()) == _dict(df.take([3, 0, 0]))
+    assert _dict(df.lazy().take([3, 0, 0]).collect()) == _dict(df.gather([3, 0, 0]))
+    assert df.take([3, 0, 0]).index.to_list() == [3, 0, 0]
     assert _dict(df.lazy().take([3, 0, 0]).collect()) == {"a": [1, 3, 3], "b": [40, 10, 10]}
 
     mask = df["a"] > 1

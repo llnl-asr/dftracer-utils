@@ -143,7 +143,7 @@ def sorted_positions(
     keys = list(columns)
     columns["pos"] = positions(len(levels[0]))
     frame = DataFrame.from_dict(columns)
-    return frame.sort_values(keys, ascending=list(flags), na_position=na_position)["pos"]
+    return frame._sort_values(keys, ascending=list(flags), na_position=na_position)["pos"]
 
 
 _NATIVE_TEXT = frozenset(

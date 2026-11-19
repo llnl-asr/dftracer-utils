@@ -30,6 +30,7 @@ from typing import (
     cast,
 )
 
+from .. import dftracer_utils_ext as _ext
 from ..agg import UdafAgg
 from ..dataframe import DataFrame, JoinHow
 from ..expr import Agg, Expr, col
@@ -118,7 +119,7 @@ def _split(frame: DataFrame, keys: list[str], n: int) -> list[DataFrame]:
 
 
 def _tail(frame: DataFrame, k: int) -> DataFrame:
-    return frame.tail(k)
+    return _ext.DataFrame.tail(frame, k)
 
 
 def _head(frame: DataFrame, k: int) -> DataFrame:
@@ -138,7 +139,7 @@ def _with_overlap(
         return fn(frame)
     lead = 0 if before is None else len(before)
     out = fn(_concat([x for x in (before, frame, after) if x is not None]))
-    return cast(DataFrame, out.iloc[lead : lead + len(frame)])
+    return out.slice(lead, len(frame))
 
 
 def _join(left: DataFrame, right: DataFrame, on: Keys, how: str, kw: dict[str, bool]) -> DataFrame:

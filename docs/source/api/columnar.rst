@@ -99,6 +99,9 @@ methods (``sum min max mean var std skew kurt``) are added to every
 .. autoclass:: dftracer.utils.GroupBy
    :members: agg
 
+.. autoclass:: dftracer.utils.groupby.SeriesGroupBy
+   :members: agg
+
 A ``GroupBy`` is obtained from a native ``DataFrame``'s ``group_by(key)`` and
 consumed by ``.agg(*specs)``, where each spec is an ``Agg`` or a legacy
 ``"op:column"`` string; value expressions across all the aggregates compile

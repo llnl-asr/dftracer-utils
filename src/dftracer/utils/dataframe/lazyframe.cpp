@@ -3552,6 +3552,27 @@ IndexList plan_index(const LazyFrame& lf) {
     return index;
 }
 
+// `lf` without the columns of its index, except those named in `keep`: the
+// operand of an op whose rule drops the index, so no label column outlives it.
+// A plan with no such column is returned as it is.
+LazyFrame without_index_columns(const LazyFrame& lf,
+                                dstd::Span<const dstd::String> keep) {
+    const IndexList index = plan_index(lf);
+    if (index.empty()) return lf;
+    const dstd::Vector<dstd::String> all = lf.schema();
+    dstd::Vector<dstd::String> names;
+    for (const dstd::String& n : all) {
+        bool is_label = false;
+        for (const dstd::String& i : index)
+            if (i == n) is_label = true;
+        for (const dstd::String& k : keep)
+            if (k == n) is_label = false;
+        if (!is_label) names.push_back(n);
+    }
+    if (names.size() == all.size()) return lf;
+    return lf.select(std::move(names));
+}
+
 const Field* find_field(const Schema& s, dstd::StringView name) {
     for (const Field& f : s.fields)
         if (f.name == name) return &f;
@@ -5138,14 +5159,14 @@ LazyFrame LazyFrame::reverse() const {
 }
 
 LazyFrame LazyFrame::with_row_index(dstd::String name) const {
-    auto ops = ops_;
+    auto ops = without_index_columns(*this, {}).ops_;
     ops.push_back(
         dstd::make_shared<LazyOp>(LazyOp{WithRowIndexOp{std::move(name)}}));
     return with_ops(std::move(ops));
 }
 
 LazyFrame LazyFrame::null_count() const {
-    auto ops = ops_;
+    auto ops = without_index_columns(*this, {}).ops_;
     ops.push_back(dstd::make_shared<LazyOp>(LazyOp{NullCountOp{}}));
     return with_ops(std::move(ops));
 }
@@ -5430,6 +5451,21 @@ LazyFrame LazyFrame::join(LazyFrame other, dstd::Vector<dstd::String> left_on,
         return failed(
             invalid_argument<"join: left_on and right_on differ in length">()
                 .error());
+    {
+        const IndexList left_index = plan_index(*this);
+        const IndexList right_index = plan_index(other);
+        if ((!left_index.empty() || !right_index.empty()) &&
+            !index_join_keeps<dstd::String, dstd::String>(
+                left_index, right_index, left_on, right_on)) {
+            const LazyFrame bare_left = without_index_columns(*this, left_on);
+            const LazyFrame bare_right = without_index_columns(other, right_on);
+            if (bare_left.schema().size() != schema().size() ||
+                bare_right.schema().size() != other.schema().size())
+                return bare_left.join(bare_right, std::move(left_on),
+                                      std::move(right_on), how,
+                                      std::move(suffix), nulls_equal);
+        }
+    }
     {
         const dstd::Vector<dstd::String> left_names = schema();
         const dstd::Vector<dstd::String> right_names = other.schema();

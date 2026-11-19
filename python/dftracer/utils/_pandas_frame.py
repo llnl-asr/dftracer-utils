@@ -33,7 +33,14 @@ from ._levels import (
 )
 from ._pandas_series import OMITTED, Omitted, replace_in, replace_pairs, valid_edge
 from ._reshape import stack_frame, unstack_frame
-from ._series_index import default_name, internal_name, positions, public_name, renamed_names
+from ._series_index import (
+    default_name,
+    drop_levels,
+    internal_name,
+    positions,
+    public_name,
+    renamed_names,
+)
 from ._time_index import TimeIndexMixin
 from ._value_counts import frame_value_counts, native_counts
 from .enums import DType, rule_to_units
@@ -831,26 +838,24 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
 
     def xs(
         self, key: object, axis: int = 0, level: object = None, drop_level: bool = True
-    ) -> DataFrame:
-        """Rows with index label ``key`` (:attr:`loc`); with ``level`` the rows
+    ) -> DataFrame | Series | Row:
+        """Rows with index label ``key`` (:attr:`loc`: a Series for a label one
+        row holds); with ``level`` the rows
         whose index level of that name or position is ``key``, that level left
         out unless ``drop_level`` is false. A part of a MultiIndex label leaves
         out the levels it names."""
         from ._loc import Labels, _apply_rows, drop_index_levels, rows_by_level
-        from .dataframe import DataFrame
 
         if axis not in (0, "index"):
             raise ValueError("xs: only the index axis is supported")
         frame = self._frame()
         if level is None:
-            out = frame.loc[key]
-        else:
-            labels = Labels(frame)
-            rows = rows_by_level(labels, level, key)
-            out = _apply_rows(frame, rows)
-            if drop_level:
-                out = drop_index_levels(out, labels.names, rows.drop)
-        assert isinstance(out, DataFrame)
+            return cast("DataFrame | Series | Row", frame.loc[key])
+        labels = Labels(frame)
+        rows = rows_by_level(labels, level, key)
+        out = _apply_rows(frame, rows)
+        if drop_level:
+            out = drop_index_levels(out, labels.names, rows.drop)
         return out
 
     def truncate(self, before: object | None = None, after: object | None = None) -> DataFrame:
@@ -900,7 +905,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
             frame = frame.with_column(keys[0], positions(len(frame))).set_index(keys)
         picked, flags, keyed = sort_plan(keys, level, ascending, sort_remaining)
         if key is None:
-            out = frame.sort_values([keys[i] for i in picked], flags, na_position)
+            out = frame._sort_values([keys[i] for i in picked], flags, na_position)
         else:
             levels = [column_series(frame, keys[i]) for i in picked]
             order = sorted_positions(
@@ -1017,8 +1022,9 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         mine: list[str | None] = []
         theirs: list[str | None] = []
         for name in self.columns:
-            diff = self._col(name).compare(column_series(other, name)).to_dict()
-            for i, va, vb in zip(diff["index"], diff["self"], diff["other"]):
+            diff = drop_levels(self._col(name)).compare(drop_levels(column_series(other, name)))
+            plain = diff.to_dict()
+            for i, va, vb in zip(diff.index_levels()[0].to_list(), plain["self"], plain["other"]):
                 assert isinstance(i, int)
                 rows.append(i)
                 cols.append(name)

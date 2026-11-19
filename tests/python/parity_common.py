@@ -160,6 +160,15 @@ def _ours_labels(x: Series) -> Optional[List[Any]]:
     return levels[0] if len(levels) == 1 else [list(row) for row in zip(*levels)]
 
 
+def _frame_labels(x: DataFrame) -> Optional[List[Any]]:
+    """The row labels of a frame (a list per row for several levels), None
+    when it is positional."""
+    if not x.index_names():
+        return None
+    levels = [clean(level.to_list()) for level in x.index_levels()]
+    return levels[0] if len(levels) == 1 else [list(row) for row in zip(*levels)]
+
+
 def norm_ours(x: Any) -> Norm:
     if isinstance(x, LazyFrame):
         x = x.collect()
@@ -176,6 +185,7 @@ def norm_ours(x: Any) -> Norm:
             "values": {c: clean(x[c].to_list()) for c in cols},
             "kinds": {c: ours_kind(x[c]) for c in cols},
             "n": x.shape[0],
+            "labels": _frame_labels(x),
         }
     if isinstance(x, (list, tuple)):
         return "seq", {"values": clean(list(x))}
@@ -207,6 +217,7 @@ def norm_pandas(pd: Any, x: Any) -> Norm:
             "kinds": {str(c): pandas_kind(pd, x[c].dtype) for c in x.columns},
             "n": len(x),
             "range": _is_range(pd, x.index),
+            "labels": [list(v) if isinstance(v, tuple) else v for v in clean(x.index.tolist())],
         }
     if isinstance(x, (list, tuple)):
         return "seq", {"values": clean(list(x))}
@@ -284,7 +295,7 @@ def compare(ours: Any, theirs: Any, theirs_norm: Norm, is_unordered: bool = Fals
                 return f"[dtype] {c}: {a['kinds'][c]} vs {b['kinds'][c]}"
             if not close(a["values"][c], b["values"][c]):
                 return f"[values] {c}: {a['values'][c]} vs {b['values'][c]}"
-        if not b.get("range", True):
+        if not b.get("range", True) and a.get("labels") != b["labels"]:
             return "[index] the library result has row labels"
     elif kind == "dtype":
         if a["kind"] != b["kind"]:
@@ -333,7 +344,7 @@ def norm_polars(pl: Any, x: Any) -> Norm:
     return "scalar", {"values": clean([x])[0]}
 
 
-FINDING_TAGS = ("needs-index", "keyword", "missing", "shape", "semantics", "engine")
+FINDING_TAGS = ("keyword", "missing", "shape", "semantics", "engine")
 
 
 def load_findings(name: str, pandas_version: str = "") -> Dict[str, str]:

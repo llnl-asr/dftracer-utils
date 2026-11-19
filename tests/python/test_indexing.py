@@ -21,7 +21,8 @@ def _d(frame):
 
 
 def _same(ours, ref):
-    got = _d(ours)
+    assert ours.index.to_list() == ref.index.tolist()
+    got = _d(ours.reset_index(drop=True))
     exp = {c: [None if pd.isna(v) else v for v in ref[c].tolist()] for c in ref.columns}
     assert got == exp
 
@@ -73,7 +74,7 @@ def test_loc_reads_default_index_and_set_index():
     assert d["k"].to_list() == [10, 20, 30, 40]  # and stays a column
     assert sorted(d.schema) == ["a", "k", "s"]
     assert d.index.to_list() == [10, 20, 30, 40]
-    assert d.loc[20]["a"].to_list() == [2]
+    assert d.loc[20]["a"] == 2 and d.loc[20, "a"] == 2
     assert d.loc[20:30, "a"].to_list() == pk.loc[20:30, "a"].tolist()
     assert d.loc[:20, "a"].to_list() == pk.loc[:20, "a"].tolist()
     assert d.loc[30:, "a"].to_list() == pk.loc[30:, "a"].tolist()
@@ -95,7 +96,7 @@ def test_loc_reads_default_index_and_set_index():
 
     # A string index.
     s = df.set_index("s")
-    assert s.loc["y"]["a"].to_list() == [2]
+    assert s.loc["y"]["a"] == 2
     # The rows come in the order of the labels asked for, as pandas.
     assert (
         s.loc[["w", "x"], "a"].to_list()
@@ -106,9 +107,9 @@ def test_loc_reads_default_index_and_set_index():
 
     # The index name follows the frame through ops that keep the column, and
     # is dropped when the column goes.
-    assert d.sort_values("a", ascending=False).loc[10, "s"].to_list() == ["x"]
+    assert d.sort_values("a", ascending=False).loc[10, "s"] == "x"
     assert d.filter(d["a"] > 1).index_names() == ["k"]
-    assert d.head(2).loc[20]["a"].to_list() == [2]
+    assert d.head(2).loc[20]["a"] == 2
     assert d.select("a").index_names() == []
     assert d.lazy().index_names() == ["k"]
 
@@ -313,9 +314,9 @@ def test_several_index_columns_match_pandas_multiindex():
     assert len(d.index_levels()) == 2
 
     # A full tuple, a partial tuple (the leading level), a bare first label.
-    assert _d(d.loc[(2, 11)])["v"] == [pm.loc[(2, 11), "v"]]
-    assert _d(d.loc[(2, 11), :])["v"] == [4.0]
-    assert d.loc[(2, 11), "v"].to_list() == [4.0]
+    assert d.loc[(2, 11)]["v"] == pm.loc[(2, 11), "v"]
+    assert d.loc[(2, 11), :]["v"] == 4.0
+    assert d.loc[(2, 11), "v"] == 4.0
     assert _d(d.loc[(2,)])["v"] == pm.loc[(2,), "v"].tolist()
     assert _d(d.loc[2])["v"] == pm.loc[2, "v"].tolist()
     assert _d(d.loc[[(1, 11), (2, 12)]])["v"] == pm.loc[[(1, 11), (2, 12)], "v"].tolist()

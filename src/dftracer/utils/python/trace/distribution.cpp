@@ -322,9 +322,20 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
     }
 
     {
+        auto agg_index = dftracer::utils::trace::index::Index::open(
+            dftracer::utils::trace::index::normalize_index_root(build_dir));
+        if (!agg_index) {
+            dftracer::utils::python::core::set_py_error(agg_index.error());
+            return NULL;
+        }
+        auto agg_generation = agg_index->generation();
+        if (!agg_generation) {
+            dftracer::utils::python::core::set_py_error(agg_generation.error());
+            return NULL;
+        }
         auto agg_intern =
             dftracer::utils::trace::index::schemas::dft::agg::intern_for_index(
-                index_dir);
+                build_dir, *agg_generation);
         batch_config->agg_fold_factory =
             [agg_config_ptr,
              agg_intern](dftracer::utils::dstd::StringIntern &build_intern)

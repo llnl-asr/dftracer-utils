@@ -4,19 +4,28 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/open_count.h>
 #include <dftracer/utils/store/store.h>
+#include <dftracer/utils/store/store_id.h>
 #include <dftracer/utils/store/writer.h>
 #include <doctest/doctest.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <testing_utilities.h>
+#include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -109,6 +118,38 @@ dstd::Vector<dstd::Pair<dstd::String, dstd::String>> collect(Cursor cursor) {
     }
     CHECK_FALSE(cursor.error().has_value());
     return rows;
+}
+
+dstd::Vector<dstd::String> names_in(const dftu_utils_test::ScopedTestDir& dir) {
+    dstd::Vector<dstd::String> names;
+    auto opened = dstd::fs::Dir::open(dir.path().view());
+    REQUIRE(opened.has_value());
+    auto listing = opened->entries();
+    REQUIRE(listing.has_value());
+    for (const dstd::fs::DirEntry& entry : *listing)
+        names.emplace_back(entry.name);
+    return names;
+}
+
+std::size_t count_suffix(dstd::Span<const dstd::String> names,
+                         dstd::StringView suffix) {
+    std::size_t count = 0;
+    for (const dstd::String& name : names) {
+        if (dstd::PathView(name).extension() == suffix) ++count;
+    }
+    return count;
+}
+
+dstd::String store_id_of(const dftu_utils_test::ScopedTestDir& dir) {
+    auto text = dstd::fs::read_file(dstd::PathView(dir.file("store.id")));
+    REQUIRE(text.has_value());
+    return std::move(*text);
+}
+
+void write_one(Store& store) {
+    const Namespace ns = register_ns(store, spec_of("dftu.test.marker"));
+    put_all(store, ns, scope_of("/a"), {{"k", "v"}});
+    REQUIRE(run(store.close()).has_value());
 }
 
 using Rows = dstd::Vector<dstd::Pair<dstd::String, dstd::String>>;
@@ -748,4 +789,355 @@ TEST_SUITE("store api") {
               dstd::Optional<dstd::String>(dstd::String(4096, 'd')));
         REQUIRE(store.close().get().has_value());
     }
+
+    TEST_CASE(
+        "a store whose directory was deleted is replaced by the next open") {
+        dftu_utils_test::ScopedTestDir dir("store_api_replaced");
+        Store first = open_store(dir);
+        const Namespace ns = register_ns(first, spec_of("dftu.test.replaced"));
+        put_all(first, ns, scope_of("/a"), {{"k", "v"}});
+        CHECK(first.is_current());
+
+        const std::uint64_t opens = internal::opens();
+        Store same = open_store(dir);
+        CHECK(same.generation() == first.generation());
+        CHECK(internal::opens() == opens);
+
+        REQUIRE(dstd::fs::remove_all(dir.path().view()).has_value());
+        CHECK_FALSE(first.is_current());
+        Store second = open_store(dir);
+        CHECK(second.is_current());
+        CHECK(second.generation() != first.generation());
+        CHECK_FALSE(first.is_current());
+        CHECK(internal::opens() == opens + 1);
+    }
+
+    TEST_CASE("a store with no writer sees a directory made again") {
+        dftu_utils_test::ScopedTestDir dir("store_api_recreated");
+        Store first = open_store(dir);
+        REQUIRE(dstd::fs::remove_all(dir.path().view()).has_value());
+        REQUIRE(dstd::fs::create_directories(dir.path().view()).has_value());
+        CHECK_FALSE(first.is_current());
+        Store second = open_store(dir);
+        CHECK(second.generation() != first.generation());
+    }
+
+    TEST_CASE(
+        "a replaced store refuses to write or read into the new directory") {
+        dftu_utils_test::ScopedTestDir dir("store_api_refuses");
+        Store first = open_store(dir);
+        const Namespace ns = register_ns(first, spec_of("dftu.test.refuses"));
+        REQUIRE(dstd::fs::remove_all(dir.path().view()).has_value());
+        Store second = open_store(dir);
+        const Namespace own = register_ns(second, spec_of("dftu.test.refuses"));
+
+        Batch batch = first.batch(ns, scope_of("/a"));
+        batch.put(view_of("k"), view_of("stale"));
+        auto written = run(first.commit(std::move(batch)));
+        REQUIRE_FALSE(written.has_value());
+        CHECK(written.error().condition() == dstd::Condition::NotFound);
+        CHECK_FALSE(first.snapshot().has_value());
+
+        put_all(second, own, scope_of("/a"), {{"k", "fresh"}});
+        REQUIRE(run(second.flush()).has_value());
+        CHECK(get_value(second, own, scope_of("/a"), "k") ==
+              dstd::Optional<dstd::String>("fresh"));
+
+        auto opened = dstd::fs::Dir::open(dir.path().view());
+        REQUIRE(opened.has_value());
+        auto listing = opened->entries();
+        REQUIRE(listing.has_value());
+        std::size_t data_files = 0;
+        for (const dstd::fs::DirEntry& entry : *listing) {
+            if (dstd::PathView(entry.name).extension() == ".dfs") ++data_files;
+        }
+        CHECK(data_files == 1);
+    }
+
+    TEST_CASE(
+        "the last owner of a stale store drops while another thread opens") {
+        dftu_utils_test::ScopedTestDir dir("store_api_stale_drop");
+        constexpr int ROUNDS = 400;
+        for (int round = 0; round < ROUNDS; ++round) {
+            dstd::Optional<Store> held;
+            held.emplace(open_store(dir));
+            REQUIRE(dstd::fs::remove_all(dir.path().view()).has_value());
+            std::atomic<bool> go{false};
+            std::atomic<bool> opened{false};
+            dstd::Thread opener([&] {
+                while (!go.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                opened.store(Store::open(dstd::StringView(dir.str().data(),
+                                                          dir.str().size()))
+                                 .has_value(),
+                             std::memory_order_release);
+            });
+            go.store(true, std::memory_order_release);
+            held.reset();
+            opener.join();
+            CHECK(opened.load(std::memory_order_acquire));
+        }
+    }
+
+    TEST_CASE("a store has one marker, shared by every process that opens it") {
+        dftu_utils_test::ScopedTestDir dir("store_api_marker_shared");
+        Store first = open_store(dir);
+        write_one(first);
+        const dstd::String id = store_id_of(dir);
+        REQUIRE(id.size() == 16);
+        CHECK(count_suffix(names_in(dir), ".mark") == 1);
+
+        const pid_t pid = ::fork();
+        REQUIRE(pid >= 0);
+        if (pid == 0) {
+            ::alarm(60);
+            auto opened = Store::open(
+                dstd::StringView(dir.str().data(), dir.str().size()));
+            if (!opened || !opened->is_current()) ::_exit(1);
+            const Namespace ns = [&] {
+                auto added = opened->ns(spec_of("dftu.test.marker"));
+                return added.has_value() ? *added : Namespace{};
+            }();
+            Batch batch = opened->batch(ns, scope_of("/child"));
+            batch.put(view_of("k"), view_of("child"));
+            if (!run(opened->commit(std::move(batch)))) ::_exit(2);
+            if (!run(opened->close())) ::_exit(3);
+            auto text =
+                dstd::fs::read_file(dstd::PathView(dir.file("store.id")));
+            if (!text || *text != id) ::_exit(4);
+            ::_exit(0);
+        }
+        int status = 0;
+        REQUIRE(::waitpid(pid, &status, 0) == pid);
+        REQUIRE(WIFEXITED(status));
+        CHECK(WEXITSTATUS(status) == 0);
+        CHECK(store_id_of(dir) == id);
+        CHECK(count_suffix(names_in(dir), ".mark") == 1);
+        CHECK(first.is_current());
+    }
+
+    TEST_CASE("a directory deleted and built again gets a new marker") {
+        dftu_utils_test::ScopedTestDir dir("store_api_marker_new");
+        dstd::String before;
+        {
+            Store first = open_store(dir);
+            write_one(first);
+            before = store_id_of(dir);
+        }
+        REQUIRE(dstd::fs::remove_all(dir.path().view()).has_value());
+        Store second = open_store(dir);
+        write_one(second);
+        CHECK(store_id_of(dir) != before);
+        CHECK(count_suffix(names_in(dir), ".mark") == 1);
+    }
+
+    TEST_CASE("a store with no marker gets one from its first writer") {
+        dftu_utils_test::ScopedTestDir dir("store_api_marker_old");
+        {
+            Store first = open_store(dir);
+            write_one(first);
+        }
+        for (const dstd::String& name : names_in(dir)) {
+            if (name == "store.id" ||
+                dstd::PathView(name).extension() == ".mark") {
+                REQUIRE(dstd::fs::remove(dstd::PathView(dir.file(name)))
+                            .has_value());
+            }
+        }
+        Store reader = open_store(dir);
+        CHECK(reader.is_current());
+        CHECK(count_suffix(names_in(dir), ".mark") == 0);
+        CHECK_FALSE(dstd::fs::exists(dstd::PathView(dir.file("store.id")))
+                        .value_or(true));
+        write_one(reader);
+        CHECK(count_suffix(names_in(dir), ".mark") == 1);
+        CHECK(store_id_of(dir).size() == 16);
+        CHECK(reader.is_current());
+    }
+
+    TEST_CASE("open and close cycles leave one marker, not one per open") {
+        dftu_utils_test::ScopedTestDir dir("store_api_marker_cycles");
+        for (int cycle = 0; cycle < 50; ++cycle) {
+            Store store = open_store(dir);
+            write_one(store);
+        }
+        const auto names = names_in(dir);
+        CHECK(count_suffix(names, ".mark") == 1);
+        std::size_t ids = 0;
+        for (const dstd::String& name : names) ids += name == "store.id";
+        CHECK(ids == 1);
+    }
+
+    TEST_CASE("a stale-looking failure of the check leaves the store current") {
+        dftu_utils_test::ScopedTestDir dir("store_api_check_error");
+        Store store = open_store(dir);
+        write_one(store);
+        // The classifier: only a missing path says the directory is gone.
+        CHECK(store::detail::path_is_gone(
+            dstd::Error(dstd::Condition::NotFound)));
+        CHECK_FALSE(
+            store::detail::path_is_gone(dstd::Error(dstd::Condition::Io)));
+        CHECK_FALSE(
+            store::detail::path_is_gone(dstd::Error(dstd::Condition::Timeout)));
+        CHECK_FALSE(store::detail::path_is_gone(
+            dstd::Error(dstd::Condition::InvalidArgument)));
+        // A path below a file is not a directory, which is also "gone".
+        dir.create_file("plain", "x");
+        const auto below = dstd::fs::stat(dstd::PathView(dir.file("plain/x")));
+        REQUIRE_FALSE(below.has_value());
+        CHECK(store::detail::path_is_gone(below.error()));
+
+        // A directory that cannot be searched makes stat fail with EACCES.
+        if (::geteuid() != 0) {
+            REQUIRE(::chmod(dir.str().c_str(), 0) == 0);
+            const bool current = store.is_current();
+            REQUIRE(::chmod(dir.str().c_str(), 0755) == 0);
+            CHECK(current);
+        }
+        CHECK(store.is_current());
+    }
+
+    TEST_CASE("a deleted marker is made again while the store id is kept") {
+        dftu_utils_test::ScopedTestDir dir("store_api_marker_heal");
+        Store store = open_store(dir);
+        write_one(store);
+        const dstd::String id = store_id_of(dir);
+        auto mark_files = [&] {
+            dstd::Vector<dstd::String> marks;
+            for (const dstd::String& name : names_in(dir)) {
+                if (dstd::PathView(name).extension() == ".mark")
+                    marks.push_back(name);
+            }
+            return marks;
+        };
+        const auto marks = mark_files();
+        REQUIRE(marks.size() == 1);
+
+        REQUIRE(
+            dstd::fs::remove(dstd::PathView(dir.file(marks[0]))).has_value());
+        CHECK(store.is_current());
+        CHECK(mark_files() == marks);
+        CHECK(store_id_of(dir) == id);
+
+        // With store.id gone too, the store was replaced.
+        REQUIRE(
+            dstd::fs::remove(dstd::PathView(dir.file(marks[0]))).has_value());
+        REQUIRE(
+            dstd::fs::remove(dstd::PathView(dir.file("store.id"))).has_value());
+        CHECK_FALSE(store.is_current());
+
+        // And so it is when store.id holds another id.
+        Store again = open_store(dir);
+        write_one(again);
+        const dstd::String other = store_id_of(dir);
+        CHECK(other != id);
+        REQUIRE(dstd::fs::remove(dstd::PathView(dir.file(dstd::String("id-") +
+                                                         other + ".mark")))
+                    .has_value());
+        REQUIRE(dstd::fs::write_file(dstd::PathView(dir.file("store.id")),
+                                     "0123456789abcdef")
+                    .has_value());
+        CHECK_FALSE(again.is_current());
+    }
+
+    TEST_CASE("a reader of an older store takes the id a writer made later") {
+        dftu_utils_test::ScopedTestDir dir("store_api_marker_reader");
+        {
+            Store first = open_store(dir);
+            write_one(first);
+        }
+        for (const dstd::String& name : names_in(dir)) {
+            if (name == "store.id" ||
+                dstd::PathView(name).extension() == ".mark") {
+                REQUIRE(dstd::fs::remove(dstd::PathView(dir.file(name)))
+                            .has_value());
+            }
+        }
+        Store reader = open_store(dir);
+        REQUIRE(reader.snapshot().has_value());
+        CHECK(count_suffix(names_in(dir), ".mark") == 0);
+
+        const pid_t pid = ::fork();
+        REQUIRE(pid >= 0);
+        if (pid == 0) {
+            ::alarm(60);
+            auto writer = Store::open(
+                dstd::StringView(dir.str().data(), dir.str().size()));
+            if (!writer) ::_exit(1);
+            const Namespace ns = [&] {
+                auto added = writer->ns(spec_of("dftu.test.marker"));
+                return added.has_value() ? *added : Namespace{};
+            }();
+            Batch batch = writer->batch(ns, scope_of("/child"));
+            batch.put(view_of("k"), view_of("child"));
+            if (!run(writer->commit(std::move(batch)))) ::_exit(2);
+            ::_exit(run(writer->close()) ? 0 : 3);
+        }
+        int status = 0;
+        REQUIRE(::waitpid(pid, &status, 0) == pid);
+        REQUIRE(WIFEXITED(status));
+        REQUIRE(WEXITSTATUS(status) == 0);
+        const dstd::String id = store_id_of(dir);
+
+        // The reader sees the new data file, opens a snapshot again, and takes
+        // the id. Deleting the marker then shows it: it comes back.
+        REQUIRE(reader.refresh().has_value());
+        REQUIRE(reader.snapshot().has_value());
+        const dstd::String mark = dstd::String("id-") + id + ".mark";
+        REQUIRE(dstd::fs::remove(dstd::PathView(dir.file(mark))).has_value());
+        CHECK(reader.is_current());
+        CHECK(count_suffix(names_in(dir), ".mark") == 1);
+    }
+
+    TEST_CASE("a reader reads an invalid store.id once") {
+        dftu_utils_test::ScopedTestDir dir("store_api_marker_junk");
+        {
+            Store first = open_store(dir);
+            write_one(first);
+        }
+        for (const dstd::String& name : names_in(dir)) {
+            if (name == "store.id" ||
+                dstd::PathView(name).extension() == ".mark") {
+                REQUIRE(dstd::fs::remove(dstd::PathView(dir.file(name)))
+                            .has_value());
+            }
+        }
+        REQUIRE(dstd::fs::write_file(dstd::PathView(dir.file("store.id")),
+                                     "not an id")
+                    .has_value());
+        Store reader = open_store(dir);
+        REQUIRE(reader.snapshot().has_value());
+        // The id is fixed by hand. The reader does not look again, so it stays
+        // on the directory's inode and makes no marker.
+        REQUIRE(dstd::fs::write_file(dstd::PathView(dir.file("store.id")),
+                                     "0123456789abcdef")
+                    .has_value());
+        REQUIRE(reader.refresh().has_value());
+        REQUIRE(reader.snapshot().has_value());
+        CHECK(reader.is_current());
+        CHECK(count_suffix(names_in(dir), ".mark") == 0);
+    }
+
+#if DFTRACER_UTILS_TEST_PROBES
+    TEST_CASE(
+        "the last owner of a stale store drops between lookup and check") {
+        dftu_utils_test::ScopedTestDir dir("store_api_stale_hook");
+        static dstd::Optional<Store>* held = nullptr;
+        dstd::Optional<Store> handle;
+        handle.emplace(open_store(dir));
+        held = &handle;
+        REQUIRE(dstd::fs::remove_all(dir.path().view()).has_value());
+        internal::set_open_probe([] {
+            if (held != nullptr) held->reset();
+        });
+        auto reopened =
+            Store::open(dstd::StringView(dir.str().data(), dir.str().size()));
+        internal::set_open_probe(nullptr);
+        held = nullptr;
+        // Before the fix the stale state was destroyed under the registry
+        // lock that its destructor takes, and this call never returned.
+        REQUIRE(reopened.has_value());
+        CHECK(reopened->is_current());
+    }
+#endif
 }

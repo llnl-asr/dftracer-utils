@@ -28,7 +28,10 @@ dstd::Result<AggRun> start_aggregation(
     auto target = trace::index::Index::open(
         trace::index::normalize_index_root(index_path));
     if (!target) return target.error();
-    auto intern = trace::index::schemas::dft::agg::intern_for_index(index_path);
+    auto generation = target->generation();
+    if (!generation) return generation.error();
+    auto intern = trace::index::schemas::dft::agg::intern_for_index(
+        index_path, *generation);
     auto snapshot = target->snapshot();
     if (!snapshot) return snapshot.error();
     auto dictionary = agg_dictionary(*snapshot, *intern);

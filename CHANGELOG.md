@@ -898,6 +898,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The C++ SDK gets `Host::fileio()` with `LineReader`, `ChunkReader` and `GzWriter`, and the fileio library gets a plain-file line source, `async_streaming_plain_lines`.
   `dftu_task_run` now returns the task's status, so a `DFTU_END` task status reaches the caller.
 
+### Fixed
+
+- Read the new index after one process deletes an index and builds it again at the same path.
+  Before, `Indexer.rowset("files")` raised "the index holds no rows" and a typed read returned no rows, because the process kept the store of the deleted index open.
+  `Store::is_current()` and `Store::generation()` (C++) tell a handle whether the directory on disk is the one it opened; `Store::open` and `Index::open` drop a handle that is not current, and the aggregation intern table is keyed by `Index::generation()`.
+  A store directory holds one id in `store.id` (16 hex digits, made once with `O_EXCL` by the first process that opens the store with write access) and a marker file `id-<id>.mark`; no process removes them.
+  A store is current while its marker exists, so the check does not depend on inode numbers, and a directory made again gets a new id.
+  When only the marker is gone and `store.id` still holds the store's id, the marker is made again and the store stays current; it is replaced only when `store.id` is gone or holds another id, so a copy of the directory put over a deleted one, which keeps its id, is not detected.
+  A failure of the check other than "not found" (ESTALE, EIO, EACCES, a timeout) leaves the store current.
+  A short or invalid `store.id` is replaced with a temp file and a rename, and a reader waits for a file that a creator is still writing.
+  A store made before this change gets its id from its first writer, and a reader without write access falls back to the directory's device and inode.
+  A store that is no longer current refuses to open a writer or a snapshot, with a `NotFound` error, so it cannot write into the new directory.
+  Opening an index that is already open costs one more `stat` call.
+
 ### Removed
 
 - Remove `dftracer.utils.dfanalyzer`; it moves to the DFAnalyzer project. With it go `DaskTraceViewer.collect_typed_ipc_futures`, `dftracer.utils.arrow` (`ArrowTable`, `ipc_to_table`, `decode_dictionary_columns`) and `dftracer.utils.index.open_readonly_indexer`, which only it used.

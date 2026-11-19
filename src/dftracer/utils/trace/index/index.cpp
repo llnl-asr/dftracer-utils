@@ -20,6 +20,7 @@
 #include <dftracer/utils/trace/index/tables.h>
 
 #include <algorithm>
+#include <iterator>
 #include <mutex>
 #include <utility>
 
@@ -131,6 +132,15 @@ Index::Impl::find_store() {
     return dstd::Optional<dftracer::utils::store::Store>(std::move(*opened));
 }
 
+bool Index::Impl::is_current() {
+    dstd::Optional<dftracer::utils::store::Store> held;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        held = store;
+    }
+    return !held || held->is_current();
+}
+
 FileRef IndexAccess::make_file(dstd::String path,
                                dftracer::utils::store::ScopeKey scope,
                                const SourceStat& stat) {
@@ -158,6 +168,14 @@ FileBuild IndexAccess::make_build(dstd::String root,
 
 const dstd::String& IndexAccess::root(const Index& index) {
     return index.impl_->root;
+}
+
+bool IndexAccess::is_current(const Index& index) {
+    return index.impl_->is_current();
+}
+
+bool IndexAccess::same(const Index& a, const Index& b) {
+    return a.impl_ == b.impl_;
 }
 
 dstd::Expected<dftracer::utils::store::Store, dstd::Error>
@@ -592,16 +610,33 @@ class RetainedRoots {
    public:
     Index find_or_add(dstd::StringView root, Index made) {
         memory::detail::Scope general(memory::detail::Manager::get().general());
+        // Both are destroyed after the lock is gone: dropping the last handle
+        // of a store closes it.
+        dstd::Optional<Index> candidate;
+        Held dropped;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            const auto known = find(root);
+            if (known != roots_.end()) candidate = known->second;
+        }
+        // The stat of the check runs outside the lock, so openers do not
+        // queue behind it.
+        const bool stale = candidate && !IndexAccess::is_current(*candidate);
         std::lock_guard<std::mutex> lock(mutex_);
-        const auto known =
-            std::find_if(roots_.begin(), roots_.end(),
-                         [&](const auto& held) { return held.first == root; });
+        const auto known = find(root);
         if (known != roots_.end()) {
-            roots_.splice(roots_.begin(), roots_, known);
-            return roots_.front().second;
+            if (!stale || !IndexAccess::same(known->second, *candidate)) {
+                roots_.splice(roots_.begin(), roots_, known);
+                return roots_.front().second;
+            }
+            // The directory was deleted or replaced, so the kept handle holds
+            // files that are gone.
+            dropped.splice(dropped.begin(), roots_, known);
         }
         roots_.emplace_front(root, made);
-        if (roots_.size() > INDEX_ROOTS_RETAINED) roots_.pop_back();
+        if (roots_.size() > INDEX_ROOTS_RETAINED) {
+            dropped.splice(dropped.begin(), roots_, std::prev(roots_.end()));
+        }
         return made;
     }
 
@@ -623,6 +658,13 @@ class RetainedRoots {
 
    private:
     using Held = dstd::List<dstd::Pair<dstd::String, Index>>;
+
+    Held::iterator find(dstd::StringView root) {
+        return std::find_if(
+            roots_.begin(), roots_.end(),
+            [&](const auto& held) { return held.first == root; });
+    }
+
     std::mutex mutex_;
     Held roots_;
 };
@@ -661,6 +703,12 @@ dstd::Expected<Index, dstd::Error> Index::open(dstd::StringView root) {
     impl->store_dir = trace::index::store_dir(impl->root);
     const dstd::String key = impl->root;
     return retained_roots().find_or_add(key, Index(std::move(impl)));
+}
+
+dstd::Expected<std::uint64_t, dstd::Error> Index::generation() const {
+    auto opened = impl_->open_store();
+    if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());
+    return opened->generation();
 }
 
 dstd::Expected<Snapshot, dstd::Error> Index::snapshot() const {

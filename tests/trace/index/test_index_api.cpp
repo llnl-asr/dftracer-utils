@@ -18,6 +18,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/open_count.h>
 #include <dftracer/utils/trace/index/build/file_group.h>
 #include <dftracer/utils/trace/index/index.h>
 #include <dftracer/utils/trace/index/indexer.h>
@@ -27,8 +28,10 @@
 #include <dftracer/utils/trace/index/store/store_layout.h>
 #include <dftracer/utils/trace/index/tables.h>
 #include <doctest/doctest.h>
+#include <sys/wait.h>
 #include <task_result.h>
 #include <testing_utilities.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
@@ -1861,4 +1864,101 @@ TEST_CASE("opening a view root keeps its store inside the view root") {
     CHECK(dstd::fs::exists(root + "/views/v1/store").value());
     CHECK_FALSE(dstd::fs::exists(root + "/store").value());
     trace::index::release_root(view);
+}
+
+TEST_CASE("an index deleted and built again at one path reads the new index") {
+    dftu_utils_test::TestEnvironment env;
+    REQUIRE(env.is_valid());
+    const dstd::Path root(env.dir());
+    REQUIRE(dstd::fs::create_directories(root).has_value());
+    const auto traces = create_traces(env, root);
+    const auto index_path = dstd::String(root.str()) + "/.dftindex";
+
+    auto build_and_count = [&](dstd::Span<const dstd::String> some) {
+        for (const auto& trace : some)
+            REQUIRE(dftu_utils_test::build_index(
+                dstd::String(trace), dstd::String(index_path), CHECKPOINT));
+        auto opened = take(Index::open(index_path));
+        return take(take(opened.snapshot()).files()).size();
+    };
+
+    CHECK(build_and_count(dstd::Span<const dstd::String>(traces)) == 3);
+    auto before = take(Index::open(index_path));
+    const std::uint64_t first = take(before.generation());
+    CHECK(first != 0);
+
+    for (int round = 0; round < 3; ++round) {
+        REQUIRE(dstd::fs::remove_all(dstd::PathView(index_path)).has_value());
+        const std::size_t kept = 1 + static_cast<std::size_t>(round % 2);
+        CHECK(build_and_count(
+                  dstd::Span<const dstd::String>(traces.data(), kept)) == kept);
+        CHECK(take(take(Index::open(index_path)).generation()) != first);
+    }
+}
+
+TEST_CASE("an index handle kept across a delete is not served again") {
+    dftu_utils_test::TestEnvironment env;
+    REQUIRE(env.is_valid());
+    const dstd::String root = env.dir() + "/.dftindex";
+    {
+        auto opened = take(Index::open(root));
+        auto build = take(opened.build("/traces/a.pfw.gz", stat_of(1, 10, 1)));
+        put_members(build, 2);
+        put_stats(build, 2);
+        REQUIRE(run(build.commit()).has_value());
+    }
+    REQUIRE(dstd::fs::remove_all(dstd::PathView(root)).has_value());
+    auto reopened = take(Index::open(root));
+    CHECK(take(take(reopened.snapshot()).files()).empty());
+    auto build = take(reopened.build("/traces/b.pfw.gz", stat_of(2, 20, 1)));
+    put_members(build, 2);
+    put_stats(build, 2);
+    REQUIRE(run(build.commit()).has_value());
+    const auto snapshot = take(reopened.snapshot());
+    CHECK(take(snapshot.files()).size() == 1);
+    CHECK(snapshot.file("/traces/b.pfw.gz").has_value());
+    CHECK_FALSE(snapshot.file("/traces/a.pfw.gz").has_value());
+}
+
+TEST_CASE("reopening an unchanged index keeps its generation and its store") {
+    dftu_utils_test::TestEnvironment env;
+    REQUIRE(env.is_valid());
+    const dstd::String root = env.dir() + "/.dftindex";
+    dstd::Optional<Index> first(take(Index::open(root)));
+    auto build = take(first->build("/traces/a.pfw.gz", stat_of(1, 10, 1)));
+    put_members(build, 2);
+    put_stats(build, 2);
+    REQUIRE(run(build.commit()).has_value());
+    const std::uint64_t generation = take(first->generation());
+    const std::uint64_t opens = dftracer::utils::store::internal::opens();
+
+    CHECK(take(take(Index::open(root)).generation()) == generation);
+    first.reset();
+    CHECK(take(take(Index::open(root)).generation()) == generation);
+    CHECK(dftracer::utils::store::internal::opens() == opens);
+}
+
+TEST_CASE("a child of a fork opens a retained root without waiting") {
+    dftu_utils_test::TestEnvironment env;
+    REQUIRE(env.is_valid());
+    const dstd::String root = env.dir() + "/.dftindex";
+    {
+        auto opened = take(Index::open(root));
+        auto build = take(opened.build("/traces/a.pfw.gz", stat_of(1, 10, 1)));
+        put_members(build, 2);
+        put_stats(build, 2);
+        REQUIRE(run(build.commit()).has_value());
+    }
+    const pid_t pid = ::fork();
+    REQUIRE(pid >= 0);
+    if (pid == 0) {
+        ::alarm(60);
+        auto again = Index::open(root);
+        if (!again) ::_exit(1);
+        ::_exit(again->snapshot().has_value() ? 0 : 2);
+    }
+    int status = 0;
+    REQUIRE(::waitpid(pid, &status, 0) == pid);
+    REQUIRE_MESSAGE(WIFEXITED(status), "the child died or hung: ", status);
+    CHECK(WEXITSTATUS(status) == 0);
 }

@@ -777,7 +777,9 @@ TEST_SUITE("AggPartialsStore") {
             target.build("unused.pfw.gz", trace::index::SourceStat{1, 1, 1}));
         dstd::StringIntern intern;
         schemas::dft::agg::AggregationFold fold(
-            intern, schemas::dft::agg::intern_for_index(index_path),
+            intern,
+            schemas::dft::agg::intern_for_index(
+                index_path, dftu_utils_test::ok(target.generation())),
             schemas::dft::agg::standard_aggregation_config());
         dftu_utils_test::ok(fold.write(build));
     }

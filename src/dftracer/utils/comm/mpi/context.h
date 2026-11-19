@@ -28,11 +28,12 @@ namespace dftracer::utils::comm::mpi {
  *
  * The threads hold the context, so it outlives them, and the handle that
  * @ref make gives stops them when its last copy goes, on any thread: a thread
- * of the context that drops the last copy detaches itself and joins the
- * other, so no thread ever joins itself. The first context of the process
- * initializes MPI when no one did. When this library initialized MPI, a hook
- * at the end of the process stops the threads of every live context, and then
- * finalizes MPI.
+ * of the context that drops the last copy leaves itself to be joined when
+ * the next context starts or at shutdown, and joins the other, so no thread
+ * ever joins itself. The first context of the process initializes MPI when no
+ * one did. When this library initialized MPI, a hook at the end of the process
+ * stops the threads of every live context, joins the threads that left
+ * themselves, and then finalizes MPI.
  */
 class Context {
    public:
@@ -96,12 +97,13 @@ class Context {
     }
 
     /// Stops both threads and waits for them, except the one this call runs
-    /// on, which it detaches. A context with native requests still pending
-    /// waits a short while for them, and then ends the job with MPI_Abort and
-    /// one line on stderr instead of finalizing MPI, so the job never hangs on
-    /// a collective that a peer never matched. @p force ends the progress
-    /// thread with requests still watched, which only the end of the process
-    /// may do. Does nothing for a context that already stopped.
+    /// on, which the next context start or the shutdown joins. A context with
+    /// native requests still pending waits a short while for them, and then
+    /// ends the job with MPI_Abort and one line on stderr instead of finalizing
+    /// MPI, so the job never hangs on a collective that a peer never matched.
+    /// @p force ends the progress thread with requests still watched, which
+    /// only the end of the process may do. Does nothing for a context that
+    /// already stopped.
     void shutdown(bool force);
 
     /// Stops the threads of every live context, for the exit hook.

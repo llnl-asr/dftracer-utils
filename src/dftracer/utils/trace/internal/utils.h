@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -86,12 +87,12 @@ constexpr dstd::StringView IPC[] = {
 template <std::size_t N>
 inline dstd::String name_in_query(const dstd::StringView (&ops)[N]) {
     dstd::String q = "name in [";
-    for (std::size_t i = 0; i < N; ++i) {
-        if (i > 0) q += ", ";
-        q += '"';
-        q.append(ops[i]);
-        q += '"';
-    }
+    dstd::fmt_append_join<", ">(q, ops,
+                                [](dstd::String& o, dstd::StringView op) {
+                                    o += '"';
+                                    o.append(op);
+                                    o += '"';
+                                });
     q += ']';
     return q;
 }

@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/udaf_registry.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
@@ -617,10 +618,7 @@ char* dftu_lazyframe_schema(const dftu_lazyframe* lf) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names =
         lf->lf.schema();
     dftracer::utils::dstd::String joined;
-    for (std::size_t i = 0; i < names.size(); ++i) {
-        if (i) joined.push_back('\n');
-        joined += names[i];
-    }
+    dftracer::utils::dstd::fmt_append_join<"\n">(joined, names);
     return dup_string(joined);
 }
 

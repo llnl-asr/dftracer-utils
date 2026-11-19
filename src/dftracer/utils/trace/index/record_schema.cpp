@@ -885,10 +885,9 @@ dstd::Result<const RecordSchema*> get_schema(dstd::StringView id) {
     if (!reg) return reg.error();
     if (const RecordSchema* s = (*reg)->find(id)) return s;
     dstd::String ids;
-    for (const RecordSchema* s : (*reg)->all()) {
-        if (!ids.empty()) ids += ", ";
-        ids += s->id;
-    }
+    dstd::fmt_append_join<", ">(
+        ids, (*reg)->all(),
+        [](dstd::String& o, const RecordSchema* s) { o += s->id; });
     return common::make_error<
         "unknown record schema {} (registered: {}); user schemas load from "
         "$DFTRACER_UTILS_SCHEMA_PATH and <index_dir>/schemas/">(
@@ -926,10 +925,8 @@ dstd::Result<dstd::String> schemas_json() {
     };
     auto list = [&](dstd::Span<const dstd::String> xs) {
         out += '[';
-        for (std::size_t i = 0; i < xs.size(); ++i) {
-            if (i) out += ',';
-            quoted(xs[i]);
-        }
+        dstd::fmt_append_join<",">(
+            out, xs, [&](dstd::String&, dstd::StringView x) { quoted(x); });
         out += ']';
     };
     bool first = true;
@@ -1093,14 +1090,14 @@ dstd::String to_json(const SchemaDetection& d) {
     json::append_json_escaped(out, d.chosen ? d.chosen->id : "");
     out += "\",\"objects\":" + dstd::to_string(d.objects) +
            ",\"records\":" + dstd::to_string(d.records) + ",\"scores\":[";
-    for (std::size_t i = 0; i < d.scores.size(); ++i) {
-        const auto& s = d.scores[i];
-        if (i) out += ',';
-        out += "{\"id\":\"";
-        json::append_json_escaped(out, s.schema->id);
-        out += "\",\"required\":" + dstd::to_string(s.schema->require.size()) +
-               ",\"share\":" + dstd::to_string(s.share) + '}';
-    }
+    dstd::fmt_append_join<",">(
+        out, d.scores, [](dstd::String& o, const auto& s) {
+            o += "{\"id\":\"";
+            json::append_json_escaped(o, s.schema->id);
+            o +=
+                "\",\"required\":" + dstd::to_string(s.schema->require.size()) +
+                ",\"share\":" + dstd::to_string(s.share) + '}';
+        });
     out += "]}";
     return dstd::String(out);
 }

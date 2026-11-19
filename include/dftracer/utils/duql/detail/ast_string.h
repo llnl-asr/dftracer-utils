@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DUQL_DETAIL_AST_STRING_H
 #define DFTRACER_UTILS_DUQL_DETAIL_AST_STRING_H
 
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/detail/ast.h>
@@ -63,10 +64,9 @@ inline void literal_to_string(dstd::String& os, const LiteralNode& lit) {
 
 inline void array_to_string(dstd::String& os, const ArrayNode& arr) {
     os += '[';
-    for (std::size_t i = 0; i < arr.elements.size(); ++i) {
-        if (i > 0) os += ", ";
-        literal_to_string(os, arr.elements[i]);
-    }
+    dstd::fmt_append_join<", ">(
+        os, arr.elements,
+        [](dstd::String& o, const auto& el) { literal_to_string(o, el); });
     os += ']';
 }
 

@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/agg_query.h>
+#include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -458,4 +459,13 @@ TEST_SUITE("CompareMetrics") {
         REQUIRE(results.size() == 1);
         CHECK(results[0].pct_change == doctest::Approx(100.0).epsilon(0.01));
     }
+}
+
+TEST_CASE("name_in_query quotes and joins operation names") {
+    const dstd::StringView one[] = {"read"};
+    CHECK(trace::internal::posix_ops::name_in_query(one) ==
+          "name in [\"read\"]");
+    const dstd::StringView two[] = {"read", "pread64"};
+    CHECK(trace::internal::posix_ops::name_in_query(two) ==
+          "name in [\"read\", \"pread64\"]");
 }

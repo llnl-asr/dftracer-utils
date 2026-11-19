@@ -788,10 +788,10 @@ void build_metric_json(dstd::String& out, const MetricComparison& mc) {
 void build_metrics_arr(dstd::String& out,
                        dstd::Span<const MetricComparison> ms) {
     out += "[";
-    for (std::size_t i = 0; i < ms.size(); ++i) {
-        if (i > 0) out += ",";
-        build_metric_json(out, ms[i]);
-    }
+    dstd::fmt_append_join<",">(out, ms,
+                               [](dstd::String& o, const MetricComparison& m) {
+                                   build_metric_json(o, m);
+                               });
     out += "]";
 }
 
@@ -821,17 +821,17 @@ void build_node_json(dstd::String& out, const NodeResult& node) {
     out += "},";
 
     out += "\"groups\":[";
-    for (std::size_t i = 0; i < node.groups.size(); ++i) {
-        if (i > 0) out += ",";
-        build_group_json(out, node.groups[i]);
-    }
+    dstd::fmt_append_join<",">(out, node.groups,
+                               [](dstd::String& o, const GroupComparison& g) {
+                                   build_group_json(o, g);
+                               });
     out += "],";
 
     out += "\"children\":[";
-    for (std::size_t i = 0; i < node.children.size(); ++i) {
-        if (i > 0) out += ",";
-        build_node_json(out, node.children[i]);
-    }
+    dstd::fmt_append_join<",">(out, node.children,
+                               [](dstd::String& o, const NodeResult& child) {
+                                   build_node_json(o, child);
+                               });
     out += "]";
 
     out += "}";
@@ -889,10 +889,9 @@ dstd::String TreeTableFormatter::render_json(
     out += ",";
 
     out += "\"nodes\":[";
-    for (std::size_t i = 0; i < output.nodes.size(); ++i) {
-        if (i > 0) out += ",";
-        build_node_json(out, output.nodes[i]);
-    }
+    dstd::fmt_append_join<",">(
+        out, output.nodes,
+        [](dstd::String& o, const NodeResult& n) { build_node_json(o, n); });
     out += "]";
 
     out += "}";

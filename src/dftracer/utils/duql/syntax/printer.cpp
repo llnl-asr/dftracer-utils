@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -365,10 +366,9 @@ class Printer {
     }
 
     void exprs(dstd::Span<const ExprPtr> items) {
-        for (std::size_t i = 0; i < items.size(); ++i) {
-            if (i) out += ", ";
-            expr(items[i], Or);
-        }
+        dstd::fmt_append_join<", ">(
+            out, items,
+            [&](dstd::String&, const ExprPtr& item) { expr(item, Or); });
     }
 
     void inline_pipeline(const Pipeline& p) { pipeline(p, " | "); }
@@ -377,10 +377,9 @@ class Printer {
         bool first = true;
         if (!p.sources.empty()) {
             out += "from ";
-            for (std::size_t i = 0; i < p.sources.size(); ++i) {
-                if (i) out += ", ";
-                source(p.sources[i]);
-            }
+            dstd::fmt_append_join<", ">(
+                out, p.sources,
+                [&](dstd::String&, const auto& s) { source(s); });
             first = false;
         }
         for (const Stage& s : p.stages) {
@@ -402,10 +401,7 @@ class Printer {
         out += d.name;
         if (!d.params.empty()) {
             out += '(';
-            for (std::size_t i = 0; i < d.params.size(); ++i) {
-                if (i) out += ", ";
-                out += d.params[i];
-            }
+            dstd::fmt_append_join<", ">(out, d.params);
             out += ')';
         }
         out += " = ";
@@ -609,14 +605,14 @@ class Printer {
     int print(const Call& c) {
         out += c.name;
         out += '(';
-        for (std::size_t i = 0; i < c.args.size(); ++i) {
-            if (i) out += ", ";
-            if (!c.args[i].name.empty()) {
-                out += c.args[i].name;
-                out += " = ";
-            }
-            expr(c.args[i].value, Or);
-        }
+        dstd::fmt_append_join<", ">(out, c.args,
+                                    [&](dstd::String&, const auto& arg) {
+                                        if (!arg.name.empty()) {
+                                            out += arg.name;
+                                            out += " = ";
+                                        }
+                                        expr(arg.value, Or);
+                                    });
         out += ')';
         return Primary;
     }
@@ -657,12 +653,12 @@ class Printer {
     }
 
     void assigns(dstd::Span<const Assign> fields) {
-        for (std::size_t i = 0; i < fields.size(); ++i) {
-            if (i) out += ", ";
-            out += fields[i].name;
-            out += " = ";
-            expr(fields[i].value, Or);
-        }
+        dstd::fmt_append_join<", ">(out, fields,
+                                    [&](dstd::String&, const Assign& field) {
+                                        out += field.name;
+                                        out += " = ";
+                                        expr(field.value, Or);
+                                    });
     }
 
     void block(dstd::Span<const Assign> fields) {
@@ -672,14 +668,14 @@ class Printer {
     }
 
     void items(dstd::Span<const Item> list) {
-        for (std::size_t i = 0; i < list.size(); ++i) {
-            if (i) out += ", ";
-            if (!list[i].name.empty()) {
-                out += list[i].name;
-                out += " = ";
-            }
-            expr(list[i].value, Or);
-        }
+        dstd::fmt_append_join<", ">(out, list,
+                                    [&](dstd::String&, const Item& item) {
+                                        if (!item.name.empty()) {
+                                            out += item.name;
+                                            out += " = ";
+                                        }
+                                        expr(item.value, Or);
+                                    });
     }
 
     void keys(dstd::Span<const SortKey> list) {
@@ -703,10 +699,9 @@ class Printer {
     }
 
     void paths(dstd::Span<const Path> list) {
-        for (std::size_t i = 0; i < list.size(); ++i) {
-            if (i) out += ", ";
-            put_path(out, list[i]);
-        }
+        dstd::fmt_append_join<", ">(
+            out, list,
+            [](dstd::String& o, const Path& path) { put_path(o, path); });
     }
 
     void stage(const StageNode& n) {
@@ -742,12 +737,12 @@ class Printer {
 
     void print_stage(const Rename& s) {
         out += "rename ";
-        for (std::size_t i = 0; i < s.pairs.size(); ++i) {
-            if (i) out += ", ";
-            out += s.pairs[i].first;
-            out += " = ";
-            put_path(out, s.pairs[i].second);
-        }
+        dstd::fmt_append_join<", ">(out, s.pairs,
+                                    [](dstd::String& o, const auto& pair) {
+                                        o += pair.first;
+                                        o += " = ";
+                                        put_path(o, pair.second);
+                                    });
     }
 
     void print_stage(const Distinct& s) {
@@ -881,10 +876,8 @@ class Printer {
         else
             out += rowset;
         out += " on ";
-        for (std::size_t i = 0; i < keys.size(); ++i) {
-            if (i) out += ", ";
-            join_key(keys[i]);
-        }
+        dstd::fmt_append_join<", ">(
+            out, keys, [&](dstd::String&, const auto& key) { join_key(key); });
     }
 
     void print_stage(const Lookup& s) {
@@ -1225,19 +1218,19 @@ void put_term(dstd::String& out, const Term& t) {
             } else if constexpr (std::is_same_v<T, TIn>) {
                 put_child(out, *n.subject);
                 out += n.negated ? " not in [" : " in [";
-                for (std::size_t i = 0; i < n.list.size(); ++i) {
-                    if (i > 0) out += ", ";
-                    put_term(out, *n.list[i]);
-                }
+                dstd::fmt_append_join<", ">(
+                    out, n.list, [](dstd::String& o, const auto& term) {
+                        put_term(o, *term);
+                    });
                 out += ']';
             } else if constexpr (std::is_same_v<T, TCall>) {
                 out += n.fn == Fn::Udf ? dstd::StringView(n.udf)
                                        : fn_info(n.fn).name;
                 out += '(';
-                for (std::size_t i = 0; i < n.args.size(); ++i) {
-                    if (i > 0) out += ", ";
-                    put_term(out, *n.args[i]);
-                }
+                dstd::fmt_append_join<", ">(
+                    out, n.args, [](dstd::String& o, const auto& term) {
+                        put_term(o, *term);
+                    });
                 out += ')';
             } else if constexpr (std::is_same_v<T, TIndex>) {
                 put_child(out, *n.array);
@@ -1246,10 +1239,10 @@ void put_term(dstd::String& out, const Term& t) {
                 out += ']';
             } else if constexpr (std::is_same_v<T, TList>) {
                 out += '[';
-                for (std::size_t i = 0; i < n.items.size(); ++i) {
-                    if (i > 0) out += ", ";
-                    put_term(out, *n.items[i]);
-                }
+                dstd::fmt_append_join<", ">(
+                    out, n.items, [](dstd::String& o, const auto& term) {
+                        put_term(o, *term);
+                    });
                 out += ']';
             } else if constexpr (std::is_same_v<T, TQuant>) {
                 out += n.all ? "all(" : "any(";

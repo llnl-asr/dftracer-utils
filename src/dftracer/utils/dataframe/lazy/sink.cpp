@@ -13,6 +13,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -31,10 +32,7 @@ dstd::String sink_choices() {
     const dstd::Vector<dstd::String> names = registered_sink_names();
     if (names.empty()) return dstd::String("none are registered");
     dstd::String out;
-    for (const dstd::String& name : names) {
-        if (!out.empty()) out += ", ";
-        out += name;
-    }
+    dstd::fmt_append_join<", ">(out, names);
     return out;
 }
 

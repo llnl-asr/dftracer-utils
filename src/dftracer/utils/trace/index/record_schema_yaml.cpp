@@ -62,10 +62,9 @@ dstd::Result<E> choice_of(
     for (const auto& [name, value] : names)
         if (*v == name) return value;
     dstd::String all;
-    for (const auto& [name, value] : names) {
-        if (!all.empty()) all += ", ";
-        all += name;
-    }
+    dstd::fmt_append_join<", ">(
+        all, names,
+        [](dstd::String& o, const auto& entry) { o += entry.first; });
     return spec_error(source,
                       dstd::fmt<"{} is {}; expected one of {}">(key, *v, all));
 }

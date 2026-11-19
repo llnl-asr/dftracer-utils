@@ -566,10 +566,8 @@ struct Named {
 
 inline dstd::String join(detail::List<Col> items) {
     dstd::String out;
-    for (std::size_t i = 0; i < items.size(); ++i) {
-        if (i) out += ", ";
-        out += items[i].raw();
-    }
+    dstd::fmt_append_join<", ">(
+        out, items, [](dstd::String& o, const Col& item) { o += item.raw(); });
     return out;
 }
 
@@ -729,8 +727,8 @@ class Pipe {
     /// A stage that calls the pipeline macro `name` with `args`.
     Pipe use(dstd::StringView name, detail::List<Col> args = {}) const {
         dstd::String t = dstd::fmt<"{}(">(name);
-        for (std::size_t i = 0; i < args.size(); ++i)
-            t += (i ? ", " : "") + args[i].raw();
+        dstd::fmt_append_join<", ">(
+            t, args, [](dstd::String& o, const Col& arg) { o += arg.raw(); });
         return stage(dstd::fmt<"{})">(t), detail::error_of(args));
     }
     Pipe define_text(dstd::StringView name, detail::List<dstd::String> params,
@@ -738,8 +736,7 @@ class Pipe {
         dstd::String t = dstd::fmt<"def {}">(name);
         if (!params.empty()) {
             t += "(";
-            for (std::size_t i = 0; i < params.size(); ++i)
-                t += (i ? ", " : "") + params[i];
+            dstd::fmt_append_join<", ">(t, params);
             t += ")";
         }
         return decl(dstd::fmt<"{} = {}">(t, body), error);
@@ -766,9 +763,10 @@ class Pipe {
     Pipe rename(
         detail::List<dstd::Pair<dstd::String, dstd::String>> pairs) const {
         dstd::String t = "rename ";
-        for (std::size_t i = 0; i < pairs.size(); ++i)
-            t += dstd::fmt<"{}{} = {}">((i ? ", " : ""), pairs[i].first,
-                                        pairs[i].second);
+        dstd::fmt_append_join<", ">(
+            t, pairs, [](dstd::String& o, const auto& pair) {
+                o += dstd::fmt<"{} = {}">(pair.first, pair.second);
+            });
         return stage(t);
     }
     Pipe distinct(detail::List<Item> keys = {}) const {
@@ -993,15 +991,15 @@ class Pipe {
     }
     static dstd::String names(detail::List<dstd::String> list) {
         dstd::String out;
-        for (std::size_t i = 0; i < list.size(); ++i)
-            out += (i ? ", " : "") + list[i];
+        dstd::fmt_append_join<", ">(out, list);
         return out;
     }
     static dstd::String assigns(detail::List<Named> fields) {
         dstd::String out;
-        for (std::size_t i = 0; i < fields.size(); ++i)
-            out += dstd::fmt<"{}{} = {}">((i ? ", " : ""), fields[i].name,
-                                          fields[i].value.raw());
+        dstd::fmt_append_join<", ">(
+            out, fields, [](dstd::String& o, const Named& field) {
+                o += dstd::fmt<"{} = {}">(field.name, field.value.raw());
+            });
         return out;
     }
     static dstd::String block(detail::List<Named> fields) {
@@ -1009,22 +1007,24 @@ class Pipe {
     }
     static dstd::String items_text(detail::List<Item> items) {
         dstd::String out;
-        for (std::size_t i = 0; i < items.size(); ++i) {
-            if (i) out += ", ";
-            if (!items[i].name.empty())
-                out += dstd::fmt<"{} = ">(items[i].name);
-            out += items[i].value.raw();
-        }
+        dstd::fmt_append_join<", ">(out, items,
+                                    [](dstd::String& o, const Item& item) {
+                                        if (!item.name.empty())
+                                            o += dstd::fmt<"{} = ">(item.name);
+                                        o += item.value.raw();
+                                    });
         return out;
     }
     static dstd::String sort_keys(detail::List<SortKey> keys) {
         dstd::String out;
-        for (std::size_t i = 0; i < keys.size(); ++i) {
-            if (i) out += ", ";
-            out += keys[i].value.raw();
-            if (keys[i].nulls == Nulls::First) out += " nulls first";
-            if (keys[i].nulls == Nulls::Last) out += " nulls last";
-        }
+        dstd::fmt_append_join<", ">(out, keys,
+                                    [](dstd::String& o, const SortKey& key) {
+                                        o += key.value.raw();
+                                        if (key.nulls == Nulls::First)
+                                            o += " nulls first";
+                                        if (key.nulls == Nulls::Last)
+                                            o += " nulls last";
+                                    });
         return out;
     }
     static dstd::String key_text(const JoinKey& k) {
@@ -1063,8 +1063,8 @@ class Pipe {
     static dstd::String join_keys(dstd::StringView rowset,
                                   detail::List<JoinKey> on) {
         dstd::String t = dstd::fmt<"lookup {} on ">(rowset);
-        for (std::size_t i = 0; i < on.size(); ++i)
-            t += (i ? ", " : "") + key_text(on[i]);
+        dstd::fmt_append_join<", ">(
+            t, on, [](dstd::String& o, const JoinKey& k) { o += key_text(k); });
         return t;
     }
 
@@ -1085,8 +1085,10 @@ inline Pipe source(dstd::StringView file) {
 inline Pipe sources(detail::List<dstd::String> files) {
     Pipe p;
     p.from_ = "from ";
-    for (std::size_t i = 0; i < files.size(); ++i)
-        p.from_ += (i ? ", " : "") + detail::string_literal(files[i]);
+    dstd::fmt_append_join<", ">(p.from_, files,
+                                [](dstd::String& o, dstd::StringView file) {
+                                    o += detail::string_literal(file);
+                                });
     return p;
 }
 /// A pipeline over the row set or `let` `name` (`all`, `data`, ...).

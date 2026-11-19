@@ -3,9 +3,11 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/internal/join_names.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -222,6 +224,9 @@ TEST_CASE("C ABI drop and rename_columns") {
     char* schema = dftu_lazyframe_schema(d);
     CHECK(dstd::String(schema).find('b') == dstd::String::npos);
     dftu_duql_string_free(schema);
+    char* both = dftu_lazyframe_schema(base);
+    CHECK(dstd::String(both) == "a\nb");
+    dftu_duql_string_free(both);
     const char* from[] = {"a"};
     const char* to[] = {"z"};
     dftu_lazyframe* r = dftu_lazyframe_rename_columns(base, from, 1, to, 1);
@@ -233,4 +238,12 @@ TEST_CASE("C ABI drop and rename_columns") {
     dftu_lazyframe_free(r);
     dftu_lazyframe_free(d);
     dftu_lazyframe_free(base);
+}
+
+TEST_CASE("join_names_of separates names with a comma and a space") {
+    const dstd::String names[] = {"a", "b", "c"};
+    const dstd::Span<const dstd::String> all(names, 3);
+    CHECK(dataframe::join_names_of<dstd::String>(all) == "a, b, c");
+    CHECK(dataframe::join_names_of<dstd::String>(all.first(1)) == "a");
+    CHECK(dataframe::join_names_of<dstd::String>(all.first(0)).empty());
 }

@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/index/build/chunk_indexer.h>
+#include <dftracer/utils/trace/index/build/corrupt_index.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -249,4 +250,17 @@ TEST_SUITE("ChunkIndexer") {
         config.stats_share = 1.0;
         CHECK(config.validate().has_value());
     }
+}
+
+TEST_CASE("corrupt_index_message names every index directory") {
+    dstd::Set<dstd::String> roots;
+    roots.insert(dstd::String("/idx/a"));
+    roots.insert(dstd::String("/idx/b"));
+    CHECK(corrupt_index_message(roots, "bad page", false) ==
+          "the index at /idx/a, /idx/b is corrupt (bad page); delete that "
+          "directory and build the index again");
+    CHECK(corrupt_index_message(roots, "bad page", true) ==
+          "the index at /idx/a, /idx/b is corrupt and clearing its "
+          "aggregation tier did not repair it (bad page); delete that "
+          "directory and build the index again");
 }

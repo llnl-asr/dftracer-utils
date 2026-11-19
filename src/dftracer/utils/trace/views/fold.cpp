@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -369,10 +370,9 @@ void put_node(dstd::String& out, const JsonNode& n) {
     }
     if (array) {
         out += '[';
-        for (std::size_t i = 0; i < items.size(); ++i) {
-            if (i) out += ',';
-            put_node(out, *items[i]);
-        }
+        dstd::fmt_append_join<",">(
+            out, items,
+            [](dstd::String& o, const auto* item) { put_node(o, *item); });
         out += ']';
         return;
     }

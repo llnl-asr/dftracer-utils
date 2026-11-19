@@ -61,10 +61,7 @@ dstd::Vector<dstd::String> strings_of(const Names& names) {
 template <class Names>
 dstd::String joined(const Names& names) {
     dstd::String out;
-    for (const auto& n : names) {
-        if (!out.empty()) out += ", ";
-        out += n;
-    }
+    dstd::fmt_append_join<", ">(out, names);
     return out;
 }
 

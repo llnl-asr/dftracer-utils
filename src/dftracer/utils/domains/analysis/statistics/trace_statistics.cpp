@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/domains/analysis/statistics/trace_statistics.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
@@ -50,15 +51,12 @@ void add_counts_object(dstd::String& ss, dstd::StringView key, const Map& m,
     ss += '"';
     trace::internal::append_value(ss, key);
     ss += "\":{";
-    bool first = true;
-    for (const auto& [k, v] : m) {
-        if (!first) ss += ',';
-        first = false;
-        ss += '"';
-        trace::internal::append_value(ss, k);
-        ss += "\":";
-        trace::internal::append_value(ss, v);
-    }
+    dstd::fmt_append_join<",">(ss, m, [](dstd::String& o, const auto& kv) {
+        o += '"';
+        trace::internal::append_value(o, kv.first);
+        o += "\":";
+        trace::internal::append_value(o, kv.second);
+    });
     ss += '}';
 }
 }  // namespace

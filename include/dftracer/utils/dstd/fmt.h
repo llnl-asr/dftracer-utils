@@ -606,6 +606,22 @@ void fmt_append_join(String& out, const R& range) {
     }
 }
 
+/// As @ref fmt_append_join without a callback, but `append(out, item)` writes
+/// each item itself, so an item that needs more than a plain `{}` hole still
+/// gets one separator between items and none at either end. `append` only
+/// appends to `out` and leaves the text already there unchanged.
+template <FixedString Sep, class R, class Append>
+void fmt_append_join(String& out, const R& range, Append&& append) {
+    static_assert(fmt_detail::plain_separator<Sep>(),
+                  "dstd::fmt_append_join: the separator must not hold a brace");
+    bool first = true;
+    for (const auto& item : range) {
+        if (!first) out.append(Sep.v, sizeof(Sep.v) - 1);
+        first = false;
+        append(out, item);
+    }
+}
+
 /// @ref fmt_join into `buf`, with the contract of @ref fmt_to.
 template <FixedString Sep, class... A>
 FmtResult fmt_join_to(char* buf, std::size_t cap, const A&... a) {

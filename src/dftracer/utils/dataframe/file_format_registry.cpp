@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -250,10 +251,7 @@ dstd::Result<Reader> claim_reader(dstd::StringView path,
         if (auto plugin = find_file_format(forced))
             return Reader{dstd::String(forced), std::move(plugin)};
         dstd::String known;
-        for (const dstd::String& name : reader_names()) {
-            if (!known.empty()) known += ", ";
-            known += name;
-        }
+        dstd::fmt_append_join<", ">(known, reader_names());
         return common::make_error<"unknown format '{}'; known formats: {}">(
             common::ErrorCode::InvalidArgument, forced, known);
     }

@@ -149,10 +149,8 @@ ArgSpec& ArgParser::option(StringView& target, Names names, StringView help) {
 ArgSpec& ArgParser::option(Vector<StringView>& target, Names names,
                            StringView help) {
     String repr = "{";
-    for (std::size_t i = 0; i < target.size(); ++i) {
-        if (i != 0) repr += ", ";
-        repr += quoted(target[i]);
-    }
+    dstd::fmt_append_join<", ">(
+        repr, target, [](String& o, StringView t) { o += quoted(t); });
     repr += "}";
     ArgSpec& spec = add_value(names, help, std::move(repr), true);
     spec.kind_ = ArgSpec::Kind::Many;

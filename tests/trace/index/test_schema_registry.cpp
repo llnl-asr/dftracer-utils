@@ -542,6 +542,23 @@ TEST_SUITE("SchemaRegistry") {
     }
 }
 
+TEST_CASE("an unknown schema id lists the registered ids with commas") {
+    const dstd::String message =
+        error_of([] { return trace::index::get_schema("no_such_schema"); });
+    CHECK(mentions(message,
+                   "unknown record schema no_such_schema (registered: "));
+    CHECK(mentions(message, "generic"));
+    const std::size_t at = message.find("(registered: ");
+    const std::size_t end = message.find(')', at);
+    REQUIRE(at != dstd::String::npos);
+    REQUIRE(end != dstd::String::npos);
+    const dstd::StringView ids =
+        dstd::StringView(message).substr(at + 13, end - at - 13);
+    CHECK(mentions(ids, ", "));
+    CHECK(ids.front() != ',');
+    CHECK(ids.back() != ' ');
+}
+
 TEST_SUITE("SchemaDetection") {
     static dstd::String dft_event(int i) {
         return R"({"id":)" + dstd::to_string(i) +

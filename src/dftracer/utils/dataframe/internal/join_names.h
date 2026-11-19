@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_JOIN_NAMES_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_JOIN_NAMES_H
 
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/shared_string.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -14,10 +15,9 @@ namespace dftracer::utils::dataframe {
 template <class Name>
 inline dstd::String join_names_of(dstd::Span<const Name> names) {
     dstd::String out;
-    for (std::size_t i = 0; i < names.size(); ++i) {
-        if (i) out += ", ";
-        out += dstd::StringView{names[i]};
-    }
+    dstd::fmt_append_join<", ">(
+        out, names,
+        [](dstd::String& o, const Name& name) { o += dstd::StringView{name}; });
     return out;
 }
 

@@ -10,10 +10,7 @@ namespace {
 dstd::String join_or_none(dstd::Span<const dstd::String> names) {
     if (names.empty()) return "(none)";
     dstd::String out;
-    for (const auto& name : names) {
-        if (!out.empty()) out += ", ";
-        out.append(name.data(), name.size());
-    }
+    dstd::fmt_append_join<", ">(out, names);
     return out;
 }
 

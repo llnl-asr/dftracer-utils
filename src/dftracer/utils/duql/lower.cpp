@@ -221,9 +221,11 @@ class Lowering {
             dstd::String text;
             if (const auto* list =
                     std::get_if<dstd::Vector<duql::LiteralValue>>(&value)) {
-                for (const auto& v : *list)
-                    text += (text.empty() ? "" : ", ") +
-                            duql::term_text(*make_term(constant(v)));
+                dstd::fmt_append_join<", ">(
+                    text, *list,
+                    [&](dstd::String& o, const duql::LiteralValue& v) {
+                        o += duql::term_text(*make_term(constant(v)));
+                    });
                 text = dstd::fmt<"[{}]">(text);
             } else {
                 text = duql::term_text(
@@ -1026,8 +1028,7 @@ class Lowering {
         if (!plugins_ || plugins_->namespaces.empty())
             return dstd::fmt<"{}no plugin is loaded">(out);
         out += "loaded plugin namespaces: ";
-        for (std::size_t i = 0; i < plugins_->namespaces.size(); ++i)
-            out += (i ? ", " : "") + plugins_->namespaces[i];
+        dstd::fmt_append_join<", ">(out, plugins_->namespaces);
         return out;
     }
 

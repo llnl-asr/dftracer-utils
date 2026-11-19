@@ -199,10 +199,7 @@ dstd::String cell_text(const dataframe::Series& column, std::int64_t row) {
 
 dstd::String table_text(const dataframe::DataFrame& table) {
     dstd::String out;
-    for (std::size_t c = 0; c < table.columns.size(); ++c) {
-        if (c > 0) out += '\t';
-        out.append(table.names[c].data(), table.names[c].size());
-    }
+    dstd::fmt_append_join<"\t">(out, table.names);
     out += '\n';
     const std::int64_t rows = table.num_rows();
     for (std::int64_t r = 0; r < rows; ++r) {

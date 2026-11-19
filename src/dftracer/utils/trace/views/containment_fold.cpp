@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/flame_arena.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -110,15 +111,14 @@ std::uint32_t group_id_of(const FoldEvent& ev, const ContainmentSpec& spec,
                           dftracer::utils::dstd::StringIntern& intern) {
     if (spec.group_fields.empty()) return 0xFFFFFFFFu;
     dstd::String key;
-    for (std::size_t i = 0; i < spec.group_fields.size(); ++i) {
-        if (i) key += " / ";
-        const FieldRef& f = spec.group_fields[i];
-        const std::uint32_t sid = field_str_id(ev, f);
-        if (sid != 0xFFFFFFFFu)
-            key.append(intern.resolve(sid));
-        else
-            key.append(dstd::to_string(field_i64(ev, f)));
-    }
+    dstd::fmt_append_join<" / ">(
+        key, spec.group_fields, [&](dstd::String& o, const FieldRef& f) {
+            const std::uint32_t sid = field_str_id(ev, f);
+            if (sid != 0xFFFFFFFFu)
+                o.append(intern.resolve(sid));
+            else
+                o.append(dstd::to_string(field_i64(ev, f)));
+        });
     return intern.get_or_insert(key);
 }
 

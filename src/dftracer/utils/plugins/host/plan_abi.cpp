@@ -82,10 +82,10 @@ dstd::Vector<dataframe::ExplainLine> plan_lines(
     const dataframe::ScanPlan& plan = **planned;
     const char* const name[] = {"no", "inexact", "exact"};
     dstd::String votes;
-    for (const dataframe::Pushed v : plan.votes) {
-        if (!votes.empty()) votes += ',';
-        votes += name[static_cast<std::size_t>(v)];
-    }
+    dstd::fmt_append_join<",">(votes, plan.votes,
+                               [&](dstd::String& o, const dataframe::Pushed v) {
+                                   o += name[static_cast<std::size_t>(v)];
+                               });
     lines.push_back({"plan_votes", votes.empty() ? "none" : votes});
     lines.push_back({"plan_cost", plan.cost < 0
                                       ? dstd::String("unknown")

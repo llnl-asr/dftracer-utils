@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/arrow/internal.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/shared_string.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -239,10 +240,10 @@ void set_frame_metadata(const DataFrame& frame, ArrowSchema* schema) {
     const dstd::Span<const dstd::SharedString> names = frame.index_names();
     if (names.empty()) return;
     dstd::String json = "[";
-    for (std::size_t i = 0; i < names.size(); ++i) {
-        if (i != 0) json += ',';
-        append_json_string(json, names[i]);
-    }
+    dstd::fmt_append_join<",">(
+        json, names, [](dstd::String& o, const dstd::SharedString& name) {
+            append_json_string(o, name);
+        });
     json += ']';
     ArrowBuffer meta;
     ArrowMetadataBuilderInit(&meta, schema->metadata);

@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/query/group_fold.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dataframe/udaf_registry.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -226,10 +227,8 @@ Status Applier::stage(const duql::PipelineGroup& group) {
                 return refuse<"group gives two columns named '{}'">(out[i]);
 
     dstd::String text;
-    for (const auto& k : g.keys) {
-        if (!text.empty()) text += ", ";
-        text += k.text;
-    }
+    dstd::fmt_append_join<", ">(
+        text, g.keys, [](dstd::String& o, const auto& k) { o += k.text; });
     for (const auto& [sum, valid] : sums) out.push_back(valid);
     dstd::String aggs;
     for (const auto& a : group.aggs) {

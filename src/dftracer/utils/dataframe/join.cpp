@@ -12,6 +12,7 @@
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/hash_combine.h>
 #include <dftracer/utils/dstd/hasher.h>
@@ -997,10 +998,7 @@ dstd::Result<DataFrame> HashJoin::probe_values(
         dstd::String key;
         value_key(key, right_keys_, h);
         dstd::String on;
-        for (const dstd::String& k : right_on_) {
-            if (!on.empty()) on += ", ";
-            on += dstd::StringView(k);
-        }
+        dstd::fmt_append_join<", ">(on, right_on_);
         return invalid_argument<
             "join: lookup key {} of '{}' has right rows with different "
             "values of '{}'">(duql::key_text(key), on,

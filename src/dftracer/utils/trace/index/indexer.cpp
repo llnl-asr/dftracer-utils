@@ -945,10 +945,7 @@ void append_string(dstd::String& out, dstd::StringView s) {
 
 void append_chunks(dstd::String& out, dstd::Span<const std::uint64_t> v) {
     out.push_back('[');
-    for (std::size_t i = 0; i < v.size(); ++i) {
-        if (i) out.push_back(',');
-        out.append(dstd::to_string(v[i]));
-    }
+    dstd::fmt_append_join<",">(out, v);
     out.push_back(']');
 }
 

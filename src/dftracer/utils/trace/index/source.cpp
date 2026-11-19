@@ -93,10 +93,7 @@ dstd::Result<dstd::Vector<Member>> members(dstd::StringView text,
         dstd::String params;
         if (!d.params.empty()) {
             params = "(";
-            for (std::size_t i = 0; i < d.params.size(); ++i) {
-                if (i) params += ", ";
-                params += d.params[i];
-            }
+            dstd::fmt_append_join<", ">(params, d.params);
             params += ")";
         }
         auto added =

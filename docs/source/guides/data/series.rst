@@ -377,15 +377,19 @@ pandas ``.str.replace`` stays literal. In C it is ``dftu_series_str_regex_replac
 and ``DFTU_STR_FN_REGEX_REPLACE`` for ``dftu_expr_str_fn``. See :doc:`/reference/duql` for
 the regex dialect and the match limit.
 
-``dt_format(fmt, unit)`` formats a time column as UTC text; ``unit`` is the
+``dt_format(fmt, unit)`` formats a time column as text; ``unit`` is the
 unit of the stored integers, coded as in ``dt_part`` (0 seconds, 1
 milliseconds, 2 microseconds, 3 nanoseconds); a timestamp column uses its own
 unit. In Python
 it is the pandas ``.dt.strftime(fmt)``. The directives are ``%Y %y %m %d %H
 %I %M %S %f %j %a %A %b %B %p %F %T %s %z %Z`` and ``%%``; ``%f`` is six digit
-microseconds, names are English, ``%z`` is ``+0000`` and ``%Z`` is ``UTC``. An
-unknown directive or a trailing ``%`` raises ``ValueError``; there is no other
-time zone. In C it is ``dftu_series_dt_format``, and ``dftu_expr_date_part``
+microseconds and names are English. A timestamp column with a zone prints its
+wall time in that zone, ``%z`` as the offset (``+0530``) and ``%Z`` as the
+abbreviation (``IST``); every other column prints UTC, ``%z`` as ``+0000`` and
+``%Z`` as ``UTC``. An unknown directive or a trailing ``%`` raises
+``ValueError``, and a zone that is not in the time zone database raises
+``KeyError``. The duql ``date_part`` and ``format_time`` read integers as UTC and
+refuse a timestamp column in a zone. In C it is ``dftu_series_dt_format``, and ``dftu_expr_date_part``
 and ``dftu_expr_format_time`` build the expressions that duql ``date_part``
 and ``format_time`` use.
 

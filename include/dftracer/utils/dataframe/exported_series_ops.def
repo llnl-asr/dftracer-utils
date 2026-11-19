@@ -307,5 +307,6 @@ DFTU_SERIES_OP(dftu.series.cbrt, dftu_series_cbrt, SERIES, SERIES, NONE, NONE)
 DFTU_SERIES_OP(dftu.series.log10, dftu_series_log10, SERIES, SERIES, NONE, NONE)
 DFTU_SERIES_OP(dftu.series.erf, dftu_series_erf, SERIES, SERIES, NONE, NONE)
 DFTU_SERIES_OP(dftu.series.erfc, dftu_series_erfc, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.tz_localize, dftu_series_tz_localize_opts, SERIES, SERIES, STR, I64)
 
 #undef DFTU_SERIES_OP

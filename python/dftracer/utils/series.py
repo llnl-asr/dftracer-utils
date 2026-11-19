@@ -1214,8 +1214,9 @@ _dt_accessor_new = _ext.DtAccessor.__new__
 class _DtAccessor(_ext.DtAccessor):
     """``s.dt``: the calendar parts of a Timestamp / Date / Duration Series
     in its own unit, or of an Int64 Series read as microseconds
-    (``s.dt("ns")`` picks another unit). Naive: a timezone is ignored and
-    every part is UTC, as pandas on a tz-naive column."""
+    (``s.dt("ns")`` picks another unit). A Timestamp column with a zone gives
+    the parts of its wall time in that zone; a naive column, an Int64 column
+    and a UTC one give the UTC parts."""
 
     __slots__ = ("_unit", "_given")
     _unit: str
@@ -1237,10 +1238,12 @@ class _DtAccessor(_ext.DtAccessor):
         return self._s.dt_part(code, DT_UNIT_CODES[self._unit])
 
     def strftime(self, fmt: str) -> Series:
-        """Format each instant as UTC text (pandas ``strftime``) for the
-        directives %Y %y %m %d %H %I %M %S %f %j %a %A %b %B %p %F %T %s %z
-        %Z %%; another directive raises ValueError. Unlike pandas on a naive
-        column, %z prints ``+0000`` and %Z prints ``UTC`` rather than empty."""
+        """Format each instant (pandas ``strftime``) for the directives %Y %y
+        %m %d %H %I %M %S %f %j %a %A %b %B %p %F %T %s %z %Z %%; another
+        directive raises ValueError. A column with a zone prints its wall
+        time, %z as the offset and %Z as the abbreviation. Unlike pandas on a
+        naive column, %z prints ``+0000`` and %Z prints ``UTC`` rather than
+        empty."""
         return self._s.dt_format(fmt, DT_UNIT_CODES[self._unit])
 
     def day_name(self) -> Series:
@@ -1431,20 +1434,21 @@ class _DtAccessor(_ext.DtAccessor):
     @property
     def date(self) -> Series:
         """The calendar day of each Timestamp as a Date32 column (pandas
-        ``dt.date``); the day is UTC, as every ``.dt`` part."""
+        ``dt.date``); the day of the wall time in the column's zone."""
         return self._s.dt_date()
 
     @property
     def time(self) -> Series:
         """The time of day of each Timestamp, in the column's unit: a Time32
         column for seconds and milliseconds, a Time64 column for microseconds
-        and nanoseconds (pandas ``dt.time``); UTC, as every ``.dt`` part."""
+        and nanoseconds (pandas ``dt.time``); the wall time in the column's
+        zone."""
         return self._s.dt_time()
 
     @property
     def timetz(self) -> Series:
         """As :meth:`time`. The column types carry no zone for a time of day,
-        so the result is the UTC time of day without the tzinfo pandas
+        so the result is the wall time of day without the tzinfo pandas
         attaches."""
         return self._s.dt_time()
 
@@ -1510,30 +1514,53 @@ class _DtAccessor(_ext.DtAccessor):
         """The zone name of a Timestamp column, or None when naive."""
         return self._s.timezone or None
 
-    def tz_localize(self, tz: str | None) -> Series:
-        """A naive Timestamp column marked as ``tz`` (pandas
-        ``tz_localize``); ``None`` strips the zone of an aware one. The
-        engine has no zone database, so only ``"UTC"`` (and its spellings)
-        can mark a naive column: its ticks already are UTC instants."""
-        if tz is None:
-            return self._s.with_timezone("")
-        if self.tz is not None:
-            raise TypeError(f"tz_localize: already tz-aware ({self.tz!r}); use tz_convert")
-        if tz.upper() not in ("UTC", "ETC/UTC", "Z", "GMT"):
-            raise ValueError(
-                f"tz_localize: only UTC can mark a naive column, not {tz!r} "
-                "(no zone database in the engine)"
-            )
-        return self._s.with_timezone(tz)
+    def tz_localize(
+        self,
+        tz: str | None,
+        ambiguous: str | Sequence[bool] = "raise",
+        nonexistent: str | datetime.timedelta = "raise",
+    ) -> Series:
+        """A naive Timestamp column read as wall times in ``tz`` (pandas
+        ``tz_localize``); ``None`` turns an aware column into its wall times.
+        ``ambiguous`` is ``"raise"``, ``"infer"``, ``"NaT"`` or a boolean
+        array (``True`` takes the first of the two instants); ``nonexistent``
+        is ``"raise"``, ``"shift_forward"``, ``"shift_backward"``, ``"NaT"``
+        or a ``timedelta``. ``shift_forward`` and ``shift_backward`` use the
+        instant of the change, not pandas' whole-hour rounding."""
+        from ._time_index import localize
+
+        return localize(self._s, tz, ambiguous, nonexistent)
 
     def tz_convert(self, tz: str | None) -> Series:
         """The same instants shown in zone ``tz`` (pandas ``tz_convert``):
         the type's zone changes, no tick moves. Needs a tz-aware column;
-        ``None`` gives the naive UTC column. The ``.dt`` calendar parts
-        stay UTC."""
-        if self.tz is None:
-            raise TypeError("tz_convert: a naive column; tz_localize('UTC') first")
-        return self._s.with_timezone(tz or "")
+        ``None`` gives the naive UTC column."""
+        from ._time_index import convert
+
+        return convert(self._s, tz)
+
+    def replace_time_zone(
+        self,
+        time_zone: str | None,
+        *,
+        use_earliest: bool | None = None,
+        ambiguous: str | Series = "raise",
+        non_existent: str = "raise",
+    ) -> Series:
+        """The polars name of :meth:`tz_localize`: the wall times kept and the
+        zone replaced (``None`` removes it). ``ambiguous`` is ``"raise"``,
+        ``"earliest"``, ``"latest"`` or ``"null"``; ``non_existent`` is
+        ``"raise"`` or ``"null"``."""
+        from ._time_index import replace_zone
+
+        return replace_zone(self._s, time_zone, use_earliest, ambiguous, non_existent)
+
+    def convert_time_zone(self, time_zone: str) -> Series:
+        """The polars name of :meth:`tz_convert`: the same instants shown in
+        ``time_zone``."""
+        from ._time_index import convert_time_zone
+
+        return convert_time_zone(self._s, time_zone)
 
 
 class _ListAccessor(_ext.ListAccessor):

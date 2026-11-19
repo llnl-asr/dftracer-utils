@@ -52,7 +52,8 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_series_math_bitwis
                            test_field_stat.cpp test_log2_histogram.cpp
                            test_validate.cpp test_reader_probe.cpp
                            test_plugin_frame.cpp test_udf_adapter.cpp
-                           test_timestamp_histogram.cpp test_tz.cpp)
+                           test_timestamp_histogram.cpp test_tz.cpp
+                           test_tz_kernels.cpp)
 
 foreach(test_file ${DATAFRAME_TEST_SOURCES})
   string(REPLACE ".cpp" "" bin_exec ${test_file})
@@ -93,7 +94,7 @@ foreach(test_file ${DATAFRAME_TEST_SOURCES})
   add_test(NAME dataframe/${bin_exec} COMMAND ${target_name})
   set_tests_properties(dataframe/${bin_exec} PROPERTIES
                        WORKING_DIRECTORY "${test_working_directory}")
-  if(bin_exec STREQUAL "test_tz")
+  if(bin_exec STREQUAL "test_tz" OR bin_exec STREQUAL "test_tz_kernels")
     target_compile_definitions(
       ${target_name} PRIVATE
       DFTRACER_UTILS_TZ_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/tz")

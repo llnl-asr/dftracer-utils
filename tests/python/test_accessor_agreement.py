@@ -152,10 +152,15 @@ def test_tz_localize_and_tz_convert_agree_across_series_and_expr():
     assert utc_series.to_list() == utc_expr.to_list()
     back = col("x").dt.tz_localize("UTC").dt.tz_convert(None).apply(frame)
     assert back.timezone == "" and back.to_list() == s.to_list()
-    with pytest.raises(ValueError, match="only UTC can mark"):
-        s.dt.tz_localize("Europe/Paris")
-    with pytest.raises(ValueError, match="only UTC can mark"):
-        col("x").dt.tz_localize("Europe/Paris")
+    paris_series = s.dt.tz_localize("Europe/Paris")
+    paris_expr = col("x").dt.tz_localize("Europe/Paris").apply(frame)
+    assert paris_series.timezone == paris_expr.timezone == "Europe/Paris"
+    assert paris_series.to_list() == paris_expr.to_list()
+    assert paris_series.astype("int64").to_list() != utc_series.astype("int64").to_list()
+    with pytest.raises(KeyError):
+        s.dt.tz_localize("Nowhere/Land")
+    with pytest.raises(KeyError):
+        col("x").dt.tz_localize("Nowhere/Land")
 
 
 def test_the_new_series_str_methods_match_pandas():

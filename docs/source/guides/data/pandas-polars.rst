@@ -136,9 +136,9 @@ floors toward negative infinity, except that ``cast_time_unit`` truncates a
 Duration toward zero, as polars does. A value that does not fit 64 bits in a
 finer unit raises ``DFTUtilsValueError``; polars wraps it. ``dt.date`` gives a
 Date32 column and ``dt.time`` the time of day in the column's own unit (Time32
-for seconds and milliseconds, Time64 for microseconds and nanoseconds), both in
-UTC like every ``.dt`` part. ``dt.timetz`` is ``dt.time``: a time-of-day column
-has no zone to carry. ``col("v").arg_max()`` and ``arg_min()`` give the position
+for seconds and milliseconds, Time64 for microseconds and nanoseconds), both of
+the wall time in the column's zone, like every ``.dt`` part. ``dt.timetz`` is
+``dt.time``: a time-of-day column has no zone to carry. ``col("v").arg_max()`` and ``arg_min()`` give the position
 within the group of the first extreme present value (null for a group with
 none); they need the rows in input order, so ``TraceViewer.agg`` refuses them.
 ``groupby(k)["v"].nlargest(n)`` and ``nsmallest(n)`` give the keys, the row
@@ -590,11 +590,35 @@ from the ticks with integer arithmetic, so no new kernel.
 kinds as pandas (``KeyError`` for an unknown name, ``IndexError`` for an empty one,
 ``ValueError`` for ``"UTC+1"``), and take every spelling of UTC that pandas
 treats as zero offset (``UCT``, ``Etc/GMT``, ``Zulu``, ``Greenwich`` and the
-rest). They change the type of the index level: the engine
-has no zone database, so ``tz_localize`` marks a naive index as UTC or strips a
-zone (``None``), a name of any other zone is a ``ValueError``, and ``tz_convert``
-changes only the name the type shows (the ``.dt`` parts stay UTC). ``ambiguous``
-and ``nonexistent`` change nothing for UTC.
+rest). The engine reads the zone files from the directories of :doc:`/environment`
+(``DFTRACER_UTILS_TZDIR``), after the ``zoneinfo.TZPATH`` directories and the
+``tzdata`` package that Python gives it.
+``tz_localize`` reads a naive index as wall times in the zone, and ``None``
+turns an aware index into its wall times; ``tz_convert`` changes only the zone
+the type shows, no instant moves. ``ambiguous`` (``"raise"``, ``"infer"``,
+``"NaT"`` or a boolean array) and ``nonexistent`` (``"raise"``,
+``"shift_forward"``, ``"shift_backward"``, ``"NaT"`` or a ``timedelta``) say
+what a wall time that happens twice or never becomes. Every ``.dt`` part,
+``strftime`` (``%z`` the offset, ``%Z`` the abbreviation), ``floor``,
+``ceil``, ``round``, ``normalize``, ``date`` and ``time`` of an aware column
+read the wall time in its zone, and so do ``resample``, ``asfreq``,
+``at_time`` and ``between_time``: a day of a zone with daylight saving time is
+23 or 25 hours long, as pandas. A naive column and a UTC column keep the
+direct path.
+
+``dt.replace_time_zone(time_zone, ambiguous=, non_existent=)`` and
+``dt.convert_time_zone(time_zone)`` are the polars names of ``tz_localize`` and
+``tz_convert``. ``ambiguous`` takes ``"raise"``, ``"earliest"``, ``"latest"``
+or ``"null"``, and ``non_existent`` takes ``"raise"`` or ``"null"``, as polars.
+
+Two differences from pandas, kept on purpose. ``nonexistent="shift_forward"``
+and ``"shift_backward"`` give the instant of the change (the first instant
+after the gap, and one tick before it): pandas rounds to the next or previous
+whole hour, which differs for a gap that does not end on the hour
+(``Australia/Lord_Howe``, ``Pacific/Chatham``). A fixed offset such as
+``"+0530"`` is +05:30; pandas reads it as +05:00.
+``floor``, ``ceil`` and ``round`` of an aware column fail with ``ValueError``
+when the rounded wall time happens twice or never, as pandas does.
 
 .. code-block:: python
 
@@ -686,10 +710,8 @@ Left out, and why
 
 - ``to_period``: a Period is a span, not an instant; ``dt.floor``,
   ``resample`` and the calendar parts give the same buckets.
-- ``tz_localize`` with a non-UTC zone on a naive column or index: a wall-time shift
-  needs a zone database the engine does not have.
-- ``dt.strftime`` takes the directives of ``Series.dt_format`` only, and
-  formats in UTC. Other directives raise ``ValueError``.
+- ``dt.strftime`` takes the directives of ``Series.dt_format`` only. Other
+  directives raise ``ValueError``.
 - ``MultiIndex`` methods, ``align`` / ``reindex``: they follow the row index
   (``Series`` labels exist, the lookup and reindex methods do not yet).
 - Plotting, styling, ``attrs`` / ``flags``, the file writers beyond

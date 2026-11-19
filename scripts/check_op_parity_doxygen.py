@@ -180,6 +180,7 @@ ALLOWLIST = {
 # its target is.
 PY_ALIASES = {
     "Series": {
+        "dt_tz_localize": "tz_localize",
         "is_not_null": "valid_mask",
         "fill_null": "fillna",
         "is_null": "null_mask",

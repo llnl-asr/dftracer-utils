@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 from . import schemas  # noqa: F401
 from ._eval import eval_many, where  # noqa: F401
+from ._tz import install_search_path as _install_tz_search_path
 from .agg import Udaf, count, udaf  # noqa: F401
 from .dataframe import DataFrame  # noqa: F401
 from .dftracer_utils_ext import (  # noqa: F401
@@ -136,3 +137,5 @@ __all__ = [
     "DFTUtilsReaderError",
     "DFTUtilsValueError",
 ]
+
+_install_tz_search_path()

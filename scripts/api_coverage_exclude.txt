@@ -359,18 +359,16 @@ polars Series.str.to_decimal | needs-kernel | parse text with a radix or as a de
 polars Series.str.to_integer | needs-kernel | parse text with a radix or as a decimal; cast parses base-10 integers and floats
 polars Series.str.to_time | needs-kernel | parse text to a temporal column; the engine casts numeric and string to numeric, not text to timestamp
 polars Series.dt.add_business_days | needs-kernel | business-day calendar kernels; no calendar table
-polars Series.dt.base_utc_offset | needs-kernel | time zone offset rules; the engine keeps UTC with tz_localize and tz_convert by fixed rule
+polars Series.dt.base_utc_offset | needs-kernel | the engine reads a zone's offset inside the calendar kernels, not as a column of its own
 polars Series.dt.century | needs-kernel | calendar part not in the date-part table (year to nanosecond, quarter, week, weekday, ordinal_day)
 polars Series.dt.combine | needs-kernel | build or split date and time of day columns; no date32/time cast kernel
-polars Series.dt.convert_time_zone | needs-kernel | named time zone conversion; tz_localize and tz_convert take the engine's fixed rules
-polars Series.dt.dst_offset | needs-kernel | time zone offset rules; the engine keeps UTC with tz_localize and tz_convert by fixed rule
+polars Series.dt.dst_offset | needs-kernel | the engine reads a zone's offset inside the calendar kernels, not as a column of its own
 polars Series.dt.is_business_day | needs-kernel | business-day calendar kernels; no calendar table
 polars Series.dt.millennium | needs-kernel | calendar part not in the date-part table (year to nanosecond, quarter, week, weekday, ordinal_day)
 polars Series.dt.month_end | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
 polars Series.dt.month_start | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
 polars Series.dt.offset_by | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
 polars Series.dt.replace | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
-polars Series.dt.replace_time_zone | needs-kernel | named time zone conversion; tz_localize and tz_convert take the engine's fixed rules
 polars Series.list.agg | needs-kernel | list namespace kernel; the list accessor has first, get, last and len only
 polars Series.list.all | needs-kernel | list namespace kernel; the list accessor has first, get, last and len only
 polars Series.list.any | needs-kernel | list namespace kernel; the list accessor has first, get, last and len only
@@ -430,18 +428,16 @@ polars Expr.str.to_decimal | needs-kernel | parse text with a radix or as a deci
 polars Expr.str.to_integer | needs-kernel | parse text with a radix or as a decimal; cast parses base-10 integers and floats
 polars Expr.str.to_time | needs-kernel | parse text to a temporal column; the engine casts numeric and string to numeric, not text to timestamp
 polars Expr.dt.add_business_days | needs-kernel | business-day calendar kernels; no calendar table
-polars Expr.dt.base_utc_offset | needs-kernel | time zone offset rules; the engine keeps UTC with tz_localize and tz_convert by fixed rule
+polars Expr.dt.base_utc_offset | needs-kernel | the engine reads a zone's offset inside the calendar kernels, not as a column of its own
 polars Expr.dt.century | needs-kernel | calendar part not in the date-part table (year to nanosecond, quarter, week, weekday, ordinal_day)
 polars Expr.dt.combine | needs-kernel | build or split date and time of day columns; no date32/time cast kernel
-polars Expr.dt.convert_time_zone | needs-kernel | named time zone conversion; tz_localize and tz_convert take the engine's fixed rules
-polars Expr.dt.dst_offset | needs-kernel | time zone offset rules; the engine keeps UTC with tz_localize and tz_convert by fixed rule
+polars Expr.dt.dst_offset | needs-kernel | the engine reads a zone's offset inside the calendar kernels, not as a column of its own
 polars Expr.dt.is_business_day | needs-kernel | business-day calendar kernels; no calendar table
 polars Expr.dt.millennium | needs-kernel | calendar part not in the date-part table (year to nanosecond, quarter, week, weekday, ordinal_day)
 polars Expr.dt.month_end | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
 polars Expr.dt.month_start | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
 polars Expr.dt.offset_by | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
 polars Expr.dt.replace | needs-kernel | calendar offset and component replacement of a timestamp; floor/ceil/round work on fixed units
-polars Expr.dt.replace_time_zone | needs-kernel | named time zone conversion; tz_localize and tz_convert take the engine's fixed rules
 polars Expr.dt.total_days | needs-kernel | duration totals in whole units need an integer division expression node, which the engine has not; the Series form divides in integer arithmetic
 polars Expr.dt.total_hours | needs-kernel | duration totals in whole units need an integer division expression node, which the engine has not; the Series form divides in integer arithmetic
 polars Expr.dt.total_microseconds | needs-kernel | duration totals in whole units need an integer division expression node, which the engine has not; the Series form divides in integer arithmetic

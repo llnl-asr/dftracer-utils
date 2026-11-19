@@ -546,6 +546,12 @@ Series Series::with_timezone(dstd::StringView tz) const {
     return derived(dftu_series_with_timezone(
         handle_, tz.data(), static_cast<std::int32_t>(tz.size())));
 }
+Series Series::tz_localize(dstd::StringView tz, std::int32_t ambiguous,
+                           std::int32_t nonexistent, std::int64_t shift) const {
+    return derived(dftu_series_tz_localize(handle_, tz.data(),
+                                           static_cast<std::int32_t>(tz.size()),
+                                           ambiguous, nonexistent, shift));
+}
 Series Series::floordiv(const Series& other) const {
     return paired(other, [](const dftu_series* a, const dftu_series* b) {
         return dftu_series_floordiv(a, b);

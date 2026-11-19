@@ -402,6 +402,23 @@ enum DFTU_TYPE_UINT32 8
 enum DFTU_TYPE_UINT64 9
 enum DFTU_TYPE_UINT8 6
 enum DFTU_TYPE_UNKNOWN 0
+enum DFTU_TZ_AMBIGUOUS_EARLIEST 1
+enum DFTU_TZ_AMBIGUOUS_INFER 4
+enum DFTU_TZ_AMBIGUOUS_LATEST 2
+enum DFTU_TZ_AMBIGUOUS_NAT 3
+enum DFTU_TZ_AMBIGUOUS_RAISE 0
+enum DFTU_TZ_ERROR_AMBIGUOUS 3
+enum DFTU_TZ_ERROR_INVALID_ZONE 2
+enum DFTU_TZ_ERROR_NONE 0
+enum DFTU_TZ_ERROR_NONEXISTENT 4
+enum DFTU_TZ_ERROR_OTHER 6
+enum DFTU_TZ_ERROR_OUT_OF_RANGE 5
+enum DFTU_TZ_ERROR_UNKNOWN_ZONE 1
+enum DFTU_TZ_NONEXISTENT_NAT 3
+enum DFTU_TZ_NONEXISTENT_RAISE 0
+enum DFTU_TZ_NONEXISTENT_SHIFT 4
+enum DFTU_TZ_NONEXISTENT_SHIFT_BACKWARD 2
+enum DFTU_TZ_NONEXISTENT_SHIFT_FORWARD 1
 enum DFTU_T_BYTES 4
 enum DFTU_T_F32 13
 enum DFTU_T_F64 1
@@ -1486,6 +1503,9 @@ typedef dftu_task struct dftu_task
 typedef dftu_time_unit int32_t
 typedef dftu_trace_writer struct dftu_trace_writer
 typedef dftu_type int32_t
+typedef dftu_tz_ambiguous int32_t
+typedef dftu_tz_error_kind int32_t
+typedef dftu_tz_nonexistent int32_t
 typedef dftu_value struct dftu_value
 typedef dftu_value_kind int32_t
 typedef dftu_window_frame_mode int32_t

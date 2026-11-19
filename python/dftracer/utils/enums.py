@@ -318,7 +318,7 @@ def coerce_duration(value: Duration, native_per_second: float, name: str = "valu
     return float(value)
 
 
-_RULE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([a-zA-Zµ]+)\s*$")
+_RULE = re.compile(r"^\s*(\d+(?:\.\d+)?)?\s*([a-zA-Zµ]+)\s*$")
 
 
 def rule_to_units(rule: Union[int, str], unit: str) -> int:
@@ -333,7 +333,9 @@ def rule_to_units(rule: Union[int, str], unit: str) -> int:
     m = _RULE.match(rule)
     if not m:
         raise ValueError(f"resample: cannot parse rule {rule!r}")
-    amount, name = float(m.group(1)), m.group(2).lower()
+    amount, name = float(m.group(1) or 1), m.group(2).lower()
+    if m.group(1) is None and name not in UNIT_NS:
+        raise ValueError(f"resample: cannot parse rule {rule!r}")
     if name not in UNIT_NS:
         raise ValueError(f"resample: unknown unit {m.group(2)!r} in {rule!r}")
     per = UNIT_NS.get(unit.lower())

@@ -479,6 +479,22 @@ PyObject* Series_str_wrap(PyObject* self, PyObject* args) {
     return make_series(std::move(out));
 }
 
+// Sets the Python error of the last time zone failure of this thread and
+// returns true; false when there was none. A name that is in no zone
+// directory is a KeyError, as zoneinfo and pytz; every other failure is a
+// ValueError, as pandas' AmbiguousTimeError, NonExistentTimeError and
+// OutOfBoundsDatetime.
+bool raise_tz_failure() {
+    const char* text = nullptr;
+    const std::int32_t kind = dftu_tz_take_error(&text);
+    if (kind == DFTU_TZ_ERROR_NONE) return false;
+    if (kind == DFTU_TZ_ERROR_UNKNOWN_ZONE)
+        PyErr_SetString(PyExc_KeyError, text);
+    else
+        PyErr_SetString(core::g_dft_value_error, text);
+    return true;
+}
+
 PyObject* Series_dt_part(PyObject* self, PyObject* args) {
     Held held_a(self);
     Series* a = held_a.get();
@@ -496,6 +512,7 @@ PyObject* Series_dt_part(PyObject* self, PyObject* args) {
     }
     Series out = kernel(*a, [&] { return a->dt_part(part, unit); });
     if (!out.valid()) {
+        if (raise_tz_failure()) return nullptr;
         PyErr_SetString(core::g_dft_value_error,
                         "dt_part: not a Timestamp, Date, Duration or Int64 "
                         "column");
@@ -520,6 +537,7 @@ PyObject* Series_dt_format(PyObject* self, PyObject* args) {
         return a->dt_format(fmt, static_cast<dataframe::TimeUnit>(unit));
     });
     if (!out.valid()) {
+        if (raise_tz_failure()) return nullptr;
         dstd::String msg = "dt_format: invalid format '";
         msg.append(fmt);
         msg.append("' or not a Timestamp, Date or Int64 column");
@@ -549,6 +567,7 @@ PyObject* Series_dt_round(PyObject* self, PyObject* args) {
         return a->dt_round(static_cast<std::int64_t>(every), mode);
     });
     if (!out.valid()) {
+        if (raise_tz_failure()) return nullptr;
         PyErr_SetString(core::g_dft_value_error,
                         "dt_round: not a Timestamp, Duration or Int64 column");
         return nullptr;
@@ -599,8 +618,50 @@ PyObject* Series_with_timezone(PyObject* self, PyObject* arg) {
     if (!as_str_view(arg, &tz)) return nullptr;
     Series out = kernel(*a, [&] { return a->with_timezone(tz); });
     if (!out.valid()) {
+        if (raise_tz_failure()) return nullptr;
         PyErr_SetString(core::g_dft_value_error,
                         "with_timezone: not a Timestamp column");
+        return nullptr;
+    }
+    return make_series(std::move(out));
+}
+
+PyObject* Series_tz_localize(PyObject* self, PyObject* args, PyObject* kwds) {
+    Held held_a(self);
+    Series* a = held_a.get();
+    if (!a) return nullptr;
+    PyObject* tz_obj = nullptr;
+    int ambiguous = DFTU_TZ_AMBIGUOUS_RAISE;
+    int nonexistent = DFTU_TZ_NONEXISTENT_RAISE;
+    long long shift = 0;
+    if (!core::parse_kw<"O|iiL:dt_tz_localize">(
+            args, kwds, {"tz", "ambiguous", "nonexistent", "shift"}, &tz_obj,
+            &ambiguous, &nonexistent, &shift))
+        return nullptr;
+    dstd::StringView tz;
+    if (!as_str_view(tz_obj, &tz)) return nullptr;
+    if (ambiguous < DFTU_TZ_AMBIGUOUS_RAISE ||
+        ambiguous > DFTU_TZ_AMBIGUOUS_INFER ||
+        nonexistent < DFTU_TZ_NONEXISTENT_RAISE ||
+        nonexistent > DFTU_TZ_NONEXISTENT_SHIFT) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "dt_tz_localize: ambiguous must be 0..4 and nonexistent "
+            "0..4");
+        return nullptr;
+    }
+    if (a->type() != dataframe::TypeId::Timestamp) {
+        PyErr_SetString(core::g_dft_value_error,
+                        "dt_tz_localize: not a Timestamp column");
+        return nullptr;
+    }
+    Series out = kernel(*a, [&] {
+        return a->tz_localize(tz, ambiguous, nonexistent,
+                              static_cast<std::int64_t>(shift));
+    });
+    if (!out.valid()) {
+        if (raise_tz_failure()) return nullptr;
+        PyErr_SetString(core::g_dft_value_error, "dt_tz_localize failed");
         return nullptr;
     }
     return make_series(std::move(out));

@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/internal/op_failure.h>
+#include <dftracer/utils/dataframe/internal/tz.h>
 #include <dftracer/utils/dataframe/lazy/common.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -484,9 +485,16 @@ inline coro::CoroTask<dstd::Result<DataFrame>> run_frame_op(
         if (!win) co_return dstd::Unexpected(std::move(win.error()));
         out = std::move(*win);
     } else {
+        tz::clear_failure();
         dftu_dataframe* result = dftu_op_run_frame(
             op, frames.data(), static_cast<std::uint32_t>(frames.size()), &bag);
         if (!result) {
+            // The op ran on this thread with no suspension since, so its time
+            // zone failure is still the thread's last one.
+            dstd::String tz_text;
+            if (tz::take_failure(&tz_text) != tz::Failure::None)
+                co_return common::make_error<"{}">(
+                    common::ErrorCode::InvalidArgument, tz_text);
             const char* why = dataframe::op_failure_reason(
                 name == COLUMN_OP ? dstd::StringView(args.strings_at(2).front())
                                   : dstd::StringView(name));

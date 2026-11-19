@@ -1021,6 +1021,9 @@ class Series(Generic[T_co]):
     def dt_round(self, every: int, mode: int) -> Self: ...
     def dt_as_unit(self, unit: int, mode: int = 0) -> Self: ...
     def with_timezone(self, tz: str) -> Self: ...
+    def dt_tz_localize(
+        self, tz: str, ambiguous: int = 0, nonexistent: int = 0, shift: int = 0
+    ) -> Self: ...
 
 
 class LazyFrame:
@@ -1357,6 +1360,11 @@ class DataFrame:
 
 def _series_from_arrow(array: object) -> PublicSeries:
     """Import a pyarrow array into a native vec column."""
+    ...
+
+
+def _tz_set_search_path(paths: str) -> None:
+    """The directories, separated by ``:``, searched first for time zone files."""
     ...
 
 
@@ -2024,6 +2032,7 @@ _EXPORTS = (
     "LazyFrame",
     "DataFrame",
     "_series_from_arrow",
+    "_tz_set_search_path",
     "_series_nulls",
     "_series_from_list",
     "_series_from_numpy",

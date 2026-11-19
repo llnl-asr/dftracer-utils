@@ -858,14 +858,22 @@ class Series {
     /// when a value overflows Int64 in the finer unit.
     Series dt_as_unit(TimeUnit unit,
                       std::int32_t mode = DFTU_DT_UNIT_FLOOR) const;
-    /// dftu_series_dt_date: each Timestamp (UTC) or Date64 row as Date32.
+    /// dftu_series_dt_date: each Timestamp (its wall day in the column's
+    /// zone, else the UTC day) or Date64 row as Date32.
     Series dt_date() const;
-    /// dftu_series_dt_time: each Timestamp row's UTC time of day, in the
-    /// column's own unit (Time32 for s and ms, Time64 for us and ns).
+    /// dftu_series_dt_time: each Timestamp row's time of day (wall time in the
+    /// column's zone, else UTC), in the column's own unit (Time32 for s and
+    /// ms, Time64 for us and ns).
     Series dt_time() const;
     /// dftu_series_with_timezone: this Timestamp column under zone `tz`
-    /// (empty for naive), buffers shared.
+    /// (empty for naive), buffers shared. Invalid (not valid()) for a zone
+    /// that is not in the time zone database.
     Series with_timezone(dstd::StringView tz) const;
+    /// dftu_series_tz_localize: this column's wall times in zone `tz` as UTC
+    /// instants (dftu_tz_ambiguous, dftu_tz_nonexistent; `shift` in ticks).
+    /// Invalid (not valid()) for a refused wall time or an unknown zone.
+    Series tz_localize(dstd::StringView tz, std::int32_t ambiguous,
+                       std::int32_t nonexistent, std::int64_t shift = 0) const;
 
     Series logical_and(const Series& other) const;
     Series logical_or(const Series& other) const;

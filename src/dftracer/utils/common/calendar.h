@@ -42,16 +42,25 @@ struct CivilDate {
 // https://howardhinnant.github.io/date_algorithms.html
 constexpr CivilDate civil_from_days(std::int64_t z) {
     z += 719468;
-    const std::int64_t era = (z >= 0 ? z : z - 146096) / 146097;
-    const std::int64_t doe = z - era * 146097;
-    const std::int64_t yoe =
+    // The day of the era and the era, in unsigned 32-bit arithmetic past the
+    // first division: a multiply by a constant, with no sign to fix.
+    std::int64_t era = 0;
+    std::uint32_t doe = 0;
+    if (z >= 0) {
+        const auto uz = static_cast<std::uint64_t>(z);
+        era = static_cast<std::int64_t>(uz / 146097);
+        doe = static_cast<std::uint32_t>(uz % 146097);
+    } else {
+        era = (z - 146096) / 146097;
+        doe = static_cast<std::uint32_t>(z - era * 146097);
+    }
+    const std::uint32_t yoe =
         (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    const std::int64_t y = yoe + era * 400;
-    const std::int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    const std::int64_t mp = (5 * doy + 2) / 153;
-    const std::int32_t d =
-        static_cast<std::int32_t>(doy - (153 * mp + 2) / 5 + 1);
-    const std::int32_t m = static_cast<std::int32_t>(mp < 10 ? mp + 3 : mp - 9);
+    const std::int64_t y = static_cast<std::int64_t>(yoe) + era * 400;
+    const std::uint32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const std::uint32_t mp = (5 * doy + 2) / 153;
+    const auto d = static_cast<std::int32_t>(doy - (153 * mp + 2) / 5 + 1);
+    const auto m = static_cast<std::int32_t>(mp < 10 ? mp + 3 : mp - 9);
     return CivilDate{y + (m <= 2 ? 1 : 0), m, d};
 }
 
@@ -299,9 +308,13 @@ constexpr dstd::StringView MONTHS[12] = {
 // Appends `t` as text by `fmt`, which invalid_time_format accepted. %Y has at
 // least four digits (a sign for a negative year), %f is the six-digit
 // microseconds, %s the epoch seconds rounded toward minus infinity, %z is
-// +0000 and %Z is UTC.
+// +0000 and %Z is UTC. When `t` is a wall time in a zone, `offset` is the
+// zone's seconds east of UTC and `abbreviation` its name at that instant: %z
+// prints the offset, %Z the abbreviation, and %s subtracts the offset.
 template <class String>
-inline void format_time(String& out, const CivilTime& t, dstd::StringView fmt) {
+inline void format_time(String& out, const CivilTime& t, dstd::StringView fmt,
+                        std::int32_t offset = 0,
+                        dstd::StringView abbreviation = "UTC") {
     for (std::size_t i = 0; i < fmt.size(); ++i) {
         if (fmt[i] != '%') {
             out.push_back(fmt[i]);
@@ -370,13 +383,18 @@ inline void format_time(String& out, const CivilTime& t, dstd::StringView fmt) {
                 calendar_detail::append_padded(out, t.second, 2);
                 break;
             case 's':
-                calendar_detail::append_wide(out, t.epoch_seconds);
+                calendar_detail::append_wide(out, t.epoch_seconds - offset);
                 break;
-            case 'z':
-                out.append("+0000");
+            case 'z': {
+                out.push_back(offset < 0 ? '-' : '+');
+                const std::int32_t m = offset < 0 ? -offset : offset;
+                calendar_detail::append_padded(out, m / 3600, 2);
+                calendar_detail::append_padded(out, m % 3600 / 60, 2);
+                if (m % 60 != 0) calendar_detail::append_padded(out, m % 60, 2);
                 break;
+            }
             case 'Z':
-                out.append("UTC");
+                out.append(abbreviation);
                 break;
             default:
                 out.push_back('%');

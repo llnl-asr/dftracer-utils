@@ -49,6 +49,7 @@ Series.dt_as_unit | needs-token:I64_ARG | -
 Series.dt_format | needs-token:STR_ARG | -
 Series.dt_part | needs-token:STR_ARG | -
 Series.dt_round | needs-token:STR_ARG | -
+Series.dt_tz_localize | needs-token:STR_ARG | -
 Series.dtype | python-semantics | accessor or shape property of the column, not an op
 Series.dtypes | python-semantics | pandas container API on the Series, not an op
 Series.duplicated | needs-token:FLAG | -
@@ -462,8 +463,10 @@ Dt.cast_time_unit | python-semantics | checks the unit name in Python before the
 Dt.date | python-semantics | a property of the accessor over the dt_date row
 Dt.time | python-semantics | a property of the accessor over the dt_time row
 Dt.timetz | python-semantics | a property of the accessor over the dt_time row
-Dt.tz_convert | python-semantics | reads the unit of the accessor, which a row cannot hold
-Dt.tz_localize | python-semantics | reads the unit of the accessor, which a row cannot hold
+Dt.tz_convert | python-semantics | checks the zone and the naive column in Python before the Series method
+Dt.tz_localize | python-semantics | takes pandas ambiguous and nonexistent, written over dt_tz_localize
+Dt.replace_time_zone | python-semantics | the polars names of tz_localize, with their own option values
+Dt.convert_time_zone | python-semantics | the polars name of tz_convert, which reads a naive column as UTC
 Dt.isocalendar | python-semantics | reads the unit of the accessor, which a row cannot hold
 Dt.day | python-semantics | property of the accessor's unit, not a method of one op
 Dt.day_of_week | python-semantics | property of the accessor's unit, not a method of one op

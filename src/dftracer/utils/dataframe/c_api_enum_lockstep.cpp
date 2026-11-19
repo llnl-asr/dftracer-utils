@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dataframe/internal/tz.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dataframe/udaf_adapter.h>
@@ -39,6 +40,25 @@ static_assert(code(AggOp::BitwiseXor) == DFTU_AGG_BITWISE_XOR);
 static_assert(code(Agg::BitwiseAnd) == DFTU_AGG_BITWISE_AND);
 static_assert(code(Agg::BitwiseOr) == DFTU_AGG_BITWISE_OR);
 static_assert(code(Agg::BitwiseXor) == DFTU_AGG_BITWISE_XOR);
+static_assert(code(tz::Ambiguous::Raise) == DFTU_TZ_AMBIGUOUS_RAISE);
+static_assert(code(tz::Ambiguous::Earliest) == DFTU_TZ_AMBIGUOUS_EARLIEST);
+static_assert(code(tz::Ambiguous::Latest) == DFTU_TZ_AMBIGUOUS_LATEST);
+static_assert(code(tz::Ambiguous::Nat) == DFTU_TZ_AMBIGUOUS_NAT);
+static_assert(code(tz::Ambiguous::Infer) == DFTU_TZ_AMBIGUOUS_INFER);
+static_assert(code(tz::Nonexistent::Raise) == DFTU_TZ_NONEXISTENT_RAISE);
+static_assert(code(tz::Nonexistent::ShiftForward) ==
+              DFTU_TZ_NONEXISTENT_SHIFT_FORWARD);
+static_assert(code(tz::Nonexistent::ShiftBackward) ==
+              DFTU_TZ_NONEXISTENT_SHIFT_BACKWARD);
+static_assert(code(tz::Nonexistent::Nat) == DFTU_TZ_NONEXISTENT_NAT);
+static_assert(code(tz::Nonexistent::Shift) == DFTU_TZ_NONEXISTENT_SHIFT);
+static_assert(code(tz::Failure::None) == DFTU_TZ_ERROR_NONE);
+static_assert(code(tz::Failure::UnknownZone) == DFTU_TZ_ERROR_UNKNOWN_ZONE);
+static_assert(code(tz::Failure::InvalidZone) == DFTU_TZ_ERROR_INVALID_ZONE);
+static_assert(code(tz::Failure::Ambiguous) == DFTU_TZ_ERROR_AMBIGUOUS);
+static_assert(code(tz::Failure::Nonexistent) == DFTU_TZ_ERROR_NONEXISTENT);
+static_assert(code(tz::Failure::OutOfRange) == DFTU_TZ_ERROR_OUT_OF_RANGE);
+static_assert(code(tz::Failure::Other) == DFTU_TZ_ERROR_OTHER);
 static_assert(code(Encoding::View) == 4);
 static_assert(code(Encoding::Chunked) == 5);
 

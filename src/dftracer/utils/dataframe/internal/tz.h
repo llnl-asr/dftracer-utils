@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_TZ_H
 
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
@@ -115,6 +116,10 @@ class Zone {
     /// The number of transitions listed in the file.
     std::size_t transition_count() const noexcept { return trans_.size(); }
 
+    /// True, with the offset in seconds east of UTC, when the zone has one
+    /// offset for all time.
+    bool fixed_offset(std::int32_t* offset) const noexcept;
+
     /// The stretch of UTC time around `utc_seconds`. `hint` is the `index` of a
     /// nearby Segment; a sorted scan that passes the previous one never
     /// searches.
@@ -176,6 +181,33 @@ dstd::Result<Zone> zone_from_posix(dstd::StringView name,
 /// A zone with one offset (seconds east of UTC) for all time.
 Zone fixed_zone(dstd::StringView name, std::int32_t offset,
                 dstd::StringView abbreviation);
+
+/// The kind of the last time zone failure of a thread, for a caller that has
+/// only a null result to report.
+enum class Failure : std::int32_t {
+    None = 0,
+    UnknownZone = 1,
+    InvalidZone = 2,
+    Ambiguous = 3,
+    Nonexistent = 4,
+    OutOfRange = 5,
+    Other = 6,
+};
+
+/// Records `error` as this thread's last time zone failure, classified from
+/// its code and text.
+void record_failure(const dstd::Error& error);
+
+/// Records a failure of `kind` with `message`.
+void record_failure(Failure kind, dstd::StringView message);
+
+/// Clears this thread's last time zone failure. Every time zone call starts
+/// with it, so a failure that nobody took never reads as a later call's.
+void clear_failure();
+
+/// Returns this thread's last time zone failure and clears it. `message` is
+/// set when it is not null.
+Failure take_failure(dstd::String* message);
 
 /// True when `name` is safe to join to a directory: not empty, no leading
 /// separator, no empty or ".." component, only [A-Za-z0-9_+-/].

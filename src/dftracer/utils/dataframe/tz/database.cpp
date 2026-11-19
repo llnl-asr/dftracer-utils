@@ -58,13 +58,21 @@ State& state(Cache& c) {
     return *c.state;
 }
 
+// The separator of a directory list, as PATH: ';' where a path may hold a
+// ':' after a drive letter.
+#if defined(_WIN32)
+constexpr char LIST_SEPARATOR = ';';
+#else
+constexpr char LIST_SEPARATOR = ':';
+#endif
+
 void split_dirs(dstd::StringView list, dstd::Vector<dstd::String>& out) {
     while (!list.empty()) {
-        const std::size_t colon = list.find(':');
-        const dstd::StringView one = list.substr(0, colon);
+        const std::size_t cut = list.find(LIST_SEPARATOR);
+        const dstd::StringView one = list.substr(0, cut);
         if (!one.empty()) out.emplace_back(one);
-        if (colon == dstd::StringView::npos) break;
-        list.remove_prefix(colon + 1);
+        if (cut == dstd::StringView::npos) break;
+        list.remove_prefix(cut + 1);
     }
 }
 
@@ -130,13 +138,68 @@ dstd::String fixed_abbreviation(std::int32_t offset) {
 dstd::String joined(dstd::Span<const dstd::String> dirs) {
     dstd::String out;
     for (const dstd::String& dir : dirs) {
-        if (!out.empty()) out.push_back(':');
+        if (!out.empty()) out.push_back(LIST_SEPARATOR);
         out.append(dir);
     }
     return out;
 }
 
 }  // namespace
+
+namespace {
+
+struct LastFailure {
+    Failure kind = Failure::None;
+    dstd::String message;
+};
+
+LastFailure& last_failure() {
+    static thread_local LastFailure t_failure;
+    return t_failure;
+}
+
+bool has(dstd::StringView text, dstd::StringView part) {
+    return text.find(part) != dstd::StringView::npos;
+}
+
+}  // namespace
+
+void record_failure(Failure kind, dstd::StringView message) {
+    LastFailure& f = last_failure();
+    f.kind = kind;
+    f.message.assign(message);
+}
+
+void record_failure(const dstd::Error& error) {
+    const dstd::StringView text = error.message();
+    Failure kind = Failure::Other;
+    if (common::errorcode_of(error) == common::ErrorCode::NotFound)
+        kind = Failure::UnknownZone;
+    else if (has(text, "invalid time zone name"))
+        kind = Failure::InvalidZone;
+    else if (has(text, "ambiguous"))
+        kind = Failure::Ambiguous;
+    else if (has(text, "nonexistent"))
+        kind = Failure::Nonexistent;
+    else if (has(text, "out of range"))
+        kind = Failure::OutOfRange;
+    record_failure(kind, text);
+}
+
+void clear_failure() {
+    LastFailure& f = last_failure();
+    f.kind = Failure::None;
+    f.message.clear();
+}
+
+Failure take_failure(dstd::String* message) {
+    LastFailure& f = last_failure();
+    const Failure kind = f.kind;
+    if (message) *message = std::move(f.message);
+    dstd::String().swap(f.message);
+    f.kind = Failure::None;
+    return kind;
+}
 
 bool is_valid_zone_name(dstd::StringView name) noexcept {
     if (name.empty() || name.front() == '/' || name.back() == '/') return false;

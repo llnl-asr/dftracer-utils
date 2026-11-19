@@ -159,6 +159,17 @@ Segment Zone::segment_at(std::int64_t t, std::uint32_t hint) const noexcept {
     return s;
 }
 
+bool Zone::fixed_offset(std::int32_t* offset) const noexcept {
+    if (!trans_.empty()) return false;
+    if (footer_) {
+        if (footer_->has_dst) return false;
+        *offset = footer_->std_offset;
+        return true;
+    }
+    *offset = types_[0].offset;
+    return true;
+}
+
 void Zone::offsets_at(dstd::Span<const std::int64_t> ticks, TimeUnit unit,
                       dstd::Span<std::int32_t> out) const noexcept {
     const std::int64_t per = seconds_per_tick(unit);

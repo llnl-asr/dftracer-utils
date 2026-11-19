@@ -143,6 +143,8 @@ namespace {
 // The Python object for the column a row's op returned: the error the row names
 // when the op refused the column, and under the name of the source.
 PyObject* finish(const Row& row, Series&& out, const Series& source) {
+    if (!out.valid() && frame::series_detail::raise_tz_failure())
+        return nullptr;
     if (!out.valid() && row.err[0] != '\0') {
         PyErr_SetString(core::g_dft_value_error, row.err);
         return nullptr;

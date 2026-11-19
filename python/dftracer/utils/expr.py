@@ -31,6 +31,7 @@ import atexit
 import builtins
 import contextlib
 import copy
+import datetime
 import math
 import typing
 from typing import (
@@ -2370,12 +2371,14 @@ class _ExprDt:
         return self._e._op("dftu.series.dt_as_unit", a=UNIT_CODES[time_unit], b=1)
 
     def date(self) -> Expr:
-        """The UTC calendar day of each Timestamp as a Date32 column."""
+        """The calendar day of each Timestamp (its wall day in the column's
+        zone) as a Date32 column."""
         return self._e._op("dftu.series.dt_date")
 
     def time(self) -> Expr:
-        """The UTC time of day of each Timestamp, in the column's unit (Time32
-        for s and ms, Time64 for us and ns)."""
+        """The time of day of each Timestamp (its wall time in the column's
+        zone), in the column's unit (Time32 for s and ms, Time64 for us and
+        ns)."""
         return self._e._op("dftu.series.dt_time")
 
     def total_seconds(self) -> Expr:
@@ -2385,25 +2388,72 @@ class _ExprDt:
         unit."""
         return self.epoch("ns").cast("float64") / 1_000_000_000
 
-    def tz_localize(self, tz: str | None) -> Expr:
-        """A naive Timestamp column marked as ``tz`` (``None`` strips the
-        zone). Only UTC can mark a naive column. A column that is already
-        aware is not refused here, as ``Series.dt.tz_localize`` does: the
-        zone is not known before the plan runs."""
+    def tz_localize(
+        self,
+        tz: str | None,
+        ambiguous: str = "raise",
+        nonexistent: str | datetime.timedelta = "raise",
+    ) -> Expr:
+        """A naive Timestamp column read as wall times in ``tz`` (``None``
+        turns an aware column into its wall times); ``ambiguous`` is
+        ``"raise"``, ``"infer"``, ``"NaT"``, ``"earliest"``, ``"latest"`` or
+        ``"null"``, ``nonexistent`` as :meth:`Series.dt.tz_localize`. The
+        zone is checked here; a column that is already aware raises when the
+        plan runs."""
+        from ._time_index import _AMBIGUOUS, _nonexistent_code, check_zone
+
+        check_zone(tz)
         if tz is None:
-            return self._e._op("dftu.series.with_timezone", text="")
-        if tz.upper() not in ("UTC", "ETC/UTC", "Z", "GMT"):
+            return self._e._op("dftu.series.tz_localize", text="", a=0)
+        mode = _AMBIGUOUS.get(ambiguous) if isinstance(ambiguous, str) else None
+        if mode is None:
             raise ValueError(
-                f"tz_localize: only UTC can mark a naive column, not {tz!r} "
-                "(no zone database in the engine)"
+                f"'{ambiguous}' is not valid for the ambiguous argument: "
+                "'raise', 'infer', 'NaT' or a boolean array"
             )
-        return self._e._op("dftu.series.with_timezone", text=tz)
+        code, shift_ticks = _nonexistent_code(nonexistent, "ns")
+        if not -(1 << 47) < shift_ticks < (1 << 47):
+            raise ValueError(
+                "the nonexistent shift of a lazy tz_localize must lie within +-2**47 "
+                "nanoseconds (about 39 hours)"
+            )
+        packed = mode + (code << 8) + (shift_ticks << 16)
+        return self._e._op("dftu.series.tz_localize", text=tz, a=packed)
 
     def tz_convert(self, tz: str | None) -> Expr:
         """The same instants shown in zone ``tz`` (``None`` for the naive UTC
         column); no tick moves. A naive column is not refused here, as
         ``Series.dt.tz_convert`` does."""
+        from ._time_index import check_zone
+
+        check_zone(tz)
         return self._e._op("dftu.series.with_timezone", text=tz or "")
+
+    def replace_time_zone(
+        self,
+        time_zone: str | None,
+        *,
+        use_earliest: bool | None = None,
+        ambiguous: str = "raise",
+        non_existent: str = "raise",
+    ) -> Expr:
+        """The polars name of :meth:`tz_localize`."""
+        if non_existent not in ("raise", "null"):
+            raise ValueError(
+                f"`non_existent` must be one of {{'raise', 'null'}}, got {non_existent}"
+            )
+        if use_earliest is not None:
+            ambiguous = "earliest" if use_earliest else "latest"
+        if ambiguous not in ("raise", "earliest", "latest", "null"):
+            raise ValueError(
+                f"`ambiguous` must be one of {{'raise', 'earliest', 'latest', 'null'}}, "
+                f"got {ambiguous}"
+            )
+        return self.tz_localize(time_zone, ambiguous, "NaT" if non_existent == "null" else "raise")
+
+    def convert_time_zone(self, time_zone: str) -> Expr:
+        """The polars name of :meth:`tz_convert`."""
+        return self.tz_convert(time_zone)
 
     def _round(self, every: int | str, mode: int) -> Expr:
 

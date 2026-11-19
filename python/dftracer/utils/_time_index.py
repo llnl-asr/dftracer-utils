@@ -13,7 +13,6 @@ so empty bins are listed."""
 from __future__ import annotations
 
 import datetime
-import importlib
 import re
 from typing import TYPE_CHECKING, Callable, Literal, Optional, Sequence, Tuple, Union, cast
 
@@ -102,17 +101,28 @@ _UTC = frozenset(
         "ETC/GREENWICH",
     )
 )
-_OFFSET = re.compile(r"^[+-]\d{2}(:?\d{2})?$")
 
 
-def _require_utc(key: Series, op: str) -> None:
-    """``NotImplementedError`` for a column in a named zone: days and times of day
-    there are wall-clock ones, and the engine has no zone database."""
-    if key.timezone.upper() not in _UTC:
-        raise NotImplementedError(
-            f"{op}: the index is in zone {key.timezone!r}, which needs a time zone "
-            "database the engine does not have; tz_convert('UTC') or tz_convert(None) first"
-        )
+def zoned(key: Series) -> bool:
+    """Whether the Timestamp column is in a zone whose offset can change, so its
+    days and times of day are wall-clock ones that the engine reads through the
+    zone. A naive column and a UTC one are read directly."""
+    return key.timezone.upper() not in _UTC
+
+
+def wall(key: Series) -> Series:
+    """The wall times of a Timestamp column as a naive one (the same column
+    when it is naive or in UTC)."""
+    return key.dt_tz_localize("") if zoned(key) else key.with_timezone("")
+
+
+def localize_back(naive: Series, key: Series) -> Series:
+    """Wall times as the instants of ``key``'s zone, a repeated wall time at
+    its first instant and a skipped one moved to the end of the gap, as the
+    pandas resample edges."""
+    if not zoned(key):
+        return naive.with_timezone(key.timezone)
+    return naive.dt_tz_localize(key.timezone, 1, 1)
 
 
 def _kind_error(shape: str) -> TypeError:
@@ -377,16 +387,19 @@ def _tick_edges(
     origin: str | int,
     offset: int,
     day: int,
+    anchors: tuple[int, int] | None = None,
 ) -> tuple[int, int]:
     """The first and last edge of a fixed-width grid (pandas
-    ``_adjust_dates_anchored``), in units of ticks."""
+    ``_adjust_dates_anchored``), in units of ticks. In a zone ``anchors`` holds
+    the instants of the local midnight at or before the first row and at or
+    after the last row."""
     zero = 0
     if origin == "start_day":
-        zero = first - first % day
+        zero = anchors[0] if anchors else first - first % day
     elif origin == "start":
         zero = first
     elif origin in ("end", "end_day"):
-        end = last if origin == "end" else -((-last) // day) * day
+        end = last if origin == "end" else (anchors[1] if anchors else -((-last) // day) * day)
         steps = (end - first) // width
         if closed_left:
             steps += 1
@@ -404,6 +417,15 @@ def _tick_edges(
         low = first - foffset if foffset > 0 else first - width
         high = last + (width - loffset) if loffset > 0 else last
     return low, high
+
+
+def _day_anchors(key: Series, low: int, high: int, day: int) -> tuple[int, int]:
+    """The instants of the local midnight at or before ``low`` and at or after
+    ``high``, two ticks of ``key``."""
+    rows = _like(_series().from_list([low, high], DType.INT64), key)
+    floor = rows.dt_round(day, 0).astype("int64")
+    ceil = rows.dt_round(day, 1).astype("int64")
+    return int(cast(int, floor.iloc[0])), int(cast(int, ceil.iloc[1]))
 
 
 def check_sides(closed: str | None, label: str | None) -> None:
@@ -440,10 +462,15 @@ def make_bins(
     label = label or ("right" if end_default else "left")
     left = closed == "left"
     ticks = key.astype("int64")
-    if ticks.null_count == 0 and len(ticks) and ticks.is_sorted():
-        low, high = ticks.iloc[0], ticks.iloc[len(ticks) - 1]
+    in_zone = zoned(key)
+    # A calendar bin in a zone is a wall-clock one: the first and last day are
+    # read on the wall times, and each edge is mapped back to an instant. A
+    # fixed width stays a width of instants.
+    local = wall(key).astype("int64") if in_zone and rule.calendar is not None else ticks
+    if local.null_count == 0 and len(local) and local.is_sorted():
+        low, high = local.iloc[0], local.iloc[len(local) - 1]
     else:
-        low, high = ticks.min(), ticks.max()
+        low, high = local.min(), local.max()
     if low is None or high is None:
         empty = _like(_series().from_list([], DType.INT64), key)
         return _Bins(_ext._series_nulls(int(DType.INT64), len(key)), empty, 0, ticks)
@@ -454,7 +481,12 @@ def make_bins(
             raise ValueError(f"resample: {rule.text!r} is not a whole number of {unit}")
         if isinstance(origin, int):
             origin = origin // per_unit
-        first, last = _tick_edges(low, high, width, left, origin, offset // per_unit, day)
+        anchors = _day_anchors(key, low, high, day) if in_zone else None
+        if in_zone and origin == "epoch":
+            # pandas anchors on the local midnight of 1970-01-01 in the zone.
+            midnight = _like(_series().from_list([0], DType.INT64), wall(key))
+            origin = int(cast(int, localize_back(midnight, key).astype("int64").iloc[0]))
+        first, last = _tick_edges(low, high, width, left, origin, offset // per_unit, day, anchors)
         count = (last - first) // width
         shifted = ticks if left else ticks - 1
         ids = (shifted - first).floordiv(width)
@@ -466,8 +498,8 @@ def make_bins(
     cal = rule.calendar
     first_day = low // day + _EPOCH_ORDINAL
     last_day = high // day + _EPOCH_ORDINAL
-    anchors = range(cal.before(first_day, left), cal.after(last_day) + 1, cal.n)
-    edges = [(cal.date_of(a) - _EPOCH_ORDINAL) * day for a in anchors]
+    steps = range(cal.before(first_day, left), cal.after(last_day) + 1, cal.n)
+    edges = [(cal.date_of(a) - _EPOCH_ORDINAL) * day for a in steps]
     bounds = list(edges)
     if cal.at_end and not left:
         bounds = [e + day - 1 for e in edges]
@@ -475,15 +507,24 @@ def make_bins(
         bounds = bounds[:-1]
         edges = edges[:-1]
     count = len(bounds) - 1
+    # In a zone a bin is read on the wall time of each row, so a day is one
+    # fixed width there (23 or 25 hours of instants on a change of offset) and
+    # no edge needs mapping back to find the bin of a row.
     if cal.is_fixed and count >= 1:
         # Days and weeks are a fixed width from the first edge: the bin is
         # arithmetic, with the right-closed edge moved one tick (or a day for
         # the end-of-day edge of a week) as the bounds are.
         shift = 0 if left else (day if cal.at_end else 1)
-        ids = (ticks - (shift + edges[0])).floordiv(edges[1] - edges[0])
+        ids = (local - (shift + edges[0])).floordiv(edges[1] - edges[0])
     else:
         breaks = _series().from_list(bounds, DType.INT64)
-        ids = (ticks.cut(breaks, right=not left) - 1).astype("int64")
+        ids = (local.cut(breaks, right=not left) - 1).astype("int64")
+    if in_zone:
+        template = _like(_series().from_list([], DType.INT64), wall(key))
+        wall_edges = _like(_series().from_list(edges, DType.INT64), template)
+        edges = [
+            int(cast(int, v)) for v in localize_back(wall_edges, key).astype("int64").to_list()
+        ]
     shown = edges[:count] if label == "left" else edges[1 : count + 1]
     return _Bins(ids, _like(_series().from_list(shown, DType.INT64), key), count, ticks)
 
@@ -767,7 +808,6 @@ def resample(
             data = {_VALUE: drop_levels(obj)}
         else:
             data = {c: _column(obj, c) for c in obj.columns}
-    _require_utc(key, "resample")
     parsed = parse_rule(rule, unit_name(key), key.timezone != "")
     aware = _origin_aware(origin)
     if parsed.calendar is None and aware is not None and aware != (key.timezone != ""):
@@ -821,7 +861,7 @@ def _time_of_day_us(key: Series) -> Series:
     """The time of day of each instant, in microseconds (cut off below)."""
     per_unit = UNIT_NS[unit_name(key)]
     day = 86_400_000_000_000 // per_unit
-    ticks = key.astype("int64")
+    ticks = wall(key).astype("int64")
     tod = ticks - ticks.floordiv(day) * day
     return tod.floordiv(1000 // per_unit) if per_unit < 1000 else tod * (per_unit // 1000)
 
@@ -829,7 +869,6 @@ def _time_of_day_us(key: Series) -> Series:
 def at_time_mask(obj: Frameish, time: object) -> Series:
     """The rows whose time of day is ``time``."""
     _, key = index_level(obj, None, "Index must be DatetimeIndex")
-    _require_utc(key, "at_time")
     return _time_of_day_us(key).eq(_time_us(time))
 
 
@@ -843,7 +882,6 @@ def between_time_mask(
             "Inclusive has to be either string of 'both', 'neither', 'left' or 'right'"
         )
     _, key = index_level(obj, None, "Index must be DatetimeIndex")
-    _require_utc(key, "between_time")
     lo, hi = _time_us(start_time, True), _time_us(end_time, True)
     tod = _time_of_day_us(key)
     if key.null_count:
@@ -873,41 +911,106 @@ def retime(obj: Frameish, level: LevelArg, convert: Callable[[Series], Series]) 
 def check_zone(tz: str | None) -> None:
     """The errors pandas gives for a zone it does not know: ``KeyError`` for an
     unknown name, ``IndexError`` for an empty one, ``ValueError`` for a
-    malformed one."""
+    malformed one. The engine reads the zone files, so it decides."""
     if tz is None:
         return
     if not isinstance(tz, str):
         raise TypeError(f"tz must be a string or None, not {type(tz).__name__}")
     if tz == "":
         raise IndexError("list index out of range")
-    if tz.upper() in _UTC or _OFFSET.match(tz):
-        return
     if re.match(r"^UTC[+-]", tz, re.I):
         raise ValueError(f"{tz!r} is not a valid time zone")
-    try:
-        zoneinfo = importlib.import_module("zoneinfo")
-    except ImportError:  # Python 3.8 has no zone database to ask
-        return
-    try:
-        zoneinfo.ZoneInfo(tz)
-    except zoneinfo.ZoneInfoNotFoundError:
-        raise KeyError(f"'{tz}'") from None
-    except ValueError:
-        raise ValueError(f"{tz!r} is not a valid time zone") from None
+    if tz in ("Z", "z"):
+        # The engine reads Z as UTC; pandas and polars do not know the name.
+        raise KeyError(f"'{tz}'")
+    _ext._series_nulls(int(DType.TIMESTAMP), 0).with_timezone(tz)
 
 
-def localize(key: Series, tz: str | None) -> Series:
-    """A naive column marked as ``tz``; ``None`` strips the zone."""
+_AMBIGUOUS = {"raise": 0, "earliest": 1, "latest": 2, "NaT": 3, "null": 3, "infer": 4}
+_NONEXISTENT = {"raise": 0, "shift_forward": 1, "shift_backward": 2, "NaT": 3, "null": 3}
+
+
+def _nonexistent_code(nonexistent: object, unit: str) -> tuple[int, int]:
+    """The engine code of ``nonexistent`` and its shift in ticks of ``unit``."""
+    if isinstance(nonexistent, datetime.timedelta):
+        ns = (
+            nonexistent.days * 86400 + nonexistent.seconds
+        ) * 1_000_000_000 + nonexistent.microseconds * 1000
+        return 4, int(ns / UNIT_NS[unit])
+    code = _NONEXISTENT.get(nonexistent) if isinstance(nonexistent, str) else None
+    if code is None:
+        raise ValueError(
+            "The nonexistent argument must be one of 'raise', 'NaT', 'shift_forward', "
+            "'shift_backward' or a timedelta object"
+        )
+    return code, 0
+
+
+def localize(
+    key: Series,
+    tz: str | None,
+    ambiguous: object = "raise",
+    nonexistent: object = "raise",
+) -> Series:
+    """A naive column read as wall times in ``tz``; ``None`` turns an aware
+    column into its wall times. ``ambiguous`` is ``"raise"``, ``"infer"``,
+    ``"NaT"`` (or the polars ``"earliest"``, ``"latest"``, ``"null"``) or a
+    boolean array (``True`` for the first of the two instants);
+    ``nonexistent`` is ``"raise"``, ``"shift_forward"``, ``"shift_backward"``,
+    ``"NaT"`` or a ``timedelta``."""
     if tz is not None and key.timezone:
         raise TypeError("Already tz-aware, use tz_convert to convert.")
     check_zone(tz)
+    code, shift = _nonexistent_code(nonexistent, unit_name(key))
     if tz is None:
-        return key.with_timezone("")
-    if tz.upper() not in _UTC:
+        return key.dt_tz_localize("")
+    if isinstance(ambiguous, str):
+        mode = _AMBIGUOUS.get(ambiguous)
+        if mode is None:
+            raise ValueError(
+                f"'{ambiguous}' is not valid for the ambiguous argument: "
+                "'raise', 'infer', 'NaT' or a boolean array"
+            )
+        return key.dt_tz_localize(tz, mode, code, shift)
+    flags = _series().from_list([bool(v) for v in cast("Sequence[bool]", ambiguous)], DType.BOOL)
+    if len(flags) != len(key):
+        raise ValueError("Length of ambiguous bool-array must be the same size as vals")
+    first = key.dt_tz_localize(tz, 1, code, shift)
+    second = key.dt_tz_localize(tz, 2, code, shift)
+    return _like(
+        first.astype("int64").where(flags, second.astype("int64")),
+        first,
+    )
+
+
+_POLARS_AMBIGUOUS = ("raise", "earliest", "latest", "null")
+
+
+def replace_zone(
+    key: Series,
+    tz: str | None,
+    use_earliest: bool | None,
+    ambiguous: object,
+    non_existent: str,
+) -> Series:
+    """polars ``replace_time_zone``: the wall times kept under zone ``tz``."""
+    if non_existent not in ("raise", "null"):
+        raise ValueError(f"`non_existent` must be one of {{'raise', 'null'}}, got {non_existent}")
+    if use_earliest is not None:
+        ambiguous = "earliest" if use_earliest else "latest"
+    if not isinstance(ambiguous, str) or ambiguous not in _POLARS_AMBIGUOUS:
         raise ValueError(
-            f"tz_localize: only UTC can mark a naive column, not {tz!r} "
-            "(no zone database in the engine)"
+            f"`ambiguous` must be one of {{'raise', 'earliest', 'latest', 'null'}}, got {ambiguous}"
         )
+    if tz is not None and key.timezone:
+        # polars replaces the zone of an aware column: its wall times stay.
+        key = key.dt_tz_localize("")
+    return localize(key, tz, ambiguous, "NaT" if non_existent == "null" else "raise")
+
+
+def convert_time_zone(key: Series, tz: str) -> Series:
+    """polars ``convert_time_zone``: a naive column is read as UTC."""
+    check_zone(tz)
     return key.with_timezone(tz)
 
 
@@ -926,14 +1029,15 @@ def grid_of(key: Series, freq: object) -> Series:
     """The ``date_range(min, max, freq)`` of a Timestamp column."""
     unit = unit_name(key)
     rule = parse_rule(freq, unit, key.timezone != "")
-    ticks = key.astype("int64")
+    calendar_zone = rule.calendar is not None and zoned(key)
+    # A calendar step in a zone runs on the wall times and is mapped back.
+    source = wall(key) if calendar_zone else key
+    ticks = source.astype("int64")
     low, high = ticks.min(), ticks.max()
     per_unit = UNIT_NS[unit]
     if low is None or high is None:
         return _like(_series().from_list([], DType.INT64), key)
     low, high = int(cast(int, low)), int(cast(int, high))
-    if rule.calendar is not None:
-        _require_utc(key, "asfreq")
     if rule.calendar is None:
         width = rule.ns // per_unit
         if width * per_unit != rule.ns:
@@ -953,7 +1057,8 @@ def grid_of(key: Series, freq: object) -> Series:
             break
         values.append(stamp)
         a += cal.n
-    return _like(_series().from_list(values, DType.INT64), key)
+    grid = _like(_series().from_list(values, DType.INT64), source)
+    return localize_back(grid, key) if calendar_zone else grid
 
 
 def _is_grid(key: Series, freq: object) -> bool:
@@ -1094,7 +1199,6 @@ class TimeIndexMixin:
             grid = grid_of(key, freq).rename(public_name(names[at]))
             out = reindex_rows(obj, grid, method, fill_value, None, None)
         if normalize:
-            _require_utc(key, "asfreq")
             out = retime(out, None, lambda k: k.dt.normalize())
         return cast("Self", out)
 
@@ -1129,13 +1233,18 @@ class TimeIndexMixin:
         ambiguous: str | Sequence[bool] = "raise",
         nonexistent: str | datetime.timedelta = "raise",
     ) -> Self:
-        """The Timestamp index marked as zone ``tz`` (pandas ``tz_localize``);
-        ``None`` strips the zone. The engine has no zone database, so only
-        UTC can mark a naive index (a UTC index has no ambiguous or
-        nonexistent time, so those two arguments change nothing)."""
+        """The Timestamp index read as wall times in zone ``tz`` (pandas
+        ``tz_localize``); ``None`` turns an aware index into its wall times.
+        ``ambiguous`` and ``nonexistent`` say what a wall time that happens
+        twice or never becomes, as pandas; ``shift_forward`` and
+        ``shift_backward`` use the instant of the change, not pandas' whole-hour
+        rounding."""
         if not _axis_rows(axis, self._kind()):
             raise TypeError("tz_localize: the columns are not a DatetimeIndex")
-        return cast("Self", retime(self._this(), level, lambda k: localize(k, tz)))
+        return cast(
+            "Self",
+            retime(self._this(), level, lambda k: localize(k, tz, ambiguous, nonexistent)),
+        )
 
     def tz_convert(
         self,

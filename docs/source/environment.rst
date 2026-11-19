@@ -114,7 +114,7 @@ Memory and kernels
        written cost more than the compression.
    * - ``DFTRACER_UTILS_TZDIR``
      - unset
-     - Directories, separated by ``:``, searched for time zone files (TZif)
+     - Directories, separated as in ``PATH`` (``:``, and ``;`` on Windows), searched for time zone files (TZif)
        such as ``America/New_York``. They come after the directories the host
        program set and before ``TZDIR`` and the system zoneinfo directories
        (``/usr/share/zoneinfo``, ``/usr/lib/zoneinfo``,

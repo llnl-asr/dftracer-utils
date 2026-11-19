@@ -881,14 +881,18 @@ def test_tz_localize_and_tz_convert_match_pandas():
     assert tokyo.astype("int64").to_list() == utc.astype("int64").to_list()
     assert tokyo.to_pandas().equals(ps.dt.tz_localize("UTC").dt.tz_convert("Asia/Tokyo"))
     assert tokyo.to_pandas().dt.hour.tolist() == [9, 10, 10]
-    # The .dt parts read UTC whatever the zone.
-    assert tokyo.dt.hour.to_list() == [0, 1, 1]
+    # The .dt parts read the wall time of the zone.
+    assert tokyo.dt.hour.to_list() == [9, 10, 10]
+    assert utc.dt.hour.to_list() == [0, 1, 1]
     assert tokyo.dt.tz_convert(None).dt.tz is None
     assert utc.dt.tz_localize(None).dt.tz is None
     assert utc.dt.tz_localize(None).astype("int64").to_list() == [t * 1000 for t in ticks]
-    with pytest.raises(ValueError, match="only UTC"):
-        s.dt.tz_localize("Asia/Tokyo")
-    with pytest.raises(TypeError, match="already"):
+    tokyo_wall = s.dt.tz_localize("Asia/Tokyo")
+    assert tokyo_wall.to_pandas().equals(ps.dt.tz_localize("Asia/Tokyo"))
+    assert tokyo_wall.astype("int64").to_list() == [
+        (t - 9 * 3600 * 1_000_000) * 1000 for t in ticks
+    ]
+    with pytest.raises(TypeError, match="(?i)already"):
         utc.dt.tz_localize("UTC")
     with pytest.raises(TypeError, match="naive"):
         s.dt.tz_convert("UTC")

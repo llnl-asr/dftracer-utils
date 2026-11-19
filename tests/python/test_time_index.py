@@ -484,26 +484,28 @@ def test_tz_on_a_level_and_errors():
         _check(lambda x: x.tz_localize("UTC"), q, oq)
 
 
-def test_tz_other_zones_are_refused_not_guessed():
-    o = DataFrame.from_pandas(FRAMES["sorted"])
-    with pytest.raises(ValueError, match="UTC"):
-        o.tz_localize("Europe/Paris")
+@pytest.mark.parametrize("zone", ["Europe/Paris", "America/New_York", "Asia/Kolkata"])
+@pytest.mark.parametrize("name", ["sorted", "unsorted", "ms", "ns", "nat"])
+def test_tz_localize_and_convert_use_a_named_zone(zone, name):
+    p, o = _both(FRAMES, name)
+    _check(lambda x: x.tz_localize(zone), p, o)
+    _check(lambda x: x.tz_localize(zone).tz_convert("UTC"), p, o)
+    _check(lambda x: x.tz_localize(zone).tz_localize(None), p, o)
+    _check(lambda x: x.tz_localize("UTC").tz_convert(zone), p, o)
 
 
-def test_a_named_zone_is_refused_where_wall_time_matters():
-    p = FRAMES["utc"].copy()
-    o = DataFrame.from_pandas(p).tz_convert("Europe/Paris")
+def test_a_named_zone_reads_the_wall_time_where_wall_time_matters():
+    p = FRAMES["utc"].tz_convert("Europe/Paris")
+    o = DataFrame.from_pandas(p)
     for call in (
-        lambda x: x.resample("1D"),
-        lambda x: x.resample("1h"),
-        lambda x: x.at_time("00:10"),
-        lambda x: x.between_time("00:10", "01:00"),
+        lambda x: x.resample("1D").sum(),
+        lambda x: x.resample("1h").sum(),
+        lambda x: x.at_time("01:10"),
+        lambda x: x.between_time("01:10", "03:00"),
         lambda x: x.asfreq("D"),
         lambda x: x.asfreq("1h", normalize=True),
     ):
-        with pytest.raises(NotImplementedError, match="zone"):
-            call(o)
-    assert len(o.asfreq("1h")) == len(DataFrame.from_pandas(p).asfreq("1h"))
+        _check(call, p, o)
 
 
 @pytest.mark.parametrize("level", [0, -1, 1, 2, -3, "k", "t", "zz", None])

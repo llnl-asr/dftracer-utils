@@ -1088,6 +1088,9 @@ class Series(Generic[T_co]):
     def dt_round(self, every: int, mode: int) -> Self: ...
     def dt_as_unit(self, unit: int, mode: int = 0) -> Self: ...
     def with_timezone(self, tz: str) -> Self: ...
+    def dt_tz_localize(
+        self, tz: str, ambiguous: int = 0, nonexistent: int = 0, shift: int = 0
+    ) -> Self: ...
 
 class LazyFrame:
     """A native deferred query over a vec batch. Builder methods record ops and
@@ -1426,6 +1429,10 @@ class DataFrame:
 
 def _series_from_arrow(array: object) -> PublicSeries:
     """Import a pyarrow array into a native vec column."""
+    ...
+
+def _tz_set_search_path(paths: str) -> None:
+    """The directories, separated by ``:``, searched first for time zone files."""
     ...
 
 def _series_nulls(type_id: int, n: int) -> PublicSeries:

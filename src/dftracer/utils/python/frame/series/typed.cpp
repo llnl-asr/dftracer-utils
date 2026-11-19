@@ -177,6 +177,16 @@ PyObject* Series_to_bytes(PyObject* self, PyObject*) {
     });
 }
 
+// _tz_set_search_path(paths): the directories searched first for time zone
+// files, separated by ':'.
+PyObject* tz_set_search_path(PyObject*, PyObject* arg) {
+    Py_ssize_t size = 0;
+    const char* paths = PyUnicode_AsUTF8AndSize(arg, &size);
+    if (!paths) return nullptr;
+    dftu_tz_set_search_path(paths, static_cast<std::int32_t>(size));
+    Py_RETURN_NONE;
+}
+
 // _series_nulls(type_id, n): a column of `n` nulls of the given type.
 PyObject* series_nulls(PyObject*, PyObject* args) {
     int type_id = 0;

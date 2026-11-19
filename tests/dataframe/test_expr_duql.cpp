@@ -7,6 +7,7 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -1066,11 +1067,17 @@ TEST_CASE("format_time directives on fixed instants in every unit") {
 TEST_CASE("date_part and format_time: types, CSE and refusals") {
     const Series i = ints({1'700'000'000'123'456});
     const Series s = strs({"x"});
+    // duql reads integers as UTC; a Timestamp column in a zone is not one, so
+    // it is refused rather than read as UTC.
+    Series zoned = ints({1'700'000'000'123'456});
+    zoned.handle()->type = TypeId::Timestamp;
+    zoned.handle()->set_timezone("America/New_York");
     for (const Expr& e : {dftu_utils_test::built(dataframe::expr_date_part(
                               c0(), DFTU_DT_HOUR, 1000)),
                           dftu_utils_test::built(
                               dataframe::expr_format_time(c0(), "%F", 1000))}) {
         CHECK(refused(e, {&s}));
+        CHECK(refused(e, {&zoned}));
     }
     CHECK(dftu_utils_test::infer_type_ok(
               dftu_utils_test::built(

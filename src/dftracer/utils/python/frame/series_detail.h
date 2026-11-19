@@ -271,7 +271,11 @@ PyObject* Series_dt_part(PyObject* self, PyObject* args);
 PyObject* Series_dt_format(PyObject* self, PyObject* args);
 PyObject* Series_dt_round(PyObject* self, PyObject* args);
 PyObject* Series_dt_as_unit(PyObject* self, PyObject* args);
+/// Sets the Python error of this thread's last time zone failure and returns
+/// true; false when there was none.
+bool raise_tz_failure();
 PyObject* Series_with_timezone(PyObject* self, PyObject* arg);
+PyObject* Series_tz_localize(PyObject* self, PyObject* args, PyObject* kwds);
 
 // series/arrow.cpp
 PyObject* Series_arrow_c_array(PyObject* self, PyObject* args);
@@ -301,6 +305,7 @@ PyObject* series_retype(PyObject* self, PyObject* args);
 PyObject* series_list_of(PyObject* self, PyObject* args);
 PyObject* series_from_bytes(PyObject* self, PyObject* obj);
 PyObject* series_nulls(PyObject* self, PyObject* args);
+PyObject* tz_set_search_path(PyObject* self, PyObject* arg);
 
 }  // namespace dftracer::utils::python::frame::series_detail
 

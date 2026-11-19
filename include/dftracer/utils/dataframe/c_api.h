@@ -828,18 +828,23 @@ enum {
 };
 /** One calendar `part` (a dftu_dt_part) per row as Int64, of a Timestamp /
  * Date32 / Date64 / Duration column in its own unit, or of an Int64 column
- * read in `unit` (a dftu_time_unit). Naive: a timezone is ignored, every part
- * is UTC. Before the epoch the day still floors correctly. NULL for another
- * type or a bad code. */
+ * read in `unit` (a dftu_time_unit). A Timestamp column with a timezone gives
+ * the parts of its wall time in that zone; a naive column, an Int64 column and
+ * a UTC one give the UTC parts. Before the epoch the day still floors
+ * correctly. NULL for another type, a bad code, or a zone that is not in the
+ * time zone database (see dftu_tz_take_error). */
 DFTU_EXPORT dftu_series* dftu_series_dt_part(const dftu_series* v, int32_t part,
                                              int32_t unit);
 /** Each instant of a Timestamp / Date32 / Date64 / Duration column (its own
- * unit) or an Int64 column read in `unit` (a dftu_time_unit) as UTC text by the
+ * unit) or an Int64 column read in `unit` (a dftu_time_unit) as text by the
  * strftime-style `fmt` (fmt_len bytes): %Y %y %m %d %H %I %M %S %f (six-digit
- * microseconds) %j %a %A %b %B %p %F %T %s (epoch seconds, floored) %z (+0000)
- * %Z (UTC) %%. A null row stays null. NULL for another input type, a bad
- * `unit`, a NULL `fmt` with a positive length, an unknown directive or a
- * trailing '%'. The caller frees the result. */
+ * microseconds) %j %a %A %b %B %p %F %T %s (epoch seconds, floored) %z %Z %%.
+ * A Timestamp column with a timezone prints its wall time in that zone, %z as
+ * the offset (+0530, and seconds when the zone has them) and %Z as the zone's
+ * abbreviation at that instant; every other input prints UTC, %z as +0000 and
+ * %Z as UTC. A null row stays null. NULL for another input type, a bad `unit`,
+ * a NULL `fmt` with a positive length, an unknown directive, a trailing '%',
+ * or a zone that is not in the database. The caller frees the result. */
 DFTU_EXPORT dftu_series* dftu_series_dt_format(const dftu_series* v,
                                                const char* fmt, int32_t fmt_len,
                                                int32_t unit);
@@ -848,8 +853,11 @@ typedef int32_t dftu_dt_round_mode;
 enum { DFTU_DT_FLOOR = 0, DFTU_DT_CEIL = 1, DFTU_DT_ROUND = 2 };
 /** Each instant rounded to a multiple of `every` (in the column's own unit;
  * an Int64 column is taken as it is) by `mode` (a dftu_dt_round_mode; ROUND
- * is half to even, as pandas). The result keeps the input's type. NULL for a
- * date column, another non-instant type, `every` <= 0 or a bad code. */
+ * is half to even, as pandas). A Timestamp column with a timezone rounds its
+ * wall time and maps the result back to UTC; a wall time that happens twice
+ * or never makes the call fail, as pandas. The result keeps the input's type.
+ * NULL for a date column, another non-instant type, `every` <= 0, a bad code,
+ * or a zone failure (see dftu_tz_take_error). */
 DFTU_EXPORT dftu_series* dftu_series_dt_round(const dftu_series* v,
                                               int64_t every, int32_t mode);
 /** How dftu_series_dt_as_unit rounds to a coarser unit. */
@@ -868,28 +876,110 @@ enum {
  * wrap). */
 DFTU_EXPORT dftu_series* dftu_series_dt_as_unit(const dftu_series* v,
                                                 int32_t unit, int32_t mode);
-/** The calendar day of each Timestamp (its own unit, zone ignored: UTC) or
- * Date64 row as Date32, floored toward -infinity. NULL for another type or a
- * day outside Int32. */
+/** The calendar day of each Timestamp (its own unit; a column with a timezone
+ * gives the day of its wall time in that zone, else the UTC day) or Date64 row
+ * as Date32, floored toward -infinity. NULL for another type, a day outside
+ * Int32 or a zone that is not in the database. */
 DFTU_EXPORT dftu_series* dftu_series_dt_date(const dftu_series* v);
-/** The UTC time of day of each Timestamp row, since midnight in the column's
- * own unit: Time32 for seconds and milliseconds, Time64 for microseconds and
- * nanoseconds. NULL for another type. */
+/** The time of day of each Timestamp row, since midnight in the column's own
+ * unit (the wall time in the column's zone, or UTC when it has none): Time32
+ * for seconds and milliseconds, Time64 for microseconds and nanoseconds. NULL
+ * for another type or a zone that is not in the database. */
 DFTU_EXPORT dftu_series* dftu_series_dt_time(const dftu_series* v);
-/** The same instants under the timezone `tz` (a zone name such as "UTC" or
- * "Asia/Tokyo"; `tz_len` bytes, 0 for naive): the Timestamp type's zone is
- * replaced and no tick moves, as pandas `tz_convert`, or `tz_localize` on a
- * naive column with "UTC". The buffers are shared. NULL for another type. */
+/** The same instants under the timezone `tz` (a zone name such as "UTC",
+ * "Asia/Tokyo" or "+05:30"; `tz_len` bytes, 0 for naive): the Timestamp type's
+ * zone is replaced and no tick moves, as pandas `tz_convert`. The buffers are
+ * shared. NULL for another type, or for a name that is not in the time zone
+ * database (see dftu_tz_take_error). */
 DFTU_EXPORT dftu_series* dftu_series_with_timezone(const dftu_series* v,
                                                    const char* tz,
                                                    int32_t tz_len);
 /** Sets the directories searched for time zone files first, as `paths`
- * (`len` bytes, not NUL terminated) separated by ':'. The library then also
+ * (`len` bytes, not NUL terminated) separated as in PATH (':', and ';' on
+ * Windows). The library then also
  * searches DFTRACER_UTILS_TZDIR, TZDIR and the system zoneinfo directories. A
  * NULL `paths` or a `len` of 0 or less clears the list. Zones already loaded
  * stay as they are. The text is copied, so the caller keeps ownership. Thread
  * safe. */
 DFTU_EXPORT void dftu_tz_set_search_path(const char* paths, int32_t len);
+/** How dftu_series_tz_localize reads a wall time that happens twice (the
+ * clock stepping back). */
+typedef int32_t dftu_tz_ambiguous;
+enum {
+    /** The call fails. */
+    DFTU_TZ_AMBIGUOUS_RAISE = 0,
+    /** The first of the two instants (the daylight time side). */
+    DFTU_TZ_AMBIGUOUS_EARLIEST = 1,
+    /** The second of the two instants (the standard time side). */
+    DFTU_TZ_AMBIGUOUS_LATEST = 2,
+    /** The row becomes null. */
+    DFTU_TZ_AMBIGUOUS_NAT = 3,
+    /** As pandas "infer": in each run of consecutive ambiguous rows the rows
+     * before the wall time steps back take the first instant and the rest the
+     * second; a run needs exactly one step back. */
+    DFTU_TZ_AMBIGUOUS_INFER = 4
+};
+/** How dftu_series_tz_localize reads a wall time that never happens (the
+ * clock stepping forward). */
+typedef int32_t dftu_tz_nonexistent;
+enum {
+    /** The call fails. */
+    DFTU_TZ_NONEXISTENT_RAISE = 0,
+    /** The first instant after the gap. */
+    DFTU_TZ_NONEXISTENT_SHIFT_FORWARD = 1,
+    /** One tick before the gap. */
+    DFTU_TZ_NONEXISTENT_SHIFT_BACKWARD = 2,
+    /** The row becomes null. */
+    DFTU_TZ_NONEXISTENT_NAT = 3,
+    /** The wall time plus `shift` ticks, read at the offset after the gap; the
+     * call fails when that is still not a single instant. */
+    DFTU_TZ_NONEXISTENT_SHIFT = 4
+};
+/** Wall time to UTC, pandas `tz_localize`. A naive Timestamp column read as
+ * wall times in the zone `tz` becomes a column in that zone, its ticks the
+ * UTC instants; `ambiguous` and `nonexistent` (dftu_tz_ambiguous and
+ * dftu_tz_nonexistent) say what a wall time that happens twice or never
+ * becomes, and `shift` (ticks of the column's unit) is the shift of
+ * DFTU_TZ_NONEXISTENT_SHIFT. A column with a timezone and an empty `tz` becomes
+ * the naive column of its wall times. A naive column with an empty `tz`
+ * comes back as it is. NULL for a column that is not a Timestamp, a column with
+ * a timezone and a non-empty `tz`, a bad code, a zone that is not in the
+ * database, a wall time that the options refuse, or a wall time whose instant
+ * does not fit Int64 (see dftu_tz_take_error). The caller frees the result. */
+DFTU_EXPORT dftu_series* dftu_series_tz_localize(const dftu_series* v,
+                                                 const char* tz, int32_t tz_len,
+                                                 int32_t ambiguous,
+                                                 int32_t nonexistent,
+                                                 int64_t shift);
+/** dftu_series_tz_localize with its options in one Int64, for the column op
+ * table: `options` is `ambiguous | nonexistent << 8 | shift_ns << 16`, the
+ * shift in nanoseconds, so it must lie within +-2^47 ns (about 39 hours); the
+ * caller that packs it checks that. NULL, with a DFTU_TZ_ERROR_OTHER failure,
+ * for a shift that is not a whole number of the column's ticks. */
+DFTU_EXPORT dftu_series* dftu_series_tz_localize_opts(const dftu_series* v,
+                                                      const char* tz,
+                                                      int32_t tz_len,
+                                                      int64_t options);
+/** The kinds of failure dftu_tz_take_error reports. */
+typedef int32_t dftu_tz_error_kind;
+enum {
+    DFTU_TZ_ERROR_NONE = 0,
+    /** The zone name is well formed and in no directory searched. */
+    DFTU_TZ_ERROR_UNKNOWN_ZONE = 1,
+    /** The zone name is malformed. */
+    DFTU_TZ_ERROR_INVALID_ZONE = 2,
+    DFTU_TZ_ERROR_AMBIGUOUS = 3,
+    DFTU_TZ_ERROR_NONEXISTENT = 4,
+    DFTU_TZ_ERROR_OUT_OF_RANGE = 5,
+    DFTU_TZ_ERROR_OTHER = 6
+};
+/** The last time zone failure of the calling thread, then cleared: a kind
+ * (dftu_tz_error_kind, DFTU_TZ_ERROR_NONE when the last time zone call on this
+ * thread did not fail) and, when `message` is not NULL, a NUL-terminated text
+ * in `*message` that stays valid until the next time zone call on this thread.
+ * The calls that report a failure through a NULL result are the time zone
+ * calls of this header and the calendar kernels of a zone-aware column. */
+DFTU_EXPORT int32_t dftu_tz_take_error(const char** message);
 /** Each row's List<String> joined with `sep` into one String; a null list
  * stays null. NULL unless `v` is a FLAT List of strings. */
 DFTU_EXPORT dftu_series* dftu_series_list_join(const dftu_series* v,

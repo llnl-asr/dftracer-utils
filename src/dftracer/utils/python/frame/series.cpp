@@ -947,6 +947,13 @@ PyMethodDef Series_methods[] = {
      METH_VARARGS | METH_KEYWORDS,
      "with_timezone(tz) -> this Timestamp column under zone tz ('' for "
      "naive), the same instants and buffers."},
+    {"dt_tz_localize", DFTU_PYCFUNCTION(Series_tz_localize),
+     METH_VARARGS | METH_KEYWORDS,
+     "dt_tz_localize(tz, ambiguous=0, nonexistent=0, shift=0) -> naive "
+     "Timestamp column read as wall times in zone tz, as UTC instants. "
+     "ambiguous: 0 raise, 1 earliest, 2 latest, 3 null, 4 infer. nonexistent: "
+     "0 raise, 1 shift forward, 2 shift backward, 3 null, 4 shift by `shift` "
+     "ticks. A column with a zone and tz '' gives its wall times, naive."},
     {"is_null_at", Series_is_null, METH_O,
      "is_null_at(i) -> whether row i is null."},
     {"num_children", Series_num_children, METH_NOARGS,
@@ -1174,6 +1181,17 @@ int init_series(PyObject* m) {
     if (!nulls_fn) return -1;
     if (PyModule_AddObject(m, "_series_nulls", nulls_fn) < 0) {
         Py_DECREF(nulls_fn);
+        return -1;
+    }
+
+    static PyMethodDef tz_path_def = {
+        "_tz_set_search_path", tz_set_search_path, METH_O,
+        "_tz_set_search_path(paths) -> None: the directories (separated by "
+        "':') searched first for time zone files."};
+    PyObject* tz_path_fn = PyCFunction_NewEx(&tz_path_def, nullptr, nullptr);
+    if (!tz_path_fn) return -1;
+    if (PyModule_AddObject(m, "_tz_set_search_path", tz_path_fn) < 0) {
+        Py_DECREF(tz_path_fn);
         return -1;
     }
 

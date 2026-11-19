@@ -151,13 +151,13 @@ Norm = Tuple[str, Dict[str, Any]]
 
 
 def _ours_labels(x: Series) -> Optional[List[Any]]:
-    """The row labels of ``x`` (a tuple per row for several levels), None when
+    """The row labels of ``x`` (a list per row for several levels), None when
     it is positional."""
     names = x.index_names()
     if not names:
         return None
     levels = [clean(x._index_level(i).to_list()) for i in range(len(names))]
-    return levels[0] if len(levels) == 1 else [tuple(row) for row in zip(*levels)]
+    return levels[0] if len(levels) == 1 else [list(row) for row in zip(*levels)]
 
 
 def norm_ours(x: Any) -> Norm:

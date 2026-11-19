@@ -310,7 +310,7 @@ Select and test rows
          mask = dur.is_in(other)
          nonnull = dur.drop_nulls()
          sorted_ok = dur.is_sorted()
-         seen = dur.value_counts()     # a two-column DataFrame
+         seen = dur.value_counts()     # a Series of counts labelled by the values
          dup_mask = dur.is_duplicated()  # also is_unique(); per-value, not per-row
                                           # (see DataFrame.is_duplicated for whole-row)
 

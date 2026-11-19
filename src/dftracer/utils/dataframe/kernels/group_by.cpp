@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/float_key.h>
 #include <dftracer/utils/dataframe/internal/numeric_dispatch.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/kernels/group_by.h>
@@ -118,9 +119,21 @@ Groups build_groups(const dftu_series* keys_in) {
                                        std::int32_t>
             idx;
         const char* data = reinterpret_cast<const char*>(k->data.data());
+        // A float keys as pandas and Polars key it: -0.0 is 0.0 and every NaN
+        // is one value, so the key bytes are the canonical bits.
+        const bool is_float = k->type == TypeId::Float16 ||
+                              k->type == TypeId::Float32 ||
+                              k->type == TypeId::Float64;
         for (std::int64_t i = 0; i < k->length; ++i) {
             dftracer::utils::dstd::String key(
                 data + static_cast<std::size_t>(i) * width, width);
+            if (is_float) {
+                std::uint64_t bits = 0;
+                std::memcpy(&bits, key.data(), width);
+                bits = dftracer::utils::dataframe::canonical_float_bits(
+                    bits, static_cast<unsigned>(width));
+                std::memcpy(key.data(), &bits, width);
+            }
             auto [it, ins] = idx.try_emplace(
                 std::move(key), static_cast<std::int32_t>(distinct.size()));
             if (ins) distinct.push_back(it->first);

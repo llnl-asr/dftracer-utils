@@ -7,7 +7,7 @@ The C extension carries the full SIMD kernel surface on ``_Series``; the Python
 in the reference) rather than relying on attribute forwarding. These tests prove
 the wrappers dispatch correctly and return the right Python type: reductions
 return scalars, elementwise/ordering ops return a wrapped ``Series``, and
-``value_counts`` returns a ``DataFrame``.
+``value_counts`` returns a ``Series`` of counts.
 """
 
 import numpy as np
@@ -91,11 +91,12 @@ def test_properties():
     assert s.encoding is not None
 
 
-def test_value_counts_returns_dataframe():
+def test_value_counts_is_a_series_of_counts_labelled_by_the_values():
     s = Series.from_numpy(np.array([1, 1, 2, 3, 3, 3], dtype=np.int64))
     vc = s.value_counts()
-    assert isinstance(vc, DataFrame)
-    assert vc.num_rows == 3
+    assert isinstance(vc, Series)
+    assert vc.to_list() == [3, 2, 1]
+    assert vc.index.to_list() == [3, 1, 2]
 
 
 def test_string_ops():

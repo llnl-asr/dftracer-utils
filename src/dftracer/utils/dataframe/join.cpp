@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
+#include <dftracer/utils/dataframe/internal/float_key.h>
 #include <dftracer/utils/dataframe/internal/frame_index.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/join.h>
@@ -99,6 +100,9 @@ struct KeyView {
     // A null cell is a value: it hashes to one constant and equals only another
     // null cell (the `nulls_equal` join). Off, a null key never matches.
     bool null_safe = false;
+    // A float key matches as pandas and Polars match it: -0.0 equals 0.0 and
+    // every NaN equals every NaN.
+    bool is_float = false;
 
     explicit KeyView(const Series& c) {
         const dftu_series& h = *c.handle();
@@ -122,7 +126,18 @@ struct KeyView {
         } else {
             kind = Fixed;
             width = byte_width(h.type, h.fixed_size()).value_or(0);
+            is_float = h.type == TypeId::Float16 || h.type == TypeId::Float32 ||
+                       h.type == TypeId::Float64;
         }
+    }
+    std::uint64_t float_bits(const std::uint8_t* p) const {
+        std::uint64_t bits = 0;
+        if (width == 8) {
+            std::memcpy(&bits, p, 8);
+            return canonical_f64_bits(bits);
+        }
+        std::memcpy(&bits, p, width);
+        return canonical_float_bits(bits, static_cast<unsigned>(width));
     }
     bool is_null(std::int64_t i) const {
         return validity && !((validity[i >> 3] >> (i & 7)) & 1);
@@ -145,6 +160,7 @@ struct KeyView {
                 std::uint64_t bits = 0;
                 const std::uint8_t* p =
                     data + static_cast<std::size_t>(i) * width;
+                if (is_float) return float_bits(p);
                 if (width == 8) {
                     std::memcpy(&bits, p, 8);
                     return bits;
@@ -175,6 +191,7 @@ struct KeyView {
                     data + static_cast<std::size_t>(i) * width;
                 const std::uint8_t* b =
                     o.data + static_cast<std::size_t>(j) * width;
+                if (is_float) return float_bits(a) == o.float_bits(b);
                 // The common widths compare as one load each; memcmp is a
                 // call per row, which the probe loop cannot afford.
                 if (width == 8) {
@@ -678,8 +695,26 @@ dstd::Result<DataFrame> HashJoin::probe(
         };
         const bool one_word = !nulls_equal_ && lviews.size() == 1 &&
                               lviews[0].kind == KeyView::Fixed &&
-                              lviews[0].width == 8;
-        if (one_word && !direct_.empty()) {
+                              lviews[0].width == 8 &&
+                              lviews[0].is_float == rviews[0].is_float;
+        if (one_word && lviews[0].is_float) {
+            // The one-word probe over canonical bits: -0.0 is 0.0 and every
+            // NaN is one value (the build side hashed the same bits).
+            const auto* lk =
+                reinterpret_cast<const std::uint64_t*>(lviews[0].data);
+            const std::uint8_t* lv = lviews[0].validity;
+            run(
+                [&](std::int64_t i) {
+                    return lv && !((lv[i >> 3] >> (i & 7)) & 1);
+                },
+                [&](std::int64_t i) {
+                    auto it = first_.find(canonical_f64_bits(lk[i]));
+                    return it != first_.end() ? it->second : std::int64_t{-1};
+                },
+                // The table is keyed by the whole canonical word, so a chain
+                // holds only rows that equal it.
+                [&](std::int64_t, std::int64_t) { return true; });
+        } else if (one_word && !direct_.empty()) {
             const auto* lk =
                 reinterpret_cast<const std::uint64_t*>(lviews[0].data);
             const auto* rk =

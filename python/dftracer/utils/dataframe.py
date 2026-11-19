@@ -227,6 +227,25 @@ def single_index(index: Sequence[str], op: str) -> str:
     return index[0]
 
 
+def _nan_keys(frame: DataFrame, given: list[str | Series]) -> tuple[DataFrame, list[str | Series]]:
+    """The frame and keys for a pandas ``groupby`` over float keys: a NaN is
+    missing like a null, so it becomes a null and ``dropna`` treats the two
+    alike (the rows keep their places, so the group-wise transforms keep the
+    length of the frame)."""
+    keys = list(given)
+    for i in range(len(keys)):
+        key = keys[i]
+        column = frame._col(key) if isinstance(key, str) else key
+        if not column.dtype.is_float or not column.is_nan().any():
+            continue
+        cleaned = column.where(column.is_nan().logical_not())
+        if isinstance(key, str):
+            frame = frame.with_column(key, cleaned)
+        else:
+            keys[i] = cleaned
+    return frame, keys
+
+
 def _bound(native: _ext.DataFrame) -> DataFrame:
     """A native result as the public class: the native factories build it."""
     return cast("DataFrame", native)
@@ -816,7 +835,10 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         keeps the engine's group order. With ``as_index`` (the pandas default)
         an aggregate result is indexed by the keys, as pandas does, even when
         this frame has no index; ``as_index=False`` keeps the keys as plain
-        columns, as :meth:`group_by` always does."""
+        columns, as :meth:`group_by` always does. A float NaN key is missing like
+        a null: left out with ``dropna`` (the default), and one group with the
+        null keys without it, as pandas; :meth:`group_by` keeps NaN as its own
+        group, as Polars."""
         given = [by] if isinstance(by, (str, Series)) else list(by)
         source = self
         hidden = [n for n in _ext.DataFrame.index_names(self) if n not in given]
@@ -825,7 +847,8 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
             source = _bound(
                 _ext.DataFrame.select(self, *[c for c in self._names() if c not in hidden])
             )
-        out = source.group_by(by, *aggs, dropna=dropna)
+        source, given = _nan_keys(source, given)
+        out = source.group_by(given, *aggs, dropna=dropna)
         if isinstance(out, DataFrame):
             keys = [
                 k if isinstance(k, str) else "key" if len(given) == 1 else f"key{i}"
@@ -1703,6 +1726,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
             else:
                 raise KeyError(f"group_by: no column named {k!r}")
         rows: Series | None = None
+        total = len(source)
         if dropna:
             for k in keys:
                 if source._col(k).null_count:
@@ -1715,6 +1739,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
             # The Python object over this wrapper, so the index names carry.
             grouped = GroupBy(source, keys)
             grouped._rows = rows
+            grouped._total = total
             return grouped
         return _ext.DataFrame.group_by(source, *[k for k in keys], *[a for a in aggs])
 

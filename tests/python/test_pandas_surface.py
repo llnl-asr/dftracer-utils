@@ -140,8 +140,8 @@ def test_frame_reductions_match_pandas():
     assert _d(df.median())["b"] == [num.median()["b"]]
     assert _d(df.quantile(0.5))["b"] == [num.quantile(0.5)["b"]]
     vc = df.value_counts(["s"])
-    assert _d(vc) == {"s": ["x", "y", "z"], "count": [2, 1, 1]}
-    assert _d(df.value_counts())["count"] == [1, 1, 1]  # the null row is dropped
+    assert (vc.index.to_list(), vc.to_list()) == (["x", "y", "z"], [2, 1, 1])
+    assert df.value_counts().to_list() == [1, 1, 1]  # the null row is dropped
 
 
 def test_frame_conveniences():

@@ -47,6 +47,11 @@ bool append_double_key(dstd::String& out, double v) {
     return true;
 }
 
+void append_nan_key(dstd::String& out) {
+    out += DOUBLE_TAG;
+    dstd::append_f64_be(out, std::numeric_limits<double>::quiet_NaN());
+}
+
 void append_string_key(dstd::String& out, dstd::StringView v) {
     out += STRING_TAG;
     dstd::append_u64_be(out, v.size());

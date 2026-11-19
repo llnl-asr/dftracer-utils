@@ -496,12 +496,12 @@ def test_pandas_semantics_rulings():
     assert _lst(Series([5, 1, 9, 1, 9]).mode()) == [1]
     assert _lst(a.ops.series.compare(0, 2)) == [False, False, True, True]
 
-    # value_counts keeps its frame shape and takes the pandas arguments.
+    # value_counts is the pandas Series of counts labelled by the values.
     s = Series([1, 1, 2, 3, 3, 3])
     vc = s.value_counts()
-    assert _dict(vc) == {"value": [3, 1, 2], "count": [3, 2, 1]}
-    assert _dict(s.value_counts(ascending=True)) == {"value": [2, 1, 3], "count": [1, 2, 3]}
-    assert _dict(s.value_counts(normalize=True)) == {
-        "value": [3, 1, 2],
-        "proportion": [0.5, 1 / 3, 1 / 6],
-    }
+    assert (vc.index.to_list(), vc.to_list()) == ([3, 1, 2], [3, 2, 1])
+    asc = s.value_counts(ascending=True)
+    assert (asc.index.to_list(), asc.to_list()) == ([2, 1, 3], [1, 2, 3])
+    prop = s.value_counts(normalize=True)
+    assert prop.index.to_list() == [3, 1, 2]
+    assert prop.to_list() == [0.5, 1 / 3, 1 / 6]

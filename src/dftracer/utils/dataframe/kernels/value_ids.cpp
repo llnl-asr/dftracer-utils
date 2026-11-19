@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dataframe/internal/float_key.h>
 #include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/internal/value_ids.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -15,12 +16,25 @@ constexpr char BOOL_BYTES[2] = {0, 1};
 
 struct Builder {
     dstd::HashMap<dstd::StringView, std::int32_t> map;
+    // A float keys by its canonical bits (-0.0 is +0.0, every NaN is one
+    // value), which no row holds, so it has a table of values.
+    dstd::HashMap<std::uint64_t, std::int32_t> float_map;
     ValueIds& out;
     bool is_string;
     bool is_bool;
+    bool is_float;
     std::size_t width;
 
     std::int32_t intern(dstd::StringView s, std::int64_t row) {
+        if (is_float) {
+            std::uint64_t bits = 0;
+            std::memcpy(&bits, s.data(), s.size());
+            auto [it, fresh] = float_map.try_emplace(
+                canonical_float_bits(bits, static_cast<unsigned>(width)),
+                static_cast<std::int32_t>(out.first.size()));
+            if (fresh) out.first.push_back(row);
+            return it->second;
+        }
         auto [it, fresh] =
             map.try_emplace(s, static_cast<std::int32_t>(out.first.size()));
         if (fresh) out.first.push_back(row);
@@ -127,15 +141,19 @@ bool value_ids(const dftu_series& v, ValueIds& out) {
     out.null_id = -1;
     const TypeId narrow = narrow_varwidth_type(v.type);
     Builder b{{},
+              {},
               out,
               narrow == TypeId::String || narrow == TypeId::Binary,
               v.type == TypeId::Bool,
+              v.type == TypeId::Float16 || v.type == TypeId::Float32 ||
+                  v.type == TypeId::Float64,
               0};
     if (v.type == TypeId::FixedSizeBinary)
         b.width = static_cast<std::size_t>(v.fixed_size());
     else
         b.width = byte_width(v.type).value_or(0);
     b.map.reserve(64);
+    b.float_map.reserve(64);
     b.fill(&v, 0);
     return true;
 }

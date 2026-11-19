@@ -29,8 +29,10 @@ namespace dftracer::utils::duql {
 /// the integer, exactly past 2^53), a string by its bytes, a bool apart; a
 /// tuple concatenates its parts. Null and missing values have no key.
 void append_int_key(dstd::String& out, bool negative, std::uint64_t magnitude);
-/// False for NaN, which has no key.
+/// False for NaN, which has no key; @ref append_nan_key keys a NaN.
 bool append_double_key(dstd::String& out, double v);
+/// The one key every NaN has, whatever its sign and payload.
+void append_nan_key(dstd::String& out);
 void append_string_key(dstd::String& out, dstd::StringView v);
 void append_bool_key(dstd::String& out, bool v);
 /// The decoded text of a key that append_string_key built, else nullopt.

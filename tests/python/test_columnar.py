@@ -1460,10 +1460,9 @@ def test_dataframe_group_by_dynamic():
 def test_series_value_counts():
     col = _series_from_arrow(pa.array([1, 2, 1, 3, 1, 2], pa.int64()))
     vc = col.value_counts()
-    values = pa.array(vc["value"]).to_pylist()
-    counts = pa.array(vc["count"]).to_pylist()
-    assert values[0] == 1 and counts[0] == 3  # most frequent first
-    assert dict(zip(values, counts)) == {1: 3, 2: 2, 3: 1}
+    assert vc.name == "count"
+    assert vc.to_list() == [3, 2, 1]  # most frequent first
+    assert vc.index.to_list() == [1, 2, 3]
 
 
 def test_columnar_expr_apply_direct_no_wrapper():

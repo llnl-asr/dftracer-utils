@@ -267,10 +267,25 @@ void mode_one(const dftu_series& v, dftu_scalar& out) {
     const std::int64_t n = v.length;
     const bool has_null = static_cast<bool>(v.validity.block());
 
+    // A float NaN is missing, as in pandas' mode, and -0.0 is 0.0: the
+    // values are counted as a copy with the zero's sign dropped.
+    dftracer::utils::dstd::Vector<T> unsigned_zero;
+    if constexpr (std::is_floating_point_v<T>) {
+        unsigned_zero.resize(static_cast<std::size_t>(n));
+        for (std::int64_t i = 0; i < n; ++i)
+            unsigned_zero[static_cast<std::size_t>(i)] =
+                p[i] == T{} ? T{} : p[i];
+        p = unsigned_zero.data();
+    }
+
     dftracer::utils::dstd::Vector<std::int64_t> idx;
     idx.reserve(static_cast<std::size_t>(n));
-    for (std::int64_t i = 0; i < n; ++i)
-        if (!has_null || is_valid(v, i)) idx.push_back(i);
+    for (std::int64_t i = 0; i < n; ++i) {
+        if (has_null && !is_valid(v, i)) continue;
+        if constexpr (std::is_floating_point_v<T>)
+            if (p[i] != p[i]) continue;
+        idx.push_back(i);
+    }
     const std::int64_t m = static_cast<std::int64_t>(idx.size());
 
     if (m == 0) {

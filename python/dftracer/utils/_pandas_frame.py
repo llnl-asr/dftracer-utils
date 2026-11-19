@@ -34,6 +34,7 @@ from ._levels import (
 )
 from ._pandas_series import OMITTED, Omitted, replace_in, replace_pairs, valid_edge
 from ._series_index import default_name, internal_name, positions, public_name, renamed_names
+from ._value_counts import frame_value_counts, native_counts
 from .enums import DType, rule_to_units
 from .series import Series
 
@@ -444,7 +445,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, _ext.DataFrame):
         on a tie (pandas lists the tied modes sorted)."""
 
         def one(s: Series) -> object:
-            counts = s.value_counts()
+            counts = native_counts(s)
             if len(counts) == 0:
                 return None
             count = column_series(counts, "count")
@@ -514,21 +515,21 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, _ext.DataFrame):
         return DataFrame(table)
 
     def value_counts(
-        self, subset: Sequence[str] | None = None, ascending: bool = False
-    ) -> DataFrame:
-        """Distinct rows of ``subset`` (every column by default) with their
-        count, most frequent first, as a frame with a ``count`` column."""
+        self,
+        subset: Sequence[str] | None = None,
+        normalize: bool = False,
+        sort: bool = True,
+        ascending: bool = False,
+        dropna: bool = True,
+    ) -> Series:
+        """The count of each distinct row of ``subset`` (every column by
+        default) as a Series named ``count``, labelled by the row's values (the
+        pandas ``value_counts``). ``normalize`` gives fractions, named
+        ``proportion``; ``sort=False`` keeps the order of first appearance and
+        ``ascending`` flips the count order, ties keeping that order.
+        ``dropna=False`` keeps the rows with a null key."""
         keys = list(subset) if subset else self.columns
-        frame = self._frame()
-        # pandas drops a row with a null key (dropna=True).
-        present = None
-        for k in keys:
-            m = self._col(k).notna()
-            present = m if present is None else present.logical(0, m)
-        if present is not None:
-            frame = frame.filter(present)
-        counts = _group(frame, keys).size().rename({"size": "count"})
-        return counts.sort_values("count", ascending=ascending)
+        return frame_value_counts(self._frame(), keys, normalize, sort, ascending, dropna)
 
     # -- shape, iteration, conveniences -------------------------------------------
     @property

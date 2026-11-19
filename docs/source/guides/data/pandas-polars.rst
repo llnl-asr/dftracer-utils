@@ -393,7 +393,19 @@ raise ``ValueError`` otherwise. ``sort_index`` orders the rows by their labels,
 level by level. ``loc``, ``at``, ``get``, ``xs`` and ``s[label]`` look rows up by
 label (see Label lookup). ``s[mask]`` keeps the rows where a Bool Series is true, a null counting as false. Comparing two
 Series whose labels differ raises ``ValueError``, as pandas.
-``Series.value_counts`` keeps the Polars frame of ``value`` and ``count``.
+``Series.value_counts`` and ``DataFrame.value_counts`` are the pandas Series of
+counts named ``count`` (``proportion`` with ``normalize=True``), labelled by the
+values (one level per column for a frame). They take ``normalize``, ``sort``,
+``ascending`` and ``dropna`` (and ``bins`` on a Series, the counts per interval of
+``pandas.cut`` with every interval listed, labelled by its text such as
+``"(0.999, 2.0]"``; the bins of an interval label are text, not an interval
+object). Ties keep the order of first appearance, ``sort=False`` lists the values
+by first appearance, and ``dropna=False`` counts a null and a NaN as one missing
+value. Against a pandas nullable dtype (``Int64``, ``Float64``) the null sits at
+its first appearance among tied counts, where pandas puts it last; pandas 2 orders
+the tied rows of a frame and the rows with a null key in its own way, and a
+pandas 3 ``str`` column gives a pyarrow-backed count. ``Expr.value_counts`` keeps
+its Polars struct and the lazy group-by keeps its frame.
 The labels a group-by gives its results are in "Levels" below.
 
 Levels

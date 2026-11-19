@@ -311,6 +311,10 @@ bool is_in_f64_simd(const dftu_series& v, const dftu_series& values,
         return false;
     const std::int64_t nn = values.length;
     if (nn <= 0 || nn > 32) return false;
+    // A NaN needle matches a NaN row, which an equality compare never sets.
+    const auto* needles = reinterpret_cast<const double*>(values.data.data());
+    for (std::int64_t k = 0; k < nn; ++k)
+        if (needles[k] != needles[k]) return false;
     HWY_DYNAMIC_DISPATCH(is_in_f64)
     (reinterpret_cast<const double*>(v.data.data()), v.length,
      reinterpret_cast<const double*>(values.data.data()), static_cast<int>(nn),

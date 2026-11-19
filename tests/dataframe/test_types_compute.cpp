@@ -1142,12 +1142,10 @@ TEST_SUITE("dataframe_types_compute") {
     }
 
     TEST_CASE(
-        "DataFrame::group_by groups a Float16 key by exact bit pattern, "
-        "keeping +-0.0 and NaN distinct") {
-        // rows: 1.0, -0.0, 1.0, +0.0, NaN, -0.0 -> four groups: {1.0}x2,
-        // {-0.0}x2, {+0.0}x1, {NaN}x1. -0.0/+0.0 must stay separate groups
-        // (their half bit patterns differ) and NaN must group with itself
-        // (bit-pattern equality, not IEEE float equality where NaN != NaN).
+        "DataFrame::group_by groups a Float16 key with -0.0 equal to +0.0 "
+        "and NaN equal to itself") {
+        // rows: 1.0, -0.0, 1.0, +0.0, NaN, -0.0 -> three groups: {1.0}x2,
+        // {0.0}x3, {NaN}x1, as pandas and Polars key a float.
         Series keys = make_float16(dftu_utils_test::span_of<float>(
             {1.0f, -0.0f, 1.0f, 0.0f, std::nanf(""), -0.0f}));
         dstd::Vector<std::int64_t> ones(6, 1);
@@ -1159,27 +1157,22 @@ TEST_SUITE("dataframe_types_compute") {
         DataFrame grouped = dftu_utils_test::ok(df.group_by(
             "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
                      {GroupAgg{Agg::Count, "v", "n"}})));
-        REQUIRE(grouped.num_rows() == 4);
+        REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Float16);
         const std::uint16_t* bits = gk.data<std::uint16_t>();
         REQUIRE(bits != nullptr);
         const std::int64_t* n = grouped.column("n").data<std::int64_t>();
         REQUIRE(n != nullptr);
-        int seen_one = 0, seen_neg_zero = 0, seen_pos_zero = 0, seen_nan = 0;
-        for (std::int64_t r = 0; r < 4; ++r) {
+        int seen_one = 0, seen_zero = 0, seen_nan = 0;
+        for (std::int64_t r = 0; r < 3; ++r) {
             const float f = dataframe::half_to_float(bits[r]);
             if (std::isnan(f)) {
                 ++seen_nan;
                 CHECK(n[r] == 1);
             } else if (f == 0.0f) {
-                if (std::signbit(f)) {
-                    ++seen_neg_zero;
-                    CHECK(n[r] == 2);
-                } else {
-                    ++seen_pos_zero;
-                    CHECK(n[r] == 1);
-                }
+                ++seen_zero;
+                CHECK(n[r] == 3);
             } else if (f == 1.0f) {
                 ++seen_one;
                 CHECK(n[r] == 2);
@@ -1188,8 +1181,7 @@ TEST_SUITE("dataframe_types_compute") {
             }
         }
         CHECK(seen_one == 1);
-        CHECK(seen_neg_zero == 1);
-        CHECK(seen_pos_zero == 1);
+        CHECK(seen_zero == 1);
         CHECK(seen_nan == 1);
     }
 
@@ -1213,34 +1205,29 @@ TEST_SUITE("dataframe_types_compute") {
             dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
                                       dstd::Vector<const Series*>{&v2}));
         dataframe::agg_merge(*st1, *st2);
-        // {1.0}x2, {-0.0}x2, {+0.0}x1, {NaN}x1
-        REQUIRE(dataframe::agg_group_count(*st1) == 4);
+        // {1.0}x2, {0.0}x3, {NaN}x1
+        REQUIRE(dataframe::agg_group_count(*st1) == 3);
 
         const dstd::String blob = dataframe::agg_serialize(*st1);
         AggStatePtr back =
             dftu_utils_test::ok(dataframe::agg_deserialize(blob));
-        REQUIRE(dataframe::agg_group_count(*back) == 4);
+        REQUIRE(dataframe::agg_group_count(*back) == 3);
 
         DataFrame out = dataframe::agg_finalize(*back, "k");
-        REQUIRE(out.num_rows() == 4);
+        REQUIRE(out.num_rows() == 3);
         CHECK(out.column("k").type() == TypeId::Float16);
         const std::uint16_t* bits = out.column("k").data<std::uint16_t>();
         REQUIRE(bits != nullptr);
         const std::int64_t* n = out.column("n").data<std::int64_t>();
-        int seen_one = 0, seen_neg_zero = 0, seen_pos_zero = 0, seen_nan = 0;
-        for (std::int64_t r = 0; r < 4; ++r) {
+        int seen_one = 0, seen_zero = 0, seen_nan = 0;
+        for (std::int64_t r = 0; r < 3; ++r) {
             const float f = dataframe::half_to_float(bits[r]);
             if (std::isnan(f)) {
                 ++seen_nan;
                 CHECK(n[r] == 1);
             } else if (f == 0.0f) {
-                if (std::signbit(f)) {
-                    ++seen_neg_zero;
-                    CHECK(n[r] == 2);
-                } else {
-                    ++seen_pos_zero;
-                    CHECK(n[r] == 1);
-                }
+                ++seen_zero;
+                CHECK(n[r] == 3);
             } else if (f == 1.0f) {
                 ++seen_one;
                 CHECK(n[r] == 2);
@@ -1249,8 +1236,7 @@ TEST_SUITE("dataframe_types_compute") {
             }
         }
         CHECK(seen_one == 1);
-        CHECK(seen_neg_zero == 1);
-        CHECK(seen_pos_zero == 1);
+        CHECK(seen_zero == 1);
         CHECK(seen_nan == 1);
     }
 }

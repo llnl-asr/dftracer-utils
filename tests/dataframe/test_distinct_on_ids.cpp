@@ -277,14 +277,14 @@ TEST_SUITE("distinct on ids") {
         CHECK(dftu_utils_test::ok(df.unique()).num_rows() == 0);
     }
 
-    TEST_CASE("float unique keeps every NaN row and the sorted order") {
+    TEST_CASE("float unique keeps one NaN row and the sorted order") {
         dstd::Vector<double> v{std::nan(""), std::nan(""), 1.0, 0.0,
                                -0.0,         7.0,          5.0};
         dstd::Vector<std::uint8_t> valid{0b0111111};
         Series s = Series::flat(TypeId::Float64, v.data(), 7, valid.data());
         Series u = s.unique();
-        REQUIRE(u.length() == 6);
-        CHECK(s.nunique() == 5);
+        REQUIRE(u.length() == 5);
+        CHECK(s.nunique() == 4);
         CHECK(u.is_null(0));
         CHECK(u.null_count() == 1);
         const double* d = u.values<double>().data();
@@ -294,6 +294,5 @@ TEST_SUITE("distinct on ids") {
         CHECK(d[2] == 1.0);
         CHECK(d[3] == 7.0);
         CHECK(std::isnan(d[4]));
-        CHECK(std::isnan(d[5]));
     }
 }

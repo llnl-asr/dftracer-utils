@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/internal/compare_simd.h>  // pack_flags
+#include <dftracer/utils/dataframe/internal/float_key.h>
 #include <dftracer/utils/dataframe/internal/radix_dedup.h>   // parallel dedup
 #include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/internal/value_ids.h>
@@ -187,6 +188,11 @@ Series is_in_strings(const dftu_series& v, const dftu_series& values) {
     return bool_from_flags(flags);
 }
 
+// A number as an is_in key: -0.0 is 0.0 and every NaN is one value.
+std::uint64_t number_key(double x) {
+    return canonical_f64_bits(std::bit_cast<std::uint64_t>(x));
+}
+
 Series is_in_impl(const Series& v_in, const Series& values_in) {
     if (refuse_nested_value("is_in", v_in.type())) return Series{};
     // FLAT Float64 with a small needle set: SIMD broadcast-compare.
@@ -210,7 +216,7 @@ Series is_in_impl(const Series& v_in, const Series& values_in) {
     const Series v = flatten(v_in);
     const Series values = flatten(values_in);
     const bool is_bytes = value_domain(v.type()) == ValueDomain::Bytes;
-    dstd::HashSet<double> num_set;
+    dstd::HashSet<std::uint64_t> num_set;
     dstd::HashSet<dstd::String> str_set;
     const std::int64_t m = values.length();
     const bool vals_null = values.null_count() > 0;
@@ -226,7 +232,7 @@ Series is_in_impl(const Series& v_in, const Series& values_in) {
         if (is_bytes) {
             if (vals_bytes) str_set.insert(dstd::String(read_bytes(values, j)));
         } else if (vals_domain == ValueDomain::Numeric) {
-            num_set.insert(read_f64(values, j));
+            num_set.insert(number_key(read_f64(values, j)));
         }
     }
     const std::int64_t n = v.length();
@@ -238,7 +244,7 @@ Series is_in_impl(const Series& v_in, const Series& values_in) {
             if (has_nulls && v.is_null(i)) continue;
             const bool hit =
                 is_bytes ? str_set.count(dstd::String(read_bytes(v, i))) > 0
-                         : num_set.count(read_f64(v, i)) > 0;
+                         : num_set.count(number_key(read_f64(v, i))) > 0;
             flags[static_cast<std::size_t>(i)] = hit ? 1 : 0;
         }
     };

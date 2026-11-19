@@ -18,6 +18,7 @@ from ._group_labels import (
 )
 from ._group_labels import take as labelled_take
 from ._group_transforms import GroupTransforms
+from ._series_index import positions as row_positions
 from ._series_index import to_frame, with_levels
 from .agg import (
     PANDAS_AGG_NAMES,
@@ -90,10 +91,12 @@ class GroupBy(GroupTransforms[DataFrame]):
         out._as_index = self._as_index
         out._origin = self._origin
         out._rows = self._rows
+        out._total = self._total
         return out
 
     _single: Optional[str] = None
     _rows: Optional[Series] = None
+    _total: Optional[int] = None
     _sort: bool = False
     _as_index: Optional[bool] = None
     _origin: Optional[DataFrame] = None
@@ -207,10 +210,19 @@ class GroupBy(GroupTransforms[DataFrame]):
     def _transform(
         self, kind: str, n: int = 0, method: str = "average", ascending: bool = True
     ) -> DataFrame:
+        spread = kind not in ("head", "tail", "nth") and not kind.startswith("rolling_")
+        if spread and self._all_dropped():
+            names = (
+                [kind]
+                if kind in ("cumcount", "ngroup")
+                else [c for c in self._batch._names() if c not in self._keys]
+            )
+            return self._labelled(self._missing_frame(names), None, True)
         if self._origin is None:
-            return _ext.DataFrame._group_transform(
+            out = _ext.DataFrame._group_transform(
                 self._batch, self._keys, kind, int(n), method, bool(ascending)
             )
+            return self._spread(out) if spread else out
         # The engine's row positions ride along as a column, so the rows that
         # survive (head, tail, nth) get their own index labels back.
         pos = "__dftu_pos__"
@@ -224,19 +236,60 @@ class GroupBy(GroupTransforms[DataFrame]):
         )
         positions = self._col(out, pos) if kind in ("head", "tail", "nth") else None
         out = _ext.DataFrame.select(out, *[c for c in out._names() if c != pos])
-        return self._labelled(out, positions)
+        return self._labelled(out, positions, spread)
 
-    def _labelled(self, out: DataFrame, positions: Series | Sequence[int] | None) -> DataFrame:
+    def _spread(self, out: DataFrame) -> DataFrame:
+        """``out``, one row per row the pandas ``groupby`` kept, on every row
+        of the grouped frame: a row whose key was dropped (a null or NaN key
+        with ``dropna``) is null, as pandas gives NaN there."""
+        rows, total = self._rows, self._total
+        if (
+            rows is None
+            or total is None
+            or len(rows) == total
+            or len(out) == total
+            or not pandas_named(self)
+        ):
+            return out
+        slots = DataFrame({"__dftu_at__": row_positions(total)})
+        kept = DataFrame({"__dftu_at__": rows, "__dftu_to__": row_positions(len(rows))})
+        joined = slots.join(kept, on="__dftu_at__", how="left").sort_by("__dftu_at__")
+        out = out.take(self._col(joined, "__dftu_to__").fill_null(-1))
+        # An integer result with missing rows is float64 with NaN, as pandas.
+        for name in out._names():
+            if self._col(out, name).dtype.is_integer:
+                out = out.with_column(name, self._col(out, name).astype("float64"))
+        return out
+
+    def _all_dropped(self) -> bool:
+        """Whether the pandas ``groupby`` dropped every row (every key null or
+        NaN): its transforms are then all missing, on every row."""
+        return pandas_named(self) and bool(self._total) and len(self._batch) == 0
+
+    def _missing_frame(self, names: Sequence[str]) -> DataFrame:
+        """A float64 column per name, missing on every row of the grouped frame."""
+        total = self._total or 0
+        return DataFrame({n: Series.from_list([None] * total).astype("float64") for n in names})
+
+    def _labelled(
+        self, out: DataFrame, positions: Series | Sequence[int] | None, spread: bool = False
+    ) -> DataFrame:
         """``out`` with the index the grouped frame had: its index columns,
         taken at ``positions`` (rows of the grouped frame, or all its rows in
         order when ``None``), come back as the index, as pandas keeps the
         labels of the rows a group method returns."""
         origin = self._origin
+        rows_all = self._rows
+        if spread:
+            out = self._spread(out)
+            positions = None
+            if self._total is not None:
+                rows_all = None
         if origin is None:
             return out
         rows: Series | Sequence[int] | None = positions
-        if self._rows is not None:
-            rows = self._rows if positions is None else self._rows.take(positions)
+        if rows_all is not None:
+            rows = rows_all if positions is None else rows_all.take(positions)
         names = _ext.DataFrame.index_names(origin)
         for name in names:
             column = _ext.DataFrame.__getitem__(origin, name)
@@ -721,6 +774,8 @@ class GroupBy(GroupTransforms[DataFrame]):
         cols = [c for c in frame._names() if c not in self._keys]
         for c in cols:  # pandas drops a row with a null value (dropna=True)
             frame = frame.filter(self._col(frame, c).notna())
+            if pandas_named(self) and self._col(frame, c).dtype.is_float:
+                frame = frame.filter(self._col(frame, c).is_nan().logical_not())
         if self._sort or not pandas_named(self):
             out = GroupBy(frame, self._keys + cols).size().rename({"size": "count"})
             out = out.sort_values(
@@ -746,6 +801,8 @@ class GroupBy(GroupTransforms[DataFrame]):
         frame = self._frame()
         agg = PANDAS_AGG_NAMES.get(func, func)
         cols = self._value_columns(agg)
+        if self._all_dropped():
+            return self._labelled(self._missing_frame(cols), None, True)
         row = "__dftu_row__"
         indexed = frame.with_row_index(row)
         specs = [Agg(agg, Col(c), f"__dftu_t_{c}__") for c in cols]
@@ -758,10 +815,10 @@ class GroupBy(GroupTransforms[DataFrame]):
                 broadcast = self._col(frame, c).full_like(v)
                 out = out.with_column(c, broadcast)
             return self._labelled(out.select(*cols), None)
-        joined = indexed.join(grouped, on=self._keys).sort_values(row)
+        joined = indexed.join(grouped, on=self._keys, nulls_equal=True).sort_values(row)
         for c in cols:
             joined = joined.with_column(c, self._col(joined, f"__dftu_t_{c}__"))
-        return self._labelled(joined.select(*cols), self._col(joined, row))
+        return self._labelled(joined.select(*cols), self._col(joined, row), spread=True)
 
     # -- user functions: traced into the engine, else run per group -----------
     def apply(self, func: Callable[[DataFrame], object]) -> DataFrame | Series:
@@ -828,7 +885,11 @@ class GroupBy(GroupTransforms[DataFrame]):
         # Row leaves too: the aggregates broadcast back onto the rows.
         row = "__dftu_row__"
         indexed = frame.with_row_index(row)
-        joined = indexed.join(grouped, on=self._keys).sort_values(row) if self._keys else indexed
+        joined = (
+            indexed.join(grouped, on=self._keys, nulls_equal=True).sort_values(row)
+            if self._keys
+            else indexed
+        )
         if not self._keys:
             for name in grouped.columns:
                 v = self._col(grouped, name)[0]
@@ -876,6 +937,11 @@ class GroupBy(GroupTransforms[DataFrame]):
 
     def _groups_in_order(self) -> list[tuple[object, list[int]]]:
         groups: list[tuple[object, list[int]]] = list(self.groups.items())
+        if self._rows is not None:
+            # `groups` names rows of the frame the group-by was made on; the
+            # callers index the frame with the rows the group-by kept.
+            local = {at: i for i, at in enumerate(self._rows.to_list())}
+            groups = [(k, [local[r] for r in rows]) for k, rows in groups]
         if pandas_named(self) and self._sort:
             # Key order, a null key last, as the engine sorts them.
             def order(item: tuple[object, list[int]]) -> tuple[object, ...]:

@@ -378,30 +378,10 @@ std::int64_t nunique(const Series& v) {
 }
 
 // The first row of every distinct value, ascending: one null row stands for
-// all the nulls. Floats compare as equal_at does (NaN != NaN, so every NaN row
-// is its own value; -0.0 is +0.0); every other type compares as value_ids does.
+// all the nulls. Every type compares as value_ids does, so a float's -0.0 is
+// 0.0 and every NaN is one value (as pandas and Polars key a float).
 static dstd::Vector<std::int64_t> distinct_first_rows(const Series& f) {
-    const TypeId t = f.type();
     dstd::Vector<std::int64_t> firsts;
-    if (t == TypeId::Float64 || t == TypeId::Float32 || t == TypeId::Float16) {
-        const std::int64_t n = f.length();
-        Series order = argsort(f, false);
-        const std::int64_t* idx = order.data<std::int64_t>();
-        const bool has_nulls = f.null_count() > 0;
-        std::int64_t prev = -1;
-        std::int64_t k = 0;
-        for (; k < n; ++k) {
-            const std::int64_t i = idx[k];
-            if (has_nulls && f.is_null(i)) break;
-            if (prev < 0 || !equal_at(f, i, prev)) {
-                firsts.push_back(i);
-                prev = i;
-            }
-        }
-        if (k < n) firsts.push_back(idx[k]);
-        std::sort(firsts.begin(), firsts.end());
-        return firsts;
-    }
     ValueIds ids;
     value_ids(*f.handle(), ids);
     firsts.assign(ids.first.begin(), ids.first.end());

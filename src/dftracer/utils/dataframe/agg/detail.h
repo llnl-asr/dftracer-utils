@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg/lower.h>
 #include <dftracer/utils/dataframe/field_stat.h>
+#include <dftracer/utils/dataframe/internal/float_key.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dataframe/udaf_states.h>
@@ -1697,8 +1698,11 @@ class AggState : public dstd::HeapObject {
         // group.
         return find_or_add_group(
             [&](std::size_t k) {
-                return static_cast<std::int64_t>(
-                    read_bits(*keys[k], i, col_domain(keys[k]->type())));
+                const FieldStatDomain d = col_domain(keys[k]->type());
+                const std::uint64_t bits = read_bits(*keys[k], i, d);
+                return static_cast<std::int64_t>(d == FieldStatDomain::F64
+                                                     ? canonical_f64_bits(bits)
+                                                     : bits);
             },
             [&](std::size_t k) -> dstd::StringView {
                 // String/LargeString are length-delimited (string_at handles

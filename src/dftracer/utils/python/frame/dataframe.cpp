@@ -526,6 +526,15 @@ PyObject* DataFrame_take(PyObject* self, PyObject* seq) {
     dftracer::utils::dstd::Vector<std::int64_t> idx;
     if (!parse_int_seq(seq, "take() expects a sequence of ints", idx))
         return nullptr;
+    // A take past the end would read outside the columns.
+    const std::int64_t rows = to_dataframe(b).num_rows();
+    for (const std::int64_t i : idx) {
+        if (i >= rows) {
+            PyErr_SetString(PyExc_IndexError,
+                            "take: an index is at or past the frame's length");
+            return nullptr;
+        }
+    }
     return run_batch_op(
         b, [&](const DataFrame& frame) { return frame.take(idx); });
 }

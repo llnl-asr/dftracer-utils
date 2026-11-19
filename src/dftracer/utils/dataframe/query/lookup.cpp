@@ -199,6 +199,15 @@ bool integral(dataframe::TypeId t) {
     }
 }
 
+// A float cell as a key: a NaN is one value, as in every join.
+bool float_key(dstd::String& out, double v) {
+    if (std::isnan(v)) {
+        duql::append_nan_key(out);
+        return true;
+    }
+    return duql::append_double_key(out, v);
+}
+
 }  // namespace
 
 bool append_cell_key(dstd::String& out, const dataframe::Series& s,
@@ -222,10 +231,9 @@ bool append_cell_key(dstd::String& out, const dataframe::Series& s,
         case dataframe::TypeId::Uint64:
             return int_key<std::uint64_t>(out, s, r);
         case dataframe::TypeId::Float32:
-            return duql::append_double_key(
-                out, static_cast<double>(s.data<float>()[r]));
+            return float_key(out, static_cast<double>(s.data<float>()[r]));
         case dataframe::TypeId::Float64:
-            return duql::append_double_key(out, s.data<double>()[r]);
+            return float_key(out, s.data<double>()[r]);
         case dataframe::TypeId::Bool:
             duql::append_bool_key(out, bit(s, r));
             return true;

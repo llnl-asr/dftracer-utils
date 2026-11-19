@@ -59,6 +59,7 @@ from ._series_index import (
     positions,
     with_levels,
 )
+from ._value_counts import series_value_counts
 from .enums import (
     DT_UNIT_CODES,
     DTYPE_BY_NAME,
@@ -739,24 +740,23 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         return cast("Series[float]", self.astype("float64") * (180.0 / math.pi))
 
     def value_counts(
-        self, normalize: bool = False, sort: bool = True, ascending: bool = False
-    ) -> DataFrame:
-        """A ``value`` / ``count`` frame of the distinct values, most frequent
-        first (the pandas arguments: ``normalize`` reports a ``proportion``
-        column instead, ``ascending`` flips the order, ``sort=False`` keeps
-        first-seen order). A frame rather than an indexed Series: this engine
-        has no index."""
-        from .dataframe import DataFrame
-
-        vc = DataFrame(super().value_counts())
-        if normalize:
-            total = float(self.length)
-            vc = vc.with_column("proportion", vc["count"].astype("float64") / total).select(
-                "value", "proportion"
-            )
-        if sort and ascending:
-            vc = vc.reverse()
-        return vc
+        self,
+        normalize: bool = False,
+        sort: bool = True,
+        ascending: bool = False,
+        bins: int | Sequence[float] | None = None,
+        dropna: bool = True,
+    ) -> Series:
+        """The count of each distinct value as a Series named ``count``,
+        labelled by the values (the pandas ``value_counts``). ``normalize``
+        gives fractions, named ``proportion``; ``sort=False`` keeps the order
+        of first appearance and ``ascending`` flips the count order, ties
+        keeping that order. ``dropna=False`` counts the nulls and NaNs as one
+        missing value. ``bins`` counts the values per interval of
+        ``pandas.cut`` (an integer count of equal-width bins, or ascending
+        edges), every interval listed, labelled with its text such as
+        ``"(0.999, 2.0]"``."""
+        return series_value_counts(self, normalize, sort, ascending, bins, dropna)
 
     def clip(
         self,

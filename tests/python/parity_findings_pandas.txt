@@ -65,18 +65,12 @@ series.astype#2[F] | semantics | [raises] pandas raised ValueError, ours returne
 series.unique#1[I] | semantics | [values] [None, -4, 1, 2, 3] vs [1, None, 3, 2, -4]
 series.unique#1[F] | semantics | [values] [None, -2.5, 0.0, 1.5, 3.0] vs [1.5, None, 3.0, -2.5, 0.0]
 series.unique#1[S] | semantics | [values] [None, 'a', 'ab', 'b'] vs ['b', 'a', None, 'ab']
-series.value_counts#1[I] | shape | [type] ours DataFrame (frame), library Series (series)
-series.value_counts#1[F] | shape | [type] ours DataFrame (frame), library Series (series)
-series.value_counts#1[S] | shape | [type] ours DataFrame (frame), library Series (series)
-series.value_counts#2[I] | shape | [error] ours raised TypeError: Series.value_counts() got an unexpected keyword argument 'dropna'
-series.value_counts#2[F] | shape | [error] ours raised TypeError: Series.value_counts() got an unexpected keyword argument 'dropna'
-series.value_counts#2[S] | shape | [error] ours raised TypeError: Series.value_counts() got an unexpected keyword argument 'dropna'
-series.value_counts#3[I] | shape | [type] ours DataFrame (frame), library Series (series)
-series.value_counts#3[F] | shape | [type] ours DataFrame (frame), library Series (series)
-series.value_counts#3[S] | shape | [type] ours DataFrame (frame), library Series (series)
-series.value_counts#4[I] | shape | [type] ours DataFrame (frame), library Series (series)
-series.value_counts#4[F] | shape | [type] ours DataFrame (frame), library Series (series)
-series.value_counts#4[S] | shape | [type] ours DataFrame (frame), library Series (series)
+series.value_counts#2[I] | semantics | [index] the library result has row labels
+series.value_counts#2[F] | semantics | [index] the library result has row labels
+pandas3:series.value_counts#1[S] | semantics | pandas 3 only: [dtype] int64 vs int64[pyarrow]
+pandas3:series.value_counts#2[S] | semantics | pandas 3 only: [dtype] int64 vs int64[pyarrow]
+pandas3:series.value_counts#3[S] | semantics | pandas 3 only: [dtype] float64 vs double[pyarrow]
+pandas3:series.value_counts#4[S] | semantics | pandas 3 only: [dtype] int64 vs int64[pyarrow]
 series.mode#1[S] | semantics | [dtype] int64 vs str
 series.mode#2[I] | semantics | [error] ours raised TypeError: Series.mode() got an unexpected keyword argument 'dropna'
 series.nlargest#2[I] | needs-index | [error] ours raised TypeError: Series.nlargest() got an unexpected keyword argument 'keep'
@@ -173,7 +167,6 @@ frame.mask#1[N] | semantics | [values] a: [-1, None, -1, 2, -1] vs [-1, -1, -1, 
 frame.astype#1[N] | semantics | [values] a: [1.0, None, 3.0, 2.0, 2.0] vs [1.0, nan, 3.0, 2.0, 2.0]
 frame.astype#2[N] | semantics | [values] a: [1.0, None, 3.0, 2.0, 2.0] vs [1.0, nan, 3.0, 2.0, 2.0]
 frame.drop_duplicates#2[M] | keyword | [error] ours raised TypeError: DataFrame.unique() got an unexpected keyword argument 'keep'
-frame.value_counts#1[M] | shape | [type] ours DataFrame (frame), library Series (series)
 frame.sort_values#1[M] | needs-index | [index] the library result has row labels
 frame.sort_values#2[M] | needs-index | [index] the library result has row labels
 frame.sort_values#3[M] | needs-index | [index] the library result has row labels
@@ -249,3 +242,5 @@ pandas2:groupby.head#1[G] | shape | pandas 2 only: [shape] columns ['k', 'a', 'b
 pandas2:groupby.nth#1[G] | shape | pandas 2 only: [shape] columns ['k', 'a', 'b'] vs ['index', 'k', 'a', 'b']
 pandas2:groupby.apply#1[G] | semantics | pandas 2 only: the group function gets the key columns (pandas 3 leaves them out), so its result has the key as a column and as an index level and the harness cannot reset the index
 pandas2:groupby.value_counts#1[G] | semantics | pandas 2 only: [values] a: [1, 3, 2, 2] vs [1, 2, 3, 2]
+
+pandas2:frame.value_counts#1[M] | semantics | pandas 2 only: [index] the library result has row labels

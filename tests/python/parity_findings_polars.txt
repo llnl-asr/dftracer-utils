@@ -57,15 +57,15 @@ series.is_unique#1[I] | engine | [error] ours raised TypeError: 'bool' object is
 series.is_unique#1[F] | engine | [error] ours raised TypeError: 'bool' object is not callable
 series.is_unique#1[S] | engine | [error] ours raised TypeError: 'bool' object is not callable
 series.is_unique#1[W] | engine | [error] ours raised TypeError: 'bool' object is not callable
-series.value_counts#1[I] | shape | [shape] columns ['value', 'count'] vs ['v', 'count']
-series.value_counts#1[F] | shape | [shape] columns ['value', 'count'] vs ['v', 'count']
-series.value_counts#1[S] | shape | [shape] columns ['value', 'count'] vs ['v', 'count']
-series.value_counts#2[I] | shape | [shape] columns ['value', 'count'] vs ['v', 'count']
-series.value_counts#2[F] | shape | [shape] columns ['value', 'count'] vs ['v', 'count']
-series.value_counts#2[S] | shape | [shape] columns ['value', 'count'] vs ['v', 'count']
-series.value_counts#3[I] | shape | [shape] columns ['value', 'proportion'] vs ['v', 'proportion']
-series.value_counts#3[F] | shape | [shape] columns ['value', 'proportion'] vs ['v', 'proportion']
-series.value_counts#3[S] | shape | [shape] columns ['value', 'proportion'] vs ['v', 'proportion']
+series.value_counts#1[I] | shape | [type] ours Series (series), library DataFrame (frame)
+series.value_counts#1[F] | shape | [type] ours Series (series), library DataFrame (frame)
+series.value_counts#1[S] | shape | [type] ours Series (series), library DataFrame (frame)
+series.value_counts#2[I] | shape | [type] ours Series (series), library DataFrame (frame)
+series.value_counts#2[F] | shape | [type] ours Series (series), library DataFrame (frame)
+series.value_counts#2[S] | shape | [type] ours Series (series), library DataFrame (frame)
+series.value_counts#3[I] | shape | [type] ours Series (series), library DataFrame (frame)
+series.value_counts#3[F] | shape | [type] ours Series (series), library DataFrame (frame)
+series.value_counts#3[S] | shape | [type] ours Series (series), library DataFrame (frame)
 series.mode#1[I] | shape | [shape] length 1 vs 2
 series.mode#1[F] | shape | [shape] length 1 vs 6
 series.mode#1[S] | shape | [dtype] int64 vs str

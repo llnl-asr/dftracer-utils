@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>  // dftu_series
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_i64/u64/f64
+#include <dftracer/utils/dataframe/internal/float_key.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/sketch.h>  // DDSketch, sketch_bucket_keys
 #include <dftracer/utils/dstd/base64.h>
@@ -377,6 +378,11 @@ struct Plain8 {
         std::memcpy(&v, data + static_cast<std::size_t>(i) * 8, 8);
         return v;
     }
+    // The cell as a group key: a float's -0.0 and NaNs are one value each.
+    std::uint64_t key_bits(std::int64_t i) const {
+        const std::uint64_t v = bits(i);
+        return domain == FieldStatDomain::F64 ? canonical_f64_bits(v) : v;
+    }
 };
 
 bool plain8(const Series& c, Plain8& out) {
@@ -514,11 +520,24 @@ std::size_t key_word_count(dstd::Span<const PlainKey> k) {
     return w;
 }
 
+// Whether a key column is a float, so its cells need canonical bits.
+bool any_float_key(dstd::Span<const PlainKey> k) {
+    for (const PlainKey& kk : k)
+        if (!kk.is_str && kk.fixed.domain == FieldStatDomain::F64) return true;
+    return false;
+}
+
+// A cell's bits as a key: a float cell goes through canonical_f64_bits.
+std::uint64_t canonical_key(const Plain8& c, std::uint64_t b) {
+    return c.domain == FieldStatDomain::F64 ? canonical_f64_bits(b) : b;
+}
+
 // Row i's key words; false for a string longer than 16 bytes.
-bool key_words(dstd::Span<const PlainKey> k, std::int64_t i, std::uint64_t* w) {
+bool key_words(dstd::Span<const PlainKey> k, bool any_float, std::int64_t i,
+               std::uint64_t* w) {
     for (const PlainKey& kk : k) {
         if (!kk.is_str) {
-            *w++ = kk.fixed.bits(i);
+            *w++ = any_float ? kk.fixed.key_bits(i) : kk.fixed.bits(i);
             continue;
         }
         if (kk.by_ref()) {
@@ -890,6 +909,7 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
     const std::size_t nk = k.size();
     bool all_fixed = nk >= 1 && nk <= 3;
     for (const PlainKey& kk : k) all_fixed &= !kk.is_str;
+    const bool any_float = any_float_key(k);
     if (all_fixed && !st.direct_refused && end > begin) {
         std::uint64_t lo[3], hi[3];
         bool any = false;
@@ -900,11 +920,21 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
         // One key, no nulls, is the common shape and gets a plain loop.
         if (nk == 1 && !k[0].fixed.validity) {
             const std::uint8_t* d = k[0].fixed.data;
-            for (std::int64_t i = begin; i < end; ++i) {
-                std::uint64_t b;
-                std::memcpy(&b, d + static_cast<std::size_t>(i) * 8, 8);
-                lo[0] = std::min(lo[0], b);
-                hi[0] = std::max(hi[0], b);
+            if (k[0].fixed.domain == FieldStatDomain::F64) {
+                for (std::int64_t i = begin; i < end; ++i) {
+                    std::uint64_t b;
+                    std::memcpy(&b, d + static_cast<std::size_t>(i) * 8, 8);
+                    b = canonical_f64_bits(b);
+                    lo[0] = std::min(lo[0], b);
+                    hi[0] = std::max(hi[0], b);
+                }
+            } else {
+                for (std::int64_t i = begin; i < end; ++i) {
+                    std::uint64_t b;
+                    std::memcpy(&b, d + static_cast<std::size_t>(i) * 8, 8);
+                    lo[0] = std::min(lo[0], b);
+                    hi[0] = std::max(hi[0], b);
+                }
             }
             any = end > begin;
         } else {
@@ -915,7 +945,7 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
                 if (null) continue;
                 any = true;
                 for (std::size_t j = 0; j < nk; ++j) {
-                    const std::uint64_t b = k[j].fixed.bits(i);
+                    const std::uint64_t b = k[j].fixed.key_bits(i);
                     lo[j] = std::min(lo[j], b);
                     hi[j] = std::max(hi[j], b);
                 }
@@ -1018,7 +1048,7 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
     auto slow_group = [&](std::int64_t i) {
         return st.find_or_add_group(
             [&](std::size_t j) {
-                return static_cast<std::int64_t>(k[j].fixed.bits(i));
+                return static_cast<std::int64_t>(k[j].fixed.key_bits(i));
             },
             [&](std::size_t j) -> dstd::StringView { return k[j].str(i); },
             [&](std::size_t j) { return k[j].is_null(i); });
@@ -1054,13 +1084,19 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
 
     // The row loop, instantiated once per (moments, nulls-anywhere) so
     // neither test sits inside it.
-    auto run = [&]<bool Moments, bool Nulls, std::size_t NK>() {
+    auto run = [&]<bool Moments, bool Nulls, std::size_t NK, bool Float>() {
         // NK is the key count the packing unrolls over; 0 leaves the cache
-        // off (a string key, or more keys than it covers).
+        // off (a string key, or more keys than it covers). Float says a key
+        // is a float, so an integer key pays no test per row.
         auto packed = [&](std::int64_t i) {
             std::uint64_t at = 0;
-            for (std::size_t j = 0; j < NK; ++j)
-                at += (k[j].fixed.bits(i) - lo_k[j]) * stride[j];
+            for (std::size_t j = 0; j < NK; ++j) {
+                const std::uint64_t b = k[j].fixed.bits(i);
+                if constexpr (Float)
+                    at += (canonical_key(k[j].fixed, b) - lo_k[j]) * stride[j];
+                else
+                    at += (b - lo_k[j]) * stride[j];
+            }
             return at;
         };
         auto key_null = [&](std::int64_t i) {
@@ -1109,7 +1145,7 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
             for (std::int64_t r = 0; r < m; ++r) {
                 std::uint64_t* w =
                     words.data() + static_cast<std::size_t>(r) * W;
-                const bool ok = key_words(k, b0 + r, w);
+                const bool ok = key_words(k, any_float, b0 + r, w);
                 packable[static_cast<std::size_t>(r)] = ok;
                 hashes[static_cast<std::size_t>(r)] = ok ? hash_words(w, W) : 0;
             }
@@ -1202,7 +1238,7 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
                     cg = static_cast<std::int32_t>(slow_group(i));
                     if (fast &&
                         static_cast<std::size_t>(cg) == st.fast_hash.size()) {
-                        if (key_words(k, i, w))
+                        if (key_words(k, any_float, i, w))
                             fast_add(st, hash_words(w, 3), w);
                         else
                             fast_add(st, 0, nullptr);
@@ -1230,16 +1266,25 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
         }
         switch (dk) {
             case 1:
-                run.template operator()<Moments, Nulls, 1>();
+                if (any_float)
+                    run.template operator()<Moments, Nulls, 1, true>();
+                else
+                    run.template operator()<Moments, Nulls, 1, false>();
                 break;
             case 2:
-                run.template operator()<Moments, Nulls, 2>();
+                if (any_float)
+                    run.template operator()<Moments, Nulls, 2, true>();
+                else
+                    run.template operator()<Moments, Nulls, 2, false>();
                 break;
             case 3:
-                run.template operator()<Moments, Nulls, 3>();
+                if (any_float)
+                    run.template operator()<Moments, Nulls, 3, true>();
+                else
+                    run.template operator()<Moments, Nulls, 3, false>();
                 break;
             default:
-                run.template operator()<Moments, Nulls, 0>();
+                run.template operator()<Moments, Nulls, 0, false>();
         }
     };
     if (moments) {
@@ -1973,10 +2018,11 @@ bool agg_pack(const AggState& st, dstd::Span<const Series* const> keys,
         if (p.stride == 0) p.open(shape.stride);
     // The row loop with the word count fixed, so the copies are plain
     // stores; a wider key takes the general loop.
+    const bool any_float = any_float_key(k);
     auto run = [&]<std::size_t WK>() {
         std::uint64_t w[WK > 0 ? WK : 64];
         for (std::int64_t i = begin; i < end; ++i) {
-            if (!key_words(k, i, w)) return false;
+            if (!key_words(k, any_float, i, w)) return false;
             const std::uint64_t h = hash_words(w, WK > 0 ? WK : shape.W);
             const auto p = static_cast<std::size_t>(((h >> 32) * parts) >> 32);
             AggPages& dst = out[p];

@@ -89,7 +89,7 @@ members under the same names. For side-by-side C++ and Python tabs of each op se
 .. code-block:: python
 
    worst = df.sort_by("sum_dur", descending=True).head(10)
-   hist = df["cat"].value_counts()                # a two-column DataFrame
+   hist = df["cat"].value_counts()                # counts, labelled by the values
 
 Series operations
 -----------------

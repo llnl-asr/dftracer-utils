@@ -129,6 +129,15 @@ class ThreadPoolExecutor final : public TaskExecutor {
     // Live-thread ceiling for blocking-handoff replacements; the permit gate
     // still bounds RUNNING threads. A backstop, not a working bound.
     std::atomic<std::size_t> max_live_{0};
+    // After a worker thread fails to start (the RLIMIT_NPROC or pids.max
+    // limit), no new worker is tried before this steady time; the pool runs
+    // with the workers it has.
+    std::atomic<std::uint64_t> spawn_retry_ns_{0};
+    std::atomic<bool> spawn_warned_{false};
+    // Blocking handoffs whose replacement worker did not start; the sysmon
+    // tries them again while workers stay blocked.
+    std::atomic<std::size_t> owed_replacements_{0};
+    static constexpr std::uint64_t SPAWN_RETRY_NS = 1000000000;
     // Serializes set_threads, grow_io_threads and start.
     std::mutex resize_mutex_;
 
@@ -282,8 +291,8 @@ class ThreadPoolExecutor final : public TaskExecutor {
 
     void shutdown() override;
 
-    // Spawns one worker up to the thread_count_ cap.
-    void add_worker();
+    // Spawns one worker up to the thread_count_ cap. False when none started.
+    bool add_worker();
     // Asks one worker to exit and joins it. Safe while
     /// running; a retired worker strands no work (the run queue is shared) and
     /// exits only between tasks
@@ -446,7 +455,14 @@ class ThreadPoolExecutor final : public TaskExecutor {
     void sysmon_loop();
     /// Spawn one worker if live < `cap`. Returns true if spawned. Takes
     /// workers_mutex_; best_effort uses try_lock and gives up on contention.
+    /// A thread that cannot be created leaves the pool as it was, warns once
+    /// and holds off new workers for SPAWN_RETRY_NS.
     bool spawn_worker(std::size_t cap, bool best_effort = false);
+    /// The body of start(), under resize_mutex_. An error after running_ is
+    /// set leaves started threads for start() to stop.
+    dstd::Result<void> start_threads();
+    /// Drops the worker contexts from `kept` on, which have no thread.
+    void drop_unstarted_workers(std::size_t kept);
 
     void wake_all_workers();
 

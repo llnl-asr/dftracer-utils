@@ -671,6 +671,7 @@ if(DFTRACER_UTILS_TEST_PROBES)
     trace/index/test_event_cost.cpp
     trace/index/test_parse_walks.cpp
     trace/index/test_serial_stages.cpp
+    runtime/scheduler/test_thread_start_failure.cpp
     )
 endif()
 

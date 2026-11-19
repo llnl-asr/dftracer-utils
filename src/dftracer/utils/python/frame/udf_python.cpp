@@ -225,12 +225,16 @@ class Lane {
    public:
     /// Counts one more batch UDF and starts the lane thread when none runs.
     /// The caller holds the GIL; it is released while an old lane thread that
-    /// is leaving is joined.
-    bool acquire() {
+    /// is leaving is joined. False with `*why` set when the lane is closed or
+    /// its thread cannot be created.
+    bool acquire(dstd::String* why) {
         dstd::Thread old;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (is_closed_) return false;
+            if (is_closed_) {
+                *why = "the python udf lane is closed for this process";
+                return false;
+            }
             ++users_;
             if (is_alive_) {
                 is_stopping_ = false;
@@ -247,8 +251,17 @@ class Lane {
         if (!is_alive_) {
             is_alive_ = true;
             is_stopping_ = false;
+            auto thread =
+                dstd::Thread::try_start([this] { loop(); }, "dftu-pylane");
+            if (!thread) {
+                is_alive_ = false;
+                --users_;
+                *why = dstd::fmt<"the python udf lane cannot start: {}">(
+                    thread.error().c_str());
+                return false;
+            }
             ++threads_started_;
-            thread_ = dstd::Thread([this] { loop(); }, "dftu-pylane");
+            thread_ = std::move(*thread);
         } else {
             is_stopping_ = false;
         }
@@ -466,9 +479,8 @@ PyObject* udf_register_batch(PyObject* /*self*/, PyObject* args) {
         PyErr_SetString(PyExc_ValueError, "unknown udf result type");
         return nullptr;
     }
-    if (!lane().acquire()) {
-        PyErr_SetString(PyExc_RuntimeError,
-                        "the python udf lane is closed for this process");
+    if (dstd::String why; !lane().acquire(&why)) {
+        PyErr_SetString(PyExc_RuntimeError, why.c_str());
         return nullptr;
     }
     auto udf = dstd::make_unique<BatchUdf>(BatchUdf{fn, result});

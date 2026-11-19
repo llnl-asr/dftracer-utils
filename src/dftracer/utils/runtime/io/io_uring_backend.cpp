@@ -1035,7 +1035,12 @@ dstd::Result<void> IoUringBackend::start() {
         return started;
     }
     enable_result_.store(0, std::memory_order_relaxed);
-    thread_ = dstd::Thread([this] { ring_loop(); });
+    auto ring_thread = dstd::Thread::try_start([this] { ring_loop(); });
+    if (!ring_thread) {
+        stop();
+        return dstd::Unexpected(ring_thread.error());
+    }
+    thread_ = std::move(*ring_thread);
     if (!should_enable_ring_) return {};
     int enabled = 0;
     while ((enabled = enable_result_.load(std::memory_order_acquire)) == 0) {

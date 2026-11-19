@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/coro/timer_service.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
 
@@ -20,7 +21,9 @@ TimerService& start_process_timers() {
     // checks, so the timer thread is joined while its owners are gone.
     dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches,
                             &retire_process_timers);
-    timers.start();
+    if (auto started = timers.start(); !started)
+        dstd::fatal("coro: cannot start the process timers",
+                    started.error().c_str());
     return timers;
 }
 

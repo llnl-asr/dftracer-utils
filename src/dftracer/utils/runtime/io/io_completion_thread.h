@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_RUNTIME_IO_IO_COMPLETION_THREAD_H
 
 #include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/thread.h>
 
 #include <atomic>
@@ -25,7 +26,8 @@ class IoCompletionThread {
     /// until stop() is called. The poll_fn should block efficiently
     /// (e.g. io_uring_wait_cqe, epoll_wait) and check running() to
     /// know when to exit.
-    void start(dstd::Function<void()> poll_fn);
+    /// An error when the thread cannot be created.
+    dstd::Result<void> start(dstd::Function<void()> poll_fn);
 
     /// Signal the thread to stop (set running flag to false).
     /// The thread won't be joined until join() or stop() is called.

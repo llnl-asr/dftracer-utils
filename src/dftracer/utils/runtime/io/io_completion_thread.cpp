@@ -9,14 +9,20 @@ IoCompletionThread::~IoCompletionThread() {
     }
 }
 
-void IoCompletionThread::start(dstd::Function<void()> poll_fn) {
+dstd::Result<void> IoCompletionThread::start(dstd::Function<void()> poll_fn) {
     poll_fn_ = std::move(poll_fn);
     running_.store(true, std::memory_order_release);
-    thread_ = dstd::Thread([this] {
+    auto thread = dstd::Thread::try_start([this] {
         while (running_.load(std::memory_order_acquire)) {
             poll_fn_();
         }
     });
+    if (!thread) {
+        running_.store(false, std::memory_order_release);
+        return dstd::Unexpected(thread.error());
+    }
+    thread_ = std::move(*thread);
+    return {};
 }
 
 void IoCompletionThread::signal_stop() {

@@ -39,7 +39,7 @@ TEST_CASE("each timer registered on an idle timer thread fires") {
     int fired_rounds = 0;
     run_with_deadline("timer rounds", [&] {
         coro::TimerService timers;
-        timers.start();
+        REQUIRE(timers.start().has_value());
         std::mutex m;
         std::condition_variable cv;
         const auto until = dstd::steady_now() + RUN_FOR;
@@ -69,7 +69,7 @@ TEST_CASE("stop wakes an idle timer thread") {
         const auto until = dstd::steady_now() + RUN_FOR;
         while (dstd::steady_now() < until) {
             coro::TimerService timers;
-            timers.start();
+            CHECK(timers.start().has_value());
             timers.stop();
         }
     });

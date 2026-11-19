@@ -50,7 +50,11 @@ dstd::Result<void> EpollThreadPoolBackend::start() {
         "epoll+threadpool backend started (epoll_fd={}, event_fd={})",
         epoll_fd_.get(), event_fd_.get());
 
-    completion_thread_.start([this] { epoll_loop(); });
+    if (auto started = completion_thread_.start([this] { epoll_loop(); });
+        !started) {
+        stop();
+        return started;
+    }
     return {};
 }
 

@@ -73,6 +73,12 @@ dstd::Result<void> ThreadPoolExecutor::start() {
     }
     coro::detail::install_monitor_from_env();
 
+    auto started = start_threads();
+    if (!started && running_.load(std::memory_order_acquire)) shutdown();
+    return started;
+}
+
+dstd::Result<void> ThreadPoolExecutor::start_threads() {
     std::lock_guard<std::mutex> resize(resize_mutex_);
     running_ = true;
     shutdown_token_->store(false, std::memory_order_release);
@@ -84,7 +90,10 @@ dstd::Result<void> ThreadPoolExecutor::start() {
     permits_.store(static_cast<std::ptrdiff_t>(threads),
                    std::memory_order_release);
 
-    timer_service_.start();
+    if (auto timers = timer_service_.start(); !timers) {
+        running_ = false;
+        return timers;
+    }
 
     // Create and start I/O backend before workers so workers
     // can use it immediately.
@@ -124,20 +133,46 @@ dstd::Result<void> ThreadPoolExecutor::start() {
     }
     live_workers_.store(workers_.size(), std::memory_order_release);
 
-    // Start worker threads after all contexts are in place.
+    // Start worker threads after all contexts are in place. A pool that
+    // starts some of them runs with those.
+    std::size_t started = 0;
     for (auto& worker : workers_) {
-        worker->thread =
-            dstd::Thread([this, ctx = worker.get()] { worker_thread(ctx); });
+        auto thread = dstd::Thread::try_start(
+            [this, ctx = worker.get()] { worker_thread(ctx); });
+        if (!thread) {
+            if (started == 0) return dstd::Unexpected(thread.error());
+            DFTRACER_UTILS_LOG_WARN(
+                "runtime: started {} of {} worker threads ({}); set "
+                "DFTRACER_UTILS_THREADS to a count that fits",
+                started, workers_.size(), thread.error().c_str());
+            spawn_warned_.store(true, std::memory_order_relaxed);
+            spawn_retry_ns_.store(dstd::steady_now_ns() + SPAWN_RETRY_NS,
+                                  std::memory_order_relaxed);
+            break;
+        }
+        worker->thread = std::move(*thread);
+        ++started;
     }
+    if (started < workers_.size()) drop_unstarted_workers(started);
 
     // Elastic mode only: a monitor drives grow/shrink between the floor and
     // cap.
     if (floor < threads) {
-        monitor_thread_ = dstd::Thread([this] { monitor_loop(); });
+        auto monitor = dstd::Thread::try_start([this] { monitor_loop(); });
+        if (monitor)
+            monitor_thread_ = std::move(*monitor);
+        else
+            DFTRACER_UTILS_LOG_WARN(
+                "runtime: cannot start the pool monitor ({}); the pool stays "
+                "at its floor",
+                monitor.error().c_str());
     }
 
     // Reclaims permits from long blocks; blocking can occur in any mode.
-    sysmon_thread_ = dstd::Thread([this] { sysmon_loop(); });
+    // Without it a long block holds its permit for good, so it is required.
+    auto sysmon = dstd::Thread::try_start([this] { sysmon_loop(); });
+    if (!sysmon) return dstd::Unexpected(sysmon.error());
+    sysmon_thread_ = std::move(*sysmon);
 
     DFTRACER_UTILS_LOG_DEBUG("Executor started with {} worker threads (cap {})",
                              floor, threads);
@@ -288,6 +323,8 @@ bool ThreadPoolExecutor::spawn_worker(std::size_t cap, bool best_effort) {
     }
     if (!running_.load(std::memory_order_acquire)) return false;
     if (live_workers_.load(std::memory_order_relaxed) >= cap) return false;
+    if (dstd::steady_now_ns() < spawn_retry_ns_.load(std::memory_order_relaxed))
+        return false;
     auto worker = dstd::make_unique<WorkerContext>(
         next_worker_id_.fetch_add(1, std::memory_order_relaxed));
     worker->last_activity = dstd::steady_now();
@@ -296,13 +333,37 @@ bool ThreadPoolExecutor::spawn_worker(std::size_t cap, bool best_effort) {
     WorkerContext* ptr = worker.get();
     workers_.push_back(std::move(worker));
     live_workers_.fetch_add(1, std::memory_order_acq_rel);
-    ptr->thread = dstd::Thread([this, ptr] { worker_thread(ptr); });
+    auto thread = dstd::Thread::try_start([this, ptr] { worker_thread(ptr); });
+    if (!thread) {
+        free_cores_.push_back(ptr->core);
+        workers_.pop_back();
+        const std::size_t live =
+            live_workers_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+        spawn_retry_ns_.store(dstd::steady_now_ns() + SPAWN_RETRY_NS,
+                              std::memory_order_relaxed);
+        if (!spawn_warned_.exchange(true, std::memory_order_relaxed))
+            DFTRACER_UTILS_LOG_WARN(
+                "runtime: cannot start a worker thread ({}); running with {} "
+                "workers. Set DFTRACER_UTILS_THREADS to a count that fits",
+                thread.error().c_str(), live);
+        return false;
+    }
+    ptr->thread = std::move(*thread);
     return true;
 }
 
-void ThreadPoolExecutor::add_worker() {
-    spawn_worker(thread_count_.load(std::memory_order_acquire),
-                 /*best_effort=*/false);
+void ThreadPoolExecutor::drop_unstarted_workers(std::size_t kept) {
+    std::lock_guard<std::mutex> lock(workers_mutex_);
+    while (workers_.size() > kept) {
+        free_cores_.push_back(workers_.back()->core);
+        workers_.pop_back();
+    }
+    live_workers_.store(workers_.size(), std::memory_order_release);
+}
+
+bool ThreadPoolExecutor::add_worker() {
+    return spawn_worker(thread_count_.load(std::memory_order_acquire),
+                        /*best_effort=*/false);
 }
 
 void ThreadPoolExecutor::retire_worker() {
@@ -368,10 +429,10 @@ void ThreadPoolExecutor::ensure_running_worker() {
     const std::size_t justified =
         thread_count_.load(std::memory_order_acquire) +
         blocked_workers_.load(std::memory_order_acquire);
-    if (live_workers_.load(std::memory_order_acquire) < justified) {
-        spawn_worker(max_live_.load(std::memory_order_acquire),
-                     /*best_effort=*/true);
-    }
+    if (live_workers_.load(std::memory_order_acquire) < justified &&
+        !spawn_worker(max_live_.load(std::memory_order_acquire),
+                      /*best_effort=*/true))
+        owed_replacements_.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void ThreadPoolExecutor::enter_blocking() {
@@ -461,6 +522,12 @@ void ThreadPoolExecutor::sysmon_loop() {
                 }
             }
         }
+        // A replacement that could not start before is tried again here, as
+        // nothing else asks for it once its worker was handed off.
+        for (std::size_t owed =
+                 owed_replacements_.exchange(0, std::memory_order_acq_rel);
+             owed > 0; --owed)
+            ensure_running_worker();
         for (int i = 0; i < handed; ++i) ensure_running_worker();
         std::this_thread::sleep_for(std::chrono::nanoseconds(BLOCK_HANDOFF_NS));
     }
@@ -529,7 +596,14 @@ void ThreadPoolExecutor::set_threads(std::size_t threads,
     if (threads > old) permits_.notify_all();
     if (!running_.load(std::memory_order_acquire)) return;
     if (floor < threads && !monitor_thread_.joinable()) {
-        monitor_thread_ = dstd::Thread([this] { monitor_loop(); });
+        auto monitor = dstd::Thread::try_start([this] { monitor_loop(); });
+        if (monitor)
+            monitor_thread_ = std::move(*monitor);
+        else
+            DFTRACER_UTILS_LOG_WARN(
+                "runtime: cannot start the pool monitor ({}); the pool stays "
+                "at its floor",
+                monitor.error().c_str());
     }
     while (live_workers_.load(std::memory_order_acquire) < floor &&
            spawn_worker(floor, /*best_effort=*/false)) {
@@ -578,8 +652,8 @@ void ThreadPoolExecutor::monitor_loop() {
         // once, so a burst reaches full parallelism in one wake.
         while (pending_tasks(false) > 0 &&
                live_workers_.load(std::memory_order_acquire) <
-                   thread_count_.load(std::memory_order_acquire)) {
-            add_worker();
+                   thread_count_.load(std::memory_order_acquire) &&
+               add_worker()) {
         }
         // Shrink after a keep-alive of sustained idle, by half the workers past
         // the floor each time, so a brief lull costs nothing and a pool of any

@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/thread_probe.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <pthread.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <climits>
 #include <cstdio>
@@ -19,6 +21,24 @@ namespace dftracer::utils::dstd {
 unsigned Thread::hardware_concurrency() noexcept {
     return std::thread::hardware_concurrency();
 }
+
+#if defined(DFTRACER_UTILS_TEST_PROBES) && DFTRACER_UTILS_TEST_PROBES
+namespace {
+std::atomic<int> g_failing_creates{0};
+
+bool take_create_failure() noexcept {
+    int n = g_failing_creates.load(std::memory_order_relaxed);
+    while (n > 0 && !g_failing_creates.compare_exchange_weak(
+                        n, n - 1, std::memory_order_relaxed)) {
+    }
+    return n > 0;
+}
+}  // namespace
+
+void detail::fail_thread_creates(int count) noexcept {
+    g_failing_creates.store(count, std::memory_order_relaxed);
+}
+#endif
 
 namespace {
 
@@ -86,6 +106,9 @@ void Thread::set_current_name(StringView name) noexcept {
 
 int Thread::create(void (*run)(void*), void* arg,
                    std::size_t stack_size) noexcept {
+#if defined(DFTRACER_UTILS_TEST_PROBES) && DFTRACER_UTILS_TEST_PROBES
+    if (take_create_failure()) return EAGAIN;
+#endif
     pthread_attr_t attr;
     int rc = pthread_attr_init(&attr);
     if (rc != 0) return rc;

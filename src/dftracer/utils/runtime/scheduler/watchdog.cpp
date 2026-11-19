@@ -35,7 +35,14 @@ void Watchdog::start() {
 
     running_ = true;
     shutdown_requested_ = false;
-    watchdog_thread_ = dstd::Thread([this] { watchdog_loop(); });
+    auto thread = dstd::Thread::try_start([this] { watchdog_loop(); });
+    if (!thread) {
+        running_ = false;
+        DFTRACER_UTILS_LOG_WARN("Watchdog not started: {}",
+                                thread.error().c_str());
+        return;
+    }
+    watchdog_thread_ = std::move(*thread);
 
     DFTRACER_UTILS_LOG_DEBUG("{}", "Watchdog started");
 }

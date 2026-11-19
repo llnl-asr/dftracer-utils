@@ -54,6 +54,10 @@ def row_labels(g: GroupBy, positions: Series) -> tuple[list[str], list[Series]]:
     """The labels the rows at ``positions`` of the grouped frame had: the levels
     of the frame's index, or the positions themselves when it has none."""
     origin = g._origin
+    if g._rows is not None:
+        # The positions are rows of the kept frame; the labels are the ones
+        # the rows had before a null key left them out.
+        positions = g._rows.gather(positions)
     names = list(_ext.DataFrame.index_names(origin)) if origin is not None else []
     if names and origin is not None:
         return names, [_column(origin, n).gather(positions) for n in names]

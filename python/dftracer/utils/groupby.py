@@ -18,8 +18,8 @@ from ._group_labels import (
 )
 from ._group_labels import take as labelled_take
 from ._group_transforms import GroupTransforms
+from ._series_index import default_name, to_frame, with_levels
 from ._series_index import positions as row_positions
-from ._series_index import to_frame, with_levels
 from .agg import (
     PANDAS_AGG_NAMES,
     AggForm,
@@ -217,37 +217,114 @@ class GroupBy(GroupTransforms[DataFrame]):
     # GroupBy::transform (dftu_dataframe_group_transform), one value per input
     # row in input order; the lazy group-by builds the same plan.
     def _transform(
-        self, kind: str, n: int = 0, method: str = "average", ascending: bool = True
+        self,
+        kind: str,
+        n: int = 0,
+        method: str = "average",
+        ascending: bool = True,
+        fill: int | float | str | bool | None = None,
     ) -> DataFrame:
         spread = kind not in ("head", "tail", "nth") and not kind.startswith("rolling_")
+        if fill is not None:
+            self._check_fill(fill)
         if spread and self._all_dropped():
             names = (
                 [kind]
                 if kind in ("cumcount", "ngroup")
                 else [c for c in self._batch._names() if c not in self._keys]
             )
-            return self._labelled(self._missing_frame(names), None, True)
-        if self._origin is None:
-            out = _ext.DataFrame._group_transform(
-                self._batch, self._keys, kind, int(n), method, bool(ascending)
-            )
-            return self._spread(out) if spread else out
-        # The engine's row positions ride along as a column, so the rows that
-        # survive (head, tail, nth) get their own index labels back.
+            return self._labelled(self._missing_frame(names, fill), None, True, fill)
+        # The engine's row positions ride along as a column: the rows that
+        # survive (head, tail, nth) get their own index labels back, and a
+        # shift's vacated rows are the ones where the position is null.
         pos = "__dftu_pos__"
+        picks = kind in ("head", "tail", "nth")
+        carry = self._origin is not None or fill is not None or picks
         out = _ext.DataFrame._group_transform(
-            _ext.DataFrame.with_row_index(self._batch, pos),
+            _ext.DataFrame.with_row_index(self._batch, pos) if carry else self._batch,
             self._keys,
             kind,
             int(n),
             method,
             bool(ascending),
         )
-        positions = self._col(out, pos) if kind in ("head", "tail", "nth") else None
-        out = _ext.DataFrame.select(out, *[c for c in out._names() if c != pos])
-        return self._labelled(out, positions, spread)
+        positions = self._col(out, pos) if picks else None
+        if fill is not None:
+            kept = self._col(out, pos).is_null().logical_not()
+            for c in out._names():
+                if c != pos:
+                    out = out.with_column(c, self._filled(self._col(out, c), kept, fill))
+        if carry:
+            out = _ext.DataFrame.select(out, *[c for c in out._names() if c != pos])
+        out = self._retype(out, kind, fill is not None)
+        if self._origin is None and not picks:
+            return self._spread(out, fill) if spread else out
+        return self._labelled(out, positions, spread, fill)
 
-    def _spread(self, out: DataFrame) -> DataFrame:
+    @staticmethod
+    def _filled(column: Series, keep: Series, fill: int | float | str | bool) -> Series:
+        """``column`` where ``keep`` holds, else ``fill``."""
+        if isinstance(fill, (str, bool)):
+            return column.where(keep, Series.from_list([fill] * len(column)))
+        return column.where(keep, fill)
+
+    def _check_fill(self, fill: int | float | str | bool) -> None:
+        """``TypeError`` for a fill value the column cannot hold: text takes
+        text, a bool column a bool, a number column a number (an integer column
+        with nulls an integer). pandas gives an object column for the other
+        pairs; this engine has no such column."""
+        for name in self._batch._names():
+            if name in self._keys:
+                continue
+            column = self._col(self._batch, name)
+            kind = column.dtype
+            if kind in (DType.STRING, DType.LARGE_STRING):
+                fits = isinstance(fill, str)
+            elif kind == DType.BOOL:
+                fits = isinstance(fill, bool)
+            elif kind.is_numeric:
+                fits = isinstance(fill, (int, float)) and not isinstance(fill, bool)
+                if fits and kind.is_integer and column.null_count > 0:
+                    fits = isinstance(fill, int)
+            else:
+                fits = False
+            if not fits:
+                raise TypeError(
+                    f"shift: fill_value {fill!r} does not fit the {kind.name.lower()} "
+                    f"column {name!r}"
+                )
+
+    def _retype(self, out: DataFrame, kind: str, filled: bool) -> DataFrame:
+        """The dtype pandas gives a transform of an integer column: shift,
+        diff and the rolling windows are float64 (a shift with a fill value
+        keeps the integers). The running product of an integer column is
+        float64, where pandas keeps int64 (and wraps past its range); it is
+        exact up to 2**53."""
+        floats = (kind in ("shift", "diff") and not filled) or kind.startswith("rolling_")
+        if not floats:
+            return out
+        ints = [n for n in out._names() if self._col(out, n).dtype.is_integer]
+        for name in ints:
+            if name in self._keys or name not in self._batch:
+                continue
+            # A column with nulls is pandas' nullable Int64, which a shift
+            # and a diff keep; a plain integer column becomes float64.
+            if kind in ("shift", "diff") and self._col(self._batch, name).null_count > 0:
+                continue
+            out = out.with_column(name, self._col(out, name).astype("float64"))
+        return out
+
+    def shift(
+        self, periods: int = 1, fill_value: int | float | str | bool | None = None
+    ) -> DataFrame:
+        """Each column shifted by ``periods`` rows within its group (a negative
+        ``periods`` looks ahead); the vacated rows are null, or ``fill_value``
+        (which keeps an integer column integer). A fill the column cannot hold
+        is a ``TypeError``: text takes text, a bool column a bool, a number
+        column a number. pandas gives an object column for the other pairs."""
+        return self._transform("shift", periods, fill=fill_value)
+
+    def _spread(self, out: DataFrame, fill: int | float | str | bool | None = None) -> DataFrame:
         """``out``, one row per row the pandas ``groupby`` kept, on every row
         of the grouped frame: a row whose key was dropped (a null or NaN key
         with ``dropna``) is null, as pandas gives NaN there."""
@@ -263,10 +340,17 @@ class GroupBy(GroupTransforms[DataFrame]):
         slots = DataFrame({"__dftu_at__": row_positions(total)})
         kept = DataFrame({"__dftu_at__": rows, "__dftu_to__": row_positions(len(rows))})
         joined = slots.join(kept, on="__dftu_at__", how="left").sort_by("__dftu_at__")
-        out = out.take(self._col(joined, "__dftu_to__").fill_null(-1))
+        to = self._col(joined, "__dftu_to__")
+        out = out.take(to.fill_null(-1))
+        if fill is not None:
+            present = to.is_null().logical_not()
+            for name in out._names():
+                out = out.with_column(name, self._filled(self._col(out, name), present, fill))
+            return out
         # An integer result with missing rows is float64 with NaN, as pandas.
         for name in out._names():
-            if self._col(out, name).dtype.is_integer:
+            nullable = name in self._batch and self._col(self._batch, name).null_count > 0
+            if self._col(out, name).dtype.is_integer and not nullable:
                 out = out.with_column(name, self._col(out, name).astype("float64"))
         return out
 
@@ -275,13 +359,22 @@ class GroupBy(GroupTransforms[DataFrame]):
         NaN): its transforms are then all missing, on every row."""
         return pandas_named(self) and bool(self._total) and len(self._batch) == 0
 
-    def _missing_frame(self, names: Sequence[str]) -> DataFrame:
-        """A float64 column per name, missing on every row of the grouped frame."""
+    def _missing_frame(
+        self, names: Sequence[str], fill: int | float | str | bool | None = None
+    ) -> DataFrame:
+        """A float64 column per name, missing on every row of the grouped frame
+        (``fill`` on every row, when given)."""
         total = self._total or 0
+        if fill is not None:
+            return DataFrame({n: Series.from_list([fill] * total) for n in names})
         return DataFrame({n: Series.from_list([None] * total).astype("float64") for n in names})
 
     def _labelled(
-        self, out: DataFrame, positions: Series | Sequence[int] | None, spread: bool = False
+        self,
+        out: DataFrame,
+        positions: Series | Sequence[int] | None,
+        spread: bool = False,
+        fill: int | float | str | bool | None = None,
     ) -> DataFrame:
         """``out`` with the index the grouped frame had: its index columns,
         taken at ``positions`` (rows of the grouped frame, or all its rows in
@@ -290,16 +383,23 @@ class GroupBy(GroupTransforms[DataFrame]):
         origin = self._origin
         rows_all = self._rows
         if spread:
-            out = self._spread(out)
+            out = self._spread(out, fill)
             positions = None
             if self._total is not None:
                 rows_all = None
-        if origin is None:
-            return out
         rows: Series | Sequence[int] | None = positions
         if rows_all is not None:
             rows = rows_all if positions is None else rows_all.take(positions)
-        names = _ext.DataFrame.index_names(origin)
+        names = _ext.DataFrame.index_names(origin) if origin is not None else []
+        if not names:
+            # A frame with no index labels its rows by position: a subset of
+            # the rows keeps the positions it had.
+            if rows is None or not pandas_named(self):
+                return out
+            level = rows if isinstance(rows, Series) else Series.from_list(list(rows))
+            out = _ext.DataFrame.with_column(out, default_name(0), level)
+            return _ext.DataFrame.with_index(out, [default_name(0)])
+        assert origin is not None
         for name in names:
             column = _ext.DataFrame.__getitem__(origin, name)
             out = _ext.DataFrame.with_column(
@@ -625,9 +725,31 @@ class GroupBy(GroupTransforms[DataFrame]):
         keys), in input order."""
         if not self._keys:
             raise ValueError("get_group: the group-by has no keys")
-        out = self._frame().set_index(self._keys).loc[key, :]
-        assert isinstance(out, DataFrame)
-        return out.reset_index()
+        rows = self._group_rows(key)
+        if rows is None:
+            out = self._frame().set_index(self._keys).loc[key, :]
+            assert isinstance(out, DataFrame)
+            return out.reset_index()
+        return self._labelled(self._frame().take(rows), rows)
+
+    def _group_rows(self, key: GroupKey) -> list[int] | None:
+        """The rows (of the kept frame) of the group named ``key``; a missing
+        key (null or NaN) names the missing group. ``None`` when no group has
+        that key."""
+
+        def missing(x: object) -> bool:
+            return x is None or (isinstance(x, float) and x != x)
+
+        if isinstance(key, tuple) and len(self._keys) == 1 and len(key) == 1 and missing(key[0]):
+            raise KeyError(key)
+        parts = key if isinstance(key, tuple) else (key,)
+        for label, rows in self._groups_in_order():
+            have = label if isinstance(label, tuple) else (label,)
+            if len(have) == len(parts) and all(
+                (missing(a) and missing(b)) or a == b for a, b in zip(have, parts)
+            ):
+                return rows
+        return None
 
     @property
     def groups(self) -> dict[GroupKey, list[int]]:
@@ -941,7 +1063,9 @@ class GroupBy(GroupTransforms[DataFrame]):
             return self._labelled(frame if len(keep) else frame.head(0), None if len(keep) else [])
         row = "__dftu_row__"
         indexed = frame.with_row_index(row)
-        out = indexed.join(keep.select(*self._keys), on=self._keys).sort_values(row)
+        out = indexed.join(keep.select(*self._keys), on=self._keys, nulls_equal=True).sort_values(
+            row
+        )
         return self._labelled(out.select(*frame._names()), self._col(out, row))
 
     def _groups_in_order(self) -> list[tuple[object, list[int]]]:
@@ -1084,7 +1208,12 @@ class _GroupSeriesWindow:
         if not parts:
             return frame.select(*cols)
         out = parts[0].concat(*parts[1:]) if len(parts) > 1 else parts[0]
-        return out.sort_by(row).select(*cols)
+        out = out.sort_by(row).select(*cols)
+        # An integer column's window is float64, as pandas gives it.
+        for c in cols:
+            if g._col(out, c).dtype.is_integer:
+                out = out.with_column(c, g._col(out, c).astype("float64"))
+        return out
 
     def sum(self) -> DataFrame:
         return self._reduce("sum")

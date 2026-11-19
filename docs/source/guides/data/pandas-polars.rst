@@ -215,6 +215,13 @@ aggregate result is indexed by the keys, as in pandas, even when the frame had
 no index; ``groupby(..., as_index=False)`` and the Polars ``group_by`` keep the
 keys as columns.
 
+Two dtype differences of the pandas ``groupby`` stay for now. The running
+product ``cumprod`` of an integer column is ``float64`` (pandas keeps ``int64``
+and wraps past its range); it is exact up to 2**53, and past that it is a
+float, visibly, not a wrong integer. ``shift(fill_value=...)`` raises
+``TypeError`` for a fill the column cannot hold (text takes text, a bool column
+a bool, a number column a number), where pandas gives an object column.
+
 The index crosses the formats. ``to_pandas()`` moves the index columns into the
 pandas index (a ``MultiIndex`` for several; a level that ``from_pandas`` named
 ``__index_level_<i>__`` is unnamed again), and ``from_pandas`` records a

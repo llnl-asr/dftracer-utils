@@ -880,7 +880,9 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
 
     def gather(self, indices: Series | Sequence[int]) -> Self:
         """The rows at ``indices`` (a Series or a list; any order, repeats
-        allowed); ``take`` is the pandas name."""
+        allowed); ``take`` is the pandas name. An index past the last row is an
+        ``IndexError``. A negative index gives a null, it does not count from
+        the end as in pandas."""
         return super().take(_row_indices(indices))
 
     @property

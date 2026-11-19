@@ -639,7 +639,9 @@ class LazyFrame(_ext.LazyFrame):
     def gather(self, indices: Sequence[int]) -> LazyFrame:
         """Keep the rows at ``indices`` (any order, repeats allowed); ``take``
         is the pandas name. Not streaming: the whole frame is resident before
-        the indices apply."""
+        the indices apply. An index outside the frame, a negative one too, is
+        an error when the plan runs; the eager ``DataFrame.gather`` gives a
+        null row for a negative index."""
         return self._new(_ext.LazyFrame.take(self, list(indices)))
 
     def filter_mask(self, mask: Series) -> LazyFrame:

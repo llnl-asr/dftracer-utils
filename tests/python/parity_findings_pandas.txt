@@ -217,9 +217,9 @@ groupby.cumprod#1[G] | semantics | [dtype] a: float64 vs int64
 groupby.cumcount#1[G] | shape | [type] ours DataFrame (frame), library Series (series)
 groupby.ngroup#1[G] | shape | [type] ours DataFrame (frame), library Series (series)
 groupby.pct_change#1[G] | keyword | [error] ours raised TypeError: GroupBy.pct_change() got an unexpected keyword argument 'fill_method'
-groupby.tail#1[G] | needs-index | [index] the library result has row labels
-groupby.filter#1[G] | needs-index | [index] the library result has row labels
-groupby.get_group#1[G] | needs-index | [index] the library result has row labels
+pandas3:groupby.tail#1[G] | needs-index | [index] the library result has row labels
+pandas3:groupby.filter#1[G] | needs-index | [index] the library result has row labels
+pandas3:groupby.get_group#1[G] | needs-index | [index] the library result has row labels
 str.cat#1[S] | keyword | [error] ours raised TypeError: _StrAccessor.cat() got an unexpected keyword argument 'na_rep'
 str.join#1[S] | engine | [error] ours raised DFTUtilsValueError: list_join: not a List column of strings
 str.extract#1[S] | keyword | [error] ours raised TypeError: _StrAccessor.extract() got an unexpected keyword argument 'expand'
@@ -237,8 +237,6 @@ pandas<3.1:series.map#1[F] | semantics | pandas before 3.1: [values] [2.5, None,
 pandas2:series.rmod#1[F] | semantics | pandas 2 only: [values] [0.5, None, 2.0, -0.5, 2.0, None] vs [0.5, None, 2.0, -0.5, 2.0, nan]
 pandas2:series.rdivmod#1[F] | semantics | pandas 2 only: [values] [[1.0, None, 0.0, -1.0, 0.0, None], [0.5, None, 2.0, -0.5, 2.0, None]] vs [[1.0, None, 0.0, -1.0, 0.0, inf], [0.5, None, 2.0, -0.5, 2.0, nan]]
 pandas<3.1:frame.map#1[N] | semantics | pandas before 3.1: [dtype] a: int64 vs float64
-pandas2:groupby.head#1[G] | shape | pandas 2 only: [shape] columns ['k', 'a', 'b'] vs ['index', 'k', 'a', 'b']
-pandas2:groupby.nth#1[G] | shape | pandas 2 only: [shape] columns ['k', 'a', 'b'] vs ['index', 'k', 'a', 'b']
 pandas2:groupby.apply#1[G] | semantics | pandas 2 only: the group function gets the key columns (pandas 3 leaves them out), so its result has the key as a column and as an index level and the harness cannot reset the index
 pandas2:groupby.value_counts#1[G] | semantics | pandas 2 only: [values] a: [1, 3, 2, 2] vs [1, 2, 3, 2]
 

@@ -1343,7 +1343,12 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
 
     def gather(self, indices: Series | Sequence[int]) -> DataFrame:
         """The rows at ``indices`` (a Series or a list; any order, repeats
-        allowed); ``take`` is the pandas name."""
+        allowed); ``take`` is the pandas name. An index past the last row is an
+        ``IndexError``. A negative index gives a null row, it does not count
+        from the end as in pandas: the group transforms use that to leave a
+        vacated row null. ``LazyFrame.gather`` refuses a negative index when
+        it runs, because a plan has no null row to give a row that is not
+        there."""
         return _bound(_ext.DataFrame.take(self, _row_indices(indices)))
 
     def head(self, n: int = 5) -> DataFrame:

@@ -733,8 +733,8 @@ class View : public dataframe::LazyOps<View> {
 
     static View from_file(dstd::String file_path, dstd::String index_path = "");
     static View from_files(dstd::Vector<ViewFile> files);
-    /// Scans `dir` recursively for trace files (.pfw, .jsonl and
-    /// .ndjson, plain or gzip), sorted by path; index, split and schemas
+    /// Scans `dir` recursively for gzip trace files (*.gz),
+    /// sorted by path; index, split and schemas
     /// directories are skipped. Each file's index resolves under
     /// `index_dir` (empty = beside the trace). The files with records must
     /// share one record_schema. A directory that cannot be listed is an Io

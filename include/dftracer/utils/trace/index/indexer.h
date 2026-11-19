@@ -208,7 +208,7 @@ dstd::Result<Indexer> open_scanned(dstd::Vector<runtime::fs::FoundFile> files,
 class Indexer {
    public:
     /// `paths` holds trace files and directories; a directory contributes the
-    /// trace files (.pfw, .jsonl and .ndjson, plain or gzip) directly
+    /// gzip trace files (*.gz) directly
     /// inside it. A file that a registered plugin file format claims (the
     /// probe @ref dataframe::LazyFrame::scan_file uses, or the format named by
     /// IndexerOptions::format) is read by that format,

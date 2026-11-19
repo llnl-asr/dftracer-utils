@@ -20,8 +20,8 @@ vs ``View`` vs a plugin vs the C ABI yet - this page assumes the
 -----------------------------------
 
 A ``TraceViewer``/``View`` accepts a directory, a single file, or a list of
-files. A directory is scanned recursively for ``.pfw``, ``.jsonl``
-and ``.ndjson`` files; a plain (not gzip) one is an error, since
+files. A directory is scanned recursively for ``*.gz`` files; a plain
+(not gzip) file is not listed, and passed by name it is an error, since
 an index reads gzip only (see :doc:`troubleshooting`).
 
 .. tab-set::

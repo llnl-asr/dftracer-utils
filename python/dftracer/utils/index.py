@@ -204,7 +204,7 @@ class Indexer:
         files: A path (``str`` or ``os.PathLike``) or a sequence of paths,
             with the same rule as :class:`~dftracer.utils.TraceViewer`. One
             path that names a directory is scanned recursively for trace
-            files (.pfw, .jsonl and .ndjson, plain or gzip); a directory
+            gzip files (``*.gz``); a directory
             inside a sequence raises ``ValueError``. A repeated path is
             indexed once. A glob is not expanded, so it is a missing path and
             raises ``DFTUtilsNotFoundError``, as does any missing path, on the

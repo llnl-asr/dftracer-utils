@@ -89,6 +89,9 @@ def series_value_counts(
     if dropna and values.null_count:
         values = values.filter(values.is_not_null())
     level = internal_name(s.name, 0)
+    if sort and not ascending and not values.null_count:
+        table = native_counts(values)
+        return _labelled(table["count"], [level], [table["value"]], normalize)
     counts, labels = _counted(DataFrame({"value": values}), ["value"], sort, ascending)
     return _labelled(counts, [level], labels, normalize)
 

@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: MIT
-"""``stack`` and ``unstack`` on the row labels, written over the native sort,
-take, unpivot and pivot.
+"""``stack`` and ``unstack`` on the row labels, written over the native row
+numbering, take and unpivot.
 
 ``unstack`` numbers the distinct values of the remaining levels (the result
-rows) and of the unstacked ones (the result columns) with one sort each, checks
-that no cell is named twice, and hands the (row number, column number, value)
-table to the native pivot, whose columns come back in number order. ``stack``
+rows) and of the unstacked ones (the result columns), finds the row that fills
+each cell of the result (a cell named twice is an error) and takes each value
+column at those rows, so a cell no row fills is null. ``stack``
 runs the native unpivot over the shown columns and reads its column-major rows
 in row-major order with one take.
 
@@ -42,40 +42,8 @@ def _first_rows(levels: Sequence[Series], sort: bool) -> tuple[Series, Series, i
     each row, the row that first holds each number, and how many numbers there
     are. The numbers follow the sorted order, nulls first, or with ``sort=False``
     the order of first appearance."""
-    from .dataframe import DataFrame
-
-    n = len(levels[0])
-    keys = [f"k{i}" for i in range(len(levels))]
-    table = DataFrame.from_dict({**dict(zip(keys, map(drop_levels, levels))), "pos": positions(n)})
-    ordered = table._sort_values(keys, ascending=[True] * len(keys), na_position="first")
-    perm = drop_levels(ordered["pos"])
-    begins = positions(n).eq(0)
-    for key in keys:
-        here = drop_levels(ordered[key])
-        if here.dtype == DType.BOOL:
-            here = here.cast(DType.INT8)
-        before = here.shift(1)
-        nulls = here.is_null().cast(DType.INT64) != before.is_null().cast(DType.INT64)
-        begins = begins | (here != before).fillna(False) | nulls
-    numbers = begins.cast(DType.INT64).cumsum() - 1
-    first = drop_levels(perm.filter(begins))
-    count = len(first)
-    rows = DataFrame.from_dict({"pos": perm, "number": numbers})._sort_values("pos")
-    ids = drop_levels(rows["number"])
-    if not sort and count > 1:
-        order = drop_levels(
-            DataFrame.from_dict({"first": first, "group": positions(count)})._sort_values("first")[
-                "group"
-            ]
-        )
-        renumber = drop_levels(
-            DataFrame.from_dict({"group": order, "new": positions(count)})._sort_values("group")[
-                "new"
-            ]
-        )
-        ids = _take(renumber, ids)
-        first = _take(first, order)
-    return ids, first, count
+    ids, first = _ext._number_rows([drop_levels(level) for level in levels], sort)
+    return ids, first, len(first)
 
 
 def _take(s: Series, at: Series) -> Series:
@@ -146,33 +114,28 @@ def _wide(
     keep = [i for i in range(len(names)) if i not in picked]
     rows, row_first, row_count = _first_rows([levels[i] for i in keep], sort)
     cols, col_first, col_count = _first_rows([levels[i] for i in picked], sort and len(picked) == 1)
-    cell = rows * col_count + cols
-    if cell.duplicated().any():
-        raise ValueError(_NOT_UNIQUE)
+    try:
+        cells = _ext._unstack_positions(rows, cols, row_count, col_count)
+    except ValueError as error:
+        if "same cell" in str(error):
+            raise ValueError(_NOT_UNIQUE) from None
+        raise
     labels = _labels([levels[i] for i in picked], col_first)
     out: dict[str, Series] = {names[i]: _take(levels[i], row_first) for i in keep}
     for column, value in values:
-        table = DataFrame.from_dict({"r": rows, "c": cols, "v": value})
-        wide = table.pivot("r", "c", "v", "first")
-        mask = None
+        wide = _ext._unstack_columns(value, cells, row_count)
+        seen = None
         if fill_value is not None and value.null_count > 0:
-            marks = DataFrame.from_dict({"r": rows, "c": cols, "v": rows.is_not_null()})
-            mask = marks.pivot("r", "c", "v", "first")
+            seen = _ext._unstack_columns(rows.is_not_null(), cells, row_count)
         for j, label in enumerate(labels):
             title = _text(label if column is None else (column, *_tuple(label)))
             if title in out:
                 raise ValueError(f"unstack: the column {title!r} is also an index level name")
-            out[title] = _fill(
-                _column(wide, j), fill_value, None if mask is None else _column(mask, j)
-            )
+            out[title] = _fill(wide[j], fill_value, None if seen is None else seen[j])
     frame = DataFrame.from_dict(out)
     if row_count != len(frame):
         raise ValueError("unstack: the native pivot lost rows")
     return frame.set_index([names[i] for i in keep])
-
-
-def _column(frame: DataFrame, j: int) -> Series:
-    return drop_levels(_ext.DataFrame.__getitem__(frame, str(j)))
 
 
 def _tuple(label: object) -> tuple[object, ...]:

@@ -262,8 +262,9 @@ Series topk_packed(std::int64_t n, std::int64_t k, PackFn pack,
 // fully; otherwise only the first k indices are produced.
 template <class KeyFn>
 Series argsort_pack32(std::int64_t n, bool descending, std::int64_t k,
-                      KeyFn key_of) {
-    auto pack = [&](std::int64_t i) {
+                      const std::int64_t* rows, KeyFn key_of) {
+    auto pack = [&](std::int64_t j) {
+        const std::int64_t i = rows ? rows[j] : j;
         std::uint32_t key = key_of(i);
         if (descending) key = ~key;
         return (static_cast<std::uint64_t>(key) << 32) |
@@ -302,8 +303,9 @@ Series argsort_pack32(std::int64_t n, bool descending, std::int64_t k,
 // Pack 64-bit keys with the index into uint128 (hi = key, lo = index).
 template <class KeyFn>
 Series argsort_pack64(std::int64_t n, bool descending, std::int64_t k,
-                      KeyFn key_of) {
-    auto pack = [&](std::int64_t i) {
+                      const std::int64_t* rows, KeyFn key_of) {
+    auto pack = [&](std::int64_t j) {
+        const std::int64_t i = rows ? rows[j] : j;
         std::uint64_t key = key_of(i);
         if (descending) key = ~key;
         hwy::uint128_t p;
@@ -344,78 +346,119 @@ Series argsort_pack64(std::int64_t n, bool descending, std::int64_t k,
     });
 }
 
-// Try the SIMD path; returns an invalid Series when the type/shape is not
-// eligible (variable-width, nested, has nulls, or too many rows to pack). `k`
-// is passed through: `k < 0` = full sort, else a partial sort of the first k.
-Series argsort_simd(const Series& v, bool descending, std::int64_t k) {
+// The SIMD sort of the `m` rows `rows` of `v` (every row when `rows` is null).
+// An invalid Series when the type is not eligible (variable-width, nested, or
+// too many rows to pack). `k` is passed through: `k < 0` = full sort, else a
+// partial sort of the first k.
+Series argsort_keys(const Series& v, bool descending, std::int64_t k,
+                    std::int64_t m, const std::int64_t* rows) {
     const std::int64_t n = v.length();
-    if (v.null_count() > 0) return Series{};
     const bool wide_index = n > std::numeric_limits<std::uint32_t>::max();
 
     switch (physical_type(v.type())) {
         case TypeId::Bool: {
             const std::uint8_t* b = v.data<std::uint8_t>();
             if (wide_index) return Series{};
-            return argsort_pack32(n, descending, k, [&](std::int64_t i) {
+            return argsort_pack32(m, descending, k, rows, [&](std::int64_t i) {
                 return static_cast<std::uint32_t>((b[i >> 3] >> (i & 7)) & 1);
             });
         }
         case TypeId::Int8:
             if (wide_index) return Series{};
-            return argsort_pack32(n, descending, k, [&](std::int64_t i) {
+            return argsort_pack32(m, descending, k, rows, [&](std::int64_t i) {
                 return static_cast<std::uint32_t>(
                     static_cast<std::uint8_t>(v.data<std::int8_t>()[i]) ^
                     0x80u);
             });
         case TypeId::Int16:
             if (wide_index) return Series{};
-            return argsort_pack32(n, descending, k, [&](std::int64_t i) {
+            return argsort_pack32(m, descending, k, rows, [&](std::int64_t i) {
                 return static_cast<std::uint32_t>(
                     static_cast<std::uint16_t>(v.data<std::int16_t>()[i]) ^
                     0x8000u);
             });
         case TypeId::Int32:
             if (wide_index) return Series{};
-            return argsort_pack32(n, descending, k, [&](std::int64_t i) {
+            return argsort_pack32(m, descending, k, rows, [&](std::int64_t i) {
                 return static_cast<std::uint32_t>(v.data<std::int32_t>()[i]) ^
                        0x80000000u;
             });
         case TypeId::Uint8:
             if (wide_index) return Series{};
-            return argsort_pack32(n, descending, k, [&](std::int64_t i) {
+            return argsort_pack32(m, descending, k, rows, [&](std::int64_t i) {
                 return static_cast<std::uint32_t>(v.data<std::uint8_t>()[i]);
             });
         case TypeId::Uint16:
             if (wide_index) return Series{};
-            return argsort_pack32(n, descending, k, [&](std::int64_t i) {
+            return argsort_pack32(m, descending, k, rows, [&](std::int64_t i) {
                 return static_cast<std::uint32_t>(v.data<std::uint16_t>()[i]);
             });
         case TypeId::Uint32:
             if (wide_index) return Series{};
-            return argsort_pack32(n, descending, k, [&](std::int64_t i) {
+            return argsort_pack32(m, descending, k, rows, [&](std::int64_t i) {
                 return v.data<std::uint32_t>()[i];
             });
         case TypeId::Float32:
             if (wide_index) return Series{};
-            return argsort_pack32(n, descending, k, [&](std::int64_t i) {
+            return argsort_pack32(m, descending, k, rows, [&](std::int64_t i) {
                 return sortable_f32(v.data<float>()[i]);
             });
         case TypeId::Int64:
-            return argsort_pack64(n, descending, k, [&](std::int64_t i) {
+            return argsort_pack64(m, descending, k, rows, [&](std::int64_t i) {
                 return static_cast<std::uint64_t>(v.data<std::int64_t>()[i]) ^
                        0x8000000000000000ULL;
             });
         case TypeId::Uint64:
-            return argsort_pack64(n, descending, k, [&](std::int64_t i) {
+            return argsort_pack64(m, descending, k, rows, [&](std::int64_t i) {
                 return v.data<std::uint64_t>()[i];
             });
         case TypeId::Float64:
-            return argsort_pack64(n, descending, k, [&](std::int64_t i) {
+            return argsort_pack64(m, descending, k, rows, [&](std::int64_t i) {
                 return sortable_f64(v.data<double>()[i]);
             });
         default:
             return Series{};  // String / nested: scalar
     }
+}
+
+// Try the SIMD path; returns an invalid Series when the type/shape is not
+// eligible. Rows with no value are left out of the sort and put first or last
+// in their own order, as the scalar path orders them (a stable sort). `k` is
+// as for argsort_keys; a partial sort only asks for `nulls_last`.
+Series argsort_simd(const Series& v, bool descending, std::int64_t k,
+                    bool nulls_last) {
+    const std::int64_t n = v.length();
+    if (v.null_count() == 0) return argsort_keys(v, descending, k, n, nullptr);
+    // Only a flat column of numbers keeps its nulls in a bitmap of its own.
+    if (!v.is_flat() || is_string_column(*v.handle()) ||
+        !v.handle()->validity.block())
+        return Series{};
+    const std::uint8_t* valid_bits = v.handle()->validity.data();
+    dstd::Vector<std::int64_t> valid;
+    dstd::Vector<std::int64_t> nulls;
+    valid.reserve(static_cast<std::size_t>(n - v.null_count()));
+    nulls.reserve(static_cast<std::size_t>(v.null_count()));
+    for (std::int64_t i = 0; i < n; ++i)
+        ((valid_bits[i >> 3] >> (i & 7)) & 1 ? valid : nulls).push_back(i);
+    Series part =
+        argsort_keys(v, descending, k, static_cast<std::int64_t>(valid.size()),
+                     valid.data());
+    if (!part.valid()) return part;
+    const std::int64_t want = k < 0 ? n : std::min(k, n);
+    const std::int64_t have = part.length();
+    const std::int64_t* sorted = part.data<std::int64_t>();
+    dstd::Vector<std::int64_t> out(static_cast<std::size_t>(want));
+    std::int64_t* o = out.data();
+    const std::int64_t first_nulls =
+        nulls_last ? 0
+                   : std::min(want, static_cast<std::int64_t>(nulls.size()));
+    std::copy_n(nulls.data(), first_nulls, o);
+    o += first_nulls;
+    const std::int64_t mid = std::min(want - first_nulls, have);
+    std::copy_n(sorted, mid, o);
+    o += mid;
+    std::copy_n(nulls.data(), want - first_nulls - mid, o);
+    return Series::flat_i64(out.data(), want);
 }
 
 // A chunked column, and a selection, view or constant of numbers, is read
@@ -435,7 +478,7 @@ int compare_rows(const Series& v, std::int64_t a, std::int64_t b) {
 Series argsort(const Series& v, bool descending, bool nulls_last) {
     if (needs_flat(v)) return argsort(v.materialize(), descending, nulls_last);
     if (refuse_nested_value("argsort", v.type())) return Series{};
-    Series simd = argsort_simd(v, descending, -1);
+    Series simd = argsort_simd(v, descending, -1, nulls_last);
     if (simd.valid()) return simd;
     return argsort_scalar(v, descending, nulls_last);
 }
@@ -446,7 +489,7 @@ Series topk_indices(const Series& v, std::int64_t k, bool largest) {
     const std::int64_t n = v.length();
     k = k < 0 ? 0 : (k > n ? n : k);
     // largest -> descending key order; the first k are the k largest.
-    Series simd = argsort_simd(v, largest, k);
+    Series simd = argsort_simd(v, largest, k, true);
     if (simd.valid()) return simd;
     Series full = argsort_scalar(v, largest, true);  // strings / nulls / nested
     const std::int64_t* idx = full.data<std::int64_t>();

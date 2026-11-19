@@ -1220,6 +1220,45 @@ int init_series(PyObject* m) {
         return -1;
     }
 
+    static PyMethodDef number_rows_def = {
+        "_number_rows", number_rows, METH_VARARGS,
+        "_number_rows(keys, sorted) -> (ids, first): the number of each row of "
+        "the key columns (a null equals a null) and the first row of each "
+        "number; by first appearance, or by ascending value with `sorted`."};
+    PyObject* number_rows_fn =
+        PyCFunction_NewEx(&number_rows_def, nullptr, nullptr);
+    if (!number_rows_fn) return -1;
+    if (PyModule_AddObject(m, "_number_rows", number_rows_fn) < 0) {
+        Py_DECREF(number_rows_fn);
+        return -1;
+    }
+
+    static PyMethodDef unstack_positions_def = {
+        "_unstack_positions", unstack_positions, METH_VARARGS,
+        "_unstack_positions(rows, cols, row_count, col_count) -> Series: the "
+        "row that fills each cell of an unstack, column by column, -1 for "
+        "none; "
+        "ValueError when two rows fill one cell."};
+    PyObject* unstack_positions_fn =
+        PyCFunction_NewEx(&unstack_positions_def, nullptr, nullptr);
+    if (!unstack_positions_fn) return -1;
+    if (PyModule_AddObject(m, "_unstack_positions", unstack_positions_fn) < 0) {
+        Py_DECREF(unstack_positions_fn);
+        return -1;
+    }
+
+    static PyMethodDef unstack_columns_def = {
+        "_unstack_columns", unstack_columns, METH_VARARGS,
+        "_unstack_columns(values, positions, row_count) -> list of Series: "
+        "the columns of an unstack, null where a cell has no row."};
+    PyObject* unstack_columns_fn =
+        PyCFunction_NewEx(&unstack_columns_def, nullptr, nullptr);
+    if (!unstack_columns_fn) return -1;
+    if (PyModule_AddObject(m, "_unstack_columns", unstack_columns_fn) < 0) {
+        Py_DECREF(unstack_columns_fn);
+        return -1;
+    }
+
     static PyMethodDef tz_path_def = {
         "_tz_set_search_path", tz_set_search_path, METH_O,
         "_tz_set_search_path(paths) -> None: the directories (separated by "

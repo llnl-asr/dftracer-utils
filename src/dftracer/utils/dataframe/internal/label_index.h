@@ -154,6 +154,12 @@ class LabelIndex {
     // The label hash of the typed table when `keys` are one level of cells of
     // its kind, else null.
     const IntTable* int_table_for(dstd::Span<const CellColumn> keys) const;
+    dstd::Vector<std::int64_t> int_rows(const IntTable& t,
+                                        const CellColumn& key,
+                                        std::int64_t count) const;
+    dstd::Vector<std::int64_t> int_fill_rows(const CellColumn& key,
+                                             std::int64_t count,
+                                             FillMethod method) const;
     dstd::Result<dstd::SharedPtr<const LabelIndex>> in_units(
         dstd::Span<dstd::Vector<CellColumn>* const> sets) const;
     Located locate_cells(dstd::Span<const CellColumn> keys,

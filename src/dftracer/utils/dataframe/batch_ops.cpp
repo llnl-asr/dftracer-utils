@@ -1411,28 +1411,20 @@ static dstd::Result<DataFrame> unique_raw(
     if (n > 0 && cols.empty()) idx.push_back(0);
     dstd::Vector<std::int32_t> comb;
     dstd::Vector<std::int64_t> first;
+    for (const Series* col : cols)
+        if (value_domain(col->type()) == ValueDomain::None)
+            return cell_key_error(col->type());
     for (std::size_t c = 0; n > 0 && c < cols.size(); ++c) {
         ValueIds ids;
-        if (!value_ids(*cols[c]->handle(), ids))
-            return cell_key_error(cols[c]->type());
-        if (c == 0) {
+        value_ids(*cols[c]->handle(), ids);
+        // A column of values that all differ leaves nothing to tell apart.
+        if (c == 0 || static_cast<std::int64_t>(ids.first.size()) == n) {
             comb = std::move(ids.ids);
             first = std::move(ids.first);
+            if (static_cast<std::int64_t>(first.size()) == n) break;
             continue;
         }
-        dstd::HashMap<std::uint64_t, std::int32_t> seen;
-        first.clear();
-        for (std::int64_t i = 0; i < n; ++i) {
-            const std::uint64_t key =
-                (static_cast<std::uint64_t>(comb[static_cast<std::size_t>(i)])
-                 << 32) |
-                static_cast<std::uint32_t>(
-                    ids.ids[static_cast<std::size_t>(i)]);
-            auto [it, fresh] =
-                seen.try_emplace(key, static_cast<std::int32_t>(first.size()));
-            if (fresh) first.push_back(i);
-            comb[static_cast<std::size_t>(i)] = it->second;
-        }
+        combine_value_ids(comb, ids.ids, first);
     }
     if (!first.empty()) idx = std::move(first);
     return take(b, idx);
@@ -1951,16 +1943,33 @@ dstd::Result<DataFrame> value_counts(const Series& v) {
             kept.push_back(counts[id]);
         }
     counts = std::move(kept);
+    // Most frequent first, ties by first appearance: a stable counting sort
+    // of the distinct values by count, descending.
+    const std::size_t distinct = counts.size();
+    std::int64_t most = 0;
+    for (std::int64_t c : counts) most = c > most ? c : most;
+    dstd::Vector<std::int64_t> start(static_cast<std::size_t>(most) + 2, 0);
+    for (std::int64_t c : counts)
+        ++start[static_cast<std::size_t>(most - c) + 1];
+    for (std::size_t c = 1; c < start.size(); ++c) start[c] += start[c - 1];
+    dstd::Vector<std::int64_t> ordered_first(distinct);
+    dstd::Vector<std::int64_t> ordered_counts(distinct);
+    for (std::size_t j = 0; j < distinct; ++j) {
+        const auto at = static_cast<std::size_t>(
+            start[static_cast<std::size_t>(most - counts[j])]++);
+        ordered_first[at] = first_index[j];
+        ordered_counts[at] = counts[j];
+    }
     DataFrame df;
     df.names.push_back(dstd::SharedString{"value"});
     df.names.push_back(dstd::SharedString{"count"});
-    Series values = v.take(first_index);
+    Series values = v.take(ordered_first);
     df.columns.push_back(values.encoding() == Encoding::Flat
                              ? std::move(values)
                              : values.materialize());
-    df.columns.push_back(Series::flat_i64(
-        counts.data(), static_cast<std::int64_t>(counts.size())));
-    return sort_by(df, "count", true);
+    df.columns.push_back(Series::flat_i64(ordered_counts.data(),
+                                          static_cast<std::int64_t>(distinct)));
+    return df;
 }
 
 namespace {

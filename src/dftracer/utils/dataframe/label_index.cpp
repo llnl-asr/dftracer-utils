@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/internal/label_index.h>
+#include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -581,25 +582,15 @@ Located LabelIndex::locate_cells(dstd::Span<const CellColumn> keys,
     Located out;
     if (const IntTable* it = int_table_for(keys);
         it != nullptr && it->state == IntState::Usable) {
-        const std::size_t mask = it->slots.size() - 1;
-        const CellColumn& key = keys.front();
+        const dstd::Vector<std::int64_t> found =
+            int_rows(*it, keys.front(), count);
+        out.positions.reserve(found.size());
         for (std::int64_t r = 0; r < count; ++r) {
-            const auto label = static_cast<std::int64_t>(key.bits(r));
-            std::size_t at =
-                static_cast<std::size_t>(dstd::hash::splitmix64(key.bits(r))) &
-                mask;
-            for (;;) {
-                const IntSlot& slot = it->slots[at];
-                if (slot.row_plus_one == 0) {
-                    out.missing.push_back(r);
-                    break;
-                }
-                if (slot.label == label) {
-                    out.positions.push_back(slot.row_plus_one - 1);
-                    break;
-                }
-                at = (at + 1) & mask;
-            }
+            const std::int64_t row = found[static_cast<std::size_t>(r)];
+            if (row < 0)
+                out.missing.push_back(r);
+            else
+                out.positions.push_back(row);
         }
         return out;
     }
@@ -1074,6 +1065,87 @@ dstd::Result<dstd::Vector<std::int64_t>> LabelIndex::reindex(
     return reindex_cells(*cells, count, options);
 }
 
+// The row of each of the `count` keys in the table, -1 where a key is not a
+// label. Lookups do not depend on each other, so they run in parallel.
+dstd::Vector<std::int64_t> LabelIndex::int_rows(const IntTable& t,
+                                                const CellColumn& key,
+                                                std::int64_t count) const {
+    dstd::Vector<std::int64_t> out(static_cast<std::size_t>(count), -1);
+    const std::size_t mask = t.slots.size() - 1;
+    parallel_for(
+        count, std::int64_t{1} << 14, [&](std::int64_t from, std::int64_t to) {
+            for (std::int64_t r = from; r < to; ++r) {
+                const auto label = static_cast<std::int64_t>(key.bits(r));
+                std::size_t at = static_cast<std::size_t>(
+                                     dstd::hash::splitmix64(key.bits(r))) &
+                                 mask;
+                for (;;) {
+                    const IntSlot& slot = t.slots[at];
+                    if (slot.row_plus_one == 0) break;
+                    if (slot.label == label) {
+                        out[static_cast<std::size_t>(r)] =
+                            slot.row_plus_one - 1;
+                        break;
+                    }
+                    at = (at + 1) & mask;
+                }
+            }
+        });
+    return out;
+}
+
+// The row each key fills from on one level of whole-number labels that are
+// monotonic (see reindex_fill): the label itself or the nearest before it for
+// Pad, the nearest after it for Backfill. A key at or after the previous one
+// (in label order) searches on from the previous answer.
+dstd::Vector<std::int64_t> LabelIndex::int_fill_rows(const CellColumn& key,
+                                                     std::int64_t count,
+                                                     FillMethod method) const {
+    dstd::Vector<std::int64_t> out(static_cast<std::size_t>(count), -1);
+    const CellColumn& level = levels_.front();
+    const bool inc = increasing_;
+    const bool pad = method == FillMethod::Pad;
+    const std::int64_t rows = rows_;
+    parallel_for(
+        count, std::int64_t{1} << 14, [&](std::int64_t from, std::int64_t to) {
+            std::int64_t cursor = 0;
+            std::int64_t previous = 0;
+            for (std::int64_t r = from; r < to; ++r) {
+                const auto k = static_cast<std::int64_t>(key.bits(r));
+                auto before = [&](std::int64_t row) {
+                    const auto label =
+                        static_cast<std::int64_t>(level.bits(row));
+                    return inc ? label < k : label > k;
+                };
+                const bool onward =
+                    r > from && (inc ? k >= previous : k <= previous);
+                std::int64_t lo = onward ? cursor : 0;
+                std::int64_t hi = lo;
+                std::int64_t step = 1;
+                while (hi < rows && before(hi)) {
+                    lo = hi + 1;
+                    hi += step;
+                    step <<= 1;
+                }
+                if (hi > rows) hi = rows;
+                while (lo < hi) {
+                    const std::int64_t mid = lo + (hi - lo) / 2;
+                    if (before(mid))
+                        lo = mid + 1;
+                    else
+                        hi = mid;
+                }
+                cursor = lo;
+                previous = k;
+                const bool exact =
+                    lo < rows && static_cast<std::int64_t>(level.bits(lo)) == k;
+                out[static_cast<std::size_t>(r)] =
+                    pad ? (exact ? lo : lo - 1) : (lo < rows ? lo : -1);
+            }
+        });
+    return out;
+}
+
 dstd::Result<dstd::Vector<std::int64_t>> LabelIndex::reindex_cells(
     dstd::Span<const CellColumn> keys, std::int64_t count,
     const ReindexOptions& options) const {
@@ -1118,28 +1190,18 @@ dstd::Result<dstd::Vector<std::int64_t>> LabelIndex::reindex_cells(
             return invalid_argument<
                 "cannot reindex on an axis with duplicate labels">();
     }
-    if (filling) return reindex_fill(keys, count, options);
-    dstd::Vector<std::int64_t> out(n, -1);
-    if (use_typed) {
-        const std::size_t mask = typed->slots.size() - 1;
-        const CellColumn& key = keys.front();
-        for (std::int64_t r = 0; r < count; ++r) {
-            const auto label = static_cast<std::int64_t>(key.bits(r));
-            std::size_t at =
-                static_cast<std::size_t>(dstd::hash::splitmix64(key.bits(r))) &
-                mask;
-            for (;;) {
-                const IntSlot& slot = typed->slots[at];
-                if (slot.row_plus_one == 0) break;
-                if (slot.label == label) {
-                    out[static_cast<std::size_t>(r)] = slot.row_plus_one - 1;
-                    break;
-                }
-                at = (at + 1) & mask;
-            }
+    if (filling) {
+        if (use_typed && options.method != FillMethod::Nearest &&
+            options.limit < 0 && !std::isfinite(options.tolerance) &&
+            !options.tolerance_is_nanos && options.tolerance >= 0) {
+            order();
+            if (increasing_ || decreasing_)
+                return int_fill_rows(keys.front(), count, options.method);
         }
-        return out;
+        return reindex_fill(keys, count, options);
     }
+    dstd::Vector<std::int64_t> out(n, -1);
+    if (use_typed) return int_rows(*typed, keys.front(), count);
     for (std::int64_t r = 0; r < count; ++r) {
         std::uint64_t h = 0;
         for (std::size_t l = 0; l < prefix; ++l)

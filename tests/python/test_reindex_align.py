@@ -826,3 +826,61 @@ def test_an_empty_target_with_a_limit_on_a_decreasing_index_is_empty(method):
         lambda: (pd.Series([1.0, 2.0, 3.0], index=[30, 20, 10]),),
         lambda s: s.reindex([], method=method, limit=2),
     )
+
+
+# ---- large inputs: the lookups run in parallel chunks ----------------------------
+
+
+def _big_labels(count, seed, step=3):
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    return (rng.permutation(count) * step).tolist()
+
+
+@pytest.mark.parametrize("method", [None, "ffill", "bfill"])
+@pytest.mark.parametrize("order", ["ascending", "descending"])
+@pytest.mark.parametrize("keys", ["sorted", "unsorted"])
+def test_series_reindex_of_many_keys_matches_pandas(method, order, keys):
+    import numpy as np
+
+    labels = sorted(_big_labels(40_000, 1))
+    if order == "descending":
+        labels = labels[::-1]
+    rng = np.random.default_rng(2)
+    target = rng.integers(-20, 3 * 40_000 + 20, 50_000)
+    if keys == "sorted":
+        target = np.sort(target) if order == "ascending" else np.sort(target)[::-1]
+    check(
+        lambda: (_s(labels),),
+        lambda s: s.reindex(target.tolist() if isinstance(s, pd.Series) else target, method=method),
+    )
+
+
+@pytest.mark.parametrize("keys", ["list", "numpy"])
+def test_series_loc_of_many_labels_matches_pandas(keys):
+    import numpy as np
+
+    labels = _big_labels(40_000, 3)
+    rng = np.random.default_rng(4)
+    picked = rng.choice(np.array(labels), 30_000, replace=False)
+    key = picked.tolist() if keys == "list" else picked
+    check(lambda: (_s(labels),), lambda s: s.loc[key])
+    with pytest.raises(KeyError):
+        Series.from_pandas(_s(labels)).loc[np.array([1, 2, 5]) if keys == "numpy" else [1, 2, 5]]
+
+
+@pytest.mark.parametrize("join", ["left", "right", "inner", "outer"])
+def test_series_align_of_sorted_unique_integer_labels_matches_pandas(join):
+    import numpy as np
+
+    rng = np.random.default_rng(5)
+    left = np.unique(rng.integers(0, 90_000, 40_000)).tolist()
+    right = np.unique(rng.integers(30_000, 120_000, 40_000)).tolist()
+    check(lambda: (_s(left), _s(right, "w")), lambda a, b: a.align(b, join=join))
+
+
+@pytest.mark.parametrize("join", ["left", "inner", "outer"])
+def test_series_align_with_repeated_or_unsorted_labels_matches_pandas(join):
+    check(lambda: (_s([5, 1, 3, 9]), _s([3, 4, 5], "w")), lambda a, b: a.align(b, join=join))
+    check(lambda: (_s([1, 2, 2, 9]), _s([2, 4, 9], "w")), lambda a, b: a.align(b, join=join))

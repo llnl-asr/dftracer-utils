@@ -18,7 +18,7 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_series_math_bitwis
                            test_lazyframe_output_schema.cpp
                            test_node_registry.cpp
                            test_morsel_ordering.cpp
-                           test_order.cpp test_sort_nulls.cpp test_frame_window.cpp test_output_morsels.cpp
+                           test_order.cpp test_sort_nulls.cpp test_value_ids_parallel.cpp test_frame_window.cpp test_output_morsels.cpp
                            test_frame_gap_fill.cpp test_frame_asof.cpp test_lazy_asof_interval.cpp
                            test_frame_ops.cpp test_frame_index.cpp test_series_index.cpp test_label_lookup.cpp test_reindex.cpp test_reduce_types.cpp
                            test_count_nulls.cpp test_set_union.cpp test_cast_pairs.cpp

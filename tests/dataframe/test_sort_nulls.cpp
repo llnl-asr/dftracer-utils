@@ -14,8 +14,10 @@
 #include <span_list.h>
 #include <task_result.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <numeric>
 
 using namespace dftracer::utils;
 
@@ -59,6 +61,73 @@ TEST_CASE("argsort keeps input order for ties and nulls in every mode") {
           I{1, 4, 6, 0, 3, 5, 2, 7});
 }
 
+TEST_CASE("argsort and topk_indices with nulls match a stable sort") {
+    const std::int64_t n = 5000;
+    dstd::Vector<double> x(static_cast<std::size_t>(n));
+    dstd::Vector<std::uint8_t> bits(static_cast<std::size_t>((n + 7) / 8), 0);
+    for (std::int64_t i = 0; i < n; ++i) {
+        const auto at = static_cast<std::size_t>(i);
+        x[at] = i % 97 == 0 ? std::nan("") : static_cast<double>((i * 31) % 40);
+        if (i % 7 != 0)
+            bits[at >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
+    }
+    const dataframe::Series s =
+        dataframe::Series::flat_f64(x.data(), n, bits.data());
+    const auto valid = [&](std::int64_t i) {
+        return (bits[static_cast<std::size_t>(i >> 3)] >> (i & 7)) & 1;
+    };
+    // NaN is one value above every number; a null is outside the order.
+    const auto order = [&](bool desc, bool nulls_last) {
+        dstd::Vector<std::int64_t> idx(static_cast<std::size_t>(n));
+        std::iota(idx.begin(), idx.end(), 0);
+        const auto before = [&](std::int64_t a, std::int64_t b) {
+            const bool na = !valid(a), nb = !valid(b);
+            if (na || nb) return na && nb ? false : (nulls_last ? nb : na);
+            const double xa = x[static_cast<std::size_t>(a)];
+            const double xb = x[static_cast<std::size_t>(b)];
+            const bool ka = std::isnan(xa), kb = std::isnan(xb);
+            if (ka || kb) return desc ? ka > kb : ka < kb;
+            return desc ? xa > xb : xa < xb;
+        };
+        std::sort(idx.begin(), idx.end(), [&](std::int64_t a, std::int64_t b) {
+            if (before(a, b)) return true;
+            if (before(b, a)) return false;
+            return a < b;
+        });
+        return idx;
+    };
+    for (const bool desc : {false, true})
+        for (const bool nulls_last : {false, true})
+            CHECK(values_of(dataframe::argsort(s, desc, nulls_last)) ==
+                  order(desc, nulls_last));
+    for (const std::int64_t k : {0, 1, 10, 3000, 4500, 5000})
+        for (const bool largest : {false, true}) {
+            dstd::Vector<std::int64_t> want = order(largest, true);
+            want.resize(static_cast<std::size_t>(k));
+            CHECK(values_of(dataframe::topk_indices(s, k, largest)) == want);
+        }
+}
+
+TEST_CASE("a column of only nulls sorts in input order") {
+    const dataframe::Series s = ints({4, 5, 6}, {0, 0, 0});
+    using I = dstd::Vector<std::int64_t>;
+    CHECK(values_of(dataframe::argsort(s, false, true)) == I{0, 1, 2});
+    CHECK(values_of(dataframe::argsort(s, true, false)) == I{0, 1, 2});
+    CHECK(values_of(dataframe::topk_indices(s, 2, true)) == I{0, 1});
+}
+
+TEST_CASE("an index column that is a selection is read through its values") {
+    const dataframe::Series base = ints({10, 20, 30, 40, 50});
+    const dataframe::Series picked = base.filter(base > 15);
+    REQUIRE(picked.encoding() == dataframe::Encoding::Selection);
+    CHECK(dataframe::to_index_vector(picked) ==
+          dstd::Vector<std::int64_t>{20, 30, 40, 50});
+    using I = dstd::Vector<std::int64_t>;
+    CHECK(values_of(picked.sort(true)) == I{50, 40, 30, 20});
+    CHECK(values_of(picked.top_k(2)) == I{50, 40});
+    CHECK(values_of(picked.bottom_k(2)) == I{20, 30});
+}
+
 TEST_CASE("string argsort keeps input order for ties and nulls in every mode") {
     const dstd::StringView vals[] = {"b", "", "a", "b", "", "b", "", "a"};
     const std::uint8_t bits[] = {0b10101101};
@@ -73,6 +142,23 @@ TEST_CASE("string argsort keeps input order for ties and nulls in every mode") {
           I{0, 3, 5, 2, 7, 1, 4, 6});
     CHECK(values_of(dataframe::argsort(s, true, false)) ==
           I{1, 4, 6, 0, 3, 5, 2, 7});
+}
+
+TEST_CASE("argsort of a string column in a selection reads nulls through it") {
+    const dstd::StringView vals[] = {"b", "", "a", "b", "", "b", "", "a"};
+    const std::uint8_t bits[] = {0b10101101};
+    const dataframe::Series base = dataframe::Series::strings(
+        dstd::Span<const dstd::StringView>(vals, 8), bits);
+    const std::uint8_t keep[] = {0b11110111};
+    const dataframe::Series mask =
+        dataframe::Series::flat(dataframe::TypeId::Bool, keep, 8);
+    const dataframe::Series picked = base.filter(mask);
+    REQUIRE(picked.encoding() == dataframe::Encoding::Selection);
+    const dataframe::Series twin = picked.materialize();
+    for (const bool desc : {false, true})
+        for (const bool nulls_last : {false, true})
+            CHECK(values_of(dataframe::argsort(picked, desc, nulls_last)) ==
+                  values_of(dataframe::argsort(twin, desc, nulls_last)));
 }
 
 TEST_CASE("sort_by_multi takes one nulls_last flag per key") {
@@ -131,6 +217,25 @@ TEST_CASE("unique keeps one null and can keep first-occurrence order") {
     CHECK(sorted.is_null(0));
     CHECK(values_of(sorted.drop_nulls()) == dstd::Vector<std::int64_t>{1, 3});
     CHECK(s.nunique() == 2);
+}
+
+TEST_CASE("unique over fixed-width columns counts floats and nulls as values") {
+    // Float64: -0.0 and 0.0 are one value, every NaN is one value, a null is
+    // its own value; Int16 repeats.
+    const dstd::Vector<double> f = {0.0,          -0.0, std::nan(""), 1.5,
+                                    std::nan(""), 0.0,  1.5,          7.0};
+    const std::uint8_t fbits[] = {0b11111111 & ~(1 << 6)};
+    dataframe::DataFrame d;
+    d.names = dstd::make_shared_strings({"f", "row"});
+    d.columns.push_back(dataframe::Series::flat_f64(f.data(), 8, fbits));
+    d.columns.push_back(ints({0, 1, 2, 3, 4, 5, 6, 7}));
+    const auto out = dftu_utils_test::ok(d.unique());
+    // distinct rows by (f, row): every row differs through `row`
+    CHECK(out.num_rows() == 8);
+    const auto by_f = dftu_utils_test::ok(
+        d.unique(dftu_utils_test::span_of<dstd::String>({"f"})));
+    CHECK(values_of(by_f.column("row")) ==
+          dstd::Vector<std::int64_t>{0, 2, 3, 6, 7});
 }
 
 TEST_CASE("search_sorted right inserts after equal values") {

@@ -1614,10 +1614,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
             _ext.DataFrame.select(self, names[0]), first
         )._col(first)
         body = _ext.DataFrame.with_column(self, first, positions)
-        kept = body.filter(mask)
-        if len(kept) == len(self):
-            return _bound(_ext.DataFrame.share(self))
-        return _bound(_ext.DataFrame.with_index(kept, [first]))
+        return _bound(_ext.DataFrame.with_index(body.filter(mask), [first]))
 
     def fillna(
         self,

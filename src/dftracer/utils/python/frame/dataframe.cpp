@@ -20,6 +20,7 @@
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/plan.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -42,6 +43,7 @@
 #include <dftracer/utils/python/frame/lazyframe.h>
 #include <dftracer/utils/python/frame/series.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <nanoarrow/nanoarrow.hpp>
@@ -73,6 +75,92 @@ using dftracer::utils::python::frame::strings_from_str_or_seq;
 // A DataFrame owns its columns as one STRUCT column: child(i) hands out a
 // column sharing the struct's buffers (O(1)), and the struct exports to Arrow
 // in one zero-copy step.
+
+// The position of a name among the names of one DataFrameObject, as a hash
+// built on the first lookup of a wide frame. The names of the object change in
+// make_dataframe and DataFrame_replace only, and each of them calls reset().
+class NameLookup {
+   public:
+    NameLookup() noexcept = default;
+    NameLookup(const NameLookup&) = delete;
+    NameLookup& operator=(const NameLookup&) = delete;
+    ~NameLookup() { reset(); }
+
+    void reset() noexcept {
+        dftracer::utils::dstd::UniquePtr<Table> old(
+            table_.exchange(nullptr, std::memory_order_acq_rel));
+    }
+
+    std::int64_t find(
+        dftracer::utils::dstd::Span<const dftracer::utils::dstd::SharedString>
+            names,
+        dftracer::utils::dstd::StringView name) const {
+        if (names.size() >= TABLE_MIN) {
+            Table* t = table_.load(std::memory_order_acquire);
+            if (!t) {
+                Table* fresh = build(names);
+                if (table_.compare_exchange_strong(t, fresh,
+                                                   std::memory_order_acq_rel)) {
+                    t = fresh;
+                } else {
+                    dftracer::utils::dstd::UniquePtr<Table> lost(fresh);
+                }
+            }
+            std::size_t h = hash(name) & t->mask;
+            while (t->slots[h] != EMPTY_SLOT) {
+                const std::uint32_t pos = t->slots[h];
+                if (dftracer::utils::dstd::StringView(names[pos]) == name)
+                    return static_cast<std::int64_t>(pos);
+                h = (h + 1) & t->mask;
+            }
+            return -1;
+        }
+        for (std::size_t i = 0; i < names.size(); ++i)
+            if (names[i] == name) return static_cast<std::int64_t>(i);
+        return -1;
+    }
+
+   private:
+    struct Table {
+        std::uint32_t mask = 0;
+        dftracer::utils::dstd::Vector<std::uint32_t> slots;
+    };
+    static constexpr std::size_t TABLE_MIN = 64;
+    static constexpr std::uint32_t EMPTY_SLOT = 0xFFFFFFFFu;
+
+    static std::size_t hash(dftracer::utils::dstd::StringView name) {
+        return static_cast<std::size_t>(
+            dftracer::utils::dstd::hash::xxh3_64(name));
+    }
+
+    static Table* build(
+        dftracer::utils::dstd::Span<const dftracer::utils::dstd::SharedString>
+            names) {
+        std::size_t cap = 16;
+        while (cap < names.size() * 2) cap <<= 1;
+        Table* t = dftracer::utils::dstd::make_unique<Table>().release();
+        t->mask = static_cast<std::uint32_t>(cap - 1);
+        t->slots.resize(cap, EMPTY_SLOT);
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            const dftracer::utils::dstd::StringView n(names[i]);
+            std::size_t h = hash(n) & t->mask;
+            bool dup = false;
+            while (t->slots[h] != EMPTY_SLOT) {
+                if (dftracer::utils::dstd::StringView(names[t->slots[h]]) ==
+                    n) {
+                    dup = true;
+                    break;
+                }
+                h = (h + 1) & t->mask;
+            }
+            if (!dup) t->slots[h] = static_cast<std::uint32_t>(i);
+        }
+        return t;
+    }
+
+    mutable std::atomic<Table*> table_{nullptr};
+};
+
 struct DataFrameObject {
     PyObject_HEAD PyObject* weaklist;
     Series st;
@@ -84,6 +172,8 @@ struct DataFrameObject {
     // each call rebuilds a DataFrame view of this object.
     dftracer::utils::dstd::SharedPtr<dftracer::utils::dataframe::LabelCache>
         label_cache;
+    // The name lookup of `names`, reset where `names` is assigned.
+    NameLookup name_lookup;
 };
 
 PyTypeObject DataFrameType;
@@ -120,6 +210,7 @@ PyObject* make_dataframe(DataFrame&& b) {
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::SharedString>();
     new (&self->label_cache) dftracer::utils::dstd::SharedPtr<
         dftracer::utils::dataframe::LabelCache>();
+    new (&self->name_lookup) NameLookup();
     if (b.row_index) {
         self->index_names = std::move(b.row_index->names);
         self->label_cache = std::move(b.row_index->cache);
@@ -130,6 +221,7 @@ PyObject* make_dataframe(DataFrame&& b) {
 void DataFrame_dealloc(DataFrameObject* self) {
     if (self->weaklist)
         PyObject_ClearWeakRefs(reinterpret_cast<PyObject*>(self));
+    self->name_lookup.~NameLookup();
     self->label_cache.~SharedPtr();
     self->index_names.~vector();
     self->names.~vector();
@@ -139,9 +231,7 @@ void DataFrame_dealloc(DataFrameObject* self) {
 
 std::int64_t index_of(const DataFrameObject* self,
                       dftracer::utils::dstd::StringView name) {
-    for (std::size_t i = 0; i < self->names.size(); ++i)
-        if (self->names[i] == name) return static_cast<std::int64_t>(i);
-    return -1;
+    return self->name_lookup.find(self->names, name);
 }
 
 // A dataframe::DataFrame view over the struct's children (shared buffers,
@@ -271,6 +361,7 @@ PyObject* DataFrame_replace(PyObject* self, PyObject* other) {
         DataFrame f = to_dataframe(o);
         Series st = Series::structs(f.names, std::move(f.columns));
         b->names = o->names;
+        b->name_lookup.reset();
         b->index_names = o->index_names;
         b->label_cache = o->label_cache;
         b->st = std::move(st);

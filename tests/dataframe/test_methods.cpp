@@ -96,6 +96,72 @@ TEST_CASE("DataFrame select / filter / sort_by / column") {
     CHECK(top2.num_rows() == 2);
 }
 
+TEST_CASE("column_index finds every name of a wide frame") {
+    constexpr std::size_t WIDTH = 300;
+    DataFrame df;
+    for (std::size_t i = 0; i < WIDTH; ++i) {
+        df.names.emplace_back(dstd::StringView(dstd::fmt<"c{}">(i)));
+        {
+            const auto value = static_cast<std::int64_t>(i);
+            df.columns.push_back(Series::flat_i64(&value, 1));
+        }
+    }
+    for (std::size_t i = 0; i < WIDTH; ++i)
+        CHECK(df.column_index(dstd::fmt<"c{}">(i)) ==
+              static_cast<std::int64_t>(i));
+    CHECK(df.column_index("c300") == -1);
+    CHECK(df.column_index("") == -1);
+
+    // Names that change after a lookup are still found.
+    df.names.emplace_back("late");
+    {
+        const std::int64_t value = -1;
+        df.columns.push_back(Series::flat_i64(&value, 1));
+    }
+    CHECK(df.column_index("late") == static_cast<std::int64_t>(WIDTH));
+    df.names.erase(df.names.begin());
+    df.columns.erase(df.columns.begin());
+    CHECK(df.column_index("c0") == -1);
+    CHECK(df.column_index("c1") == 0);
+    CHECK(df.column_index("late") == static_cast<std::int64_t>(WIDTH - 1));
+
+    DataFrame moved = std::move(df);
+    CHECK(moved.column_index("c1") == 0);
+    CHECK(moved.column("c299").data<std::int64_t>()[0] == 299);
+}
+
+TEST_CASE("column_index sees a name replaced in place") {
+    constexpr std::size_t WIDTH = 40;
+    DataFrame df;
+    for (std::size_t i = 0; i < WIDTH; ++i) {
+        df.names.emplace_back(dstd::StringView(dstd::fmt<"c{}">(i)));
+        const auto value = static_cast<std::int64_t>(i);
+        df.columns.push_back(Series::flat_i64(&value, 1));
+    }
+    CHECK(df.column_index("c21") == 21);
+    df.names[21] = dstd::SharedString(dstd::StringView("renamed"));
+    CHECK(df.column_index("c21") == -1);
+    CHECK(df.column_index("renamed") == 21);
+    std::rotate(df.names.begin() + 5, df.names.begin() + 6,
+                df.names.begin() + 30);
+    CHECK(df.column_index("c5") == 29);
+    CHECK(df.column_index("c6") == 5);
+}
+
+TEST_CASE("column_index returns the first of a repeated name") {
+    DataFrame df;
+    for (std::size_t i = 0; i < 40; ++i) {
+        df.names.emplace_back(dstd::StringView(dstd::fmt<"c{}">(i % 20)));
+        {
+            const auto value = static_cast<std::int64_t>(i);
+            df.columns.push_back(Series::flat_i64(&value, 1));
+        }
+    }
+    for (std::size_t i = 0; i < 20; ++i)
+        CHECK(df.column_index(dstd::fmt<"c{}">(i)) ==
+              static_cast<std::int64_t>(i));
+}
+
 TEST_CASE("DataFrame group_by aggregates") {
     DataFrame df;
     df.names = dstd::make_shared_strings({"k", "v"});

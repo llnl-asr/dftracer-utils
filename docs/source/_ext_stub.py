@@ -1374,6 +1374,29 @@ def _series_nulls(type_id: int, n: int) -> PublicSeries:
     ...
 
 
+def _number_rows(keys: Sequence[PublicSeries], sorted: bool) -> tuple[PublicSeries, PublicSeries]:
+    """The number of each row of the key columns (a null equals a null) and the
+    first row of each number: by first appearance, or by ascending value, nulls
+    first, with ``sorted``."""
+    ...
+
+
+def _unstack_positions(
+    rows: PublicSeries, cols: PublicSeries, row_count: int, col_count: int
+) -> PublicSeries:
+    """The row that fills each cell of an unstack, column by column, ``-1`` for a
+    cell no row fills; ``ValueError`` when two rows fill one cell."""
+    ...
+
+
+def _unstack_columns(
+    values: PublicSeries, positions: PublicSeries, row_count: int
+) -> list[PublicSeries]:
+    """The columns of an unstack: ``values`` at the positions of each column, a
+    null where a cell has no row."""
+    ...
+
+
 def _series_from_list(values: Sequence[object], type_id: int = ...) -> PublicSeries:
     """A native column from a list of bool, int, float, str, bytes, datetime,
     date, time, timedelta or Decimal (None is null), typed ``type_id`` when
@@ -2035,6 +2058,9 @@ _EXPORTS = (
     "_series_from_arrow",
     "_tz_set_search_path",
     "_series_nulls",
+    "_number_rows",
+    "_unstack_positions",
+    "_unstack_columns",
     "_series_from_list",
     "_series_from_numpy",
     "_ewm_alpha",

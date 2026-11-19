@@ -14,6 +14,7 @@
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
+#include <numeric>
 #include <utility>
 
 // The row labels of a Series: the accessors, the row-selecting methods that
@@ -672,13 +673,86 @@ struct LabelJoin {
     dstd::Vector<std::int64_t> left;   // row of the left side per row, or -1
     dstd::Vector<std::int64_t> right;  // row of the right side per row, or -1
     bool same = false;                 // the labels are equal, rows stay put
+    bool left_whole = false;           // `left` is every row in order
 };
+
+// The join of two strictly increasing Int64 label columns without nulls by
+// one walk over both, or no value when either is not such a column. Outer
+// is sorted, Inner and Left keep the order of `a`.
+dstd::Optional<LabelJoin> merge_join_int64(const Level& la, const Level& lb,
+                                           JoinHow how) {
+    const Series a =
+        la.column.is_flat() ? la.column.share() : la.column.materialize();
+    const Series b =
+        lb.column.is_flat() ? lb.column.share() : lb.column.materialize();
+    if (a.type() != TypeId::Int64 || b.type() != TypeId::Int64 ||
+        a.null_count() > 0 || b.null_count() > 0)
+        return dstd::nullopt;
+    const std::int64_t* x = a.data<std::int64_t>();
+    const std::int64_t* y = b.data<std::int64_t>();
+    const std::int64_t na = a.length();
+    const std::int64_t nb = b.length();
+    for (std::int64_t i = 1; i < na; ++i)
+        if (x[i - 1] >= x[i]) return dstd::nullopt;
+    for (std::int64_t j = 1; j < nb; ++j)
+        if (y[j - 1] >= y[j]) return dstd::nullopt;
+    LabelJoin out;
+    dstd::Vector<std::int64_t> labels;
+    std::int64_t i = 0;
+    std::int64_t j = 0;
+    if (how == JoinHow::Left) {
+        out.left_whole = true;
+        out.left.resize(static_cast<std::size_t>(na));
+        std::iota(out.left.begin(), out.left.end(), std::int64_t{0});
+        out.right.assign(static_cast<std::size_t>(na), -1);
+        for (; i < na; ++i) {
+            while (j < nb && y[j] < x[i]) ++j;
+            if (j < nb && y[j] == x[i])
+                out.right[static_cast<std::size_t>(i)] = j;
+        }
+        out.levels.push_back(a.share());
+        return out;
+    }
+    const bool outer = how == JoinHow::Outer;
+    while (i < na || j < nb) {
+        if (j >= nb || (i < na && x[i] < y[j])) {
+            if (outer) {
+                labels.push_back(x[i]);
+                out.left.push_back(i);
+                out.right.push_back(-1);
+            }
+            ++i;
+        } else if (i >= na || y[j] < x[i]) {
+            if (outer) {
+                labels.push_back(y[j]);
+                out.left.push_back(-1);
+                out.right.push_back(j);
+            }
+            ++j;
+        } else {
+            labels.push_back(x[i]);
+            out.left.push_back(i);
+            out.right.push_back(j);
+            ++i;
+            ++j;
+        }
+    }
+    out.levels.push_back(Series::flat_i64(
+        labels.data(), static_cast<std::int64_t>(labels.size())));
+    return out;
+}
 
 // The join of two label sets on their rows: Outer (sorted, nulls last), Inner
 // or Left (in the order of `la`). `levels` are the joined label columns.
 dstd::Result<LabelJoin> join_rows(dstd::Span<const Level> la,
                                   dstd::Span<const Level> lb, JoinHow how) {
     const std::size_t k = la.size();
+    if (k == 1 && (how == JoinHow::Left || how == JoinHow::Inner ||
+                   how == JoinHow::Outer)) {
+        if (dstd::Optional<LabelJoin> merged =
+                merge_join_int64(la.front(), lb.front(), how))
+            return std::move(*merged);
+    }
     dstd::Vector<dstd::String> keys;
     DataFrame left;
     DataFrame right;
@@ -736,7 +810,10 @@ dstd::Result<LabelJoin> join_labels(dstd::Vector<Level> la,
                                         : join_rows(la, lb, how);
     if (!joined) return joined.error();
     joined->names = std::move(out.names);
-    if (how == JoinHow::Right) std::swap(joined->left, joined->right);
+    if (how == JoinHow::Right) {
+        std::swap(joined->left, joined->right);
+        joined->left_whole = false;
+    }
     return joined;
 }
 
@@ -850,7 +927,9 @@ dstd::Result<AlignedSeries> align_labels(const Series& a, const Series& b,
                              : AlignedSeries{a.share(), b.without_index()};
     dstd::Vector<dstd::StringView> views;
     for (const dstd::String& name : joined->names) views.emplace_back(name);
-    Series left = widen_gained(take(a.without_index(), joined->left), a);
+    Series left = joined->left_whole
+                      ? a.without_index()
+                      : widen_gained(take(a.without_index(), joined->left), a);
     Series right = widen_gained(take(b.without_index(), joined->right), b);
     left = left.valid()
                ? left.rename(a.handle()->name).with_index(views, joined->levels)

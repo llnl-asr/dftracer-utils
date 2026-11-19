@@ -26,6 +26,7 @@ from .expr import Expr, col, collect_columns, lit, when
 from .series import Series
 
 if TYPE_CHECKING:
+    import numpy as np
     import pyarrow as pa
 
     from .dataframe import DataFrame
@@ -351,6 +352,16 @@ def _named(labels: Labels, depth: int) -> tuple[int, ...]:
     return tuple(range(depth)) if depth < labels.depth else ()
 
 
+def _is_integer_array(key: object) -> bool:
+    """Whether ``key`` is a one-dimensional numpy array of integers: its labels
+    go to the native lookup as a column, not one by one."""
+    return (
+        type(key).__module__ == "numpy"
+        and getattr(key, "ndim", 0) == 1
+        and getattr(getattr(key, "dtype", None), "kind", "") in ("i", "u")
+    )
+
+
 def rows_by_label(labels: Labels, key: object) -> Rows:
     """``loc`` rows against the index of a frame or Series. A label (or a tuple
     naming the leading levels of a MultiIndex) or a list of them selects the
@@ -372,6 +383,8 @@ def rows_by_label(labels: Labels, key: object) -> Rows:
         return Rows.take(positions, drop=_named(labels, 1))
     if isinstance(key, builtins.slice):
         return _label_slice(labels, key)
+    if _is_integer_array(key):
+        return rows_by_label(labels, Series.from_numpy(cast("np.ndarray", key)))
     if _is_labels_list(key):
         values = list(cast("Sequence[object]", key))
         if _bool_list(values):

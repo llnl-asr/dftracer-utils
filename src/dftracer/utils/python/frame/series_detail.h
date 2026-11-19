@@ -310,6 +310,9 @@ PyObject* series_retype(PyObject* self, PyObject* args);
 PyObject* series_list_of(PyObject* self, PyObject* args);
 PyObject* series_from_bytes(PyObject* self, PyObject* obj);
 PyObject* series_nulls(PyObject* self, PyObject* args);
+PyObject* number_rows(PyObject* self, PyObject* args);
+PyObject* unstack_positions(PyObject* self, PyObject* args);
+PyObject* unstack_columns(PyObject* self, PyObject* args);
 PyObject* tz_set_search_path(PyObject* self, PyObject* arg);
 
 }  // namespace dftracer::utils::python::frame::series_detail

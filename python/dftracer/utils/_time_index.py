@@ -499,7 +499,13 @@ def make_bins(
     first_day = low // day + _EPOCH_ORDINAL
     last_day = high // day + _EPOCH_ORDINAL
     steps = range(cal.before(first_day, left), cal.after(last_day) + 1, cal.n)
-    edges = [(cal.date_of(a) - _EPOCH_ORDINAL) * day for a in steps]
+    if cal.is_fixed and len(steps) > 1:
+        # A day or a week is a fixed number of days from one step to the next.
+        first_edge = (cal.date_of(steps[0]) - _EPOCH_ORDINAL) * day
+        stride = (cal.date_of(steps[1]) - cal.date_of(steps[0])) * day
+        edges = list(range(first_edge, first_edge + len(steps) * stride, stride))
+    else:
+        edges = [(cal.date_of(a) - _EPOCH_ORDINAL) * day for a in steps]
     bounds = list(edges)
     if cal.at_end and not left:
         bounds = [e + day - 1 for e in edges]
@@ -520,11 +526,9 @@ def make_bins(
         breaks = _series().from_list(bounds, DType.INT64)
         ids = (local.cut(breaks, right=not left) - 1).astype("int64")
     if in_zone:
-        template = _like(_series().from_list([], DType.INT64), wall(key))
+        template = _like(_series().from_list([], DType.INT64), wall(key.slice(0, 0)))
         wall_edges = _like(_series().from_list(edges, DType.INT64), template)
-        edges = [
-            int(cast(int, v)) for v in localize_back(wall_edges, key).astype("int64").to_list()
-        ]
+        edges = cast("list[int]", localize_back(wall_edges, key).astype("int64").to_list())
     shown = edges[:count] if label == "left" else edges[1 : count + 1]
     return _Bins(ids, _like(_series().from_list(shown, DType.INT64), key), count, ticks)
 

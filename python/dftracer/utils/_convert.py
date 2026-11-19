@@ -594,8 +594,8 @@ def index_columns(df: pd.DataFrame) -> list[tuple[str, pd.Series]]:
 def _indices(indices: Series | Sequence[int]) -> list[int]:
     if isinstance(indices, _ext.Series):
         raw: object = indices
-        return [int(cast(int, i)) for i in cast("Series", raw).to_list()]
-    return [int(i) for i in indices]
+        return list(map(int, cast("list[int]", cast("Series", raw).to_list())))
+    return list(map(int, indices))
 
 
 def _row_indices(indices: Series | Sequence[int]) -> Series | list[int]:

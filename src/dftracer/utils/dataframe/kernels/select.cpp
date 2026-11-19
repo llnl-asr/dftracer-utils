@@ -42,11 +42,6 @@ Series bool_from_flags(dstd::Span<const char> flags) {
     return Series::flat(TypeId::Bool, packed.data(), n);
 }
 
-dstd::Vector<std::int64_t> to_index_vector(const Series& idx) {
-    const std::int64_t* p = idx.data<std::int64_t>();
-    return dstd::Vector<std::int64_t>(p, p + idx.length());
-}
-
 // Per-row occurrence count of each row's own value, keyed in the column's
 // domain (nulls all share one group, counted separately). Radix-partitioned
 // over the non-null rows, mirroring the eager DataFrame dedup helpers.
@@ -318,6 +313,12 @@ Series sample_impl(const Series& v, std::int64_t n, std::uint64_t seed) {
 }
 
 }  // namespace
+
+dstd::Vector<std::int64_t> to_index_vector(const Series& idx) {
+    if (!idx.is_flat()) return to_index_vector(idx.materialize());
+    const std::int64_t* p = idx.data<std::int64_t>();
+    return dstd::Vector<std::int64_t>(p, p + idx.length());
+}
 }  // namespace dftracer::utils::dataframe
 
 using dftracer::utils::dataframe::borrow;

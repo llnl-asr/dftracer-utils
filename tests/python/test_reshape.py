@@ -332,6 +332,56 @@ def test_unstack_of_a_large_column_set_orders_numbers_by_value():
     _check(lambda o: o.unstack(), ps, Series.from_pandas(ps))
 
 
+def _random_pairs(rows, cols, count, seed):
+    """`count` distinct (row, column) labels in an order that is not sorted."""
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    pairs = pd.MultiIndex.from_arrays(
+        [rng.integers(0, rows, count), rng.integers(0, cols, count)], names=["a", "b"]
+    ).drop_duplicates()
+    order = rng.permutation(len(pairs))
+    return pairs[order], rng.random(len(pairs))
+
+
+@pytest.mark.parametrize("seed", [1, 2])
+def test_unstack_of_many_unsorted_cells_matches_pandas(seed):
+    index, values = _random_pairs(70, 45, 4000, seed)
+    ps = pd.Series(values, index=index, name="v")
+    forms = [
+        lambda o: o.unstack(),
+        lambda o: o.unstack(0),
+        lambda o: o.unstack(fill_value=-1.0),
+    ]
+    if int(pd.__version__.split(".")[0]) >= 3:
+        # pandas 2 puts values in the wrong cells for sort=False on unsorted labels.
+        forms.append(lambda o: o.unstack(sort=False))
+    for form in forms:
+        _check(form, ps, Series.from_pandas(ps))
+    pf = pd.DataFrame({"v": values, "w": (values * 100).astype("int64")}, index=index)
+    _check(lambda o: o.unstack(), pf, DataFrame.from_pandas(pf))
+
+
+def test_unstack_of_a_result_with_too_many_cells_is_refused():
+    n = 50_000
+    index = pd.MultiIndex.from_arrays([list(range(n)), list(range(n))], names=["a", "b"])
+    ps = pd.Series(range(n), index=index)
+    with pytest.raises(ValueError, match="too big"):
+        Series.from_pandas(ps).unstack()
+
+
+def test_unstack_with_many_columns_names_each_one():
+    n = 3000
+    ps = pd.Series(
+        [float(i) for i in range(n)],
+        index=pd.MultiIndex.from_arrays([[0] * n, list(range(n))], names=["a", "b"]),
+    )
+    got = Series.from_pandas(ps).unstack().to_pandas()
+    assert list(got.columns) == list(range(n)) or list(got.columns) == [str(i) for i in range(n)]
+    assert got.shape == (1, n)
+    assert got.iloc[0, n - 1] == float(n - 1)
+
+
 def test_unstack_a_positional_series_is_refused():
     with pytest.raises(ValueError):
         Series.from_list([1, 2, 3]).unstack()

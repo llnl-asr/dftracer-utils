@@ -809,9 +809,11 @@ class _Lowering:
         name = f"_X[{x}]"
         if v.kind in ("col", "filter"):
             if self._is_unsigned(v) and not raw:
-                self._line(
-                    f"{name} = dftu_expr_cast(DFTU_TYPE_INT64, dftu_expr_col({self._leaf(v)}));"
-                )
+                inner = f"_X[{self.expr_count}]"
+                self.expr_count += 1
+                self._line(f"{inner} = dftu_expr_col({self._leaf(v)});")
+                self._check(inner, "out of memory")
+                self._line(f"{name} = dftu_expr_cast(DFTU_TYPE_INT64, {inner});")
             else:
                 self._line(f"{name} = dftu_expr_col({self._leaf(v)});")
         elif v.kind == "lit":

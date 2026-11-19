@@ -105,6 +105,7 @@ class GroupBy(GroupTransforms[DataFrame]):
             frame.select(self._keys + [c for c in picked if c not in self._keys]), self._keys
         )
         out._single = picked[0] if len(picked) == 1 else None
+        out._selected = picked
         out._sort = self._sort
         out._as_index = self._as_index
         out._origin = self._origin
@@ -113,6 +114,7 @@ class GroupBy(GroupTransforms[DataFrame]):
         return out
 
     _single: Optional[str] = None
+    _selected: Optional[List[str]] = None
     _rows: Optional[Series] = None
     _total: Optional[int] = None
     _sort: bool = False
@@ -277,7 +279,10 @@ class GroupBy(GroupTransforms[DataFrame]):
                 if c != pos:
                     out = out.with_column(c, self._filled(self._col(out, c), kept, fill))
         if carry:
-            out = _ext.DataFrame.select(out, *[c for c in out._names() if c != pos])
+            keep = self._picked() if picks else None
+            out = _ext.DataFrame.select(
+                out, *(keep if keep is not None else [c for c in out._names() if c != pos])
+            )
         out = self._retype(out, kind, fill is not None)
         if self._origin is None and not picks:
             return self._spread(out, fill) if spread else out
@@ -305,6 +310,9 @@ class GroupBy(GroupTransforms[DataFrame]):
         kept = _ext.DataFrame.filter(side, keep)
         picked = self._col(_ext.DataFrame.reverse(kept) if from_end else kept, pos)
         out = _ext.DataFrame.take(frame, picked)
+        picked_columns = self._picked()
+        if picked_columns is not None:
+            out = _ext.DataFrame.select(out, *picked_columns)
         return self._labelled(self._retype(out, kind, False), picked)
 
     @staticmethod
@@ -907,6 +915,16 @@ class GroupBy(GroupTransforms[DataFrame]):
         if dtype != DType.STRING:
             for c in cols:
                 out = out.with_column(c, self._col(out, c).astype(dtype))
+        origin_index = _ext.DataFrame.index_names(self._origin) if self._origin is not None else []
+        if label == "__dftu_pos__" and len(origin_index) == 1:
+            # A column selection dropped the index: the positions are rows of
+            # the grouped frame, whose labels are the answer.
+            labels = self._col(cast(DataFrame, self._origin), origin_index[0])
+            for c in cols:
+                at = self._col(out, c)
+                out = out.with_column(
+                    c, labels.take(at if self._rows is None else self._rows.take(at))
+                )
         return self._sorted(out)
 
     def ohlc(self) -> DataFrame:
@@ -934,7 +952,7 @@ class GroupBy(GroupTransforms[DataFrame]):
                 specs.append(Agg(name, Col(c), label))
         out = self.agg(*specs)
         for q in (0.25, 0.5, 0.75):
-            quant = self.quantile(q)
+            quant = GroupBy.quantile(self, q)
             names = {c: f"{c}_{int(q * 100)}%" for c in cols}
             if self._keys:
                 out = out.join(quant.rename(names), on=self._keys)
@@ -1017,6 +1035,16 @@ class GroupBy(GroupTransforms[DataFrame]):
             return self._lower_apply(traced)
         return self._apply_python(func)
 
+    def _picked(self) -> list[str] | None:
+        """The columns the pandas ``groupby(keys)[columns]`` shows in a
+        row-keeping result; ``None`` for no selection and for the Polars
+        ``group_by``, which keeps the keys."""
+        return self._selected if pandas_named(self) else None
+
+    def _shown(self) -> list[str]:
+        picked = self._picked()
+        return list(picked) if picked is not None else self._frame()._names()
+
     def _group_columns(self) -> list[str]:
         """The columns a group function sees: all of them, but for the pandas
         ``groupby`` the key columns are left out, as pandas 3 does (pandas 2
@@ -1024,15 +1052,22 @@ class GroupBy(GroupTransforms[DataFrame]):
         names = self._frame()._names()
         return [c for c in names if c not in self._keys] if pandas_named(self) else names
 
-    def filter(self, func: Callable[[DataFrame], object]) -> DataFrame:
+    def filter(self, func: Callable[[DataFrame], object], dropna: bool = True) -> DataFrame:
         """The rows of the groups for which ``func`` holds (pandas
         ``GroupBy.filter``): ``lambda g: g["v"].sum() > 10`` lowers to one
         group-by and a join; a body the trace cannot follow runs in Python per
-        group with a warning. Rows come back in input order."""
+        group with a warning. Rows come back in input order. With
+        ``dropna=False`` the rows of the other groups stay, null. For the
+        pandas ``groupby`` of a frame, a body that gives anything but a bool
+        is a ``TypeError``."""
         traced = trace_group(func, self._frame()._names(), "GroupBy.filter")
-        if traced is not None:
-            return self._lower_filter(traced)
-        return self._filter_python(func)
+        kept = self._lower_filter(traced) if traced is not None else self._filter_python(func)
+        frame = self._frame().select(*self._shown())
+        if dropna:
+            return self._labelled(frame.gather(kept), kept)
+        keep = set(kept.to_list() if isinstance(kept, Series) else kept)
+        at = [i if i in keep else -1 for i in range(len(frame))]
+        return self._labelled(frame.gather(Series.from_list(at)), None)
 
     def _group_values(self, expr: Expr) -> tuple[DataFrame, Expr]:
         """The per-group frame holding every aggregate leaf of ``expr`` (keys
@@ -1100,7 +1135,8 @@ class GroupBy(GroupTransforms[DataFrame]):
         read = {c for c in collect_columns(expr) if c in self._frame()}
         return labelled_series(self, out.rename(read.pop()) if len(read) == 1 else out)
 
-    def _lower_filter(self, traced: object) -> DataFrame:
+    def _lower_filter(self, traced: object) -> Series | list[int]:
+        """The rows of the groups for which the traced condition holds."""
         frame = self._frame()
         if isinstance(traced, Agg):
             traced = AggLeaf(traced) != 0
@@ -1111,13 +1147,13 @@ class GroupBy(GroupTransforms[DataFrame]):
         grouped, rewritten = self._group_values(traced)
         keep = grouped.filter(rewritten.apply(grouped))
         if not self._keys:
-            return self._labelled(frame if len(keep) else frame.head(0), None if len(keep) else [])
+            return list(range(len(frame))) if len(keep) else []
         row = "__dftu_row__"
         indexed = frame.with_row_index(row)
         out = indexed.join(keep.select(*self._keys), on=self._keys, nulls_equal=True)._sort_values(
             row
         )
-        return self._labelled(out.select(*frame._names()), self._col(out, row))
+        return self._col(out, row)
 
     def _groups_in_order(self) -> list[tuple[object, list[int]]]:
         groups: list[tuple[object, list[int]]] = list(self.groups.items())
@@ -1168,14 +1204,24 @@ class GroupBy(GroupTransforms[DataFrame]):
                 keys[k].append(v)
         return self._scalars(DataFrame({**keys, "value": [r for _, r in results]}))
 
-    def _filter_python(self, func: Callable[[DataFrame], object]) -> DataFrame:
+    def _filter_python(self, func: Callable[[DataFrame], object]) -> list[int]:
         frame = self._frame()
         keep: list[int] = []
         for _, rows in self._groups_in_order():
-            if func(frame.gather(rows)):
+            verdict = func(frame.gather(rows))
+            if self._requires_bool() and verdict is not None and not isinstance(verdict, bool):
+                raise TypeError(
+                    f"filter function returned a {type(verdict).__name__}, "
+                    "but expected a scalar bool"
+                )
+            if verdict:
                 keep.extend(rows)
-        kept = sorted(keep)
-        return self._labelled(frame.gather(kept), kept)
+        return sorted(keep)
+
+    def _requires_bool(self) -> bool:
+        """Whether a filter body must give a bool: the pandas ``groupby`` of a
+        frame says so, the Polars ``group_by`` takes any truth value."""
+        return pandas_named(self)
 
 
 _SERIES_FORM = (
@@ -1236,6 +1282,48 @@ class SeriesGroupBy(GroupBy):
             return self._single_series(out)
         return out
 
+    def size(self) -> DataFrame | Series:
+        """The row count per group; as pandas, the Series is named by the
+        column."""
+        out = super().size()
+        return out.rename(self._single) if isinstance(out, Series) else out
+
+    def describe(self) -> DataFrame:
+        """The ``count``, ``mean``, ``std``, ``min``, ``25%``, ``50%``,
+        ``75%`` and ``max`` of the column per group, as columns of those
+        names."""
+        out = super().describe()
+        if not pandas_named(self):
+            return out
+        prefix = f"{self._single}_"
+        return out.rename({c: c[len(prefix) :] for c in out.columns if c.startswith(prefix)})
+
+    def apply(self, func: Callable[..., object]) -> DataFrame | Series:
+        """``func`` over the column of each group (pandas
+        ``SeriesGroupBy.apply``); a scalar per group is a Series named by the
+        column."""
+        if not pandas_named(self):
+            return super().apply(func)
+        out = super().apply(self._on_column(func))
+        if isinstance(out, Series) and out.name is None:
+            return out.rename(self._single)
+        return out
+
+    def filter(self, func: Callable[..., object], dropna: bool = True) -> DataFrame | Series:
+        """The rows of the groups for which ``func`` of the column holds
+        (pandas ``SeriesGroupBy.filter``), as a Series."""
+        if not pandas_named(self):
+            return super().filter(func, dropna)
+        return self._single_series(super().filter(self._on_column(func), dropna))
+
+    def _requires_bool(self) -> bool:
+        return False
+
+    def _on_column(self, func: Callable[..., object]) -> Callable[[DataFrame], object]:
+        column = self._single
+        assert column is not None
+        return lambda group: func(group[column])
+
     if TYPE_CHECKING:
 
         def sum(self) -> Series: ...
@@ -1283,7 +1371,10 @@ def _series_form(name: str) -> Callable[..., object]:
     @functools.wraps(method)
     def call(self: SeriesGroupBy, *args: object, **kwargs: object) -> object:
         out = method(self, *args, **kwargs)
-        return self._single_series(out) if isinstance(out, DataFrame) else out
+        series = self._single_series(out) if isinstance(out, DataFrame) else out
+        if name in ("cumcount", "ngroup") and pandas_named(self):
+            return series.rename(None)
+        return series
 
     return call
 

@@ -271,3 +271,132 @@ def test_nlargest_result_is_a_named_series():
 )
 def test_head_tail_nth_keep_their_labels_in_input_order(name, keys, pick, n):
     _check(lambda f: getattr(f.groupby(KEYS[keys]), pick)(n), name)
+
+
+PICKS = {
+    "head": lambda g: g.head(1),
+    "head2": lambda g: g.head(2),
+    "tail": lambda g: g.tail(1),
+    "nth": lambda g: g.nth(0),
+    "nth negative": lambda g: g.nth(-1),
+}
+SELECTIONS = {"series": "v", "one column": ["v"], "two columns": ["v", "w"]}
+
+
+@pytest.mark.parametrize("name", FRAMES)
+@pytest.mark.parametrize("keys", KEYS)
+@pytest.mark.parametrize("select", SELECTIONS)
+@pytest.mark.parametrize("pick", PICKS)
+def test_a_column_selection_picks_only_its_columns(name, keys, select, pick):
+    _check(lambda f: PICKS[pick](f.groupby(KEYS[keys])[SELECTIONS[select]]), name)
+
+
+def test_a_series_pick_is_a_named_series_under_the_row_labels():
+    frame = pd.DataFrame({"g": list("abab"), "v": [1, 2, 3, 4]}, index=[10, 11, 12, 13])
+    ours = DataFrame.from_pandas(frame)
+    for pick in PICKS.values():
+        got = pick(ours.groupby("g")["v"])
+        assert isinstance(got, Series) and got.name == "v"
+        assert got.to_pandas().index.tolist() == pick(frame.groupby("g")["v"]).index.tolist()
+
+
+SHAPES = {
+    "cumsum": lambda g: g.cumsum(),
+    "shift": lambda g: g.shift(1),
+    "rank": lambda g: g.rank(),
+    "diff": lambda g: g.diff(),
+    "ffill": lambda g: g.ffill(),
+    "first": lambda g: g.first(),
+    "last": lambda g: g.last(),
+    "count": lambda g: g.count(),
+    "agg": lambda g: g.agg("sum"),
+    "idxmin": lambda g: g.idxmin(),
+    "idxmax": lambda g: g.idxmax(),
+}
+SERIES_ONLY = {
+    "filter": lambda g: g.filter(lambda x: x.sum() > 4),
+    "cumcount": lambda g: g.cumcount(),
+    "ngroup": lambda g: g.ngroup(),
+    "size": lambda g: g.size(),
+    "apply": lambda g: g.apply(lambda x: x.sum()),
+    "agg list": lambda g: g.agg(["sum", "max"]),
+    "describe": lambda g: g.describe(),
+    "value_counts": lambda g: g.value_counts(),
+}
+FRAME_ONLY = {
+    "filter": lambda g: g.filter(lambda x: x["v"].sum() > 4),
+    "size": lambda g: g.size(),
+}
+
+
+@pytest.mark.parametrize("name", ["plain", "one"])
+@pytest.mark.parametrize("select", SELECTIONS)
+@pytest.mark.parametrize("form", SHAPES)
+def test_a_column_selection_gives_the_pandas_shape(name, select, form):
+    _check(lambda f: SHAPES[form](f.groupby("g")[SELECTIONS[select]]), name, ordered=False)
+
+
+@pytest.mark.parametrize("name", ["plain", "one"])
+@pytest.mark.parametrize("form", SERIES_ONLY)
+def test_a_series_group_by_gives_the_pandas_shape(name, form):
+    _check(lambda f: SERIES_ONLY[form](f.groupby("g")["v"]), name, ordered=False)
+
+
+@pytest.mark.parametrize("name", ["plain", "one"])
+@pytest.mark.parametrize("select", ["one column", "two columns"])
+@pytest.mark.parametrize("form", FRAME_ONLY)
+def test_a_frame_group_by_gives_the_pandas_shape(name, select, form):
+    _check(lambda f: FRAME_ONLY[form](f.groupby("g")[SELECTIONS[select]]), name, ordered=False)
+
+
+def test_the_polars_group_by_keeps_its_frame_shapes_for_a_column_selection():
+    ours = DataFrame.from_pandas(pd.DataFrame({"g": list("abab"), "v": [1, 2, 3, 4]}))
+    for select in ("v", ["v"]):
+        grouped = ours.group_by("g")[select]
+        assert grouped.head(1).columns == ["g", "v"]
+        assert grouped.tail(1).columns == ["g", "v"]
+        assert grouped.nth(0).columns == ["g", "v"]
+        kept = grouped.filter(lambda x: x["v"].sum() > 5)
+        assert kept.columns == ["g", "v"] and kept["v"].to_list() == [2, 4]
+        applied = grouped.apply(lambda x: x["v"].sum())
+        assert applied.columns == ["g", "value"] and sorted(applied["value"].to_list()) == [4, 6]
+
+
+@pytest.mark.parametrize("name", ["plain", "one"])
+@pytest.mark.parametrize("pick", PICKS)
+def test_an_empty_column_selection_picks_no_columns(name, pick):
+    _check(lambda f: PICKS[pick](f.groupby("g")[[]]), name)
+
+
+@pytest.mark.parametrize("name", FRAMES)
+@pytest.mark.parametrize("keys", KEYS)
+@pytest.mark.parametrize("form", ["series", "sorted", "scaled"])
+def test_a_series_apply_keeps_the_row_labels(name, keys, form):
+    funcs = {
+        "series": lambda s: s - s.mean(),
+        "sorted": lambda s: s.sort_values(ascending=False),
+        "scaled": lambda s: s * 2,
+    }
+    _check(lambda f: f.groupby(KEYS[keys])["v"].apply(funcs[form]), name)
+
+
+@pytest.mark.parametrize("name", FRAMES)
+@pytest.mark.parametrize("select", SELECTIONS)
+def test_filter_without_dropna_fills_the_dropped_rows(name, select):
+    if select == "series":
+        func = lambda x: x.sum() > 7  # noqa: E731
+    else:
+        func = lambda x: x["v"].sum() > 7  # noqa: E731
+    _check(lambda f: f.groupby("g")[SELECTIONS[select]].filter(func, dropna=False), name)
+
+
+@pytest.mark.parametrize("select", ["one column", "two columns"])
+@pytest.mark.parametrize("value", [1, 1.5, "a", None])
+def test_a_frame_filter_needs_a_bool(select, value):
+    fn = lambda g: g.filter(lambda x: value)  # noqa: E731
+    _check(lambda f: fn(f.groupby("g")[SELECTIONS[select]]), "plain")
+
+
+@pytest.mark.parametrize("name", FRAMES)
+def test_a_series_apply_of_a_frame_keeps_the_row_labels(name):
+    _check(lambda f: f.groupby("g")["v"].apply(lambda s: s.to_frame("x").head(2)), name)

@@ -4,6 +4,7 @@
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/plugins/host/global_plugins.h>
 #include <dftracer/utils/python/core/error_exception.h>
 #include <dftracer/utils/python/core/errors.h>
@@ -12,6 +13,10 @@
 #include <cstdint>
 #include <exception>
 #include <type_traits>
+
+#if defined(__GLIBCXX__)
+#include <cxxabi.h>
+#endif
 
 #ifndef DFTRACER_UTILS_PYTHON_GIL_RELEASE_ROWS
 #define DFTRACER_UTILS_PYTHON_GIL_RELEASE_ROWS 16384
@@ -173,6 +178,18 @@ PyObject *kw_pair(PyObject *self, PyObject *args, PyObject *kwds) {
     return out;
 }
 
+namespace detail {
+// libstdc++ declares abi::__forced_unwind, which glibc's pthread_exit throws.
+// libc++ has no such type, so on Linux with libc++ guard cannot tell a forced
+// unwind from another exception: its catch-all would end the thread
+// ("exception not rethrown"). Only libstdc++ builds are covered.
+#if defined(__GLIBCXX__)
+using ForcedUnwind = abi::__forced_unwind;
+#else
+struct ForcedUnwind {};
+#endif
+}  // namespace detail
+
 /// Runs @p fn, which returns a pointer, an int status or a bool, and turns a
 /// C++ exception into the matching typed Python error. The failure value is
 /// nullptr, -1 or false. An @ref PyErrorException keeps its error domain; see
@@ -186,6 +203,10 @@ auto guard(Fn &&fn) -> decltype(fn()) {
         "guard wraps a body that returns a pointer, an int or a bool");
     try {
         return fn();
+    } catch (const detail::ForcedUnwind &) {
+        // pthread_exit, which CPython calls when a thread takes the GIL after
+        // the interpreter began to exit, unwinds the stack and must go on.
+        throw;
     } catch (const std::exception &e) {
         set_typed_py_error(e);
     } catch (...) {
@@ -209,6 +230,8 @@ auto guard_as(PyObject *type, Fn &&fn) -> decltype(fn()) {
                   "guard_as wraps a body that returns a pointer");
     try {
         return fn();
+    } catch (const detail::ForcedUnwind &) {
+        throw;
     } catch (const std::exception &e) {
         PyErr_SetString(type, e.what());
     } catch (...) {
@@ -224,11 +247,29 @@ auto guard_as(PyObject *type, Fn &&fn) -> decltype(fn()) {
 /// can run Python code on another thread, which needs the GIL.
 template <class Fn>
 auto release_gil(Fn &&fn) -> decltype(fn()) {
-    struct Released {
-        PyThreadState *state = PyEval_SaveThread();
-        ~Released() { PyEval_RestoreThread(state); }
-    } released;
-    return fn();
+    using R = decltype(fn());
+    PyThreadState *const state = PyEval_SaveThread();
+    // PyEval_RestoreThread may not return: it ends the thread with pthread_exit
+    // when the interpreter is exiting, and that unwind must not start in a
+    // destructor that runs during an exception, so the GIL is not restored by
+    // one.
+    dftracer::utils::dstd::Optional<
+        std::conditional_t<std::is_void_v<R>, char, R>>
+        result;
+    try {
+        if constexpr (std::is_void_v<R>) {
+            fn();
+        } else {
+            result.emplace(fn());
+        }
+    } catch (const detail::ForcedUnwind &) {
+        throw;
+    } catch (...) {
+        PyEval_RestoreThread(state);
+        throw;
+    }
+    PyEval_RestoreThread(state);
+    if constexpr (!std::is_void_v<R>) return std::move(*result);
 }
 
 /// Like @ref release_gil, but only when @p rows is at least

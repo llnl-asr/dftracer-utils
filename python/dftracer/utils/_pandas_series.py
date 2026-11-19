@@ -681,7 +681,7 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
                 raise KeyError(p)
         from .dataframe import DataFrame
 
-        index = DataFrame({"v": s}).with_row_index("_i")["_i"]
+        index = DataFrame.from_dict({"v": s}).with_row_index("_i")["_i"]
         return s.filter(~index.is_in(sorted(gone)))
 
     def equals(self, other: object) -> bool:
@@ -832,7 +832,7 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         pairs = s.notna().logical(0, other.notna())
         if int(pairs.astype("int64").sum()) < 2:
             return float("nan")
-        frame = DataFrame({"x": s, "y": other})
+        frame = DataFrame.from_dict({"x": s, "y": other})
         if agg == "corr":
             # pandas gives NaN when a column has no spread over the complete
             # pairs; the aggregate's readout is 0.
@@ -912,14 +912,14 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         ``GroupBy`` over columns ``key`` and ``value``."""
         from .dataframe import DataFrame
 
-        frame = DataFrame({"key": by, "value": self._s()})
+        frame = DataFrame.from_dict({"key": by, "value": self._s()})
         return frame.group_by("key")
 
     def explode(self) -> Series:
         """A List Series flattened to one row per element."""
         from .dataframe import DataFrame
 
-        return DataFrame({"v": self._s()}).explode("v")["v"]
+        return DataFrame.from_dict({"v": self._s()}).explode("v")["v"]
 
     # -- accessors: iloc and iat are positional; loc and at look labels up ----------
     @property

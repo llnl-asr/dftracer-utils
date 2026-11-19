@@ -17,6 +17,15 @@ class GroupTransforms(Generic[R]):
     ) -> R:
         raise NotImplementedError
 
+    def _pandas_face(self) -> bool:
+        """Whether this is the pandas ``groupby`` (a negative ``head`` or
+        ``tail`` ``n`` is allowed) and not the Polars ``group_by``."""
+        return False
+
+    def _check_pick(self, n: int) -> None:
+        if n < 0 and not self._pandas_face():
+            raise ValueError(f"a negative n ({n}) is not taken by the Polars group_by head or tail")
+
     def take(self, indices: Sequence[int]) -> R:
         raise NotImplementedError
 
@@ -68,11 +77,15 @@ class GroupTransforms(Generic[R]):
 
     def head(self, n: int = 5) -> R:
         """The first ``n`` rows of each group, in input order (pandas
-        ``head``)."""
+        ``head``). A negative ``n`` (pandas ``groupby`` only) keeps all but the
+        last ``-n`` rows of each group."""
+        self._check_pick(n)
         return self._transform("head", n)
 
     def tail(self, n: int = 5) -> R:
-        """The last ``n`` rows of each group, in input order."""
+        """The last ``n`` rows of each group, in input order. A negative ``n``
+        (pandas ``groupby`` only) keeps all but the first ``-n`` rows."""
+        self._check_pick(n)
         return self._transform("tail", n)
 
     def nth(self, n: int | Sequence[int]) -> R:

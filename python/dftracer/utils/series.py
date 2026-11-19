@@ -1408,7 +1408,7 @@ class _DtAccessor(_ext.DtAccessor):
         """A frame of ISO ``year``, ``week`` and ``day`` (Monday = 1)."""
         from .dataframe import DataFrame
 
-        return DataFrame(
+        return DataFrame.from_dict(
             {
                 "year": self._part(15),
                 "week": self._part(14),
@@ -1953,7 +1953,7 @@ class _StrAccessor(_ext.StrAccessor):
         wide = exploded.pivot(index="r", on="v", values="v", agg="count").drop("r").fillna(0)
         # Presence (1), not a count; an empty token is no category.
         names = [c for c in wide.columns if c != ""]
-        return DataFrame({c: wide[c].gt(0).astype("int64") for c in names})
+        return DataFrame.from_dict({c: wide[c].gt(0).astype("int64") for c in names})
 
 
 def _series_from_bytes(

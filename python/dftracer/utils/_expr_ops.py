@@ -190,7 +190,7 @@ def _eager_over(
     keys = spec.over or []
     if spec.kind is None:
         raise TypeError(f"{spec.op}: over() has no group-wise form for this op")
-    frame = DataFrame({**{k: columns[k] for k in keys}, "__dftu_v__": value})
+    frame = DataFrame.from_dict({**{k: columns[k] for k in keys}, "__dftu_v__": value})
     out = GroupBy(frame, keys)._transform(spec.kind, spec.n, _rank_name(spec), _ascending(spec))
     return out["__dftu_v__"]
 
@@ -198,7 +198,9 @@ def _eager_over(
 def _eager_agg_over(columns: dict[str, Series], spec: ColumnOp) -> Series:
     assert spec.agg is not None
     keys = spec.over or []
-    frame = DataFrame({k: v for k, v in columns.items() if not k.startswith("__dftu_cop_")})
+    frame = DataFrame.from_dict(
+        {k: v for k, v in columns.items() if not k.startswith("__dftu_cop_")}
+    )
     value = "__dftu_over_v__"
     grouped = GroupBy(frame, keys).agg(spec.agg.alias(value))
     if not keys:

@@ -46,7 +46,7 @@ from ._eval import Columnar
 from ._levels import LevelArg, pick_levels
 from ._pandas_frame import FramePandasMixin
 from ._polars_frame import FramePolarsMixin
-from ._series_index import default_name, positions, shown_name
+from ._series_index import default_name, positions, public_name, shown_name
 from ._window_spec import norm_window_spec
 from .agg import AggForm, AggKeyword, select_aggs
 from .enums import DType, rule_to_units
@@ -262,7 +262,9 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
     """A named set of columns: native frame ops plus Arrow conversion.
 
     ``DataFrame({"a": [1, 2]})`` builds one from a ``{name: array-like}``
-    mapping, the pandas / polars constructor."""
+    mapping, the pandas / polars constructor. A labelled Series in the mapping
+    gives the frame its labels, as pandas (see :func:`_with_series_labels`);
+    :meth:`from_dict` takes the columns only."""
 
     __slots__ = ()
 
@@ -277,6 +279,9 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
             )
         if isinstance(data, _ext.DataFrame):
             return cast("DataFrame", data)
+        native = _native_columns(data)
+        if native is not None:
+            return _with_series_labels(*native)
         return DataFrame.from_dict(data)
 
     def __init__(self, data: Mapping[str, object] | _ext.DataFrame) -> None:
@@ -776,9 +781,19 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
     def height(self) -> int:
         return self.num_rows
 
+    def _polars_names(self) -> list[str]:
+        """The columns the Polars names list: every column but the hidden
+        default labels (``__index_level_<n>__``); named index levels stay."""
+        hidden = {n for n in _ext.DataFrame.index_names(self) if public_name(n) is None}
+        names = list(self.column_names)
+        return [c for c in names if c not in hidden] if hidden else names
+
     @property
     def width(self) -> int:
-        return self.num_columns
+        """The number of columns, named index levels included, hidden default
+        labels not. ``to_arrow`` and ``to_pandas`` still carry the labels, for
+        the round trip."""
+        return len(self._polars_names())
 
     @property
     def dtypes(self) -> list[DType]:
@@ -786,7 +801,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
 
     @property
     def schema(self) -> dict[str, DType]:
-        return {name: self[name].dtype for name in self._names()}
+        return {name: self[name].dtype for name in self._polars_names()}
 
     def drop(
         self,
@@ -1896,7 +1911,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
             for k in keys:
                 if source._col(k).null_count:
                     if rows is None:
-                        rows = DataFrame({"v": source._col(k)}).with_row_index("_i")["_i"]
+                        rows = DataFrame.from_dict({"v": source._col(k)}).with_row_index("_i")["_i"]
                     present = source._col(k).notna()
                     rows = rows.filter(present)
                     source = source.filter(present)
@@ -2077,6 +2092,50 @@ def _native_columns(
             return None
         names.append(name)
     return names, cols
+
+
+def _with_series_labels(names: list[str], cols: list[Series]) -> DataFrame:
+    """The frame of ``cols`` under the row labels of the labelled Series among
+    them, as the pandas constructor does: one labelled Series, or several with
+    equal labels, give those labels; several with different labels are aligned
+    on the union of their labels (:meth:`Series.align`, an integer column that
+    misses a row becomes Float64). A column with no labels is positional, so it
+    needs labels equal to the others'; next to Series with different labels it
+    is a ``ValueError``. Frames of columns with no labels carry none."""
+    from . import _series_index as si
+
+    labelled = [i for i, c in enumerate(cols) if si.names_of(c)]
+    if not labelled:
+        return DataFrame(_ext._dataframe_from_columns(names, cols))
+    first = cols[labelled[0]]
+    level_names = si.names_of(first)
+    same = all(
+        si.names_of(cols[i]) == level_names
+        and len(cols[i]) == len(first)
+        and all(a.equals(b) for a, b in zip(si.levels_of(cols[i]), si.levels_of(first)))
+        for i in labelled[1:]
+    )
+    if same and len(labelled) < len(cols) and any(len(c) != len(first) for c in cols):
+        raise ValueError("all columns must have the same length")
+    if not same:
+        if len(labelled) < len(cols):
+            raise ValueError(
+                "cannot align Series with different labels next to a column with no labels; "
+                "give it labels with set_axis or reset_index them first"
+            )
+        union = first
+        for i in labelled[1:]:
+            union = union.align(cols[i])[0]
+        cols = [c.reindex_like(union) for c in cols]
+        first = cols[0]
+        level_names = si.names_of(first)
+    # a column that shares its name with a level keeps the name; the level
+    # becomes an unnamed (hidden) one
+    level_names = [si.default_name(i) if n in names else n for i, n in enumerate(level_names)]
+    levels = si.levels_of(first)
+    plain = [si.drop_levels(c) for c in cols]
+    frame = _ext._dataframe_from_columns([*names, *level_names], [*plain, *levels])
+    return _bound(_ext.DataFrame.with_index(DataFrame(frame), level_names))
 
 
 def _dataframe_from_bytes(data: bytes) -> DataFrame:

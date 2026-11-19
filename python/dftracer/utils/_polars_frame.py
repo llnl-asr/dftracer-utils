@@ -175,7 +175,7 @@ class FramePolarsMixin:
         """The rows as tuples, or dicts with ``named`` (polars ``iter_rows``; a Python object
         per cell, so not a fast path)."""
         frame = self._frame()
-        names = list(frame._names())
+        names = list(frame._polars_names())
         columns = [frame[c].to_list() for c in names]
         for i in range(len(frame)):
             row = tuple(col[i] for col in columns)
@@ -193,8 +193,8 @@ class FramePolarsMixin:
             index += len(f)
         if not 0 <= index < len(f):
             raise IndexError(f"row: {index} out of range")
-        values = tuple(column_series(f, c)[index] for c in f._names())
-        return dict(zip(f._names(), values)) if named else values
+        values = tuple(column_series(f, c).iloc[index] for c in f._polars_names())
+        return dict(zip(f._polars_names(), values)) if named else values
 
     def item(self, row: int | None = None, column: int | str | None = None) -> object:
         """The one cell of a 1x1 frame, or the cell at ``row`` / ``column``."""
@@ -205,22 +205,22 @@ class FramePolarsMixin:
             row, column = 0, 0
         if row is None or column is None:
             raise ValueError("item: pass both row and column")
-        name = f._names()[column] if isinstance(column, int) else column
-        return column_series(f, name)[row]
+        name = f._polars_names()[column] if isinstance(column, int) else column
+        return column_series(f, name).iloc[row]
 
     def get_column(self, name: str) -> Series:
         return column_series(self._frame(), name)
 
     def get_columns(self) -> list[Series]:
         f = self._frame()
-        return [column_series(f, c) for c in f._names()]
+        return [column_series(f, c) for c in f._polars_names()]
 
     def get_column_index(self, name: str) -> int:
         return self._frame().column_index(name)
 
     def to_series(self, index: int = 0) -> Series:
         f = self._frame()
-        return column_series(f, f._names()[index])
+        return column_series(f, f._polars_names()[index])
 
     def is_empty(self) -> bool:
         return len(self._frame()) == 0
@@ -253,7 +253,11 @@ class FramePolarsMixin:
         """The rows with no NaN in the float columns (or in ``subset``)."""
         f = self._frame()
         names = (
-            [subset] if isinstance(subset, str) else list(subset) if subset else list(f._names())
+            [subset]
+            if isinstance(subset, str)
+            else list(subset)
+            if subset
+            else list(f._polars_names())
         )
         keep = None
         for c in names:

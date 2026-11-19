@@ -156,7 +156,7 @@ class GroupBy(GroupTransforms[DataFrame]):
                 "count" if a.value is None else f"{a.op}_{cast(Col, a.value).name}" for a in aggs
             ]
             if engine_names != [a.out for a in aggs]:
-                out = DataFrame(
+                out = DataFrame.from_dict(
                     {
                         **{k: out[k] for k in self._keys},
                         **{a.out: out[name] for a, name in zip(aggs, engine_names)},
@@ -233,6 +233,9 @@ class GroupBy(GroupTransforms[DataFrame]):
     def _size_frame(self) -> DataFrame:
         return self.agg(Agg("count", None, "size"))
 
+    def _pandas_face(self) -> bool:
+        return pandas_named(self)
+
     # The group-wise transforms (cumsum, shift, rank, head, ...): the engine's
     # GroupBy::transform (dftu_dataframe_group_transform), one value per input
     # row in input order; the lazy group-by builds the same plan.
@@ -259,7 +262,7 @@ class GroupBy(GroupTransforms[DataFrame]):
         # shift's vacated rows are the ones where the position is null.
         pos = "__dftu_pos__"
         picks = kind in ("head", "tail", "nth")
-        if picks and n >= 0 or kind == "nth":
+        if picks:
             counted = self._counted_pick(kind, int(n), pos)
             if counted is not None:
                 return counted
@@ -292,13 +295,16 @@ class GroupBy(GroupTransforms[DataFrame]):
         """``head``, ``tail`` and ``nth`` from the native ``cumcount`` of the
         key columns: a row is kept when its place in its group (counted from the
         end for ``tail`` and a negative ``nth``) is below ``n`` (``head`` and
-        ``tail``) or equals ``n`` (``nth``). ``None`` for an empty frame, which
+        ``tail``) or equals ``n`` (``nth``). A negative ``n`` keeps all but the
+        last (``head``) or first (``tail``) ``-n`` rows: the place counted from
+        the other side is ``-n`` or more. ``None`` for an empty frame, which
         the window plan answers."""
         frame = self._batch
         if len(frame) == 0:
             return None
-        from_end = kind == "tail" or (kind == "nth" and n < 0)
-        place = -n - 1 if kind == "nth" and n < 0 else n
+        negative = n < 0 and kind != "nth"
+        from_end = (kind == "tail") != negative if kind != "nth" else n < 0
+        place = -n - 1 if kind == "nth" and n < 0 else abs(n)
         side = _ext.DataFrame.with_row_index(_ext.DataFrame.select(frame, *self._keys), pos)
         if from_end:
             side = _ext.DataFrame.reverse(side)
@@ -306,7 +312,7 @@ class GroupBy(GroupTransforms[DataFrame]):
             _ext.DataFrame._group_transform(side, self._keys, "cumcount", 0, "average", True),
             "cumcount",
         )
-        keep = counts == place if kind == "nth" else counts < place
+        keep = counts == place if kind == "nth" else counts >= place if negative else counts < place
         kept = _ext.DataFrame.filter(side, keep)
         picked = self._col(_ext.DataFrame.reverse(kept) if from_end else kept, pos)
         out = _ext.DataFrame.take(frame, picked)
@@ -1202,7 +1208,7 @@ class GroupBy(GroupTransforms[DataFrame]):
             parts = label if isinstance(label, tuple) else (label,)
             for k, v in zip(self._keys, parts):
                 keys[k].append(v)
-        return self._scalars(DataFrame({**keys, "value": [r for _, r in results]}))
+        return self._scalars(DataFrame.from_dict({**keys, "value": [r for _, r in results]}))
 
     def _filter_python(self, func: Callable[[DataFrame], object]) -> list[int]:
         frame = self._frame()

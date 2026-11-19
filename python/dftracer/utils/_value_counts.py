@@ -92,7 +92,7 @@ def series_value_counts(
     if sort and not ascending and not values.null_count:
         table = native_counts(values)
         return _labelled(table["count"], [level], [table["value"]], normalize)
-    counts, labels = _counted(DataFrame({"value": values}), ["value"], sort, ascending)
+    counts, labels = _counted(DataFrame.from_dict({"value": values}), ["value"], sort, ascending)
     return _labelled(counts, [level], labels, normalize)
 
 

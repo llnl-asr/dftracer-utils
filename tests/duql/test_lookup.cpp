@@ -22,6 +22,7 @@
 #include <span_list.h>
 #include <task_result.h>
 
+#include <initializer_list>
 #include <limits>
 #include <memory>
 
@@ -60,6 +61,18 @@ dstd::SharedPtr<const dataframe::DataFrame> float_runs() {
     f->columns.push_back(dataframe::Series::flat_f64(ids, 3));
     f->columns.push_back(dataframe::Series::strings(
         dstd::Vector<dstd::String>{"nan", "zero", "frac"}));
+    return f;
+}
+
+// A one-column table {run} of the floats `ids`, the shape an `in` sub-query
+// gives.
+dstd::SharedPtr<const dataframe::DataFrame> float_ids(
+    std::initializer_list<double> ids) {
+    auto f = dstd::make_shared<dataframe::DataFrame>();
+    const dstd::Vector<double> v(ids);
+    f->names = dstd::make_shared_strings({"run"});
+    f->columns.push_back(dataframe::Series::flat_f64(
+        v.data(), static_cast<std::int64_t>(v.size())));
     return f;
 }
 
@@ -128,6 +141,61 @@ TEST_CASE("a lookup keys floats as a group does: one NaN, -0.0 is 0.0") {
     CHECK(on_double(zero, 0.0));
     CHECK(on_double(zero, -0.0));
     CHECK_FALSE(on_double(zero, std::numeric_limits<double>::quiet_NaN()));
+}
+
+TEST_CASE("a semi-join keys a NaN subject as a group does") {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const dstd::String lets = "let runs = where run == run; ";
+    const auto on_double = [](const Query& q, double v) {
+        ValueMap m;
+        m["run"] = Cell{v};
+        m["name"] = Cell{dstd::String("a")};
+        return q.evaluate(m);
+    };
+    const Query in =
+        bound(dstd::fmt<"{}where name == \"a\" and run in (from runs | select "
+                        "run)">(lets),
+              float_ids({nan, -0.0, 1.5}));
+    CHECK(on_double(in, nan));
+    CHECK(on_double(in, -nan));
+    CHECK(on_double(in, -0.0));
+    CHECK_FALSE(on_double(in, 2.5));
+
+    const Query without_nan =
+        bound(dstd::fmt<"{}where name == \"a\" and run in (from runs | select "
+                        "run)">(lets),
+              float_ids({1.5}));
+    CHECK_FALSE(on_double(without_nan, nan));
+}
+
+TEST_CASE(
+    "a range semi-join keys a NaN subject, and a NaN bound matches no row") {
+    auto side = dstd::make_shared<dataframe::DataFrame>();
+    const double run[] = {std::numeric_limits<double>::quiet_NaN(), 1.5};
+    const std::int64_t ts[] = {10, 20};
+    side->names = dstd::make_shared_strings({"run", "__correlated_range"});
+    side->columns.push_back(dataframe::Series::flat_f64(run, 2));
+    side->columns.push_back(dataframe::Series::flat_i64(ts, 2));
+    const Query in =
+        bound("where run in (from data | where ts < ^.ts | select run)", side);
+    const Query not_in = bound(
+        "where run not in (from data | where ts < ^.ts | select run)", side);
+    const auto row = [](const Query& q, double run_value, double ts_value) {
+        ValueMap m;
+        m["run"] = Cell{run_value};
+        m["ts"] = Cell{ts_value};
+        return q.evaluate(m);
+    };
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    CHECK(row(in, nan, 15));
+    CHECK_FALSE(row(not_in, nan, 15));
+    CHECK_FALSE(row(in, 1.5, 15));
+    CHECK(row(not_in, 1.5, 15));
+    CHECK_FALSE(row(in, nan, 5));
+    CHECK(row(not_in, nan, 5));
+    CHECK(row(in, 1.5, 25));
+    CHECK_FALSE(row(in, nan, nan));
+    CHECK(row(not_in, nan, nan));
 }
 
 TEST_CASE("an arrow's conflicting values fail in a value position") {
@@ -267,6 +335,13 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     CHECK_FALSE(on_json(q, R"({"pid":1,"ts":"x","dur":9})"));
     CHECK_FALSE(on_json(q, R"({"pid":2,"ts":10,"dur":7})"));
     CHECK(on_json(q, R"({"pid":2,"ts":16,"dur":7})"));
+
+    // A NaN bound is not a range value: no row lies below it.
+    ValueMap nan_bound;
+    nan_bound["pid"] = Cell{std::int64_t{1}};
+    nan_bound["ts"] = Cell{std::numeric_limits<double>::quiet_NaN()};
+    nan_bound["dur"] = Cell{std::int64_t{9}};
+    CHECK_FALSE(q.evaluate(nan_bound));
 
     const std::int64_t opid[] = {1, 1, 1, 2, 3, 1};
     const std::int64_t lo[] = {10, 11, 0, 0, 0, 0};

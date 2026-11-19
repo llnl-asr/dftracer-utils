@@ -266,7 +266,8 @@ dstd::Result<DataFrame> gap_fill(
     dstd::Span<const dstd::String> values, GapFillMode mode,
     dstd::Optional<dstd::Pair<std::int64_t, std::int64_t>> range) {
     dstd::Result<DataFrame> out =
-        gap_fill_raw(df, partition_by, time, bucket, values, mode, range);
+        gap_fill_raw(without_hidden_index_columns(df), partition_by, time,
+                     bucket, values, mode, range);
     if (out) index_drop<"gap_fill">(*out);
     return out;
 }

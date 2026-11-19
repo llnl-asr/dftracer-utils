@@ -80,6 +80,22 @@ DataFrame without_index_columns(const DataFrame& in,
     return out;
 }
 
+DataFrame without_hidden_index_columns(const DataFrame& in) {
+    if (!in.row_index) return in.share();
+    DataFrame out;
+    for (std::size_t i = 0; i < in.names.size(); ++i) {
+        bool is_hidden = false;
+        for (const dstd::SharedString& n : in.row_index->names)
+            if (dstd::StringView(n) == dstd::StringView(in.names[i]) &&
+                dstd::StringView(n).starts_with("__index_level_"))
+                is_hidden = true;
+        if (is_hidden) continue;
+        out.names.push_back(in.names[i]);
+        out.columns.push_back(in.columns[i].share());
+    }
+    return out;
+}
+
 void apply_index_names(dstd::Span<const dstd::String> names, DataFrame& out) {
     IndexNames kept;
     kept.reserve(names.size());

@@ -901,7 +901,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         cols = list(self.columns) if subset is None else as_names(subset)
         frame = self[cols]
         if keep is False:
-            return _ext.DataFrame.is_duplicated(frame)
+            return _ext.DataFrame.is_duplicated(frame._data_only())
         if keep == "last":
             back = list(range(frame.num_rows - 1, -1, -1))
             return frame.gather(back).duplicated(keep="first").take(back)

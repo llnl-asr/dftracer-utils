@@ -359,8 +359,31 @@ def test_ops_that_drop_the_index_drop_its_columns_too():
         sorted_ours.null_count(),
         sorted_ours.lazy().join(ours.lazy(), on="k").collect(),
         sorted_ours.lazy().with_row_index("i").collect(),
+        sorted_ours.lazy().describe().collect(),
+        sorted_ours.compare_agg(ours, 1),
+        sorted_ours.lazy().concat(ours.lazy()).collect(),
+        ours.lazy().concat(sorted_ours.lazy()).collect(),
     ]:
         _no_hidden(got)
+    grid = DataFrame({"k": ["u", "u"], "t": [1, 4], "v": [1.0, 2.0]}).sort_values("t")
+    _no_hidden(grid.gap_fill(["k"], "t", 1, ["v"]))
+
+
+def test_a_named_index_column_survives_compare_agg_and_gap_fill():
+    base = DataFrame({"k": ["a", "b", "c"], "m": [1.0, 2.0, 3.0]})
+    variant = DataFrame({"k": ["a", "b", "c"], "m": [2.0, 2.0, 6.0]})
+    got = base.set_index("m").compare_agg(variant.set_index("m"), 1)
+    assert list(got.columns) == ["k", "l_m", "r_m", "delta_m", "pct_m"]
+    grid = DataFrame({"k": ["u", "u", "v"], "t": [1, 4, 1], "v": [1.0, 2.0, 3.0], "w": [1, 2, 3]})
+    filled = grid.set_index("w").gap_fill(["k"], "t", 1, ["v"])
+    assert "w" in filled.columns
+
+
+def test_lazy_compare_agg_drops_the_key_index_as_the_eager_op_does():
+    d = DataFrame({"k": ["a", "a", "b"], "m": [1.0, 2.0, 3.0]})
+    g = d.groupby("k").agg(m=("m", "sum"))
+    assert list(g.compare_agg(g, 1).index) == [0, 1]
+    assert list(g.lazy().compare_agg(g.lazy(), 1).collect().index) == [0, 1]
 
 
 # ---- a labelled Series and the group-by result --------------------------------
@@ -414,3 +437,37 @@ def test_replace_does_not_free_a_column_a_released_reader_reads():
         t.join()
     assert not errors
     assert len(s) == n + 60
+
+
+def test_the_pandas_duplicated_ignores_the_row_labels():
+    data = {"a": [2, 1, 2, 1, 3], "b": [1.0, 1.0, 1.0, 1.0, 3.0]}
+    ours = DataFrame(data).sort_values("a")
+    theirs = pd.DataFrame(data).sort_values("a")
+    assert ours.duplicated(keep=False).to_list() == theirs.duplicated(keep=False).tolist()
+
+
+def test_align_of_two_short_series_survives_a_concurrent_replace():
+    import threading
+
+    left = Series(list(range(10_000)))
+    right = Series(list(range(5_000, 15_000)))
+    stop = threading.Event()
+    errors = []
+
+    def read():
+        while not stop.is_set():
+            try:
+                left._align(right, 0)
+            except Exception as e:  # noqa: BLE001
+                errors.append(repr(e))
+                return
+
+    threads = [threading.Thread(target=read) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for i in range(10_000, 10_040):
+        left[i] = i
+    stop.set()
+    for t in threads:
+        t.join()
+    assert not errors

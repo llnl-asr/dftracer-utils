@@ -5752,7 +5752,10 @@ LazyFrame LazyFrame::compare_agg(LazyFrame variant, std::int64_t n_key) const {
     }
     auto composed = compose_compare_agg(*this, variant, lhs, rhs, nk);
     if (!composed) return failed(composed.error());
-    return std::move(*composed);
+    // The rule of compare_agg drops the index, as the eager op does.
+    auto bare = composed->with_index({});
+    if (!bare) return failed(bare.error());
+    return std::move(*bare);
 }
 
 LazyFrame LazyFrame::asof(LazyFrame other, dstd::String on,
@@ -5781,6 +5784,18 @@ LazyFrame LazyFrame::interval(LazyFrame other, dstd::String point,
 LazyFrame LazyFrame::concat(LazyFrame other) const {
     if (auto other_status = other.status(); !other_status)
         return failed(other_status.error());
+    if (!index_same<dstd::String, dstd::String>(plan_index(*this),
+                                                plan_index(other))) {
+        // The index is dropped, so a label column the other side lacks goes
+        // with it.
+        const dstd::Vector<dstd::String> left_names = schema();
+        const dstd::Vector<dstd::String> right_names = other.schema();
+        const LazyFrame bare_left = without_index_columns(*this, right_names);
+        const LazyFrame bare_right = without_index_columns(other, left_names);
+        if (bare_left.schema().size() != left_names.size() ||
+            bare_right.schema().size() != right_names.size())
+            return bare_left.concat(bare_right);
+    }
     const dstd::Vector<Field> lhs = output_schema().fields;
     const dstd::Vector<Field> rhs = other.output_schema().fields;
     if (lhs.size() != rhs.size())
@@ -5826,7 +5841,7 @@ LazyFrame LazyFrame::to_dummies(dstd::String column) const {
 }
 
 LazyFrame LazyFrame::describe() const {
-    auto ops = ops_;
+    auto ops = without_index_columns(*this, {}).ops_;
     ops.push_back(dstd::make_shared<LazyOp>(LazyOp{DescribeOp{}}));
     return with_ops(std::move(ops));
 }

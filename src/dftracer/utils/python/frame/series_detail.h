@@ -72,14 +72,16 @@ namespace dftracer::utils::python::frame::series_detail {
 // a released kernel copies into its result. A column long enough to release
 // the GIL is therefore read through a share taken under the GIL, which has its
 // own name; a shorter one is read in place, as no other thread runs meanwhile.
+// With `share_always` the share is taken for every length, for a method whose
+// release depends on more than this column (the sum of two lengths).
 class Held {
    public:
     enum Mode { Required, Optional };
 
-    explicit Held(PyObject* o, Mode mode = Required)
+    explicit Held(PyObject* o, Mode mode = Required, bool share_always = false)
         : p_(mode == Required ? as_native<Series>(o)
                               : as_native_or_null<Series>(o)) {
-        if (p_ && p_->length() >= core::GIL_RELEASE_ROWS) {
+        if (p_ && (share_always || p_->length() >= core::GIL_RELEASE_ROWS)) {
             copy_ = p_->share();
             p_ = &copy_;
         }

@@ -475,13 +475,13 @@ PyObject* Series_reindex(PyObject* self, PyObject* args) {
 // (see dataframe::align_labels); how is a JoinHow (0 inner, 1 left, 2 right,
 // 3 outer).
 PyObject* Series_align(PyObject* self, PyObject* args) {
-    Held held_a(self);
+    Held held_a(self, Held::Required, true);
     Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* other_obj = nullptr;
     int how = 0;
     if (!PyArg_ParseTuple(args, "Oi", &other_obj, &how)) return nullptr;
-    Held held_b(other_obj);
+    Held held_b(other_obj, Held::Required, true);
     Series* b = held_b.get();
     if (!b) return nullptr;
     auto r = core::without_gil(a->length() + b->length(), [&] {

@@ -89,6 +89,10 @@ void apply_index_drop(const DataFrame& in, DataFrame& out);
 /// index: the operand of an op that drops the index.
 DataFrame without_index_columns(const DataFrame& in,
                                 dstd::Span<const dstd::String> keep);
+/// `in` without the hidden default label columns (`__index_level_<i>__`) of
+/// its index, and no index: the operand of an op that drops the index but
+/// keeps the columns a user named, as `reset_index` does.
+DataFrame without_hidden_index_columns(const DataFrame& in);
 /// Rebuild by keys (group_by, group_by_dynamic, pivot): when `in`
 /// is indexed, `keys` become the index of `out`.
 void apply_index_keys(const DataFrame& in, dstd::Span<const dstd::String> keys,

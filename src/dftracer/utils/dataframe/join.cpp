@@ -1178,7 +1178,9 @@ dstd::Result<DataFrame> join(const DataFrame& left, const DataFrame& right,
 dstd::Result<DataFrame> compare_agg(const DataFrame& base,
                                     const DataFrame& variant,
                                     std::int64_t n_key) {
-    dstd::Result<DataFrame> out = compare_agg_raw(base, variant, n_key);
+    dstd::Result<DataFrame> out =
+        compare_agg_raw(without_hidden_index_columns(base),
+                        without_hidden_index_columns(variant), n_key);
     if (out) index_drop<"compare_agg">(*out);
     return out;
 }

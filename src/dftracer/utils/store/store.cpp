@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/directory_key.h>
 #include <dftracer/utils/store/fold.h>
 #include <dftracer/utils/store/open_count.h>
 #include <dftracer/utils/store/snapshot.h>
@@ -83,15 +84,13 @@ dstd::Error foreign_copy_error() {
                        "data file holds the current copy of the scope");
 }
 
-/// Absolute and without a trailing separator, so two spellings of one directory
-/// share one State.
+}  // namespace
+
 dstd::Path directory_key(dstd::StringView dir) {
     const auto absolute = dstd::fs::absolute(dstd::PathView(dir));
     if (!absolute) return dstd::Path(dir);
     return dstd::normalize(absolute->view());
 }
-
-}  // namespace
 
 bool operator==(const NamespaceSpec& a, const NamespaceSpec& b) {
     return a.name == b.name && a.format_version == b.format_version &&
@@ -363,6 +362,9 @@ struct Store::State {
     /// replaces the file.
     std::atomic<bool> marker_invalid{false};
     dstd::fs::FileStat dir_identity;
+    /// The directory, held open so its inode number stays taken after the
+    /// directory is deleted and `dir_identity` cannot match a new one.
+    dstd::File dir_hold;
     mutable std::mutex mutex;
     dstd::SharedPtr<Runtime> runtime;
     dstd::SharedPtr<engine::Writer> writer;
@@ -590,6 +592,8 @@ Store::State::get_or_open(dstd::StringView dir) {
         }
         if (const auto identity = dstd::fs::stat(key.view())) {
             created->dir_identity = *identity;
+            if (auto held = dstd::File::open(key.view(), dstd::OpenOptions{}))
+                created->dir_hold = std::move(*held);
         }
         states.insert_or_assign(dstd::String(key.str()), created);
         open_count.fetch_add(1, std::memory_order_relaxed);

@@ -318,6 +318,44 @@ engine::ExtentSegment segment_info(std::uint32_t copy_id,
 
 }  // namespace
 
+TEST_CASE("store open extent: a sealed writer holds no open buffer") {
+    Runtime runtime(2);
+    auto* executor = runtime.executor();
+    REQUIRE(executor->has_io_backend());
+    auto& backend = executor->io_backend();
+
+    TempDir dir;
+    auto file = engine::DataFileWriter::create((dir.path / "data.dfs").str(),
+                                               SIXTY_FOUR_KIB, "host", "label");
+    REQUIRE(file.has_value());
+    Collector collector;
+    engine::ExtentWriter writer(*file, backend, *runtime.executor(),
+                                SIXTY_FOUR_KIB, &collect_written, &collector);
+
+    for (std::uint32_t ns = 1; ns <= 4; ++ns) {
+        const dstd::Vector<std::uint8_t> bytes = make_segment(ns, 400);
+        REQUIRE(writer
+                    .append(ns, dstd::ByteView(bytes.data(), bytes.size()),
+                            segment_info(7, ns), nullptr)
+                    .has_value());
+    }
+    CHECK(engine::ExtentWriterTestHook::open_bytes(writer) >=
+          4 * SIXTY_FOUR_KIB);
+    REQUIRE(writer.seal_all().has_value());
+    REQUIRE(writer.wait_idle().has_value());
+    CHECK(engine::ExtentWriterTestHook::open_bytes(writer) == 0);
+
+    // The next append installs a buffer again and is written.
+    const dstd::Vector<std::uint8_t> bytes = make_segment(9, 400);
+    REQUIRE(writer
+                .append(1, dstd::ByteView(bytes.data(), bytes.size()),
+                        segment_info(7, 9), nullptr)
+                .has_value());
+    REQUIRE(writer.seal_all().has_value());
+    REQUIRE(writer.wait_idle().has_value());
+    CHECK(collector.take().size() == 5);
+}
+
 TEST_CASE("store open extent: one thread fills one namespace") {
     Runtime runtime(4);
     auto* executor = runtime.executor();

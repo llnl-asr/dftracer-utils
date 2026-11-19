@@ -916,6 +916,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ### Fixed
 
 - Rebuild a changed trace file through `scan::from_files`, `View::from_files` and `TraceViewer` with the aggregation settings the index root was built with (the interval, `group_by_file` and the extra group keys), so the rebuild no longer clears the aggregation tier of every other trace folder that shares the root. Settings the stored config cannot recover are an error that names the root.
+- Keep an idle index writer from holding one extent buffer per namespace: the buffers are made on the first append and are not zero filled, so 64 retained index roots hold about 1 MB each, not about 14 MB, and 3000 new index paths in one process end near 240 MB of RSS where they ended near 1.6 GB.
 - Raise `TimeoutError` when a Dask cluster has no worker, in place of waiting for ever, in `distributed_index`, the Dask viewer and `DaskFrame`. The wait for a first worker is `DFTRACER_UTILS_DASK_WORKER_TIMEOUT` seconds (default 60), and the error names the scheduler address.
 - Make the group-wise `cumprod` of an `int64` or `uint64` column the exact integer product while it fits in 64 bits, converted once to `float64`; past that it goes on as a float. The running float product rounded at every step past 2**53.
 - Key a NaN in a duql lookup as a group does: every NaN is one key, so `x -> t.col` and `x in (...)` find a NaN row, and `-0.0` equals `0.0`. A NaN used to match nothing.

@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <span_list.h>
+#include <valgrind_quirks.h>
 
 #include <cstdint>
 #include <stdexcept>
@@ -413,7 +414,8 @@ TEST_SUITE("expr string ops") {
         REQUIRE(rnd);
         Series r{dftu_expr_eval(rnd, in4, 2)};
         REQUIRE(r.type() == TypeId::Float64);
-        CHECK(r.data<double>()[0] == 1.3);
+        if (!dftu_utils_test::VALGRIND_ROUNDS_TIES_TO_EVEN)
+            CHECK(r.data<double>()[0] == 1.3);
         CHECK(r.data<double>()[1] == 2.5);
         CHECK(r.data<double>()[2] == 3.75);
         CHECK(dftu_expr_round_col(c0, nullptr) == nullptr);

@@ -893,19 +893,21 @@ TEST_SUITE("store api") {
             ::alarm(60);
             auto opened = Store::open(
                 dstd::StringView(dir.str().data(), dir.str().size()));
-            if (!opened || !opened->is_current()) ::_exit(1);
+            if (!opened || !opened->is_current())
+                dftu_utils_test::exit_forked_child(1);
             const Namespace ns = [&] {
                 auto added = opened->ns(spec_of("dftu.test.marker"));
                 return added.has_value() ? *added : Namespace{};
             }();
             Batch batch = opened->batch(ns, scope_of("/child"));
             batch.put(view_of("k"), view_of("child"));
-            if (!run(opened->commit(std::move(batch)))) ::_exit(2);
-            if (!run(opened->close())) ::_exit(3);
+            if (!run(opened->commit(std::move(batch))))
+                dftu_utils_test::exit_forked_child(2);
+            if (!run(opened->close())) dftu_utils_test::exit_forked_child(3);
             auto text =
                 dstd::fs::read_file(dstd::PathView(dir.file("store.id")));
-            if (!text || *text != id) ::_exit(4);
-            ::_exit(0);
+            if (!text || *text != id) dftu_utils_test::exit_forked_child(4);
+            dftu_utils_test::exit_forked_child(0);
         }
         int status = 0;
         REQUIRE(::waitpid(pid, &status, 0) == pid);
@@ -1063,15 +1065,16 @@ TEST_SUITE("store api") {
             ::alarm(60);
             auto writer = Store::open(
                 dstd::StringView(dir.str().data(), dir.str().size()));
-            if (!writer) ::_exit(1);
+            if (!writer) dftu_utils_test::exit_forked_child(1);
             const Namespace ns = [&] {
                 auto added = writer->ns(spec_of("dftu.test.marker"));
                 return added.has_value() ? *added : Namespace{};
             }();
             Batch batch = writer->batch(ns, scope_of("/child"));
             batch.put(view_of("k"), view_of("child"));
-            if (!run(writer->commit(std::move(batch)))) ::_exit(2);
-            ::_exit(run(writer->close()) ? 0 : 3);
+            if (!run(writer->commit(std::move(batch))))
+                dftu_utils_test::exit_forked_child(2);
+            dftu_utils_test::exit_forked_child(run(writer->close()) ? 0 : 3);
         }
         int status = 0;
         REQUIRE(::waitpid(pid, &status, 0) == pid);

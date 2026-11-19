@@ -6,6 +6,7 @@ two levels, several time units, naive and UTC) and the values, labels, index
 names and the error kinds are compared."""
 
 import datetime
+import os
 
 import pytest
 
@@ -16,6 +17,19 @@ from dftracer.utils import DataFrame, Series  # noqa: E402
 pytestmark = pytest.mark.filterwarnings("ignore::FutureWarning", "ignore::DeprecationWarning")
 
 NAN = float("nan")
+VALGRIND = bool(os.environ.get("DFTRACER_UTILS_VALGRIND"))
+
+
+def _vg(values, step, skip=()):
+    """Every `step`-th value, and none of `skip`, under Valgrind, which runs a
+    case about 100 times slower, so the whole grid would not end. All values
+    everywhere else."""
+    values = list(values)
+    if not VALGRIND:
+        return values
+    return [v for v in values if v not in skip][::step]
+
+
 PANDAS3 = int(pd.__version__.split(".")[0]) >= 3
 PANDAS30 = pd.__version__.startswith("3.0.")
 STAMPS = [
@@ -161,26 +175,27 @@ FUNCS = [
 ]
 
 
-@pytest.mark.parametrize("name", ["sorted", "unsorted", "utc"])
-@pytest.mark.parametrize("rule", RULES)
+@pytest.mark.parametrize("name", _vg(["sorted", "unsorted", "utc"], 2))
+# "5s" makes 570,000 bins, which Valgrind takes minutes to run.
+@pytest.mark.parametrize("rule", _vg(RULES, 4, skip=("5s",)))
 def test_resample_every_rule_and_aggregate(name, rule):
     p, o = _both(FRAMES, name)
     for fn in FUNCS:
         _check(lambda x, rule=rule, fn=fn: getattr(x.resample(rule), fn)(), p, o)
 
 
-@pytest.mark.parametrize("name", ["repeated", "unnamed", "ms", "s", "ns", "nat"])
-@pytest.mark.parametrize("rule", ["1h", "7min", "1D", "W", "ME", "QS"])
+@pytest.mark.parametrize("name", _vg(["repeated", "unnamed", "ms", "s", "ns", "nat"], 5))
+@pytest.mark.parametrize("rule", _vg(["1h", "7min", "1D", "W", "ME", "QS"], 4))
 def test_resample_other_indexes(name, rule):
     p, o = _both(FRAMES, name)
     for fn in ("sum", "count", "first", "last", "mean", "size"):
         _check(lambda x, rule=rule, fn=fn: getattr(x.resample(rule), fn)(), p, o)
 
 
-@pytest.mark.parametrize("name", ["unsorted", "utc"])
-@pytest.mark.parametrize("rule", ["1h", "1D", "W", "ME", "MS", "QE", "YE", "2ME"])
-@pytest.mark.parametrize("closed", [None, "left", "right"])
-@pytest.mark.parametrize("label", [None, "left", "right"])
+@pytest.mark.parametrize("name", _vg(["unsorted", "utc"], 2))
+@pytest.mark.parametrize("rule", _vg(["1h", "1D", "W", "ME", "MS", "QE", "YE", "2ME"], 4))
+@pytest.mark.parametrize("closed", _vg([None, "left", "right"], 2))
+@pytest.mark.parametrize("label", _vg([None, "left", "right"], 2))
 def test_resample_closed_and_label(name, rule, closed, label):
     _skip_pandas_day(name, rule)
     p, o = _both(FRAMES, name)
@@ -209,10 +224,10 @@ ORIGINS = [
 OFFSETS = [None, "30s", "7min", datetime.timedelta(minutes=-5), pd.Timedelta("1h")]
 
 
-@pytest.mark.parametrize("name", ["unsorted", "utc"])
-@pytest.mark.parametrize("rule", ["1h", "7min", "1D"])
-@pytest.mark.parametrize("origin", ORIGINS)
-@pytest.mark.parametrize("offset", OFFSETS)
+@pytest.mark.parametrize("name", _vg(["unsorted", "utc"], 2))
+@pytest.mark.parametrize("rule", _vg(["1h", "7min", "1D"], 3))
+@pytest.mark.parametrize("origin", _vg(ORIGINS, 4))
+@pytest.mark.parametrize("offset", _vg(OFFSETS, 3))
 def test_resample_origin_and_offset(name, rule, origin, offset):
     _skip_pandas_day(name, rule)
     p, o = _both(FRAMES, name)
@@ -234,7 +249,7 @@ def test_resample_empty_bins_are_zero_or_missing():
     _check(lambda x: x.resample("1D").sum(), p, o)
 
 
-@pytest.mark.parametrize("name", ["sorted", "unsorted", "nat", "utc"])
+@pytest.mark.parametrize("name", _vg(["sorted", "unsorted", "nat", "utc"], 3))
 def test_resample_ohlc_and_agg_forms(name):
     p, o = _both(SERIES, name)
     for rule in ("1h", "1D", "ME"):
@@ -285,7 +300,7 @@ ERROR_CALLS = [
 ]
 
 
-@pytest.mark.parametrize("which", range(len(ERROR_CALLS)))
+@pytest.mark.parametrize("which", _vg(range(len(ERROR_CALLS)), 5))
 def test_resample_errors(which):
     plain = pd.DataFrame({"a": [1, 2, 3]})
     for p in (FRAMES["sorted"], plain, TWO, FRAMES["sorted"].reset_index()):
@@ -322,24 +337,24 @@ ASFREQ = [
 FREQS = ["1h", "30min", "10min", "7min", "1D", "ME", "MS", "W", "QE", "YS", "2D"]
 
 
-@pytest.mark.parametrize("freq", FREQS)
-@pytest.mark.parametrize("kw", ASFREQ)
+@pytest.mark.parametrize("freq", _vg(FREQS, 5))
+@pytest.mark.parametrize("kw", _vg(ASFREQ, 3))
 def test_asfreq(freq, kw):
     for source in (FRAMES, SERIES):
         p, o = _both(source, "sorted")
         _check(lambda x: x.asfreq(freq, **kw), p, o)
 
 
-@pytest.mark.parametrize("name", ["unsorted", "ms", "utc", "ns"])
-@pytest.mark.parametrize("freq", ["1D", "7min", "ME"])
+@pytest.mark.parametrize("name", _vg(["unsorted", "ms", "utc", "ns"], 3))
+@pytest.mark.parametrize("freq", _vg(["1D", "7min", "ME"], 3))
 def test_asfreq_units_and_zones(name, freq):
     for source in (FRAMES, SERIES):
         p, o = _both(source, name)
         _check(lambda x: x.asfreq(freq), p, o)
 
 
-@pytest.mark.parametrize("name", ["repeated", "nat", "unnamed", "s"])
-@pytest.mark.parametrize("freq", ["1h", "1D"])
+@pytest.mark.parametrize("name", _vg(["repeated", "nat", "unnamed", "s"], 3))
+@pytest.mark.parametrize("freq", _vg(["1h", "1D"], 2))
 def test_asfreq_other_indexes(name, freq):
     for source in (FRAMES, SERIES):
         p, o = _both(source, name)
@@ -395,7 +410,9 @@ TIMES = [
 ]
 
 
-@pytest.mark.parametrize("name", ["sorted", "unsorted", "repeated", "ms", "utc", "nat", "ns", "s"])
+@pytest.mark.parametrize(
+    "name", _vg(["sorted", "unsorted", "repeated", "ms", "utc", "nat", "ns", "s"], 4)
+)
 def test_at_time(name):
     for source in (FRAMES, SERIES):
         p, o = _both(source, name)
@@ -403,8 +420,8 @@ def test_at_time(name):
             _check(lambda x, t=t: x.at_time(t), p, o)
 
 
-@pytest.mark.parametrize("name", ["sorted", "unsorted", "repeated", "utc", "nat", "ms"])
-@pytest.mark.parametrize("inclusive", ["both", "neither", "left", "right"])
+@pytest.mark.parametrize("name", _vg(["sorted", "unsorted", "repeated", "utc", "nat", "ms"], 4))
+@pytest.mark.parametrize("inclusive", _vg(["both", "neither", "left", "right"], 3))
 def test_between_time(name, inclusive):
     pairs = [
         ("00:10", "02:15"),
@@ -436,7 +453,8 @@ def test_time_of_day_errors():
 
 
 @pytest.mark.parametrize(
-    "name", ["sorted", "unsorted", "repeated", "unnamed", "ms", "ns", "s", "nat"]
+    "name",
+    _vg(["sorted", "unsorted", "repeated", "unnamed", "ms", "ns", "s", "nat"], 4),
 )
 def test_tz_localize_and_convert_on_a_naive_index(name):
     for source in (FRAMES, SERIES):
@@ -448,7 +466,7 @@ def test_tz_localize_and_convert_on_a_naive_index(name):
         _check(lambda x: x.tz_localize("UTC").tz_localize("UTC"), p, o)
 
 
-@pytest.mark.parametrize("name", ["utc", "nat"])
+@pytest.mark.parametrize("name", _vg(["utc", "nat"], 2))
 def test_tz_on_an_aware_index(name):
     p, o = _both(FRAMES if name == "utc" else {"nat": FRAMES["nat"].tz_localize("UTC")}, name)
     for source in (p,):
@@ -484,8 +502,8 @@ def test_tz_on_a_level_and_errors():
         _check(lambda x: x.tz_localize("UTC"), q, oq)
 
 
-@pytest.mark.parametrize("zone", ["Europe/Paris", "America/New_York", "Asia/Kolkata"])
-@pytest.mark.parametrize("name", ["sorted", "unsorted", "ms", "ns", "nat"])
+@pytest.mark.parametrize("zone", _vg(["Europe/Paris", "America/New_York", "Asia/Kolkata"], 2))
+@pytest.mark.parametrize("name", _vg(["sorted", "unsorted", "ms", "ns", "nat"], 4))
 def test_tz_localize_and_convert_use_a_named_zone(zone, name):
     p, o = _both(FRAMES, name)
     _check(lambda x: x.tz_localize(zone), p, o)
@@ -508,8 +526,8 @@ def test_a_named_zone_reads_the_wall_time_where_wall_time_matters():
         _check(call, p, o)
 
 
-@pytest.mark.parametrize("level", [0, -1, 1, 2, -3, "k", "t", "zz", None])
-@pytest.mark.parametrize("fn", ["tz_localize", "tz_convert"])
+@pytest.mark.parametrize("level", _vg([0, -1, 1, 2, -3, "k", "t", "zz", None], 4))
+@pytest.mark.parametrize("fn", _vg(["tz_localize", "tz_convert"], 2))
 def test_tz_level_argument_on_every_kind_of_index(level, fn):
     frames = {
         "int": _frame(pd.Index([3, 1], name="k"), a=[1, 2]),
@@ -529,9 +547,9 @@ EDGE_BASES = {
 }
 
 
-@pytest.mark.parametrize("unit", ["ns", "us", "s"])
-@pytest.mark.parametrize("which", ["after", "before"])
-@pytest.mark.parametrize("rule", ["ME", "W-WED", "QE", "W", "MS", "YE"])
+@pytest.mark.parametrize("unit", _vg(["ns", "us", "s"], 2))
+@pytest.mark.parametrize("which", _vg(["after", "before"], 2))
+@pytest.mark.parametrize("rule", _vg(["ME", "W-WED", "QE", "W", "MS", "YE"], 4))
 def test_rows_on_a_bin_edge_and_one_tick_from_it(unit, which, rule):
     step = pd.Timedelta(1, unit=unit)
     stamps = []
@@ -572,7 +590,7 @@ UTC_ALIASES = [
 ]
 
 
-@pytest.mark.parametrize("tz", UTC_ALIASES)
+@pytest.mark.parametrize("tz", _vg(UTC_ALIASES, 4))
 def test_the_utc_aliases_pandas_accepts(tz):
     for source in (FRAMES, SERIES):
         p, o = _both(source, "sorted")
@@ -582,7 +600,7 @@ def test_the_utc_aliases_pandas_accepts(tz):
         _check(lambda x, tz=tz: x.tz_convert(tz), pu, ou)
 
 
-@pytest.mark.parametrize("tz", ["bogus", "Mars/Olympus", "Z", "z", "", "UTC+1"])
+@pytest.mark.parametrize("tz", _vg(["bogus", "Mars/Olympus", "Z", "z", "", "UTC+1"], 3))
 def test_an_unknown_zone_fails_at_the_call_as_pandas(tz):
     for source in (FRAMES, SERIES):
         for name in ("sorted", "utc"):
@@ -593,7 +611,7 @@ def test_an_unknown_zone_fails_at_the_call_as_pandas(tz):
     _check(lambda x, tz=tz: x.tz_localize("UTC").tz_convert(tz), p, o)
 
 
-@pytest.mark.parametrize("offset", ["-3min", "+3min", "-1h30min", " -30s", "-0s"])
+@pytest.mark.parametrize("offset", _vg(["-3min", "+3min", "-1h30min", " -30s", "-0s"], 3))
 def test_a_negative_offset_parses(offset):
     for name in ("sorted", "utc"):
         p, o = _both(FRAMES, name)
@@ -603,17 +621,20 @@ def test_a_negative_offset_parses(offset):
 
 @pytest.mark.parametrize(
     "origin",
-    [
-        pd.Timestamp("2024-01-01 00:03:00"),
-        pd.Timestamp("2024-01-01 00:03:00", tz="UTC"),
-        datetime.datetime(2024, 1, 1, 0, 3),
-        "2024-01-01 00:03:00",
-        "2024-01-01 00:03:00+00:00",
-        "epoch",
-    ],
+    _vg(
+        [
+            pd.Timestamp("2024-01-01 00:03:00"),
+            pd.Timestamp("2024-01-01 00:03:00", tz="UTC"),
+            datetime.datetime(2024, 1, 1, 0, 3),
+            "2024-01-01 00:03:00",
+            "2024-01-01 00:03:00+00:00",
+            "epoch",
+        ],
+        3,
+    ),
 )
-@pytest.mark.parametrize("name", ["sorted", "utc"])
-@pytest.mark.parametrize("rule", ["7min", "1D", "ME"])
+@pytest.mark.parametrize("name", _vg(["sorted", "utc"], 2))
+@pytest.mark.parametrize("rule", _vg(["7min", "1D", "ME"], 2))
 def test_an_origin_with_another_zone_than_the_index_is_a_value_error(origin, name, rule):
     _skip_pandas_day(name, rule)
     if rule == "1D" and name == "utc":
@@ -633,7 +654,7 @@ FRACTIONS = [
 ]
 
 
-@pytest.mark.parametrize("unit", ["ns", "us"])
+@pytest.mark.parametrize("unit", _vg(["ns", "us"], 2))
 def test_fractional_times_compare_at_microseconds_as_pandas(unit):
     stamps = [
         "2024-01-01 09:30:00",
@@ -653,7 +674,7 @@ def test_fractional_times_compare_at_microseconds_as_pandas(unit):
             _check(lambda x, t=t, i=inclusive: x.between_time("09:29", t, inclusive=i), p, o)
 
 
-@pytest.mark.parametrize("freq", ["1h", "30min", "10min", "1D"])
+@pytest.mark.parametrize("freq", _vg(["1h", "30min", "10min", "1D"], 3))
 def test_asfreq_on_a_key_that_already_is_the_grid(freq):
     stamps = pd.date_range("2024-01-01", periods=50, freq=freq).astype("datetime64[us]")
     for p in (
@@ -671,8 +692,8 @@ def test_asfreq_on_a_key_that_already_is_the_grid(freq):
             _check(lambda x, f=freq: x.asfreq(f), q, oq)
 
 
-@pytest.mark.parametrize("unit", ["ns", "us", "s"])
-@pytest.mark.parametrize("method", [None, "ffill", "pad", "bfill"])
+@pytest.mark.parametrize("unit", _vg(["ns", "us", "s"], 2))
+@pytest.mark.parametrize("method", _vg([None, "ffill", "pad", "bfill"], 3))
 def test_asfreq_on_a_sparse_strictly_increasing_key(unit, method):
     keep = [0, 1, 4, 5, 6, 11, 12, 19]
     stamps = pd.date_range("2024-01-01", periods=20, freq="5s").astype(f"datetime64[{unit}]")[keep]
@@ -725,12 +746,15 @@ def flat_breaks_ok(frame, kept):
 
 @pytest.mark.parametrize(
     "stamps",
-    [
-        [pd.NaT, pd.NaT, pd.NaT],
-        [pd.NaT],
-        [pd.Timestamp("2024-01-01"), pd.NaT, pd.Timestamp("2024-01-02")],
-        [pd.NaT, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-03")],
-    ],
+    _vg(
+        [
+            [pd.NaT, pd.NaT, pd.NaT],
+            [pd.NaT],
+            [pd.Timestamp("2024-01-01"), pd.NaT, pd.Timestamp("2024-01-02")],
+            [pd.NaT, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-03")],
+        ],
+        3,
+    ),
 )
 def test_asfreq_refuses_only_an_index_that_is_all_nat(stamps):
     index = pd.DatetimeIndex(stamps).astype("datetime64[us]")

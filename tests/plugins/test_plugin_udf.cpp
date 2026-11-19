@@ -553,6 +553,17 @@ coro::CoroTask<dstd::Result<dataframe::Series>> eval_cancellable(
 }  // namespace
 
 TEST_CASE("a cancel reaches a UDF running in the parallel windows of eval") {
+    // The plugin needs 17500 steps of 10 ms to finish. Valgrind runs the
+    // timer and the windows so slowly that a cancel at 100 ms lands after
+    // about 14 s and 2300 steps, so the bounds there only ask for a stop well
+    // before the work is done.
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+    constexpr auto MAX_CANCEL_TIME = std::chrono::milliseconds(60000);
+    constexpr std::int64_t MAX_STEPS_AFTER_CANCEL = 8000;
+#else
+    constexpr auto MAX_CANCEL_TIME = std::chrono::milliseconds(2000);
+    constexpr std::int64_t MAX_STEPS_AFTER_CANCEL = 300;
+#endif
     struct SerialAfter {
         ~SerialAfter() { dataframe::set_parallel_backend(nullptr, nullptr); }
     } serial_after;
@@ -573,10 +584,10 @@ TEST_CASE("a cancel reaches a UDF running in the parallel windows of eval") {
 
     REQUIRE_FALSE(got.has_value());
     CHECK(got.error().condition() == dstd::Condition::Timeout);
-    CHECK(elapsed < std::chrono::milliseconds(2000));
+    CHECK(elapsed < MAX_CANCEL_TIME);
     std::this_thread::sleep_for(std::chrono::milliseconds(80));
     const std::int64_t steps = counter("udf_plugin_slow_steps") - before;
-    CHECK(steps < 300);
+    CHECK(steps < MAX_STEPS_AFTER_CANCEL);
 }
 
 #ifdef DURATION_UDFS_PLUGIN_PATH

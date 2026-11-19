@@ -462,6 +462,7 @@ TEST_CASE("arrow stream: releasing a lazy stream early stops the query") {
 TEST_CASE("arrow stream: a failing batch is an error that sticks") {
     Schema schema;
     schema.fields.push_back(Field{dstd::String{"a"}, scalar(TypeId::Int64)});
+    schema.fields.push_back(Field{dstd::String{"b"}, scalar(TypeId::Float64)});
     dstd::Vector<DataFrame> frames;
     frames.push_back(numbers(2));
     frames.push_back(numbers(3));

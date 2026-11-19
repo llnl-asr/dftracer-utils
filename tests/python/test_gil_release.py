@@ -26,6 +26,10 @@ def _run(fn, threads, reps):
 
 
 @pytest.mark.skipif((os.cpu_count() or 1) < 2, reason="needs two cores")
+@pytest.mark.skipif(
+    bool(os.environ.get("DFTRACER_UTILS_VALGRIND")),
+    reason="valgrind runs one thread at a time, so two threads cannot beat one",
+)
 def test_two_threads_run_sum_in_parallel():
     s = dft.Series(np.arange(ROWS, dtype=np.int64))
     expected = int(np.arange(ROWS, dtype=np.int64).sum())

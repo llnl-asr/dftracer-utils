@@ -11,6 +11,7 @@
 #include <dftracer/utils/duql/parser.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <valgrind_quirks.h>
 
 #include <charconv>
 #include <cstdint>
@@ -611,7 +612,9 @@ TEST_CASE("expressions - number functions") {
     const char* r = R"({"x":-2.5,"i":-3})";
     CHECK(eval("abs(x) == 2.5 and abs(i) == 3", r));
     CHECK(eval("floor(x) == -3 and ceil(x) == -2", r));
-    CHECK(eval("round(x) == -3 and round(2.345, 2) == 2.35", r));
+    if (!dftu_utils_test::VALGRIND_ROUNDS_TIES_TO_EVEN)
+        CHECK(eval("round(x) == -3", r));
+    CHECK(eval("round(2.345, 2) == 2.35", r));
     CHECK(eval("min(x, i) == -3 and max(x, i, 0) == 0", r));
     CHECK(eval("pow(2, 10) == 1024 and exp(0) == 1 and log(1) == 0", r));
     CHECK(truth("log(i) > 0", r) == Truth::Unknown);

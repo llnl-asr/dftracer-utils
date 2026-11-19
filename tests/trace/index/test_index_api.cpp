@@ -1957,8 +1957,9 @@ TEST_CASE("a child of a fork opens a retained root without waiting") {
     if (pid == 0) {
         ::alarm(60);
         auto again = Index::open(root);
-        if (!again) ::_exit(1);
-        ::_exit(again->snapshot().has_value() ? 0 : 2);
+        if (!again) dftu_utils_test::exit_forked_child(1);
+        dftu_utils_test::exit_forked_child(again->snapshot().has_value() ? 0
+                                                                         : 2);
     }
     int status = 0;
     REQUIRE(::waitpid(pid, &status, 0) == pid);

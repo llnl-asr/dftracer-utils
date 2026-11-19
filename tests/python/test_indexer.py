@@ -604,7 +604,9 @@ class TestAggTierQueryFilter:
         t = pa.table(reg)
         if "count" not in t.column_names:
             return 0
-        return int(pa.compute.sum(t["count"]).as_py() or 0)
+        import pyarrow.compute as pc
+
+        return int(pc.sum(t["count"]).as_py() or 0)
 
     def test_no_query(self):
         pa = pytest.importorskip("pyarrow")
@@ -664,8 +666,10 @@ class TestCollectTypedRawFallback:
         return dftu_utils.TraceViewer(files, index_dir=directory)
 
     def _agg_total(self, pa, base):
+        import pyarrow.compute as pc
+
         t = pa.table(base.group_by("name").agg("count").collect())
-        return int(pa.compute.sum(t["count"]).as_py()) if t.num_rows else 0
+        return int(pc.sum(t["count"]).as_py()) if t.num_rows else 0
 
     def test_ts_filter_returns_raw_rows(self):
         pa = pytest.importorskip("pyarrow")
@@ -895,7 +899,9 @@ class TestShardPartitionCompleteness:
     def _count(reg, pa):
         if reg is None:
             return 0
-        return int(pa.compute.sum(pa.table(reg)["count"]).as_py() or 0)
+        import pyarrow.compute as pc
+
+        return int(pc.sum(pa.table(reg)["count"]).as_py() or 0)
 
     def test_shard_ranges_union_to_full_scan(self):
         pa = pytest.importorskip("pyarrow")

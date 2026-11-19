@@ -41,16 +41,18 @@ static void destroy(void* self) {
 
 DFTU_PLUGIN_INFO("reject_destroy", "1.0")
 
+static dftu_plugin g_plugin;
+
 DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
                                                dftu_plugin_host* h,
                                                const dftu_value* config,
                                                dftu_plugin** out) {
-    dftu_plugin* p = (dftu_plugin*)calloc(1, sizeof(dftu_plugin));
+    dftu_plugin* p = &g_plugin;
     (void)h;
     (void)config;
-    if (!p) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     p->struct_size = sizeof(dftu_plugin);
     p->self = calloc(1, sizeof(Inst));
+    if (!p->self) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     p->config_keys = config_keys;
     p->plan_duql = plan_duql;
     p->destroy = destroy;

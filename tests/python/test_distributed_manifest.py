@@ -27,9 +27,10 @@ AGG_CFG = AggregationConfig(time_interval_ms=5000)
 def _agg_event_count(files, index_dir):
     """Total aggregated event count read from the index via the View tier."""
     import pyarrow as pa
+    import pyarrow.compute as pc
 
     tbl = TraceViewer(files, index_dir=index_dir).group_by("name").agg("count").collect()
-    return int(pa.compute.sum(pa.table(tbl)["count"]).as_py() or 0)
+    return int(pc.sum(pa.table(tbl)["count"]).as_py() or 0)
 
 
 def _build_distributed(env, pids, num_events=100):

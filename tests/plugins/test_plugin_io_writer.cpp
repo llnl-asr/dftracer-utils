@@ -947,6 +947,10 @@ TEST_CASE("plugin cxx: Fs list_dir reports the kind of a file and a dir") {
 }
 
 TEST_CASE("plugin cxx: Io openat2 opens through an OpenHow") {
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+    MESSAGE("skipped: Valgrind 3.22 does not handle syscall 437 (openat2)");
+    return;
+#endif
     dftu_utils_test::TestEnvironment env(0);
     const dstd::String path = env.dir() + "/sdk_openat2.bin";
     dstd::fs::write_file(dstd::PathView(path), dstd::String("how")).discard();

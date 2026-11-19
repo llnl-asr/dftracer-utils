@@ -14,6 +14,7 @@ from dftracer.utils import DataFrame, Series, TraceViewer
 from .common import Environment
 
 pa = pytest.importorskip("pyarrow")
+import pyarrow.ipc  # noqa: E402,F401
 
 CATS = ["posix", "stdio", "mpiio"]
 N = 240

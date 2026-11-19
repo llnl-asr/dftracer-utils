@@ -1587,6 +1587,10 @@ TEST_CASE("uring register: a kernel allocated buffer ring needs the ring fd") {
     RingOptions options;
     options.flags = IORING_SETUP_NO_MMAP | IORING_SETUP_REGISTERED_FD_ONLY;
     if (!ring.init(8, options)) {
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+        MESSAGE("skipped: Valgrind does not implement io_uring_setup");
+        return;
+#endif
         if (kernel_at_least(6, 5)) FAIL("a ring known by index was refused");
         MESSAGE("skipped: a kernel before 6.6 lacks REGISTERED_FD_ONLY");
         return;

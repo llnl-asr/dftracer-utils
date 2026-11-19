@@ -8,6 +8,7 @@ import gc
 import glob
 import gzip
 import os
+import platform
 import shutil
 import tempfile
 from pathlib import Path
@@ -66,6 +67,14 @@ def find_installed_example_plugin(name: str) -> str:
         if candidate.is_file():
             return str(candidate)
     return ""
+
+
+# Valgrind on arm64 emulates FRINTA, the instruction std::round compiles to, as
+# round to nearest even, so round(2.5) gives 2. A check that rounds an exact tie
+# runs everywhere else.
+VALGRIND_ROUNDS_TIES_TO_EVEN = bool(
+    os.environ.get("DFTRACER_UTILS_VALGRIND")
+) and platform.machine() in ("aarch64", "arm64")
 
 
 def valgrind_scale(n: int, divisor: int = 10) -> int:

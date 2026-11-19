@@ -26,6 +26,10 @@
 #include <functional>
 #include <type_traits>
 
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+#include <valgrind/memcheck.h>
+#endif
+
 extern "C" {
 #endif
 
@@ -146,6 +150,18 @@ inline int valgrind_threads(int n) {
 #else
     return n;
 #endif
+}
+
+/// Ends a forked child with `code`. A child keeps only the thread that forked,
+/// so under Valgrind its exit leak check reports what the parent's pool
+/// threads held (thread locals, thread arguments) and turns the exit code into
+/// 1. Reports of the child's own code, up to this call, stay on; only the
+/// exit leak check is turned off.
+[[noreturn]] inline void exit_forked_child(int code) {
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+    VALGRIND_CLO_CHANGE("--leak-check=no");
+#endif
+    ::_exit(code);
 }
 
 /// Removes `path` when this process exits normally, so a test that never

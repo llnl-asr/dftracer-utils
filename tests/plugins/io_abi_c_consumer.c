@@ -416,6 +416,8 @@ void dftu_test_io_linux_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
                   finish(s, io->tee(ctx, h->h, -1, -1, 4, 0, &n, &t), &t),
                   DFTU_E_INVALID, "tee");
 
+#ifndef DFTRACER_UTILS_VALGRIND_MODE
+    /* Valgrind 3.22 does not handle syscall 437 and answers ENOSYS. */
     expect_status(
         s, "openat2",
         finish(s, io->openat2(ctx, h->h, AT_FDCWD, path, &how, &fd, &t), &t),
@@ -424,6 +426,7 @@ void dftu_test_io_linux_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
         s, "openat2 of a missing path",
         finish(s, io->openat2(ctx, h->h, AT_FDCWD, missing, &how, &fd, &t), &t),
         DFTU_E_NOT_FOUND, "openat2");
+#endif
     if (fd >= 0) close(fd);
 
     /* A file system without user xattrs gives ENOTSUP, which is UNSUPPORTED. */

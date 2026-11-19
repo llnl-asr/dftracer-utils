@@ -17,12 +17,12 @@ A query returns nothing, "No trace files found" or "Not a gzip trace"
 collects an empty result, the CLI logs ``No trace files found in: <dir>``,
 or a query fails with ``Not a gzip trace``.
 
-**Cause**: a directory scan lists ``.pfw``, ``.jsonl`` and ``.ndjson``
-files, plain or gzip; other names, ``.json`` included, are not trace
-files (pass a ``.json`` trace with ``--files``). An index
-reads gzip only, so a View or an ``Indexer`` fails on a plain file rather
-than reading it as empty. The other common cause is a typo'd or relative path resolved
-from the wrong working directory.
+**Cause**: a directory scan lists only gzip files (``*.gz``), so a
+directory of plain ``.pfw``, ``.jsonl`` or ``.ndjson`` files looks empty.
+An index reads gzip only, so a plain file passed by name (``--files``)
+fails with ``Not a gzip trace`` rather than reading as empty. The other
+common cause is a typo'd or relative path resolved from the wrong working
+directory.
 
 **Fix**: compress plain files (``dftracer_pgzip``, see
 :doc:`io/compression`), and confirm the

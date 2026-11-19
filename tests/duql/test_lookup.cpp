@@ -22,6 +22,7 @@
 #include <span_list.h>
 #include <task_result.h>
 
+#include <limits>
 #include <memory>
 
 using namespace dftracer::utils;
@@ -51,16 +52,30 @@ dstd::Vector<const TLookup*> lookups(const Pipeline& p) {
     return out;
 }
 
-// `text`'s scan filter with every lookup bound to runs().
-Query bound(dstd::StringView text) {
+// The runs table with a float key: NaN, -0.0 and 1.5 under three tags.
+dstd::SharedPtr<const dataframe::DataFrame> float_runs() {
+    auto f = dstd::make_shared<dataframe::DataFrame>();
+    const double ids[] = {std::numeric_limits<double>::quiet_NaN(), -0.0, 1.5};
+    f->names = dstd::make_shared_strings({"run", "app"});
+    f->columns.push_back(dataframe::Series::flat_f64(ids, 3));
+    f->columns.push_back(dataframe::Series::strings(
+        dstd::Vector<dstd::String>{"nan", "zero", "frac"}));
+    return f;
+}
+
+// `text`'s scan filter with every lookup bound to `table`.
+Query bound(dstd::StringView text,
+            const dstd::SharedPtr<const dataframe::DataFrame>& table) {
     auto p = compile_program(text, {}, nullptr);
     REQUIRE_MESSAGE(p.has_value(), (p ? dstd::String() : p.error().format()));
     REQUIRE(p->main.filter);
     for (const TLookup* l : lookups(p->main))
         l->slot->table = dftu_utils_test::ok(
-            dftracer::utils::dataframe::query::make_lookup_table(*l, runs()));
+            dftracer::utils::dataframe::query::make_lookup_table(*l, table));
     return duql::detail::QueryAccess::from_node(clone(*p->main.filter));
 }
+
+Query bound(dstd::StringView text) { return bound(text, runs()); }
 
 bool on_json(const Query& q, dstd::StringView json) {
     simdjson::dom::parser parser;
@@ -93,6 +108,26 @@ TEST_CASE("lookups evaluate on JSON and flattened records") {
     const Query same =
         bound(dstd::fmt<"{}where (run -> runs.app) ?? \"x\" == \"amg\"">(lets));
     CHECK(on_json(same, R"({"run":2})"));
+}
+
+TEST_CASE("a lookup keys floats as a group does: one NaN, -0.0 is 0.0") {
+    const dstd::String lets = "let runs = where run == run; ";
+    const Query by_tag = bound(
+        dstd::fmt<"{}where run -> runs.app == \"nan\"">(lets), float_runs());
+    const Query zero = bound(
+        dstd::fmt<"{}where run -> runs.app == \"zero\"">(lets), float_runs());
+    const auto on_double = [](const Query& q, double v) {
+        ValueMap m;
+        m["run"] = Cell{v};
+        return q.evaluate(m);
+    };
+    CHECK(on_double(by_tag, std::numeric_limits<double>::quiet_NaN()));
+    CHECK(on_double(by_tag, -std::numeric_limits<double>::quiet_NaN()));
+    CHECK(on_double(by_tag, std::numeric_limits<double>::signaling_NaN()));
+    CHECK_FALSE(on_double(by_tag, 1.5));
+    CHECK(on_double(zero, 0.0));
+    CHECK(on_double(zero, -0.0));
+    CHECK_FALSE(on_double(zero, std::numeric_limits<double>::quiet_NaN()));
 }
 
 TEST_CASE("an arrow's conflicting values fail in a value position") {

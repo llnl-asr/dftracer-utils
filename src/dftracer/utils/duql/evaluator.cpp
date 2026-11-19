@@ -704,6 +704,10 @@ bool value_key(dstd::String& out, const Value& v) {
                 append_int_key(out, false, x);
                 return true;
             } else if constexpr (std::is_same_v<T, double>) {
+                if (std::isnan(x)) {
+                    append_nan_key(out);
+                    return true;
+                }
                 return append_double_key(out, x);
             } else if constexpr (std::is_same_v<T, dstd::StringView>) {
                 append_string_key(out, x);

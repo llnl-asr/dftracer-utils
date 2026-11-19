@@ -1709,7 +1709,8 @@ Matching
 
 Keys match by duql value: numbers by value (``4`` equals ``4.0``, and an
 integer past 2^53 is exact), strings by their bytes, booleans apart.
-``"4"`` never equals ``4``. A missing or null key part matches nothing.
+``"4"`` never equals ``4``. As in a group, ``-0.0`` equals ``0.0`` and every
+NaN is one key. A missing or null key part matches nothing.
 
 When several rows of ``s`` match, an arrow compared in a condition (a
 ``where``) holds when any matching row makes it hold. In ``select``,

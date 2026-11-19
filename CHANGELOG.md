@@ -917,6 +917,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 - Raise `TimeoutError` when a Dask cluster has no worker, in place of waiting for ever, in `distributed_index`, the Dask viewer and `DaskFrame`. The wait for a first worker is `DFTRACER_UTILS_DASK_WORKER_TIMEOUT` seconds (default 60), and the error names the scheduler address.
 - Make the group-wise `cumprod` of an `int64` or `uint64` column the exact integer product while it fits in 64 bits, converted once to `float64`; past that it goes on as a float. The running float product rounded at every step past 2**53.
+- Key a NaN in a duql lookup as a group does: every NaN is one key, so `x -> t.col` and `x in (...)` find a NaN row, and `-0.0` equals `0.0`. A NaN used to match nothing.
 - Answer `TraceViewer(...).collect_typed()` from the aggregation tier when the files asked for are some of the files of a shared index root, and when they live in several index roots with one aggregation interval.
   Before, the counters read required the query to name every file the index held, and a query on one trace dir of two that shared an `index_dir` fell back to a scan that returned raw event rows (or an error once the traces were gone).
   A `collect_typed()` that groups or aggregates and that the tier cannot answer, for example because the aggregation data of a file is stale, now fails with an error that names the reason, in place of returning raw event rows; a query with no group or aggregate still scans.

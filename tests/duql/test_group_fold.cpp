@@ -10,6 +10,7 @@
 #include <task_result.h>
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string_view>
 
@@ -105,6 +106,17 @@ TEST_CASE("count_distinct by an integer key takes the general path") {
     CHECK(k[1] == 1);
     CHECK(k[2] == 3);
     CHECK(counts(out) == dstd::Vector<std::int64_t>{2, 2, 1});
+}
+
+TEST_CASE("a float key groups every NaN together and -0.0 with 0.0") {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double keys[] = {nan, -0.0, 0.0, -nan, 1.5, nan};
+    const dataframe::DataFrame out =
+        fold(dataframe::scalar(dataframe::TypeId::Float64),
+             batch(dataframe::Series::flat_f64(keys, 6),
+                   strs({"a", "b", "c", "d", "e", "f"})));
+    REQUIRE(out.num_rows() == 3);
+    CHECK(counts(out) == dstd::Vector<std::int64_t>{3, 2, 1});
 }
 
 TEST_CASE("a JSON batch and a plain batch share groups and distinct values") {

@@ -3,6 +3,7 @@
 
 import gzip
 import threading
+import time
 
 import pytest
 
@@ -77,3 +78,20 @@ def test_client_without_wait_for_workers():
     _require_workers(_NoWaitClient({"w": 1}))
     with pytest.raises(TimeoutError):
         _require_workers(_NoWaitClient({}))
+
+
+def test_zero_timeout_raises_at_once(empty_client, monkeypatch):
+    monkeypatch.setenv("DFTRACER_UTILS_DASK_WORKER_TIMEOUT", "0")
+    frame = DataFrame.from_dict({"a": [1, 2, 3]})
+    start = time.monotonic()
+    exc = _raises_within_limit(lambda: DaskFrame.from_frames([frame], empty_client))
+    assert isinstance(exc, TimeoutError)
+    assert time.monotonic() - start < 5
+
+
+@pytest.mark.parametrize("raw", ["-1", "junk"])
+def test_bad_timeout_uses_the_default(raw, monkeypatch):
+    from dftracer.utils.dask._workers import _worker_timeout
+
+    monkeypatch.setenv("DFTRACER_UTILS_DASK_WORKER_TIMEOUT", raw)
+    assert _worker_timeout() == 60.0

@@ -256,7 +256,9 @@ Index storage and indexing
      - ``60``
      - Seconds ``distributed_index``, the Dask viewer and ``DaskFrame`` wait for a
        first Dask worker when the cluster has none. Then they raise
-       ``TimeoutError`` naming the scheduler. Read by the Python package only.
+       ``TimeoutError`` naming the scheduler. ``0`` does not wait: they raise at
+       once. A negative or non-numeric value means ``60``. Read by the Python
+       package only.
    * - ``DFTRACER_UTILS_INDEX_STORE_REFRESH_MS``
      - ``1000``
      - The shortest time in milliseconds between two looks for the data files

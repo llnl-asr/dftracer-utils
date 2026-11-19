@@ -27,13 +27,14 @@ def _worker_timeout() -> float:
 def _require_workers(client: Client) -> None:
     """Raise ``TimeoutError`` when ``client`` has no worker within the timeout.
 
-    A client without ``wait_for_workers`` passes when ``nthreads()`` is not empty.
+    A timeout of 0 does not wait. A client without ``wait_for_workers`` passes when
+    ``nthreads()`` is not empty.
     """
     if client.nthreads():
         return
     timeout = _worker_timeout()
     wait = getattr(client, "wait_for_workers", None)
-    if wait is not None:
+    if wait is not None and timeout > 0:
         try:
             wait(1, timeout=timeout)
             return

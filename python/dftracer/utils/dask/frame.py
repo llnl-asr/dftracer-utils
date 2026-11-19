@@ -432,6 +432,8 @@ class DaskFrame:
     ) -> DaskFrame:
         """One partition per element of ``args``: ``fn(arg)`` runs on a worker (or here)."""
         f = cls([], client)
+        if client is not None:
+            _require_workers(client)
         f._parts = [f._submit(fn, a) for a in args]
         return f
 
@@ -442,7 +444,6 @@ class DaskFrame:
     def _submit(self, fn: Callable[_P, _R], *args: _P.args, **kwargs: _P.kwargs) -> _R:
         if self._client is None:
             return fn(*args, **kwargs)
-        _require_workers(self._client)
         return cast(_R, self._client.submit(fn, *args, pure=False, **kwargs))
 
     def _gather(self, items: list[_R]) -> list[_R]:

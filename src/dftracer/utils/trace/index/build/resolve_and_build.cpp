@@ -17,6 +17,7 @@
 #include <dftracer/utils/trace/index/build/aggregation_run.h>
 #include <dftracer/utils/trace/index/build/batch_builder.h>
 #include <dftracer/utils/trace/index/build/corrupt_index.h>
+#include <dftracer/utils/trace/index/build/index_write_lock.h>
 #include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/index/index.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
@@ -416,6 +417,18 @@ bool mentions_corruption(dstd::StringView text) {
 // the caller with the index directories named. Any other error is passed on.
 coro::CoroTask<dstd::Result<ResolverResult>> resolve_and_build_index(
     ResolveAndBuildInput input) {
+    // The files of a directory are found once, here, so the roots they write
+    // to are known before the first lock and the resolver does not walk again.
+    if (input.entries.empty() && input.files.empty() &&
+        !input.directory.empty()) {
+        auto walking = coro::with_scope([&](coro::Scope& scope) {
+            return find_input_files(scope, dstd::PathView(input.directory));
+        });
+        auto found = co_await std::move(walking);
+        if (!found) co_return found.error();
+        input.entries = std::move(*found);
+        input.directory.clear();
+    }
     dstd::Set<dstd::String> roots;
     for (const auto& file : input.files)
         roots.insert(
@@ -423,6 +436,17 @@ coro::CoroTask<dstd::Result<ResolverResult>> resolve_and_build_index(
     for (const auto& entry : input.entries)
         roots.insert(
             trace::internal::determine_index_path(entry.path, input.index_dir));
+    if (!input.index_dir.empty())
+        roots.insert(
+            trace::internal::determine_index_path("", input.index_dir));
+    dstd::Set<dstd::String> keys;
+    for (const auto& root : roots) keys.insert(index_write_key(root));
+    dstd::Vector<coro::AsyncMutexGuard> writing;
+    for (const auto& key : keys) {
+        coro::AsyncMutex& mutex = index_write_mutex(key);
+        co_await mutex.lock();
+        writing.push_back(coro::AsyncMutexGuard(mutex));
+    }
     auto first = co_await resolve_and_build_once(input);
     if (first) co_return std::move(first);
     if (!mentions_corruption(first.error().message())) co_return first.error();

@@ -113,6 +113,11 @@ dstd::Vector<runtime::fs::FoundFile> scanned_entries(
 dstd::Vector<runtime::fs::FoundFile> scanned_entries(
     const ResolverResult& result, dstd::Span<const FileWorkItem> items);
 
+/// The trace files under @p directory that the resolver indexes, sorted by
+/// path.
+coro::CoroTask<dstd::Result<dstd::Vector<runtime::fs::FoundFile>>>
+find_input_files(coro::Scope& scope, dstd::PathView directory);
+
 class Resolver {
    public:
     coro::CoroTask<dstd::Result<ResolverResult>> operator()(

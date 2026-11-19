@@ -565,6 +565,9 @@ static coro::CoroTask<void> parse_and_write_worker(
                 (*parsed_jobs_ptr)[idx] = std::move(holder);
                 (*results_ptr)[idx] = std::move(result);
 
+#if DFTRACER_UTILS_TEST_PROBES
+                if (auto* probe = g_before_write_probe.load()) probe();
+#endif
                 if (trace::index::build::fill_index_job(*build, write_job,
                                                         ticket)) {
                     write_job.error_message = co_await group.add(

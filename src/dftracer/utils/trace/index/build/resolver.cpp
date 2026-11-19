@@ -471,6 +471,18 @@ dstd::Vector<runtime::fs::FoundFile> scanned_entries(
     return out;
 }
 
+coro::CoroTask<dstd::Result<dstd::Vector<runtime::fs::FoundFile>>>
+find_input_files(coro::Scope& scope, dstd::PathView directory) {
+    runtime::fs::FindOptions options;
+    options.patterns =
+        runtime::fs::names_of(common::constants::indexer::INPUT_FILE_PATTERNS);
+    options.skip_dirs =
+        runtime::fs::names_of(common::constants::indexer::SCAN_SKIP_DIRS);
+    options.skip_unreadable = true;
+    co_return co_await runtime::fs::find_all(scope, directory,
+                                             std::move(options));
+}
+
 coro::CoroTask<dstd::Result<ResolverResult>> Resolver::operator()(
     coro::Scope& ctx, const ResolverInput& input) const {
     DFTRACER_UTILS_TRACE_SCOPE("resolve index");
@@ -486,14 +498,8 @@ coro::CoroTask<dstd::Result<ResolverResult>> Resolver::operator()(
             result.all_file_mtimes.push_back(entry.mtime_seconds());
         }
     } else if (!input.directory.empty()) {
-        runtime::fs::FindOptions options;
-        options.patterns = runtime::fs::names_of(
-            common::constants::indexer::INPUT_FILE_PATTERNS);
-        options.skip_dirs =
-            runtime::fs::names_of(common::constants::indexer::SCAN_SKIP_DIRS);
-        options.skip_unreadable = true;
-        auto found = co_await runtime::fs::find_all(
-            ctx, dstd::PathView(input.directory), std::move(options));
+        auto found =
+            co_await find_input_files(ctx, dstd::PathView(input.directory));
         if (!found) co_return found.error();
         const dstd::Vector<runtime::fs::FoundFile>& matched = *found;
         result.all_files.reserve(matched.size());

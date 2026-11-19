@@ -666,6 +666,7 @@ endif()
 if(DFTRACER_UTILS_TEST_PROBES)
   list(APPEND TEST_CPP_SOURCES
     trace/index/test_build_memory.cpp
+    trace/index/test_concurrent_build.cpp
     trace/index/test_design_a.cpp
     trace/index/test_parser_reuse.cpp
     trace/index/test_agg_partials_store.cpp

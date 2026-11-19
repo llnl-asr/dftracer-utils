@@ -50,6 +50,8 @@ set(ALLOWED
   "index/schemas/dft/bloom_core.h|index/build/chunk_indexer.h"
   # the query caches keep their entries on the key-value store
   "index/cache/cache_store.h|store/store.h"
+  # the build lock is keyed as the store keys a directory
+  "index/build/index_write_lock.cpp|store/directory_key.h"
   "index/store/internal/index_decoding.h|index/gzip/gzip_member_record.h"
   "index/store/internal/index_decoding.h|index/schemas/dft/chunk_statistics.h"
   "index/store/internal/index_encoding.h|index/gzip/gzip_member_record.h"

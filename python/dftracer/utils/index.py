@@ -385,7 +385,8 @@ class Indexer:
         ``get()`` on the handle returns the :class:`IndexStatus` that ``build``
         returns when the build ends, or raises the error ``build`` would, and
         releases the GIL while it waits. Opening the files happens in the task,
-        so a bad path fails there too.
+        so a bad path fails there too. A dropped handle does not stop the build,
+        and a :meth:`build` of the same index that starts meanwhile waits for it.
         """
         native = self._native.build_async(force=force)
         return TaskHandle(

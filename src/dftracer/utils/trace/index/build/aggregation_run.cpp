@@ -37,8 +37,7 @@ dstd::Result<AggRun> start_aggregation(
     auto dictionary = agg_dictionary(*snapshot, *intern);
     if (!dictionary) return dictionary.error();
     auto written = trace::index::schemas::dft::agg::tier::write_config(
-        *target, {config.time_interval_us, config.params_hash(),
-                  config.group_by_file, config.extra_group_keys});
+        *target, trace::index::schemas::dft::agg::tier::make_config(config));
     if (!written) return written.error();
     auto cfg =
         dstd::make_shared<trace::index::schemas::dft::agg::AggregationConfig>(

@@ -1118,16 +1118,16 @@ TEST_CASE("agg meta is replaced and deleted in one record at a time") {
     auto opened = Index::open(root);
     REQUIRE(opened.has_value());
 
-    dstd::String config;
-    for (const std::uint64_t word : {std::uint64_t{60}, std::uint64_t{7}}) {
-        for (int shift = 56; shift >= 0; shift -= 8)
-            config.push_back(static_cast<char>((word >> shift) & 0xFF));
-    }
-    config.push_back(0);
+    schemas::dft::agg::tier::Config config;
+    config.time_interval_us = 60;
+    config.params_hash = 7;
+    config.group_by_file = false;
+    config.compute_percentiles = true;
+    config.sketch_accuracy = 0.05;
+    config.percentiles = {0.5, 0.99};
 
     REQUIRE(run(trace::index::delete_agg_meta(*opened, "config")).has_value());
-    REQUIRE(
-        run(trace::index::put_agg_meta(*opened, "config", config)).has_value());
+    REQUIRE(schemas::dft::agg::tier::write_config(*opened, config).has_value());
 
     auto read =
         take(schemas::dft::agg::tier::read_config(take(opened->snapshot())));
@@ -1135,11 +1135,14 @@ TEST_CASE("agg meta is replaced and deleted in one record at a time") {
     CHECK(read->time_interval_us == 60);
     CHECK(read->params_hash == 7);
     CHECK_FALSE(read->group_by_file);
+    CHECK(read->compute_percentiles);
+    CHECK_FALSE(read->use_relative_time);
+    CHECK(read->sketch_accuracy == 0.05);
+    CHECK(read->percentiles == dstd::Vector<double>{0.5, 0.99});
 
-    config[15] = 9;
-    config[16] = 1;
-    REQUIRE(
-        run(trace::index::put_agg_meta(*opened, "config", config)).has_value());
+    config.params_hash = 9;
+    config.group_by_file = true;
+    REQUIRE(schemas::dft::agg::tier::write_config(*opened, config).has_value());
     read = take(schemas::dft::agg::tier::read_config(take(opened->snapshot())));
     REQUIRE(read.has_value());
     CHECK(read->params_hash == 9);

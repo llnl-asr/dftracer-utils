@@ -62,10 +62,12 @@ def _expected(kind, count=40):
     return sorted((name, str(pid), n) for name, n in seen.items())
 
 
-def _build(files, index_dir, interval_ms=None):
+def _build(files, index_dir, interval_ms=None, **config):
     kwargs = {}
-    if interval_ms is not None:
-        kwargs["aggregation_config"] = AggregationConfig(time_interval_ms=interval_ms)
+    if interval_ms is not None or config:
+        kwargs["aggregation_config"] = AggregationConfig(
+            **({"time_interval_ms": interval_ms} if interval_ms is not None else {}), **config
+        )
     with Indexer(files=files, index_dir=index_dir, **kwargs) as indexer:
         indexer.ensure()
         return indexer.status(), indexer.rowset("files").to_dict()["path"]
@@ -195,14 +197,21 @@ def test_changed_trace_is_read_as_it_is_now_and_a_fresh_index_answers_typed():
         assert _typed([trace], index_dir) == _expected("B", 60)
 
 
-def test_rewritten_trace_keeps_the_custom_config_and_the_other_dirs_tier():
+@pytest.mark.parametrize(
+    "config",
+    [{"interval_ms": 5}, {"compute_percentiles": False}, {"group_by_file": False}],
+    ids=["interval", "no_percentiles", "no_file_key"],
+)
+def test_rewritten_trace_keeps_the_custom_config_and_the_other_dirs_tier(config):
+    interval_ms = config.get("interval_ms")
+    config = {k: v for k, v in config.items() if k != "interval_ms"}
     with Environment(lines=10) as env:
         index_dir = os.path.join(env.temp_dir, "idx")
         left = os.path.join(env.temp_dir, "left", "a.pfw.gz")
         right = os.path.join(env.temp_dir, "right", "b.pfw.gz")
         _write_trace(left, *NAMES["A"], count=200)
         _write_trace(right, *NAMES["B"], count=200)
-        _build([left, right], index_dir, interval_ms=5)
+        _build([left, right], index_dir, interval_ms=interval_ms, **config)
 
         time.sleep(1.1)
         _write_trace(left, *NAMES["B"], count=60)
@@ -212,5 +221,6 @@ def test_rewritten_trace_keeps_the_custom_config_and_the_other_dirs_tier():
         assert _typed([left, right], index_dir) == sorted(
             (n, p, c + d) for (n, p, c), (_, _, d) in zip(_expected("B", 60), _expected("B", 200))
         )
-        with Indexer(files=[left, right], index_dir=index_dir) as indexer:
-            assert indexer.status().aggregation_interval_us == 5000
+        if interval_ms is not None:
+            with Indexer(files=[left, right], index_dir=index_dir) as indexer:
+                assert indexer.status().aggregation_interval_us == interval_ms * 1000

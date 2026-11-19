@@ -261,28 +261,34 @@ ConfirmedFiles& confirmed_files() {
 }
 
 // The aggregation settings a root was built with, so a rebuild of one file
-// keeps the tier of every other file of the root. A root with no config holds
-// no tier, so it takes the standard settings. Settings that the stored config
-// does not recover are an error: clearing the tier would drop the data of the
+// keeps the tier of every other file of the root. A root with no config record
+// holds no tier, so it takes the standard settings. A record that cannot be
+// read back exactly is an error: clearing the tier would drop the data of the
 // other trace folders that share the root.
 dstd::Result<trace::index::schemas::dft::agg::AggregationConfig>
 stored_aggregation_config(const trace::index::Snapshot& snapshot,
                           dstd::StringView root) {
-    auto config =
-        trace::index::schemas::dft::agg::standard_aggregation_config();
     const auto stored =
         trace::index::schemas::dft::agg::tier::read_config(snapshot);
     if (!stored) return stored.error();
-    if (!*stored) return config;
-    config.time_interval_us = (*stored)->time_interval_us;
-    config.group_by_file = (*stored)->group_by_file;
-    config.extra_group_keys = (*stored)->extra_group_keys;
-    if (config.params_hash() != (*stored)->params_hash)
-        return common::make_error<
-            "the aggregation tier of {} was built with settings that a "
-            "freshness rebuild cannot recover; index it again with those "
-            "settings">(common::ErrorCode::Aggregation, root);
-    return config;
+    if (*stored) {
+        auto config =
+            trace::index::schemas::dft::agg::tier::aggregation_config_of(
+                **stored);
+        if (config.params_hash() == (*stored)->params_hash) return config;
+    } else {
+        const auto present =
+            trace::index::schemas::dft::agg::tier::has_config_record(snapshot);
+        if (!present.has_value()) return present.error();
+        if (!*present)
+            return trace::index::schemas::dft::agg::
+                standard_aggregation_config();
+    }
+    return common::make_error<
+        "the aggregation config of the index root {} cannot be read back, so "
+        "a changed trace file cannot be rebuilt without clearing the tier of "
+        "every folder that shares the root; index that root again explicitly">(
+        common::ErrorCode::Aggregation, root);
 }
 
 // Brings every index the files read fresh through the resolver, which clears

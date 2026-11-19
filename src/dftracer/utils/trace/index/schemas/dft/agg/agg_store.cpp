@@ -18,9 +18,15 @@ namespace {
 
 constexpr dstd::StringView CONFIG_NAME = "config";
 constexpr dstd::StringView TIME_BOUNDS_NAME = "time_bounds";
-constexpr std::size_t CONFIG_FIXED_BYTES = 17;
+constexpr std::size_t CONFIG_FIXED_BYTES = 37;
 constexpr char KEY_SEP = '\x1f';
 constexpr std::uint8_t FLAG_GROUP_BY_FILE = 1U << 0;
+constexpr std::uint8_t FLAG_RELATIVE_TIME = 1U << 1;
+constexpr std::uint8_t FLAG_NORMALIZE_TIME = 1U << 2;
+constexpr std::uint8_t FLAG_STATISTICS = 1U << 3;
+constexpr std::uint8_t FLAG_PERCENTILES = 1U << 4;
+// An earlier record has only the first bit and no settings after the flags.
+constexpr std::uint8_t FLAG_SETTINGS = 1U << 7;
 
 constexpr std::array<dstd::StringView, 2> META_NAMES = {CONFIG_NAME,
                                                         TIME_BOUNDS_NAME};
@@ -50,18 +56,32 @@ dstd::Result<void> drop_meta(const Index& index, dstd::StringView name) {
 
 dstd::Optional<Config> decode_config(dstd::StringView value) {
     if (value.size() < CONFIG_FIXED_BYTES) return dstd::nullopt;
+    const auto flags = static_cast<std::uint8_t>(value[16]);
+    if ((flags & FLAG_SETTINGS) == 0) return dstd::nullopt;
+    const auto* bytes = reinterpret_cast<const std::uint8_t*>(value.data());
     Config c;
-    c.time_interval_us = trace::index::store::layout::read_u64(value);
-    c.params_hash = trace::index::store::layout::read_u64(value.substr(8));
-    c.group_by_file =
-        (static_cast<std::uint8_t>(value[16]) & FLAG_GROUP_BY_FILE) != 0;
+    c.time_interval_us = dstd::read_u64_be(bytes);
+    c.params_hash = dstd::read_u64_be(bytes + 8);
+    c.group_by_file = (flags & FLAG_GROUP_BY_FILE) != 0;
+    c.use_relative_time = (flags & FLAG_RELATIVE_TIME) != 0;
+    c.normalize_time = (flags & FLAG_NORMALIZE_TIME) != 0;
+    c.compute_statistics = (flags & FLAG_STATISTICS) != 0;
+    c.compute_percentiles = (flags & FLAG_PERCENTILES) != 0;
+    c.reference_timestamp = dstd::read_u64_be(bytes + 17);
+    c.sketch_accuracy = dstd::read_f64_be(bytes + 25);
+    const std::uint32_t count = dstd::read_u32_be(bytes + 33);
+    if (value.size() - CONFIG_FIXED_BYTES < std::size_t{count} * 8)
+        return dstd::nullopt;
+    const std::uint8_t* at = bytes + CONFIG_FIXED_BYTES;
+    for (std::uint32_t i = 0; i < count; ++i, at += 8)
+        c.percentiles.push_back(dstd::read_f64_be(at));
     // The extra group keys follow, joined by 0x1F.
-    dstd::StringView keys = value.substr(CONFIG_FIXED_BYTES);
+    dstd::StringView keys = value.substr(CONFIG_FIXED_BYTES + count * 8);
     while (!keys.empty()) {
-        const std::size_t at = keys.find(KEY_SEP);
-        c.extra_group_keys.emplace_back(keys.substr(0, at));
-        if (at == dstd::StringView::npos) break;
-        keys.remove_prefix(at + 1);
+        const std::size_t at_sep = keys.find(KEY_SEP);
+        c.extra_group_keys.emplace_back(keys.substr(0, at_sep));
+        if (at_sep == dstd::StringView::npos) break;
+        keys.remove_prefix(at_sep + 1);
     }
     return c;
 }
@@ -74,6 +94,37 @@ dstd::Optional<TimeBounds> decode_time_bounds(dstd::StringView value) {
 
 }  // namespace
 
+Config make_config(const AggregationConfig& config) {
+    Config c;
+    c.time_interval_us = config.time_interval_us;
+    c.params_hash = config.params_hash();
+    c.group_by_file = config.group_by_file;
+    c.extra_group_keys = config.extra_group_keys;
+    c.use_relative_time = config.use_relative_time;
+    c.normalize_time = config.normalize_time;
+    c.compute_statistics = config.compute_statistics;
+    c.compute_percentiles = config.compute_percentiles;
+    c.reference_timestamp = config.reference_timestamp;
+    c.sketch_accuracy = config.sketch_accuracy;
+    c.percentiles = config.percentiles;
+    return c;
+}
+
+AggregationConfig aggregation_config_of(const Config& config) {
+    AggregationConfig c;
+    c.time_interval_us = config.time_interval_us;
+    c.group_by_file = config.group_by_file;
+    c.extra_group_keys = config.extra_group_keys;
+    c.use_relative_time = config.use_relative_time;
+    c.normalize_time = config.normalize_time;
+    c.compute_statistics = config.compute_statistics;
+    c.compute_percentiles = config.compute_percentiles;
+    c.reference_timestamp = config.reference_timestamp;
+    c.sketch_accuracy = config.sketch_accuracy;
+    c.percentiles = config.percentiles;
+    return c;
+}
+
 dstd::Expected<dstd::Optional<Config>, dstd::Error> read_config(
     const Snapshot& snapshot) {
     auto value = agg_meta(snapshot, CONFIG_NAME);
@@ -82,12 +133,33 @@ dstd::Expected<dstd::Optional<Config>, dstd::Error> read_config(
     return decode_config(dstd::StringView((*value)->data(), (*value)->size()));
 }
 
+dstd::Expected<bool, dstd::Error> has_config_record(const Snapshot& snapshot) {
+    auto value = agg_meta(snapshot, CONFIG_NAME);
+    if (!value) return dstd::Unexpected<dstd::Error>(value.error());
+    return value->has_value();
+}
+
 dstd::Result<void> write_config(const Index& index, const Config& config) {
+    for (const auto& key : config.extra_group_keys)
+        if (key.empty() || key.find(KEY_SEP) != dstd::String::npos)
+            return common::make_error<
+                "an extra group key cannot be empty or hold 0x1F: '{}'">(
+                common::ErrorCode::InvalidArgument, key);
     dstd::String value;
     dstd::append_u64_be(value, config.time_interval_us);
     dstd::append_u64_be(value, config.params_hash);
-    value.push_back(
-        static_cast<char>(config.group_by_file ? FLAG_GROUP_BY_FILE : 0));
+    std::uint8_t flags = FLAG_SETTINGS;
+    if (config.group_by_file) flags |= FLAG_GROUP_BY_FILE;
+    if (config.use_relative_time) flags |= FLAG_RELATIVE_TIME;
+    if (config.normalize_time) flags |= FLAG_NORMALIZE_TIME;
+    if (config.compute_statistics) flags |= FLAG_STATISTICS;
+    if (config.compute_percentiles) flags |= FLAG_PERCENTILES;
+    value.push_back(static_cast<char>(flags));
+    dstd::append_u64_be(value, config.reference_timestamp);
+    dstd::append_f64_be(value, config.sketch_accuracy);
+    dstd::append_u32_be(value,
+                        static_cast<std::uint32_t>(config.percentiles.size()));
+    for (const double p : config.percentiles) dstd::append_f64_be(value, p);
     for (std::size_t i = 0; i < config.extra_group_keys.size(); ++i) {
         if (i != 0) value.push_back(KEY_SEP);
         value.append(config.extra_group_keys[i]);

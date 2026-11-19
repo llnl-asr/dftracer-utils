@@ -31,6 +31,7 @@
 #include <dftracer/utils/trace/index/extensions/catalog_fold.h>
 #include <dftracer/utils/trace/index/plan/prune.h>
 #include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/trace/index/source.h>
 #include <dftracer/utils/trace/index/store/root_layout.h>
 #include <dftracer/utils/trace/index/tables.h>
@@ -259,6 +260,31 @@ ConfirmedFiles& confirmed_files() {
     return files;
 }
 
+// The aggregation settings a root was built with, so a rebuild of one file
+// keeps the tier of every other file of the root. A root with no config holds
+// no tier, so it takes the standard settings. Settings that the stored config
+// does not recover are an error: clearing the tier would drop the data of the
+// other trace folders that share the root.
+dstd::Result<trace::index::schemas::dft::agg::AggregationConfig>
+stored_aggregation_config(const trace::index::Snapshot& snapshot,
+                          dstd::StringView root) {
+    auto config =
+        trace::index::schemas::dft::agg::standard_aggregation_config();
+    const auto stored =
+        trace::index::schemas::dft::agg::tier::read_config(snapshot);
+    if (!stored) return stored.error();
+    if (!*stored) return config;
+    config.time_interval_us = (*stored)->time_interval_us;
+    config.group_by_file = (*stored)->group_by_file;
+    config.extra_group_keys = (*stored)->extra_group_keys;
+    if (config.params_hash() != (*stored)->params_hash)
+        return common::make_error<
+            "the aggregation tier of {} was built with settings that a "
+            "freshness rebuild cannot recover; index it again with those "
+            "settings">(common::ErrorCode::Aggregation, root);
+    return config;
+}
+
 // Brings every index the files read fresh through the resolver, which clears
 // a changed file's whole record. Only a file whose size, time, checkpoint size
 // or index format changed is rebuilt, with the schema it was indexed with, so
@@ -281,6 +307,9 @@ dstd::Result<void> ensure_indexes_fresh(dstd::Span<const ViewFile> files) {
         }
     };
     dstd::Map<Group, dstd::Vector<Pending>> groups;
+    dstd::HashMap<dstd::String,
+                  trace::index::schemas::dft::agg::AggregationConfig>
+        aggregation;
     dstd::Vector<dstd::String> confirmed;
     {
         Snapshots snapshots;
@@ -344,6 +373,12 @@ dstd::Result<void> ensure_indexes_fresh(dstd::Span<const ViewFile> files) {
                                   recorded_schema->size());
                 }
             }
+            if (!aggregation.contains(f.index_path)) {
+                auto kept =
+                    stored_aggregation_config(*found.snapshot, f.index_path);
+                if (!kept) return kept.error();
+                aggregation.emplace(f.index_path, std::move(*kept));
+            }
             groups[{f.index_path, f.checkpoint_size, std::move(schema)}]
                 .push_back({std::move(key), f.file_path});
         }
@@ -355,6 +390,7 @@ dstd::Result<void> ensure_indexes_fresh(dstd::Span<const ViewFile> files) {
         in.checkpoint_size = group.checkpoint_size;
         in.schema = group.schema;
         in.require_checkpoints = true;
+        in.aggregation_config = aggregation.at(group.root);
         for (const auto& p : pending)
             in.files.emplace_back(dstd::StringView(p.file));
         auto built = default_runtime().block_on(coro::named(

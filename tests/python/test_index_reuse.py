@@ -193,3 +193,24 @@ def test_changed_trace_is_read_as_it_is_now_and_a_fresh_index_answers_typed():
         time.sleep(1.1)
         _write_trace(trace, *NAMES["B"], count=60)
         assert _typed([trace], index_dir) == _expected("B", 60)
+
+
+def test_rewritten_trace_keeps_the_custom_config_and_the_other_dirs_tier():
+    with Environment(lines=10) as env:
+        index_dir = os.path.join(env.temp_dir, "idx")
+        left = os.path.join(env.temp_dir, "left", "a.pfw.gz")
+        right = os.path.join(env.temp_dir, "right", "b.pfw.gz")
+        _write_trace(left, *NAMES["A"], count=200)
+        _write_trace(right, *NAMES["B"], count=200)
+        _build([left, right], index_dir, interval_ms=5)
+
+        time.sleep(1.1)
+        _write_trace(left, *NAMES["B"], count=60)
+        # The freshness rebuild of the left trace runs through a view.
+        assert _typed([left], index_dir) == _expected("B", 60)
+        assert _typed([right], index_dir) == _expected("B", 200)
+        assert _typed([left, right], index_dir) == sorted(
+            (n, p, c + d) for (n, p, c), (_, _, d) in zip(_expected("B", 60), _expected("B", 200))
+        )
+        with Indexer(files=[left, right], index_dir=index_dir) as indexer:
+            assert indexer.status().aggregation_interval_us == 5000

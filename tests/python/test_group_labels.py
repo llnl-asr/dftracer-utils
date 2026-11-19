@@ -260,3 +260,14 @@ def test_nlargest_result_is_a_named_series():
     got = ours.groupby("g")["v"].nlargest(1)
     assert isinstance(got, Series) and got.name == "v"
     assert got.index_names() == ["g", "__index_level_1__"]
+
+
+@pytest.mark.parametrize("name", FRAMES)
+@pytest.mark.parametrize("keys", KEYS)
+@pytest.mark.parametrize(
+    "pick, n",
+    [(p, n) for p in ("head", "tail") for n in (0, 1, 2, 5)]
+    + [("nth", n) for n in (0, 1, 2, 5, -1, -2, -5)],
+)
+def test_head_tail_nth_keep_their_labels_in_input_order(name, keys, pick, n):
+    _check(lambda f: getattr(f.groupby(KEYS[keys]), pick)(n), name)

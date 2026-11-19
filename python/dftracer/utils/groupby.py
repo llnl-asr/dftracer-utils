@@ -257,6 +257,10 @@ class GroupBy(GroupTransforms[DataFrame]):
         # shift's vacated rows are the ones where the position is null.
         pos = "__dftu_pos__"
         picks = kind in ("head", "tail", "nth")
+        if picks and n >= 0 or kind == "nth":
+            counted = self._counted_pick(kind, int(n), pos)
+            if counted is not None:
+                return counted
         carry = self._origin is not None or fill is not None or picks
         out = _ext.DataFrame._group_transform(
             _ext.DataFrame.with_row_index(self._batch, pos) if carry else self._batch,
@@ -278,6 +282,30 @@ class GroupBy(GroupTransforms[DataFrame]):
         if self._origin is None and not picks:
             return self._spread(out, fill) if spread else out
         return self._labelled(out, positions, spread, fill)
+
+    def _counted_pick(self, kind: str, n: int, pos: str) -> DataFrame | None:
+        """``head``, ``tail`` and ``nth`` from the native ``cumcount`` of the
+        key columns: a row is kept when its place in its group (counted from the
+        end for ``tail`` and a negative ``nth``) is below ``n`` (``head`` and
+        ``tail``) or equals ``n`` (``nth``). ``None`` for an empty frame, which
+        the window plan answers."""
+        frame = self._batch
+        if len(frame) == 0:
+            return None
+        from_end = kind == "tail" or (kind == "nth" and n < 0)
+        place = -n - 1 if kind == "nth" and n < 0 else n
+        side = _ext.DataFrame.with_row_index(_ext.DataFrame.select(frame, *self._keys), pos)
+        if from_end:
+            side = _ext.DataFrame.reverse(side)
+        counts = self._col(
+            _ext.DataFrame._group_transform(side, self._keys, "cumcount", 0, "average", True),
+            "cumcount",
+        )
+        keep = counts == place if kind == "nth" else counts < place
+        kept = _ext.DataFrame.filter(side, keep)
+        picked = self._col(_ext.DataFrame.reverse(kept) if from_end else kept, pos)
+        out = _ext.DataFrame.take(frame, picked)
+        return self._labelled(self._retype(out, kind, False), picked)
 
     @staticmethod
     def _filled(column: Series, keep: Series, fill: int | float | str | bool) -> Series:

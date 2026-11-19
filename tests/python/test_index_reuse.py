@@ -5,6 +5,7 @@ config, two trace dirs on one index dir, and the dask build."""
 import gzip
 import os
 import shutil
+import time
 
 import pyarrow as pa
 import pytest
@@ -106,6 +107,11 @@ def test_new_aggregation_config_at_the_same_path_is_seen():
             assert sum(counts.values()) == 200
 
 
+def _private_expected(files, env, name):
+    """The answer of an index of its own, which no other dir shares."""
+    return _typed(files, os.path.join(env.temp_dir, name))
+
+
 def test_two_trace_dirs_share_one_index_dir():
     with Environment(lines=10) as env:
         index_dir = os.path.join(env.temp_dir, "shared")
@@ -113,10 +119,25 @@ def test_two_trace_dirs_share_one_index_dir():
         right = os.path.join(env.temp_dir, "right", "b.pfw.gz")
         _write_trace(left, *NAMES["A"])
         _write_trace(right, *NAMES["B"])
+        _build([left], os.path.join(env.temp_dir, "own_left"))
+        _build([right], os.path.join(env.temp_dir, "own_right"))
+        alone = {
+            "left": _private_expected([left], env, "own_left"),
+            "right": _private_expected([right], env, "own_right"),
+        }
+        assert alone["left"] == _expected("A")
+        assert alone["right"] == _expected("B")
         for order in ([left, right], [right, left], [left, right]):
-            shutil.rmtree(index_dir, ignore_errors=True)
-            _build(order, index_dir)
-            assert _typed(order, index_dir) == sorted(_expected("A") + _expected("B"))
+            for how in ("one call per dir", "one call for both"):
+                shutil.rmtree(index_dir, ignore_errors=True)
+                if how == "one call per dir":
+                    for trace in order:
+                        _build([trace], index_dir)
+                else:
+                    _build(order, index_dir)
+                assert _typed([left], index_dir) == alone["left"], how
+                assert _typed([right], index_dir) == alone["right"], how
+                assert _typed(order, index_dir) == sorted(_expected("A") + _expected("B")), how
 
 
 @pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")
@@ -149,3 +170,26 @@ def test_dask_build_delete_and_rebuild():
         finally:
             client.close()
             cluster.close()
+
+
+def test_changed_trace_is_read_as_it_is_now_and_a_fresh_index_answers_typed():
+    with Environment(lines=10) as env:
+        index_dir = os.path.join(env.temp_dir, "idx")
+        trace = os.path.join(env.temp_dir, "t", "a.pfw.gz")
+        _write_trace(trace, *NAMES["A"])
+        _build([trace], index_dir)
+        # What a DFAnalyzer-style call reads on a fresh index.
+        viewer = (
+            TraceViewer([trace], index_dir=index_dir)
+            .group_by("name", "pid")
+            .time_bucket(1000)
+            .agg("count")
+        )
+        typed = viewer.collect_typed(0, 0)
+        assert sum(pa.table(typed["regular"])["count"].to_pylist()) == 40
+        assert viewer.collect_typed(0, 8) is not None
+
+        # The trace changes: the next view reads the new content.
+        time.sleep(1.1)
+        _write_trace(trace, *NAMES["B"], count=60)
+        assert _typed([trace], index_dir) == _expected("B", 60)

@@ -395,17 +395,19 @@ void log_declined(dstd::StringView why) {
 
 using Preparation = dstd::Result<dstd::Optional<Prepared>>;
 
-Preparation declined(dstd::StringView why) {
-    log_declined(why);
-    return dstd::Optional<Prepared>();
-}
-
 enum class PrepSource { Partials, Trace };
 
 // An empty result when the partials cannot answer `plan`. With Trace a file
 // the index does not hold, a stale tier and an unreadable index leave the file
 // to be read whole instead of declining the plan.
-Preparation prepare(const ViewPlan& plan, bool typed, PrepSource from) {
+// `why_out`, when given, gets the reason of a decline.
+Preparation prepare(const ViewPlan& plan, bool typed, PrepSource from,
+                    dstd::String* why_out = nullptr) {
+    auto declined = [why_out](dstd::StringView why) -> Preparation {
+        log_declined(why);
+        if (why_out) *why_out = dstd::String(why);
+        return dstd::Optional<Prepared>();
+    };
     const bool trace = from == PrepSource::Trace;
     if (plan.files.empty()) return declined("no files");
     const auto past_pin = is_past_pin(plan);
@@ -919,8 +921,8 @@ coro::CoroTask<dstd::Result<bool>> partials_scan_collect(
 coro::CoroTask<dstd::Result<bool>> partials_collect_typed(
     const ViewPlan& plan, dataframe::DataFrame& out_regular,
     dataframe::DataFrame& out_aggregated, int shard_begin, int shard_end,
-    const ProgressFn* progress) {
-    auto prepared = prepare(plan, /*typed=*/true, PrepSource::Partials);
+    const ProgressFn* progress, dstd::String* why) {
+    auto prepared = prepare(plan, /*typed=*/true, PrepSource::Partials, why);
     if (!prepared) co_return prepared.error();
     if (!*prepared) co_return false;
     Prepared& prep = **prepared;
@@ -940,6 +942,11 @@ coro::CoroTask<dstd::Result<bool>> partials_collect_typed(
         log_declined(
             "partials that only a re-read could answer, which the "
             "query may not do");
+        if (why) {
+            *why =
+                "partials that only a re-read could answer, which the query "
+                "may not do";
+        }
         co_return false;
     }
 

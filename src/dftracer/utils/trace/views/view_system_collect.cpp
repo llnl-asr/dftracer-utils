@@ -41,36 +41,75 @@ bool is_hash_arg(dstd::StringView path) {
 
 // The plan's time_bucket and group_by do not apply here, as the counters keep
 // their own (host, name, time_bucket) grain.
-dstd::Optional<trace::index::Snapshot> covering_index(const ViewPlan& plan) {
+
+// One index root the plan reads: its snapshot and the plan files it holds.
+struct Root {
+    trace::index::Snapshot snapshot;
+    std::uint64_t params_hash = 0;
+    dstd::Vector<const ViewFile*> files;
+};
+
+// Each root the plan names with the plan files it holds, in the order the
+// plan names them, or nothing with the reason in `why`. A root serves the
+// files of every dir that shares it, so the plan may cover only some of them;
+// each plan file needs current aggregation data. All roots need one interval,
+// as the counters keep their time bucket in it.
+dstd::Optional<dstd::Vector<Root>> covering_roots(const ViewPlan& plan,
+                                                  std::uint64_t& interval_us,
+                                                  dstd::String& why) {
     const auto past_pin = is_past_pin(plan);
-    if (plan.files.empty() || !past_pin.has_value() || *past_pin)
+    if (plan.files.empty() || !past_pin.has_value() || *past_pin) {
+        why = "no files, or an index past the view's pin";
         return dstd::nullopt;
-    const dstd::String& index_path = plan.files.front().index_path;
-    if (index_path.empty()) return dstd::nullopt;
-    // An index that cannot be read has no covering columns; the scan reports
-    // it.
-    auto snapshot = snapshot_of(plan, index_path);
-    if (!snapshot) return dstd::nullopt;
-    const auto config =
-        trace::index::schemas::dft::agg::tier::read_config(*snapshot);
-    if (!config || !*config) return dstd::nullopt;
-    const auto files = snapshot->files();
-    if (!files) return dstd::nullopt;
-    dstd::HashSet<dstd::String> current;
-    for (const auto& file : *files) {
-        if (snapshot->extension(file, trace::index::store::IndexExtension::Agg,
-                                (*config)->params_hash) ==
-            trace::index::Freshness::Current)
-            current.emplace(file.path().data(), file.path().size());
     }
-    if (current.size() != plan.files.size()) return dstd::nullopt;
+    dstd::Vector<Root> roots;
+    dstd::HashMap<dstd::String, std::size_t> at;
+    bool seen_interval = false;
     for (const auto& f : plan.files) {
-        if (f.index_path != index_path) return dstd::nullopt;
-        const dstd::String logical = fileio::get_logical_path(f.file_path);
-        if (current.find(dstd::StringView(logical)) == current.end())
+        if (f.index_path.empty()) {
+            why = "a file with no index";
             return dstd::nullopt;
+        }
+        auto it = at.find(f.index_path);
+        if (it == at.end()) {
+            // An index that cannot be read has no covering columns.
+            auto snapshot = snapshot_of(plan, f.index_path);
+            if (!snapshot) {
+                why = "an unreadable index";
+                return dstd::nullopt;
+            }
+            const auto config =
+                trace::index::schemas::dft::agg::tier::read_config(*snapshot);
+            if (!config || !*config) {
+                why = "an index with no aggregation config";
+                return dstd::nullopt;
+            }
+            const std::uint64_t interval = (*config)->time_interval_us;
+            if (seen_interval && interval != interval_us) {
+                why = "indexes with other aggregation intervals";
+                return dstd::nullopt;
+            }
+            seen_interval = true;
+            interval_us = interval;
+            roots.push_back({std::move(*snapshot), (*config)->params_hash, {}});
+            it = at.emplace(f.index_path, roots.size() - 1).first;
+        }
+        Root& root = roots[it->second];
+        const auto file =
+            root.snapshot.file(fileio::get_logical_path(f.file_path));
+        if (!file) {
+            why = "a file missing from its index";
+            return dstd::nullopt;
+        }
+        if (root.snapshot.extension(
+                *file, trace::index::store::IndexExtension::Agg,
+                root.params_hash) != trace::index::Freshness::Current) {
+            why = "a file whose aggregation data is stale";
+            return dstd::nullopt;
+        }
+        root.files.push_back(&f);
     }
-    return std::move(*snapshot);
+    return roots;
 }
 
 struct GroupKey {
@@ -234,41 +273,52 @@ dataframe::DataFrame build_counters_frame(const Groups& groups, int shard_begin,
 dstd::Result<bool> system_collect(const ViewPlan& plan,
                                   dataframe::DataFrame& out_table,
                                   int shard_begin, int shard_end,
-                                  const ProgressFn*) {
-    auto index = covering_index(plan);
-    if (!index) return false;
+                                  const ProgressFn*, dstd::String* why_out) {
+    std::uint64_t interval_us = 0;
+    dstd::String why;
+    const auto roots = covering_roots(plan, interval_us, why);
+    if (!roots) {
+        if (why_out) *why_out = std::move(why);
+        return false;
+    }
     if (shard_end <= 0)
         shard_end = trace::index::schemas::dft::agg::AGG_KEY_NUM_SHARDS;
-    const auto stored =
-        trace::index::schemas::dft::agg::tier::read_config(*index);
-    if (!stored) return stored.error();
-    if (!*stored) return false;
     trace::index::schemas::dft::agg::AggregationConfig cfg;
-    cfg.time_interval_us = (*stored)->time_interval_us;
+    cfg.time_interval_us = interval_us;
 
     Groups groups;
-    for (const auto& f : plan.files) {
-        const auto file = index->file(fileio::get_logical_path(f.file_path));
-        if (!file) return false;
-        const auto walked = trace::index::for_each_agg_chunk_columns(
-            *index, *file,
-            [&](std::uint64_t,
-                const trace::index::schemas::dft::agg::ChunkColumns& block) {
-                for (std::uint64_t r = 0; r < block.rows; ++r) {
-                    GroupKey key;
-                    trace::index::schemas::dft::agg::SystemAggregationMetrics
-                        metrics;
-                    if (!counter_group(block, r, cfg, key, metrics)) continue;
-                    auto it = groups.find(key);
-                    if (it == groups.end())
-                        it = groups.emplace(std::move(key), std::move(metrics))
-                                 .first;
-                    else
-                        it->second.merge_from(metrics);
-                }
-                return true;
-            });
-        if (!walked) return walked.error();
+    for (const Root& root : *roots) {
+        for (const ViewFile* f : root.files) {
+            const auto file =
+                root.snapshot.file(fileio::get_logical_path(f->file_path));
+            if (!file) {
+                if (why_out) *why_out = "a file missing from its index";
+                return false;
+            }
+            const auto walked = trace::index::for_each_agg_chunk_columns(
+                root.snapshot, *file,
+                [&](std::uint64_t,
+                    const trace::index::schemas::dft::agg::ChunkColumns&
+                        block) {
+                    for (std::uint64_t r = 0; r < block.rows; ++r) {
+                        GroupKey key;
+                        trace::index::schemas::dft::agg::
+                            SystemAggregationMetrics metrics;
+                        if (!counter_group(block, r, cfg, key, metrics))
+                            continue;
+                        auto it = groups.find(key);
+                        if (it == groups.end())
+                            it =
+                                groups
+                                    .emplace(std::move(key), std::move(metrics))
+                                    .first;
+                        else
+                            it->second.merge_from(metrics);
+                    }
+                    return true;
+                });
+            if (!walked) return walked.error();
+        }
     }
 
     out_table = build_counters_frame(groups, shard_begin, shard_end);

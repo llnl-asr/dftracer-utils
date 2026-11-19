@@ -1309,14 +1309,24 @@ coro::CoroTask<dstd::Result<TypedResult>> run_collect_typed(
     const ProgressFn* progress) {
     ensure_schema(plan);
     TypedResult out;
-    const auto from_partials = co_await partials_collect_typed(
-        plan, out.regular, out.aggregated, shard_begin, shard_end, progress);
+    dstd::String why;
+    const auto from_partials =
+        co_await partials_collect_typed(plan, out.regular, out.aggregated,
+                                        shard_begin, shard_end, progress, &why);
     if (!from_partials.has_value()) co_return from_partials.error();
     if (*from_partials) {
         const auto from_columns = system_collect(
-            plan, out.counters, shard_begin, shard_end, progress);
+            plan, out.counters, shard_begin, shard_end, progress, &why);
         if (!from_columns.has_value()) co_return from_columns.error();
         if (*from_columns) co_return out;
+    }
+    // A query that groups or aggregates must not be answered with the events
+    // of the scan below, which are rows and not groups.
+    if (!is_row_query(plan)) {
+        co_return dstd::Error::from_format<
+            "collect_typed: the aggregation tier cannot answer this grouped "
+            "query ({}); build or rebuild the index of the traces">(
+            dstd::Condition::Unsupported, why);
     }
     // Scan the raw trace, so collect_typed returns rows rather than silently
     // none.

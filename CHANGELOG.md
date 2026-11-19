@@ -900,6 +900,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Answer `TraceViewer(...).collect_typed()` from the aggregation tier when the files asked for are some of the files of a shared index root, and when they live in several index roots with one aggregation interval.
+  Before, the counters read required the query to name every file the index held, and a query on one trace dir of two that shared an `index_dir` fell back to a scan that returned raw event rows (or an error once the traces were gone).
+  A `collect_typed()` that groups or aggregates and that the tier cannot answer, for example because the aggregation data of a file is stale, now fails with an error that names the reason, in place of returning raw event rows; a query with no group or aggregate still scans.
+
 - Read the new index after one process deletes an index and builds it again at the same path.
   Before, `Indexer.rowset("files")` raised "the index holds no rows" and a typed read returned no rows, because the process kept the store of the deleted index open.
   `Store::is_current()` and `Store::generation()` (C++) tell a handle whether the directory on disk is the one it opened; `Store::open` and `Index::open` drop a handle that is not current, and the aggregation intern table is keyed by `Index::generation()`.

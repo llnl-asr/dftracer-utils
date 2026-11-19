@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
@@ -32,10 +33,12 @@ coro::CoroTask<dstd::Result<bool>> partials_scan_collect(
 /// `out_aggregated`. False leaves both untouched. Keeps keys hashing into
 /// [shard_begin, shard_end) of AGG_KEY_NUM_SHARDS, all when shard_end <= 0.
 /// `progress` gets (0, shards) then (shards, shards). Requires plan.schema.
+/// `why`, when given, gets the reason of a false return.
 coro::CoroTask<dstd::Result<bool>> partials_collect_typed(
     const ViewPlan& plan, dftracer::utils::dataframe::DataFrame& out_regular,
     dftracer::utils::dataframe::DataFrame& out_aggregated, int shard_begin = 0,
-    int shard_end = 0, const ProgressFn* progress = nullptr);
+    int shard_end = 0, const ProgressFn* progress = nullptr,
+    dstd::String* why = nullptr);
 
 /// The query the index rules fold the events of `plan` by on a scan. Empty
 /// when the plan stays on the frame path. Reads no trace; the error is that of

@@ -1181,6 +1181,9 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_local() {
         if (!bootstraps.has_value()) co_return bootstraps.error();
         will_bootstrap = *bootstraps;
     }
+    // A typed collect reads the aggregation tier and fails without it, so its
+    // index is built first and never bootstrapped by the scan.
+    if (typed_mode) will_bootstrap = false;
     if (!no_auto_index && !will_bootstrap) {
         auto refreshed = co_await refresh_indexes(files, index_dir_std);
         if (!refreshed) co_return refreshed.error();

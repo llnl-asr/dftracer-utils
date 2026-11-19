@@ -6,6 +6,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -374,6 +375,162 @@ TEST_SUITE("ViewPartials") {
             CHECK(it->second.at("total") == 5.0 * COUNTERS);
             CHECK(it->second.at("avg") == 5.0);
         }
+    }
+
+    TEST_CASE("a typed query on some files of a shared index uses the tier") {
+        // One index root serves every dir of the traces, and a query on one
+        // dir reads only that dir's rows.
+        Fixture fx;
+        const dstd::Vector<dstd::Vector<int>> subsets{
+            {0}, {1}, {2}, {0, 1}, {1, 2}, {0, 1, 2}};
+        auto files_of = [&](dstd::Span<const int> subset) {
+            dstd::Vector<ViewFile> out;
+            for (const int i : subset)
+                out.push_back(
+                    {dstd::String(fx.gz[i]), dstd::String(fx.index_path)});
+            return out;
+        };
+        dstd::Vector<dataframe::DataFrame> expected;
+        for (const auto& subset : subsets) {
+            auto p = views::detail::scan::from_files(files_of(subset));
+            p = views::detail::scan::filter(
+                p, Query::from_string(R"(cat in ["POSIX", "STDIO"])").value());
+            p = views::detail::scan::group_by(
+                p, {GroupKey::name(), GroupKey::pid()});
+            expected.push_back(scan_only(views::detail::scan::agg(p, specs())));
+        }
+
+        fx.delete_traces();
+        for (std::size_t i = 0; i < subsets.size(); ++i) {
+            const TypedResult typed = dftu_utils_test::ok(
+                View::from_files(files_of(subsets[i]))
+                    .group_by({GroupKey::name(), GroupKey::pid()})
+                    .agg(specs())
+                    .collect_typed()
+                    .get());
+            same_rows(typed.regular, expected[i], {"name", "pid"});
+            // The "train" counters of the files asked for, and no others.
+            const Rows profiles = rows_of(typed.aggregated, {"name", "pid"});
+            REQUIRE(profiles.size() == subsets[i].size());
+            for (const int file : subsets[i])
+                CHECK(profiles.count("train|" + dstd::to_string(100 + file) +
+                                     "|") == 1);
+        }
+    }
+
+    TEST_CASE("a typed query over files of two index roots uses the tier") {
+        Fixture fx;
+        // The first two files keep the root of the fixture, and the third has
+        // a root of its own.
+        trace::index::IndexerOptions own;
+        own.index_dir = fx.env.dir() + "/idx_own";
+        own.checkpoint_size = MEMBER_BYTES;
+        own.aggregation = fx.aggregation;
+        const dstd::Vector<dstd::String> third{fx.gz[2]};
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(trace::index::Indexer::open(
+                                    dftu_utils_test::dstd_paths(third), own))
+                .build());
+        const dstd::String own_path(
+            determine_index_path(fx.gz[2], own.index_dir));
+        dstd::Vector<ViewFile> files;
+        files.push_back({dstd::String(fx.gz[0]), dstd::String(fx.index_path)});
+        files.push_back({dstd::String(fx.gz[1]), dstd::String(fx.index_path)});
+        files.push_back({dstd::String(fx.gz[2]), own_path});
+
+        auto p = views::detail::scan::from_files(files);
+        p = views::detail::scan::filter(
+            p, Query::from_string(R"(cat in ["POSIX", "STDIO"])").value());
+        p = views::detail::scan::group_by(p,
+                                          {GroupKey::name(), GroupKey::pid()});
+        const dataframe::DataFrame expected =
+            scan_only(views::detail::scan::agg(p, specs()));
+
+        fx.delete_traces();
+        const TypedResult typed = dftu_utils_test::ok(
+            View::from_files(files)
+                .group_by({GroupKey::name(), GroupKey::pid()})
+                .agg(specs())
+                .collect_typed()
+                .get());
+        same_rows(typed.regular, expected, {"name", "pid"});
+        CHECK(rows_of(typed.aggregated, {"name", "pid"}).size() == FILES);
+    }
+
+    TEST_CASE("a grouped typed query the tier cannot answer is an error") {
+        Fixture fx;
+        // The index of one file is built again with another interval, so the
+        // aggregation data of the others no longer matches its config.
+        trace::index::IndexerOptions again;
+        again.index_dir = fx.env.dir() + "/idx";
+        again.checkpoint_size = MEMBER_BYTES;
+        again.aggregation = fx.aggregation;
+        again.aggregation.time_interval_us =
+            fx.aggregation.time_interval_us / 2 + 1;
+        const dstd::Vector<dstd::String> one{fx.gz[1]};
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(trace::index::Indexer::open(
+                                    dftu_utils_test::dstd_paths(one), again))
+                .build());
+        auto grouped = fx.view()
+                           .group_by({GroupKey::name(), GroupKey::pid()})
+                           .agg(specs())
+                           .collect_typed()
+                           .get();
+        REQUIRE_FALSE(grouped.has_value());
+        const dstd::String text = grouped.error().format();
+        CHECK_MESSAGE(text.find("stale") != dstd::String::npos, text);
+
+        // A query for rows has no groups to lose, so it still scans.
+        auto rows = fx.view().collect_typed().get();
+        CHECK(rows.has_value());
+    }
+
+    TEST_CASE("a trace that changed after indexing is read as it is now") {
+        // A view makes the index fresh when it is made, so the old counts of
+        // a changed trace are never served.
+        Fixture fx;
+        const dstd::String plain = fx.env.dir() + "/changed.pfw";
+        {
+            dftu_utils_test::FileOut o(plain);
+            for (int j = 0; j < 7; ++j)
+                o << R"({"ph":"X","name":"read","cat":"POSIX","pid":101,)"
+                  << R"("tid":1,"ts":)" << (BASE_TS + j) << R"(,"dur":9,)"
+                  << R"("args":{"hhash":"hosta"}})" << "\n";
+        }
+        REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
+            plain, fx.gz[1], MEMBER_BYTES));
+        const dstd::Vector<GroupKey> keys{GroupKey::name(), GroupKey::pid()};
+
+        const dataframe::DataFrame expected = scan_events(fx, keys);
+        const dataframe::DataFrame got = dftu_utils_test::ok(
+            fx.view()
+                .filter(
+                    Query::from_string(R"(cat in ["POSIX", "STDIO"])").value())
+                .group_by(keys)
+                .agg(specs())
+                .collect()
+                .get());
+        same_rows(got, expected, {"name", "pid"});
+
+        // The typed read either answers from the rebuilt tier or says it
+        // cannot, here because the rebuild used another aggregation config
+        // than the root; it never answers with the old counts.
+        auto grouped =
+            fx.view()
+                .filter(
+                    Query::from_string(R"(cat in ["POSIX", "STDIO"])").value())
+                .group_by(keys)
+                .agg(specs())
+                .collect_typed()
+                .get();
+        if (grouped.has_value()) {
+            same_rows(grouped->regular, expected, {"name", "pid"});
+        } else {
+            CHECK(grouped.error().is(dstd::Condition::Unsupported));
+        }
+        // A read of rows has no groups to get wrong.
+        CHECK(fx.view().collect_typed().get().has_value());
     }
 
     TEST_CASE("a query groups by host and keeps the hosts it is asked for") {

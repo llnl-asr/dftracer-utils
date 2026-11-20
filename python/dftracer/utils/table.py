@@ -186,6 +186,21 @@ def _check_dtype(name: str, dtype: object) -> None:
     raise TypeError(f"column {name!r} has dtype {dtype}, which a table cannot store")
 
 
+def _arrow_alias(name: str, dtype: pd.ArrowDtype) -> str:
+    """The text that rebuilds an ArrowDtype's pyarrow type with
+    ``pa.type_for_alias``, which the reader needs because ``string[pyarrow]``
+    names both ArrowDtype(pa.string()) and StringDtype("pyarrow")."""
+    _, _, pa = _libs()
+    text = str(dtype.pyarrow_dtype)
+    try:
+        rebuilt = pa.type_for_alias(text)
+    except ValueError:
+        rebuilt = None
+    if rebuilt != dtype.pyarrow_dtype:
+        raise TypeError(f"column {name!r}: the Arrow type {text} cannot be stored in a table")
+    return text
+
+
 def _dtype_text(dtype: object) -> str:
     """The dtype string of a header field. A StringDtype that has NA as its
     missing value names its storage, as ``string[pyarrow]`` or
@@ -245,6 +260,8 @@ def _prepare(
         series = flat.iloc[:, position]
         dtype = series.dtype
         field: dict[str, object] = {"name": col, "dtype": _dtype_text(dtype)}
+        if isinstance(dtype, pd.ArrowDtype):
+            field["arrow_type"] = _arrow_alias(col, dtype)
         if isinstance(dtype, pd.CategoricalDtype):
             labels, kind = _category_labels(col, dtype.categories)
             field["categories"] = labels
@@ -470,6 +487,13 @@ def _restore(name: str, arr: pa.Array, field: dict[str, Any]) -> Column:
             out[i] = make(cell)
         return pd.Series(out, dtype=object)
     resolved = _resolve(dtype)
+    if "arrow_type" in field:
+        try:
+            resolved = pd.ArrowDtype(pa.type_for_alias(str(field["arrow_type"])))
+        except ValueError:
+            raise ValueError(
+                f"column {name!r}: unknown Arrow type {field['arrow_type']!r}"
+            ) from None
     if isinstance(resolved, np.dtype):
         if resolved.kind == "f":
             return arr.fill_null(math.nan).to_numpy(zero_copy_only=False).astype(resolved)

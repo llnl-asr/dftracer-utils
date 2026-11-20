@@ -27,7 +27,11 @@ and the exact pandas ``dtype``; a ``category`` field adds ``categories`` and
 ``ordered`` and ``categories_dtype`` (the dtype of the categories, restored
 exactly, such as ``int32`` or ``float32``), and an ``object`` field of sets or
 lists adds ``elem`` (``"set"`` or ``"list"``). A ``StringDtype`` with NA names
-its storage, as ``string[pyarrow]`` or ``string[python]``. Every other line is a ``ph`` 3 record whose ``args``
+its storage, as ``string[pyarrow]`` or ``string[python]``. An ``ArrowDtype``
+field adds ``arrow_type``, the text of its pyarrow type (``"string"``,
+``"int64"``, ``"double"``), which the reader rebuilds with
+``pyarrow.type_for_alias``; this keeps ``ArrowDtype(pa.string())`` apart from
+``StringDtype("pyarrow")``, which print alike. Every other line is a ``ph`` 3 record whose ``args``
 hold one row, in field order.
 
 NA is ``null``. NaN, ``+inf`` and ``-inf`` are the strings ``"NaN"``,
@@ -50,7 +54,8 @@ Carried: ``int8`` to ``int64``, ``uint8`` to ``uint64``, ``float32``,
 (or sets or lists of scalars), and ``category`` with all-string or all-numeric
 labels. Refused with ``TypeError``: datetime, timedelta, period and interval
 columns, an object column of anything else, and a NaN or infinity inside a set
-or list cell, and boolean categories. Refused with ``ValueError``: duplicate
+or list cell, boolean categories, and an ``ArrowDtype`` whose type
+``pyarrow.type_for_alias`` cannot rebuild. Refused with ``ValueError``: duplicate
 column names, index level names that collide with column names, category labels
 above ``2**63 - 1`` or infinite, and a column that mixes sets and lists. An
 index level name that is not a ``str`` is stored as its text and restored as

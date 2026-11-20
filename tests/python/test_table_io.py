@@ -48,6 +48,11 @@ def matrix(n=5):
             "string": pd.array(["a", None, 'q"uote\\', "line\nbreak\t", "é中"], dtype="string"),
             "str_pyarrow": pd.array(["a", None, "b", "c", "d"], dtype="string[pyarrow]"),
             "str_python": pd.array(["a", None, "b", "c", "d"], dtype=pd.StringDtype("python")),
+            "arrow_str": pd.array(["a", None, "b", "c", "d"], dtype=pd.ArrowDtype(pa.string())),
+            "arrow_bool": pd.array(
+                [True, None, False, True, False], dtype=pd.ArrowDtype(pa.bool_())
+            ),
+            "arrow_i32": pd.array([1, None, 3, 4, 5], dtype=pd.ArrowDtype(pa.int32())),
             "int64_pyarrow": pd.array([1, None, 3, 4, 5], dtype="int64[pyarrow]"),
             "double_pyarrow": pd.array([1.5, None, 3.0, math.nan, 5.0], dtype="double[pyarrow]"),
             "object": pd.Series(["x", None, "y z", "", "ü"], dtype=object),
@@ -529,6 +534,16 @@ def load_reference():
     return module
 
 
+def test_arrow_types_that_cannot_be_rebuilt_are_refused(tmp_path):
+    path = str(tmp_path / "a.pfw")
+    odd = pd.DataFrame({"d": pd.array([pa.scalar(1, pa.int8())], dtype=pd.ArrowDtype(pa.int8()))})
+    write_table(odd, path, name="t")
+    for dtype in (pa.list_(pa.int64()), pa.timestamp("ns")):
+        frame = pd.DataFrame({"d": pd.Series([None], dtype=pd.ArrowDtype(dtype))})
+        with pytest.raises(TypeError):
+            write_table(frame, path, name="t")
+
+
 def test_dfanalyzer_reads_our_files_and_we_read_theirs(tmp_path):
     ref = load_reference()
     df = matrix()
@@ -547,8 +562,6 @@ def test_dfanalyzer_reads_our_files_and_we_read_theirs(tmp_path):
     sets_equal_nan(theirs_read["sets"].tolist(), df["sets"].tolist())
 
     theirs = str(tmp_path / "theirs.pfw.gz")
-    # Their writer names a StringDtype "string" with no storage.
-    df = df.drop(columns=["str_python", "str_pyarrow"])
     ref.write_table(df, theirs, "t")
     back = read_table(theirs)
     pd.testing.assert_frame_equal(

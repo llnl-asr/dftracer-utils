@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/reader/trace_reader.h>
+#include <dftracer/utils/trace/writer/trace_writer.h>
 #include <doctest/doctest.h>
 #include <generator_ok.h>
 #include <task_result.h>
@@ -16,6 +17,7 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::reader;
 using namespace dftracer::utils::domains::workload::trace_gen;
+using dftracer::utils::trace::writer::TraceWriter;
 using namespace dftracer::utils::coro;
 using namespace dftu_utils_test;
 
@@ -41,8 +43,8 @@ TEST_SUITE("trace_gen::TraceWriter") {
 
         constexpr int NUM_EVENTS = 8;
         {
-            TraceWriter writer(gz_path);
-            writer.write("[\n");
+            auto writer = dftu_utils_test::ok(TraceWriter::open(gz_path));
+            REQUIRE(writer.write_raw("[\n"));
             emit_metadata(writer, "HH", "hh0", "node-0", "hh0");
             for (int i = 0; i < NUM_EVENTS; ++i) {
                 EventArgs a;
@@ -57,8 +59,9 @@ TEST_SUITE("trace_gen::TraceWriter") {
                 a.hhash = "hh0";
                 emit_event(writer, a);
             }
-            writer.write("]\n");
-        }  // writer flushes and closes on scope exit
+            REQUIRE(writer.write_raw("]\n"));
+            REQUIRE(writer.close());
+        }
 
         REQUIRE(dstd::fs::exists(gz_path).value());
         CHECK(dstd::fs::file_size(gz_path).value() > 0);
@@ -80,19 +83,17 @@ TEST_SUITE("trace_gen::TraceWriter") {
         CHECK(saw_metadata);
     }
 
-    TEST_CASE("close reports a file that cannot be created") {
+    TEST_CASE("open reports a file that cannot be created") {
         TestEnvironment env(0);
-        TraceWriter writer(env.dir() + "/missing_dir/x.pfw.gz");
-        writer.write("[\n");
-        CHECK_FALSE(writer.flush().has_value());
-        CHECK_FALSE(writer.close().has_value());
+        CHECK_FALSE(
+            TraceWriter::open(env.dir() + "/missing_dir/x.pfw.gz").has_value());
     }
 
     TEST_CASE("escapes control characters in string fields") {
         TestEnvironment env(0);
         const dstd::String gz_path = env.dir() + "/escaped.pfw.gz";
         {
-            TraceWriter writer(gz_path);
+            auto writer = dftu_utils_test::ok(TraceWriter::open(gz_path));
             EventArgs a;
             a.id = 1;
             a.name =
@@ -101,6 +102,7 @@ TEST_SUITE("trace_gen::TraceWriter") {
             a.cat = "POSIX";
             a.hhash = "hh0";
             emit_event(writer, a);
+            REQUIRE(writer.close());
         }
 
         TraceReader reader({.file_path = dstd::String(gz_path)});

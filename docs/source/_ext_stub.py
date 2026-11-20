@@ -406,6 +406,85 @@ class Runtime:
     ) -> None: ...
 
 
+class TraceWriter:
+    """Writes DFTracer records, one JSON line each, to a gzip file of members of
+    about ``member_size`` bytes, or to a plain file when ``compress`` is False.
+
+    ``ph`` is written as its integer. A NaN is written as the string ``"NaN"``,
+    and infinities as ``"Infinity"`` and ``"-Infinity"``. The first write error
+    is kept and raised by ``close``. Not thread-safe: a call made while another
+    thread is inside a write raises ``RuntimeError``.
+    """
+    def __init__(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        level: int = 6,
+        threads: int = 0,
+        member_size: int = 4194304,
+        compress: bool = True,
+    ) -> None: ...
+    def write_event(
+        self,
+        name: str,
+        cat: str,
+        ts: int,
+        dur: int,
+        pid: int = 0,
+        tid: int = 0,
+        args: dict[str, TraceArg] | None = None,
+    ) -> None:
+        """Write one complete event (``ph`` 1)."""
+        ...
+    def write_counter(
+        self,
+        name: str,
+        cat: str,
+        ts: int,
+        args: dict[str, TraceArg] | None = None,
+        pid: int = 0,
+        tid: int = 0,
+    ) -> None:
+        """Write one counter (``ph`` 2)."""
+        ...
+    def write_aggregated(
+        self,
+        name: str,
+        cat: str,
+        ts: int,
+        args: dict[str, TraceArg] | None = None,
+        pid: int = 0,
+        tid: int = 0,
+    ) -> None:
+        """Write one aggregated row (``ph`` 3)."""
+        ...
+    def write_metadata(
+        self,
+        name: str,
+        args: dict[str, TraceArg] | None = None,
+        pid: int = 0,
+        tid: int = 0,
+    ) -> None:
+        """Write one metadata record (``ph`` 4, ``ts`` 0)."""
+        ...
+    def write_raw(self, data: bytes | bytearray | memoryview | str) -> None:
+        """Append whole lines as they are; ``data`` must end with a newline."""
+        ...
+    def close(self) -> None:
+        """Finish the file and raise the first write error. Safe to call twice."""
+        ...
+    def discard(self) -> None:
+        """Close the writer and remove its output."""
+        ...
+    def __enter__(self) -> Self: ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None: ...
+
+
 class _RuntimeHolder(Protocol):
     """An object that owns a native ``Runtime``, as ``dftracer.utils.Runtime`` does."""
     @property
@@ -2042,6 +2121,7 @@ _EXPORTS = (
     "_close_task_callbacks",
     "TaskHandle",
     "Runtime",
+    "TraceWriter",
     "_RuntimeHolder",
     "get_default_runtime",
     "peek_default_runtime",

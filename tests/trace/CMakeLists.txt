@@ -112,6 +112,9 @@ set(TRACE_TEST_SOURCES
     reader/test_sigill_regression.cpp
     reader/test_indexed_file_reader.cpp
     reader/test_async_indexed_file_line_generator.cpp
+
+    # Writer
+    writer/test_trace_writer.cpp
 )
 
 # These read counters that exist only when DFTRACER_UTILS_TEST_PROBES is ON.

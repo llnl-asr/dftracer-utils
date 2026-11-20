@@ -10,6 +10,7 @@ This section contains the Python API documentation for dftracer utilities.
    :caption: Python Modules:
 
    trace_viewer
+   trace_writer
    duql
    columnar
    dataframe
@@ -28,6 +29,7 @@ Module Overview
 The dftracer utilities Python package provides the following main modules:
 
 - :doc:`trace_viewer` - **TraceViewer**, the primary lazy, Arrow-first query API (filter, group_by, agg, collect)
+- :doc:`trace_writer` - **TraceWriter**, which writes DFTracer records to a gzip or plain trace file
 - :doc:`duql` - The duql filter builder used by TraceViewer
 - :doc:`columnar` - The value-expression DSL (``col``/``F``/``lit``, ``Agg``, ``GroupBy``, ``eval_many``) over the DataFrame engine
 - :doc:`dataframe` - **DataFrame**, the columnar frame type (the relational and

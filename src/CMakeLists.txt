@@ -471,7 +471,10 @@ set(DFTRACER_UTILS_TRACE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/reader/internal/member_decode_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/reader/internal/gzip_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/reader/internal/reader_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/reader/error.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/reader/error.cpp
+
+    # Writer
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/writer/trace_writer.cpp)
 
 set(DFTRACER_UTILS_ARROW_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/arrow.cpp
@@ -3249,6 +3252,8 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index/batch_indexer.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/trace_viewer.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/trace_viewer.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/trace_writer.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/trace_writer.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/plugins/plugin_host.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/op_runner.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/ops.cpp

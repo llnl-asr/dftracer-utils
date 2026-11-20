@@ -34,6 +34,7 @@
 #include <dftracer/utils/python/trace/distribution.h>
 #include <dftracer/utils/python/trace/streaming_iterator.h>
 #include <dftracer/utils/python/trace/trace_viewer.h>
+#include <dftracer/utils/python/trace/trace_writer.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/system_metrics.h>
 
 namespace {
@@ -330,6 +331,7 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (dftracer::utils::python::core::init_arrow_batch_stream(m) < 0)
         return NULL;
     if (dftracer::utils::python::trace::init_trace_viewer(m) < 0) return NULL;
+    if (dftracer::utils::python::trace::init_trace_writer(m) < 0) return NULL;
     if (dftracer::utils::python::plugins::init_plugin_host(m) < 0) return NULL;
     if (dftracer::utils::python::frame::init_op_runner(m) < 0) return NULL;
     if (dftracer::utils::python::frame::init_ops(m) < 0) return NULL;

@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add `dftracer.utils.TraceWriter(path, *, level=6, threads=0, member_size=4 MiB, compress=True)`, a context manager that writes DFTracer records to a multi-member gzip or plain file: `write_event`, `write_counter`, `write_aggregated`, `write_metadata` (with `ph` as its integer) and `write_raw`. `args` takes `None`, `bool`, `int`, `float`, `str` and nested lists and dicts; NaN and infinities go out as the strings `"NaN"`, `"Infinity"` and `"-Infinity"`. C++: `trace::writer::TraceWriter`, which `dftracer_gen_fake_trace` now uses; its events put `type` before `pid`, as DFTracer does, and its metadata lines carry `pid`, `tid` and `ts`.
 - An index whose aggregation tier has percentile sketches now serves a request with `compute_percentiles=False` as it is. Before, that request cleared and rebuilt the tier without the sketches, for every trace folder that shares the index root.
 - Add `dftracer.utils.discover_trace_files(path, recursive=False)`, which lists the trace files the indexer reads under a directory, glob or file.
 - Add `DaskTraceViewer.index_record_futures(map_fn=None, progress=None)`: the distributed index records read as one ungathered future per worker, each holding an `IndexRecords`, with an optional worker-side `map_fn` and a progress phase for `ProgressAggregator`.

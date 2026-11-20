@@ -61,7 +61,14 @@ from .plugins import PluginHandle, load_plugin  # noqa: F401
 from .runtime import Runtime, TaskHandle, get_default_runtime, peek_default_runtime  # noqa: F401
 from .series import Series  # noqa: F401
 from .store import Store  # noqa: F401
-from .trace import Containment, IndexRecords, LiveFileStatus, LiveTraceViewer, TraceViewer  # noqa: F401
+from .trace import (  # noqa: F401
+    Containment,
+    IndexRecords,
+    LiveFileStatus,
+    LiveTraceViewer,
+    TraceViewer,
+    TraceWriter,
+)
 from .workers import WorkerShare, apply_worker_share, worker_share  # noqa: F401
 
 try:
@@ -104,6 +111,7 @@ __all__ = [
     "TimeUnit",
     "Store",
     "TraceViewer",
+    "TraceWriter",
     "LiveFileStatus",
     "LiveTraceViewer",
     "Containment",

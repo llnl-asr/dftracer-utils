@@ -236,7 +236,7 @@ TEST_SUITE("GenericView") {
         mixed(counted.materialize_partials({}).get());
         mixed(counted.aggregate_partial().collect().get());
         mixed(counted.collect().get());
-        mixed(v.collect_typed().get());
+        mixed(v.collect_index_records().get());
         mixed(v.materialize().get());
         mixed(counted.sink_counters(sink).get());
     }

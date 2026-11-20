@@ -719,13 +719,13 @@ dstd::Result<detail::scan::ScanPlan> timed_plan(
     return detail::scan::timed(*v);
 }
 
-coro::CoroTask<dstd::Result<TypedResult>> run_typed(
+coro::CoroTask<dstd::Result<IndexRecords>> run_index_records(
     detail::scan::ScanPlan v, int shard_begin, int shard_end,
     dstd::SharedPtr<ProgressFn> progress) {
-    auto typed = detail::scan::collect_typed(
+    auto records = detail::scan::collect_index_records(
         v, shard_begin, shard_end,
         progress && *progress ? progress.get() : nullptr);
-    co_return co_await std::move(typed);
+    co_return co_await std::move(records);
 }
 
 coro::CoroTask<dstd::Result<ExportStats>> run_materialize(
@@ -844,24 +844,25 @@ dstd::Result<dataframe::DataFrame> View::merge_partials(
     return detail::scan::merge_partials_to_table(*v, partials);
 }
 
-dataframe::LazyResult<TypedResult> View::typed(int shard_begin, int shard_end,
-                                               ProgressFn progress) const {
-    auto v = absorbed("typed", Need::Any);
-    if (!v) return failed_result<TypedResult>(lf_, v.error());
+dataframe::LazyResult<IndexRecords> View::index_records(
+    int shard_begin, int shard_end, ProgressFn progress) const {
+    auto v = absorbed("index_records", Need::Any);
+    if (!v) return failed_result<IndexRecords>(lf_, v.error());
     return {{},
             [v = std::move(*v), shard_begin, shard_end,
              progress = dstd::make_shared<ProgressFn>(std::move(progress))](
                 dstd::Vector<dataframe::DataFrame>) {
-                return run_typed(v, shard_begin, shard_end, progress);
+                return run_index_records(v, shard_begin, shard_end, progress);
             }};
 }
 
-coro::CoroTask<dstd::Result<TypedResult>> View::collect_typed(
+coro::CoroTask<dstd::Result<IndexRecords>> View::collect_index_records(
     int shard_begin, int shard_end, ProgressFn progress) const {
-    auto v = absorbed("collect_typed", Need::Any);
-    if (!v) return failed_task<TypedResult>(v.error());
-    return run_typed(std::move(*v), shard_begin, shard_end,
-                     dstd::make_shared<ProgressFn>(std::move(progress)));
+    auto v = absorbed("collect_index_records", Need::Any);
+    if (!v) return failed_task<IndexRecords>(v.error());
+    return run_index_records(
+        std::move(*v), shard_begin, shard_end,
+        dstd::make_shared<ProgressFn>(std::move(progress)));
 }
 
 coro::CoroTask<dstd::Result<ExportStats>> View::sink_json(

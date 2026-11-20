@@ -148,18 +148,19 @@ the columnar engine (see :doc:`../columnar-engine`):
        .collect()                        # -> DataFrame
    )
 
-``collect_typed`` does a single pass over an aggregation index and returns its
-three record families at once, useful for building several frames from one
-scan:
+``collect_index_records`` does a single pass over an aggregation index and
+returns its three record families at once as an
+:class:`~dftracer.utils.IndexRecords`, useful for building several frames from
+one scan:
 
 .. code-block:: python
 
-   typed = TraceViewer(files).group_by("name").agg("count", "sum:dur").collect_typed()
-   regular    = typed["regular"]      # ph="X" events
-   aggregated = typed["aggregated"]   # aggregated records (incl. extra-key dims)
-   counters   = typed["counters"]     # ph="C" counters (incl. system)
+   records = TraceViewer(files).group_by("name").agg("count", "sum:dur").collect_index_records()
+   regular    = records.regular      # ph="X" events
+   aggregated = records.aggregated   # aggregated records (incl. extra-key dims)
+   counters   = records.counters     # ph="C" counters (incl. system)
 
-``collect_typed`` runs now; ``typed(...)`` is its lazy form, a
+``collect_index_records`` runs now; ``index_records(...)`` is its lazy form, a
 :class:`~dftracer.utils.LazyResult`.
 
 Other terminals: ``stream(batch_size=65536)`` yields
@@ -393,6 +394,10 @@ How the viewer types relate and what they return:
    :undoc-members:
 
 .. autoclass:: dftracer.utils.Containment
+   :members:
+   :undoc-members:
+
+.. autoclass:: dftracer.utils.IndexRecords
    :members:
    :undoc-members:
 

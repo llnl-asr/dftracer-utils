@@ -440,7 +440,7 @@ dftracer_view
 - ``--preset <name>`` - Predefined view: io, compute, dlio
 - ``--recipe <path>`` - Custom view JSON file path
 - ``--save-recipe <path>`` - Save the constructed view to a JSON file
-- ``-q, --query <duql>`` - duql filter or pipeline (e.g., ``'cat == "POSIX" | derive ms = dur / 1000 | sort -ms | take 5'``). A pipeline with stages after the scan prints a table and does not combine with aggregation, counters, typed, materialize, call-tree, flamegraph or merge output, nor with ``--save-recipe``
+- ``-q, --query <duql>`` - duql filter or pipeline (e.g., ``'cat == "POSIX" | derive ms = dur / 1000 | sort -ms | take 5'``). A pipeline with stages after the scan prints a table and does not combine with aggregation, counters, index-records, materialize, call-tree, flamegraph or merge output, nor with ``--save-recipe``
 - ``--param <name=value>`` - Bind a ``--query`` parameter; the value is a duql literal such as ``5``, ``1.5``, ``'"read"'`` or ``true`` (repeatable)
 - ``--explain`` - Print the plan of ``--query`` and exit without scanning
 - ``--time-range <min,max>`` - Keep events starting in ``[min, max)``, in microseconds (e.g., 1000000,2000000)
@@ -486,7 +486,7 @@ dftracer_view
   bytes (0 = auto: ~1/3 of available memory)
 - ``--no-spill`` - Keep aggregation fully in memory (disable the default spill)
 - ``--agg-numeric-args`` - Aggregate every numeric ``args.*`` field automatically
-- ``--collect-typed`` - Dump the aggregation index's regular/aggregated/counters families (one pass)
+- ``--index-records`` - Dump the aggregation index's regular/aggregated/counters families (one pass)
 - ``--materialize`` - Persist this aggregation as a rollup for instant reuse (needs ``--group-by``/``--agg``)
 
 **Merging:**

@@ -58,18 +58,18 @@ Overview
 How it fits
 -----------
 
-The View is the query surface; the columnar batch is what it returns. A typed
+The View is the query surface; the columnar batch is what it returns. An index records
 read groups, buckets, aggregates, and collects in one pass:
 
 .. code-block:: python
 
-   typed = (
+   records = (
        viewer.group_by("cat", "name")
              .time_bucket(1_000_000)   # 1 second buckets, microsecond ts
              .agg(...)                 # the metrics to compute
-             .collect_typed()          # -> columnar result, Arrow-ready
+             .collect_index_records()  # -> IndexRecords of frames, Arrow-ready
    )
-   frame = typed["aggregated"].to_pandas()
+   frame = records.aggregated.to_pandas()
 
 Because the result is already columnar and Arrow-native, moving it to pandas or
 handing it to another Arrow consumer copies no data. In C++ the same path
@@ -97,7 +97,7 @@ you ask for it**, through a zero-copy edge conversion:
    batch.to_pandas()   # pandas DataFrame  Arrow C stream interface)
    batch.to_polars()   # polars DataFrame
 
-``collect()`` and ``collect_typed()`` return a ``DataFrame`` directly, so
+``collect()`` returns a ``DataFrame`` directly, so
 post-aggregation derived metrics stay entirely in the engine with no input Arrow.
 ``apply`` accepts a ``DataFrame`` (or a ``{name: Series}`` mapping) directly,
 or a ``pyarrow.Table``, whose columns are imported into the engine at the boundary.

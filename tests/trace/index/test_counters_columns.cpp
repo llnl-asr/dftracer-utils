@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// The counters of a typed collect, answered from the aggregation tier's chunk
-// column blocks: the rows, their per-second means and the shard splits.
+// The counters of an index records read, answered from the aggregation tier's
+// chunk column blocks: the rows, their per-second means and the shard splits.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
@@ -266,7 +266,7 @@ TEST_SUITE("CountersColumns") {
         const auto typed =
             dftu_utils_test::ok(trace::views::View::from_files(
                                     {{dstd::String(gz), dstd::String(idx)}})
-                                    .collect_typed()
+                                    .collect_index_records()
                                     .get());
         check_against(typed.counters, expected_groups());
 
@@ -290,7 +290,7 @@ TEST_SUITE("CountersColumns") {
         const auto whole =
             dftu_utils_test::ok(trace::views::View::from_files(
                                     {{dstd::String(gz), dstd::String(idx)}})
-                                    .collect_typed()
+                                    .collect_index_records()
                                     .get());
         check_against(whole.counters, expected_groups());
 
@@ -311,12 +311,12 @@ TEST_SUITE("CountersColumns") {
         const auto first =
             dftu_utils_test::ok(trace::views::View::from_files(
                                     {{dstd::String(gz), dstd::String(idx)}})
-                                    .collect_typed(0, boundary)
+                                    .collect_index_records(0, boundary)
                                     .get());
         const auto second =
             dftu_utils_test::ok(trace::views::View::from_files(
                                     {{dstd::String(gz), dstd::String(idx)}})
-                                    .collect_typed(boundary, 4096)
+                                    .collect_index_records(boundary, 4096)
                                     .get());
         check_against(first.counters, lo);
         check_against(second.counters, hi);

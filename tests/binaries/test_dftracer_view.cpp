@@ -903,9 +903,9 @@ TEST_SUITE("DFTracerView") {
         CHECK(sorted_lines(baseline) == sorted_lines(requery));
     }
 
-    // The build made the aggregation tier too, so the typed families exist;
-    // the --collect-typed terminal must still run cleanly.
-    TEST_CASE("collect-typed runs") {
+    // The build made the aggregation tier too, so the index record families
+    // exist; the --index-records terminal must still run cleanly.
+    TEST_CASE("index-records runs") {
         auto binary = find_view_binary();
         if (binary.empty()) {
             MESSAGE("dftracer_view binary not found, skipping.");
@@ -916,7 +916,7 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
         CHECK(run_view(binary, {"--group-by", "cat", "--agg", "count",
-                                "--collect-typed", env.dir()}) == 0);
+                                "--index-records", env.dir()}) == 0);
     }
 
     // --materialize is meaningless without an aggregation and must be rejected.

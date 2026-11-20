@@ -29,7 +29,7 @@ namespace {
 constexpr dstd::StringView SYS_CATEGORY = "sys";
 
 // The args that mark a record as an already aggregated counter, which the
-// counters of a typed collect do not take a second time.
+// counters of an index records read do not take a second time.
 bool is_preagg_count(dstd::StringView path) {
     return path == "count" || path == "dftu_cnt" || path == "dft_cnt";
 }

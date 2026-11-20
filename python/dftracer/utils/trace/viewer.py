@@ -42,6 +42,7 @@ from ..enums import coerce_bytes, coerce_duration
 from ..expr import Agg, Expr, Named, SelectItem
 from ..lazyframe import BoundColumn, LazyFrame, LazyResult, collect_all
 from ..schemas import JsonValue, RecordSchema, schema_id
+from .index_records import IndexRecords
 from .lazy import LazyOps
 from .partials import agg_specs, export_stats, partial_bytes, stats_row
 
@@ -502,30 +503,31 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         out = _ext.TraceViewer.reconstruct_if_cached(self)
         return out
 
-    def typed(
+    def index_records(
         self,
         shard_begin: int = 0,
         shard_end: int = 0,
         progress: Callable[[int, int], None] | None = None,
-    ) -> LazyResult[dict[str, DataFrame]]:
-        """The aggregation index's ``regular`` / ``aggregated`` / ``counters``
-        records over shard range ``[shard_begin, shard_end)`` (0 = all)."""
+    ) -> LazyResult[IndexRecords[DataFrame]]:
+        """The aggregation index's records over shard range
+        ``[shard_begin, shard_end)`` (0 = all)."""
         tv, runtime = self, self._runtime
 
-        def finish(_: list[DataFrame]) -> dict[str, DataFrame]:
-            raw = _ext.TraceViewer.typed(tv, shard_begin, shard_end, progress, runtime)
-            return cast("Dict[str, DataFrame]", raw)
+        def finish(_: list[DataFrame]) -> IndexRecords[DataFrame]:
+            raw = _ext.TraceViewer._index_records(tv, shard_begin, shard_end, progress, runtime)
+            regular, aggregated, counters = cast("tuple[DataFrame, DataFrame, DataFrame]", raw)
+            return IndexRecords(regular, aggregated, counters)
 
         return LazyResult([], finish)
 
-    def collect_typed(
+    def collect_index_records(
         self,
         shard_begin: int = 0,
         shard_end: int = 0,
         progress: Callable[[int, int], None] | None = None,
-    ) -> dict[str, DataFrame]:
-        """:meth:`typed`, run now."""
-        return self.typed(shard_begin, shard_end, progress).collect()
+    ) -> IndexRecords[DataFrame]:
+        """:meth:`index_records`, run now."""
+        return self.index_records(shard_begin, shard_end, progress).collect()
 
     @overload
     def sink_json(self, path: str, lazy: Literal[False] = ...) -> dict[str, JsonValue]: ...

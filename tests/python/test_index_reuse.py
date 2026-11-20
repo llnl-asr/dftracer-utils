@@ -49,7 +49,8 @@ def _typed(files, index_dir):
         TraceViewer(files, index_dir=index_dir)
         .group_by("name", "pid")
         .agg("count")
-        .collect_typed()["regular"]
+        .collect_index_records()
+        .regular
     )
     return sorted((row["name"], row["pid"], row["count"]) for row in table.to_pylist())
 
@@ -165,7 +166,8 @@ def test_dask_build_delete_and_rebuild():
                     DaskTraceViewer(traces, index_dir, client=client)
                     .group_by("name", "pid")
                     .agg("count")
-                    .collect_typed()["regular"]
+                    .collect_index_records()
+                    .regular
                 )
                 got = sorted((r["name"], r["pid"], r["count"]) for r in table.to_pylist())
                 assert got == sorted((n, p, 2 * c) for n, p, c in _expected(kind))
@@ -187,9 +189,9 @@ def test_changed_trace_is_read_as_it_is_now_and_a_fresh_index_answers_typed():
             .time_bucket(1000)
             .agg("count")
         )
-        typed = viewer.collect_typed(0, 0)
-        assert sum(pa.table(typed["regular"])["count"].to_pylist()) == 40
-        assert viewer.collect_typed(0, 8) is not None
+        records = viewer.collect_index_records(0, 0)
+        assert sum(pa.table(records.regular)["count"].to_pylist()) == 40
+        assert viewer.collect_index_records(0, 8) is not None
 
         # The trace changes: the next view reads the new content.
         time.sleep(1.1)

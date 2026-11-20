@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ### Added
 
 - Add `dftracer.utils.discover_trace_files(path, recursive=False)`, which lists the trace files the indexer reads under a directory, glob or file.
-- Add `DaskTraceViewer.typed_futures(map_fn=None, progress=None)`: the distributed typed read as one ungathered future per worker, with an optional worker-side `map_fn` and a progress phase for `ProgressAggregator`.
+- Add `DaskTraceViewer.index_record_futures(map_fn=None, progress=None)`: the distributed index records read as one ungathered future per worker, each holding an `IndexRecords`, with an optional worker-side `map_fn` and a progress phase for `ProgressAggregator`.
 - Add `dftracer.utils.memory_budget_advice(required_bytes, available_bytes=0)`, which returns a typed `MemoryBudgetAdvice` (`fits`, `peak_bytes`, `suggested_nodes`, `warning`, ...). The untyped `memory_budget_advice` of the native module is now private.
 - Add `dftracer.utils.worker_share(workers)` and `apply_worker_share(workers)` (C++ `common::worker_share`) so several worker processes on one host split it: each worker gets the usable CPUs divided by the worker count for its compute and I/O threads, and its share of the memory budget.
   `worker_share` returns a frozen `WorkerShare` (`threads`, `io_threads`, `memory_budget`, `env` with `DFTRACER_UTILS_THREADS`, `DFTRACER_UTILS_IO_THREADS` and `DFTRACER_UTILS_MEM_BUDGET`); `apply_worker_share` is the initializer for a `ProcessPoolExecutor` or `multiprocessing.Pool` and also applies the share to a runtime and a memory budget that already exist.
@@ -295,6 +295,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Rename `collect_typed` and `typed` to `collect_index_records` and `index_records` (C++ `View`, Python `TraceViewer`, `DaskTraceViewer`), which now return an `IndexRecords` with `regular`, `aggregated` and `counters` fields in place of a dict; the `dftracer_view` flag `--collect-typed` is now `--index-records`.
 - Speed up the dataframe ops that were slow against pandas 3.
   `DataFrame::column_index` looks a column up through a hash of the names that the first call on a frame of 16 or more columns builds (a frame grows by 8 bytes for it); a Python `DataFrame[name]` on a frame of 100k columns no longer scans the names.
   `unstack` numbers the rows and columns with the native hash numbering and takes each value column once at the row that fills each cell, in place of four sorts and a pivot per value column; it reads NaN labels as one label, as pandas does.

@@ -1509,12 +1509,12 @@ dstd::Result<dstd::Vector<dstd::String>> mv_source(const ScanPlan& plan) {
     return out;
 }
 
-coro::CoroTask<dstd::Result<TypedResult>> collect_typed(
+coro::CoroTask<dstd::Result<IndexRecords>> collect_index_records(
     ScanPlan plan, int shard_begin, int shard_end, const ProgressFn* progress) {
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
         co_return resolved.error();
-    co_return co_await detail::run_collect_typed(*plan, shard_begin, shard_end,
-                                                 progress);
+    co_return co_await detail::run_collect_index_records(*plan, shard_begin,
+                                                         shard_end, progress);
 }
 
 coro::CoroTask<dstd::Result<ExportStats>> export_counters(ScanPlan plan,

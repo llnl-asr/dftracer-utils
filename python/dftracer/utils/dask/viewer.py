@@ -10,7 +10,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    Dict,
     Iterator,
     List,
     Literal,
@@ -31,11 +30,9 @@ if TYPE_CHECKING:
 from ..dataframe import DataFrame, PhaseArg, TimeUnitArg
 from ..dftracer_utils_ext import NUM_SHARDS
 from ..enums import coerce_bytes, coerce_duration
+from ..trace.index_records import IndexRecords
 from ..trace.viewer import TraceViewer
 from ._workers import _require_workers
-
-TypedTables = Dict[str, Optional["pa.Table"]]
-"""One shard range of a typed read: ``regular``, ``aggregated`` and ``counters``."""
 
 _T = TypeVar("_T")
 
@@ -190,19 +187,19 @@ def _dv_materialize_shard_task(
     return subdir
 
 
-def _dv_collect_typed_task(
+def _dv_collect_index_records_task(
     files: list[str],
     index_dir: str,
     plan: _Plan,
     shard_begin: int,
     shard_end: int,
-    map_fn: Optional[Callable[[TypedTables], object]],
+    map_fn: Optional[Callable[[IndexRecords[pa.Table]], object]],
     progress: Optional[str],
 ) -> object:
-    """Worker: one CF shard range of the typed read. The tier is index-wide, so
-    every worker sees all files but a distinct shard range of the aggregation
-    CF - gives {regular, aggregated, counters} pyarrow Tables, or what
-    ``map_fn`` makes of them.
+    """Worker: one CF shard range of the index records read. The tier is
+    index-wide, so every worker sees all files but a distinct shard range of the
+    aggregation CF - gives an ``IndexRecords`` of pyarrow Tables, or what
+    ``map_fn`` makes of it.
 
     The C++ terminal yields native VecBatches, which are not picklable; import
     each into a pyarrow Table here so a process cluster can ship them."""
@@ -215,11 +212,14 @@ def _dv_collect_typed_task(
         if progress is None
         else worker_progress_forwarder(progress, f"{shard_begin}_{shard_end}")
     )
-    typed = _make_viewer(files, index_dir, plan).collect_typed(shard_begin, shard_end, forward)
-    tables: TypedTables = {
-        k: (pa.table(typed[k]) if typed.get(k) is not None else None)
-        for k in ("regular", "aggregated", "counters")
-    }
+    records = _make_viewer(files, index_dir, plan).collect_index_records(
+        shard_begin, shard_end, forward
+    )
+    tables = IndexRecords(
+        pa.table(records.regular),
+        pa.table(records.aggregated),
+        pa.table(records.counters),
+    )
     return tables if map_fn is None else map_fn(tables)
 
 
@@ -408,25 +408,28 @@ class DaskTraceViewer:
         return TraceViewer.merge_flamegraph_partials(partials)
 
     @overload
-    def typed_futures(
+    def index_record_futures(
         self, map_fn: None = ..., progress: Optional[str] = ...
-    ) -> List[Future[TypedTables]]: ...
+    ) -> List[Future[IndexRecords[pa.Table]]]: ...
     @overload
-    def typed_futures(
-        self, map_fn: Callable[[TypedTables], _T], progress: Optional[str] = ...
+    def index_record_futures(
+        self,
+        map_fn: Callable[[IndexRecords[pa.Table]], _T],
+        progress: Optional[str] = ...,
     ) -> List[Future[_T]]: ...
 
-    def typed_futures(
+    def index_record_futures(
         self,
-        map_fn: Optional[Callable[[TypedTables], object]] = None,
+        map_fn: Optional[Callable[[IndexRecords[pa.Table]], object]] = None,
         progress: Optional[str] = None,
     ) -> List[Future[Any]]:
-        """The typed read as one ungathered future per worker.
+        """The index records read as one ungathered future per worker.
 
         The aggregation tier is index-wide, so each worker reads a disjoint range
-        of its hash shards over all files and gives ``{regular, aggregated,
-        counters}`` as pyarrow Tables. ``map_fn``, when given, runs on the worker
-        on those tables and its result is what the future holds; it must be a
+        of its hash shards over all files and gives an
+        :class:`~dftracer.utils.IndexRecords` of pyarrow Tables. ``map_fn``, when
+        given, runs on the worker on those records and its result is what the
+        future holds; it must be a
         top-level function a process cluster can pickle. ``progress`` names a
         phase: each worker then publishes its ``(done, total)`` under it for a
         :class:`~dftracer.utils.dask.ProgressAggregator`. The worker count is
@@ -444,7 +447,7 @@ class DaskTraceViewer:
                 continue
             futures.append(
                 client.submit(
-                    _dv_collect_typed_task,
+                    _dv_collect_index_records_task,
                     self._files,
                     self._index_dir,
                     self._plan,
@@ -458,19 +461,24 @@ class DaskTraceViewer:
             )
         return futures
 
-    def collect_typed(self) -> TypedTables:
-        """Distributed one-pass typed read -> {regular, aggregated, counters}
-        pyarrow Tables: :meth:`typed_futures` gathered, each kind concatenated."""
+    def collect_index_records(self) -> IndexRecords[pa.Table]:
+        """Distributed one-pass index records read: :meth:`index_record_futures`
+        gathered, each family concatenated into one pyarrow Table."""
         import pyarrow as pa
 
-        parts: List[TypedTables] = self._resolve_client().gather(self.typed_futures())
+        parts: List[IndexRecords[pa.Table]] = self._resolve_client().gather(
+            self.index_record_futures()
+        )
 
-        def cat(key: str) -> pa.Table | None:
+        def cat(tables: List[pa.Table]) -> pa.Table:
             # Permissive promotion unifies system's dynamic per-metric columns across shards.
-            tables = [p[key] for p in parts if p.get(key) is not None]
-            return pa.concat_tables(tables, promote_options="permissive") if tables else None
+            return pa.concat_tables(tables, promote_options="permissive")
 
-        return {k: cat(k) for k in ("regular", "aggregated", "counters")}
+        return IndexRecords(
+            cat([p.regular for p in parts]),
+            cat([p.aggregated for p in parts]),
+            cat([p.counters for p in parts]),
+        )
 
     def _coordinator(self) -> TraceViewer:
         # Single-node viewer over the same files and aggregation, without

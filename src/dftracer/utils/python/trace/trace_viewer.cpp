@@ -891,7 +891,7 @@ PyObject* tv_sink_json(PyObject* self, PyObject* arg) {
     });
 }
 
-PyObject* tv_typed(PyObject* self, PyObject* args, PyObject* kwds) {
+PyObject* tv_index_records(PyObject* self, PyObject* args, PyObject* kwds) {
     int shard_begin = 0, shard_end = 0;
     PyObject* progress = nullptr;
     PyObject* runtime_arg = nullptr;
@@ -899,32 +899,39 @@ PyObject* tv_typed(PyObject* self, PyObject* args, PyObject* kwds) {
                            {"shard_begin", "shard_end", "progress", "runtime"},
                            &shard_begin, &shard_end, &progress, &runtime_arg))
         return nullptr;
-    trace::views::TypedResult typed;
+    trace::views::IndexRecords records;
     trace::views::ProgressFn fn = progress_from(progress);
     if (!run_on(
             runtime_arg,
             [&] {
-                return tv_of(self).collect_typed(shard_begin, shard_end,
-                                                 std::move(fn));
+                return tv_of(self).collect_index_records(shard_begin, shard_end,
+                                                         std::move(fn));
             },
-            typed))
+            records))
         return nullptr;
-    PyObject* d = PyDict_New();
-    if (!d) return nullptr;
-    const dftracer::utils::dstd::Pair<const char*, DataFrame*> parts[] = {
-        {"regular", &typed.regular},
-        {"aggregated", &typed.aggregated},
-        {"counters", &typed.counters}};
-    for (const auto& [key, frame] : parts) {
-        PyObject* v = python::frame::wrap_dataframe(std::move(*frame));
-        if (!v || PyDict_SetItemString(d, key, v) < 0) {
-            Py_XDECREF(v);
-            Py_DECREF(d);
-            return nullptr;
-        }
-        Py_DECREF(v);
+    PyObject* regular =
+        python::frame::wrap_dataframe(std::move(records.regular));
+    PyObject* aggregated =
+        python::frame::wrap_dataframe(std::move(records.aggregated));
+    PyObject* counters =
+        python::frame::wrap_dataframe(std::move(records.counters));
+    if (!regular || !aggregated || !counters) {
+        Py_XDECREF(regular);
+        Py_XDECREF(aggregated);
+        Py_XDECREF(counters);
+        return nullptr;
     }
-    return d;
+    PyObject* out = PyTuple_New(3);
+    if (!out) {
+        Py_DECREF(regular);
+        Py_DECREF(aggregated);
+        Py_DECREF(counters);
+        return nullptr;
+    }
+    PyTuple_SET_ITEM(out, 0, regular);
+    PyTuple_SET_ITEM(out, 1, aggregated);
+    PyTuple_SET_ITEM(out, 2, counters);
+    return out;
 }
 
 PyObject* tv_materialize(PyObject* self, PyObject* args, PyObject* kwds) {
@@ -1215,8 +1222,9 @@ PyMethodDef tv_methods[] = {
      "Plan of a one-row 'partial' frame."},
     {"sink_json", tv_sink_json, METH_O,
      "Plan writing the selected events to `path`; yields one stats row."},
-    {"typed", DFTU_PYCFUNCTION(tv_typed), METH_VARARGS | METH_KEYWORDS,
-     "The aggregation index's record families (runs now)."},
+    {"_index_records", DFTU_PYCFUNCTION(tv_index_records),
+     METH_VARARGS | METH_KEYWORDS,
+     "The aggregation index's record families as a tuple (runs now)."},
     {"materialize", DFTU_PYCFUNCTION(tv_materialize),
      METH_VARARGS | METH_KEYWORDS, "Persist this query (runs now)."},
     {"export_trace", DFTU_PYCFUNCTION(tv_export_trace),

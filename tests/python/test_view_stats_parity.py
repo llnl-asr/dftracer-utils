@@ -3,7 +3,10 @@
 """Parity checks for the View aggregation: the aggregation tier against the
 raw scan, and name, percentile, skew and group-key resolution."""
 
+import dataclasses
 import gzip
+
+import pytest
 
 import dftracer.utils as dftu_utils
 
@@ -194,8 +197,8 @@ def test_view_histogram_tier_matches_raw_scan(tmp_path):
             assert abs(tb["hi"] - rb["hi"]) < 1e-9
 
 
-def test_collect_typed_one_pass_returns_all_record_families(tmp_path):
-    """collect_typed reads regular events, aggregated records (arbitrary extra
+def test_collect_index_records_one_pass_returns_all_record_families(tmp_path):
+    """collect_index_records reads regular events, aggregated records (arbitrary extra
     keys), and counters (incl. system) from one tier pass."""
     import gzip
 
@@ -226,11 +229,11 @@ def test_collect_typed_one_pass_returns_all_record_families(tmp_path):
     ) as ix:
         ix.ensure()
 
-    res = TraceViewer([p], index_dir=idx).group_by("name", "pid", "tid").collect_typed()
-    assert set(res) == {"regular", "aggregated", "counters"}
-    regular = res["regular"].to_dict()
-    aggregated = res["aggregated"].to_dict()
-    counters = res["counters"].to_dict()
+    res = TraceViewer([p], index_dir=idx).group_by("name", "pid", "tid").collect_index_records()
+    assert isinstance(res, dftu_utils.IndexRecords)
+    regular = res.regular.to_dict()
+    aggregated = res.aggregated.to_dict()
+    counters = res.counters.to_dict()
 
     assert regular["name"] == ["read"] and regular["count"] == [20.0]
     assert aggregated["name"] == ["train"] and aggregated["count"] == [3.0]
@@ -238,11 +241,18 @@ def test_collect_typed_one_pass_returns_all_record_families(tmp_path):
     assert counters["name"] == ["cpu"]
     assert abs(counters["user_pct"][0] - 41.5) < 1e-9
 
+    assert all(
+        isinstance(frame, dftu_utils.DataFrame)
+        for frame in (res.regular, res.aggregated, res.counters)
+    )
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        res.regular = res.counters  # type: ignore[misc]
 
-def test_collect_typed_cat_filter_matches_collect(tmp_path):
-    """A cat filter must not be silently dropped by collect_typed. The tier
+
+def test_collect_index_records_cat_filter_matches_collect(tmp_path):
+    """A cat filter must not be silently dropped by collect_index_records. The tier
     stores cat lowercased, so an equality/membership literal is folded to match
-    (case-insensitively), and collect_typed agrees with collect()."""
+    (case-insensitively), and collect_index_records agrees with collect()."""
     import gzip
 
     from dftracer.utils import AggregationConfig, TraceViewer
@@ -266,12 +276,12 @@ def test_collect_typed_cat_filter_matches_collect(tmp_path):
     def count(q):
         tv = TraceViewer([p], index_dir=idx).filter(q).group_by("name").agg("count")
         c = tv.collect()
-        reg = tv.collect_typed()["regular"]
+        reg = tv.collect_index_records().regular
         cn = 0 if c is None else int(sum(c["count"].to_list()))
         rn = 0 if reg is None else int(sum(reg["count"].to_list()))
         return cn, rn
 
-    # Both cases and the set form match, and collect_typed never silently empties.
+    # Both cases and the set form match, and collect_index_records never silently empties.
     for q in ('cat == "posix"', 'cat == "POSIX"', 'cat in ["POSIX", "STDIO"]'):
         cn, rn = count(q)
         assert cn == rn > 0, (q, cn, rn)
@@ -318,8 +328,8 @@ def test_resolved_name_group_keys(tmp_path):
         assert list(frame["sum_dur"]) == [1725.0, 1725.0]
 
 
-def test_collect_typed_resolves_name_group_keys(tmp_path):
-    """collect_typed resolves FileName/HostName group keys to names (not the
+def test_collect_index_records_resolves_name_group_keys(tmp_path):
+    """collect_index_records resolves FileName/HostName group keys to names (not the
     stored hash), matching the generic collect() re-key path."""
 
     from dftracer.utils import AggregationConfig, TraceViewer
@@ -335,8 +345,8 @@ def test_collect_typed_resolves_name_group_keys(tmp_path):
     ) as ix:
         ix.ensure()
 
-    typed = TraceViewer(files, index_dir=idx).group_by("file_name").collect_typed()
-    reg = typed["regular"].to_pandas()
+    records = TraceViewer(files, index_dir=idx).group_by("file_name").collect_index_records()
+    reg = records.regular.to_pandas()
     assert sorted(reg["file_name"].unique()) == ["file1.dat", "file2.dat"]
 
 
@@ -439,7 +449,7 @@ def test_fileless_index_serves_non_file_queries(tmp_path):
 
     def totals(idx):
         tv = TraceViewer([p], index_dir=idx).group_by("name").agg("count", "sum:dur")
-        return tv.collect_typed()["regular"].to_pandas()
+        return tv.collect_index_records().regular.to_pandas()
 
     keyed_rows, fileless_rows = totals(keyed), totals(fileless)
 

@@ -1044,7 +1044,8 @@ TEST_SUITE("View - trace terminals") {
         CHECK(rows.num_rows() == 16);
     }
 
-    TEST_CASE("collect_typed leaves dur null where the record has none") {
+    TEST_CASE(
+        "collect_index_records leaves dur null where the record has none") {
         TestEnvironment env(10);
         const dstd::String pfw = env.dir() + "/dur_gap.pfw";
         {
@@ -1057,8 +1058,8 @@ TEST_SUITE("View - trace terminals") {
         const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         dstd::fs::remove(pfw).discard();
-        const TypedResult t =
-            test_view_common::run(views::detail::scan::collect_typed(
+        const IndexRecords t =
+            test_view_common::run(views::detail::scan::collect_index_records(
                 views::detail::scan::from_file(dstd::String(gz)), 0, 4096));
         REQUIRE(t.regular.num_rows() == 2);
         const dataframe::Series& dur =
@@ -1077,16 +1078,16 @@ TEST_SUITE("View - trace terminals") {
         Deferred<ExportStats> stats =
             s.sink_json(t.duql(R"(cat == "POSIX")"), sink);
         Deferred<dataframe::DataFrame> fg = s.collect(t.flamegraph());
-        Deferred<TypedResult> typed = s.collect(t.typed());
+        Deferred<IndexRecords> records = s.collect(t.index_records());
         test_view_common::run(s.execute());
         CHECK(both.get().call_tree.num_rows() == 32);
         CHECK(rows_of(fg.get(), FLAME_COLS) ==
               rows_of(both.get().flamegraph, FLAME_COLS));
         CHECK(stats.get().events_matched == 16);
         CHECK(sink.lines().size() == 16);
-        const TypedResult want = test_view_common::run(
-            views::detail::scan::collect_typed(nested_plan(), 0, 4096));
-        CHECK(typed.get().regular.num_rows() == want.regular.num_rows());
+        const IndexRecords want = test_view_common::run(
+            views::detail::scan::collect_index_records(nested_plan(), 0, 4096));
+        CHECK(records.get().regular.num_rows() == want.regular.num_rows());
     }
 
     TEST_CASE("a batched containment branch honors phase") {

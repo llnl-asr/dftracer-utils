@@ -401,7 +401,7 @@ enum class PrepSource { Partials, Trace };
 // the index does not hold, a stale tier and an unreadable index leave the file
 // to be read whole instead of declining the plan.
 // `why_out`, when given, gets the reason of a decline.
-Preparation prepare(const ViewPlan& plan, bool typed, PrepSource from,
+Preparation prepare(const ViewPlan& plan, bool index_records, PrepSource from,
                     dstd::String* why_out = nullptr) {
     auto declined = [why_out](dstd::StringView why) -> Preparation {
         log_declined(why);
@@ -418,7 +418,8 @@ Preparation prepare(const ViewPlan& plan, bool typed, PrepSource from,
     if (plan.all_records) return declined("every record is asked for");
     if (plan.auto_numeric_metrics || !plan.numeric_arg_aggs.empty())
         return declined("aggregates over numeric args");
-    if (plan.phase != Phase::Any && (typed || plan.phase != Phase::Events))
+    if (plan.phase != Phase::Any &&
+        (index_records || plan.phase != Phase::Events))
         return declined("a phase filter");
     const AggSchema& sch = ensure_schema(plan);
     if (plan.query && !query_answerable(plan))
@@ -431,7 +432,7 @@ Preparation prepare(const ViewPlan& plan, bool typed, PrepSource from,
     Prepared p;
     p.by_path = plan_by_path(plan);
     p.keys = std::move(*keys);
-    if (typed && plan.time_bucket_us > 0) {
+    if (index_records && plan.time_bucket_us > 0) {
         if (plan.bucket_origin_us != 0 || plan.bucket_origin_min ||
             plan.time_scale != 1.0)
             return declined("a shifted or scaled time bucket");
@@ -601,7 +602,7 @@ Preparation prepare(const ViewPlan& plan, bool typed, PrepSource from,
     // The dftracer line parser does not read a path-decoded file.
     q.reread = !p.by_path;
     q.from_trace = trace;
-    if (typed) q.window_us = plan.time_bucket_us;
+    if (index_records) q.window_us = plan.time_bucket_us;
 
     if (plan.query) {
         FilterSets sets;
@@ -856,7 +857,7 @@ dataframe::AggStatePtr seed_all(const ViewPlan& plan, AggInputSpec spec,
 }  // namespace
 
 dstd::Result<dstd::Optional<AggQuery>> trace_fold_query(const ViewPlan& plan) {
-    auto prep = prepare(plan, /*typed=*/false, PrepSource::Trace);
+    auto prep = prepare(plan, /*index_records=*/false, PrepSource::Trace);
     if (!prep) return prep.error();
     if (!*prep) return dstd::Optional<AggQuery>();
     (*prep)->query.cancelled = plan.cancelled;
@@ -877,7 +878,8 @@ dataframe::AggStatePtr seed_rows(const ViewPlan& plan, AggInputSpec spec,
 
 coro::CoroTask<dstd::Result<bool>> partials_collect(
     const ViewPlan& plan, dataframe::AggStatePtr& out) {
-    auto prepared = prepare(plan, /*typed=*/false, PrepSource::Partials);
+    auto prepared =
+        prepare(plan, /*index_records=*/false, PrepSource::Partials);
     if (!prepared) co_return prepared.error();
     if (!*prepared) co_return false;
     Prepared& prep = **prepared;
@@ -899,7 +901,7 @@ coro::CoroTask<dstd::Result<bool>> partials_collect(
 
 coro::CoroTask<dstd::Result<bool>> partials_scan_collect(
     const ViewPlan& plan, dataframe::AggStatePtr& out) {
-    auto prepared = prepare(plan, /*typed=*/false, PrepSource::Trace);
+    auto prepared = prepare(plan, /*index_records=*/false, PrepSource::Trace);
     if (!prepared) co_return prepared.error();
     if (!*prepared) co_return false;
     Prepared& prep = **prepared;
@@ -918,11 +920,12 @@ coro::CoroTask<dstd::Result<bool>> partials_scan_collect(
     co_return true;
 }
 
-coro::CoroTask<dstd::Result<bool>> partials_collect_typed(
+coro::CoroTask<dstd::Result<bool>> partials_collect_index_records(
     const ViewPlan& plan, dataframe::DataFrame& out_regular,
     dataframe::DataFrame& out_aggregated, int shard_begin, int shard_end,
     const ProgressFn* progress, dstd::String* why) {
-    auto prepared = prepare(plan, /*typed=*/true, PrepSource::Partials, why);
+    auto prepared =
+        prepare(plan, /*index_records=*/true, PrepSource::Partials, why);
     if (!prepared) co_return prepared.error();
     if (!*prepared) co_return false;
     Prepared& prep = **prepared;

@@ -294,8 +294,8 @@ class ExportSink {
 /// The three record families of one aggregation index, read in a single pass:
 /// `regular` (ph="X" events), `aggregated` (aggregated records carrying
 /// arbitrary extra-key dims), and `counters` (ph="C" counters incl. system).
-/// Returned by collect_typed().
-struct TypedResult {
+/// Returned by @ref View::collect_index_records.
+struct IndexRecords {
     dftracer::utils::dataframe::DataFrame regular;
     dftracer::utils::dataframe::DataFrame aggregated;
     dftracer::utils::dataframe::DataFrame counters;
@@ -887,10 +887,10 @@ class View : public dataframe::LazyOps<View> {
         dstd::Span<const dstd::StringView> partials) const;
 
     /// The aggregation index's record families.
-    dataframe::LazyResult<TypedResult> typed(int shard_begin = 0,
-                                             int shard_end = 4096,
-                                             ProgressFn progress = {}) const;
-    coro::CoroTask<dstd::Result<TypedResult>> collect_typed(
+    dataframe::LazyResult<IndexRecords> index_records(
+        int shard_begin = 0, int shard_end = 4096,
+        ProgressFn progress = {}) const;
+    coro::CoroTask<dstd::Result<IndexRecords>> collect_index_records(
         int shard_begin = 0, int shard_end = 4096,
         ProgressFn progress = {}) const;
 

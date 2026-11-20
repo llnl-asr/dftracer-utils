@@ -34,7 +34,7 @@ coro::CoroTask<dstd::Result<bool>> partials_scan_collect(
 /// [shard_begin, shard_end) of AGG_KEY_NUM_SHARDS, all when shard_end <= 0.
 /// `progress` gets (0, shards) then (shards, shards). Requires plan.schema.
 /// `why`, when given, gets the reason of a false return.
-coro::CoroTask<dstd::Result<bool>> partials_collect_typed(
+coro::CoroTask<dstd::Result<bool>> partials_collect_index_records(
     const ViewPlan& plan, dftracer::utils::dataframe::DataFrame& out_regular,
     dftracer::utils::dataframe::DataFrame& out_aggregated, int shard_begin = 0,
     int shard_end = 0, const ProgressFn* progress = nullptr,

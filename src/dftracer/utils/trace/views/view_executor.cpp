@@ -59,11 +59,11 @@
 #include <dftracer/utils/trace/views/coverage.h>
 #include <dftracer/utils/trace/views/engine_agg_fold.h>
 #include <dftracer/utils/trace/views/fold.h>
+#include <dftracer/utils/trace/views/index_records_fold.h>
 #include <dftracer/utils/trace/views/index_rule_fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/pipeline.h>
 #include <dftracer/utils/trace/views/stream_row_fold.h>
-#include <dftracer/utils/trace/views/typed_collect_fold.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_agg_partials.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
@@ -1304,15 +1304,15 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
     return p;
 }
 
-coro::CoroTask<dstd::Result<TypedResult>> run_collect_typed(
+coro::CoroTask<dstd::Result<IndexRecords>> run_collect_index_records(
     const ViewPlan& plan, int shard_begin, int shard_end,
     const ProgressFn* progress) {
     ensure_schema(plan);
-    TypedResult out;
+    IndexRecords out;
     dstd::String why;
-    const auto from_partials =
-        co_await partials_collect_typed(plan, out.regular, out.aggregated,
-                                        shard_begin, shard_end, progress, &why);
+    const auto from_partials = co_await partials_collect_index_records(
+        plan, out.regular, out.aggregated, shard_begin, shard_end, progress,
+        &why);
     if (!from_partials.has_value()) co_return from_partials.error();
     if (*from_partials) {
         const auto from_columns = system_collect(
@@ -1324,17 +1324,18 @@ coro::CoroTask<dstd::Result<TypedResult>> run_collect_typed(
     // of the scan below, which are rows and not groups.
     if (!is_row_query(plan)) {
         co_return dstd::Error::from_format<
-            "collect_typed: the aggregation tier cannot answer this grouped "
+            "collect_index_records: the aggregation tier cannot answer this "
+            "grouped "
             "query ({}); build or rebuild the index of the traces">(
             dstd::Condition::Unsupported, why);
     }
-    // Scan the raw trace, so collect_typed returns rows rather than silently
-    // none.
+    // Scan the raw trace, so collect_index_records returns rows rather than
+    // silently none.
     auto made = make_vdef(plan, /*for_aggregation=*/false);
     if (!made) co_return made.error();
     ViewDefinition vdef = std::move(*made);
     dftracer::utils::dstd::StringIntern intern;
-    TypedCollectFold fold(intern);
+    IndexRecordsFold fold(intern);
     std::array<Fold*, 1> folds{&fold};
     auto fused = co_await fuse(plan, vdef, folds, intern);
     if (!fused) co_return fused.error();

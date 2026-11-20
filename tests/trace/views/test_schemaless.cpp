@@ -137,19 +137,19 @@ dataframe::DataFrame tier_only(const views::detail::scan::ScanPlan& p) {
 }
 
 // Whether the chunk partials answer the events and profiles of `p`.
-bool typed_serve(const views::detail::scan::ScanPlan& p,
-                 dataframe::DataFrame& regular,
-                 dataframe::DataFrame& profiles) {
+bool index_records_serve(const views::detail::scan::ScanPlan& p,
+                         dataframe::DataFrame& regular,
+                         dataframe::DataFrame& profiles) {
     views::detail::ensure_schema(*p);
     Runtime rt;
     bool served = false;
-    dftu_utils_test::ok(rt.block_on(
-        coro::named("typed-partials",
-                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                        served = dftu_utils_test::ok(
-                            co_await views::detail::partials_collect_typed(
-                                *p, regular, profiles));
-                    }))));
+    dftu_utils_test::ok(rt.block_on(coro::named(
+        "index-records-partials",
+        coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            served = dftu_utils_test::ok(
+                co_await views::detail::partials_collect_index_records(
+                    *p, regular, profiles));
+        }))));
     return served;
 }
 
@@ -788,12 +788,12 @@ fields:
         const auto bucketed =
             views::detail::scan::time_bucket(plan(b, keys, aggs), 1000000);
         dataframe::DataFrame regular, profiles;
-        REQUIRE(typed_serve(bucketed, regular, profiles));
+        REQUIRE(index_records_serve(bucketed, regular, profiles));
         CHECK(regular.num_rows() == 16);
         same_frame(regular, scan_only(bucketed),
                    {"time_bucket", "name", "pid", "tid"});
         dataframe::DataFrame cut_regular, cut_profiles;
-        CHECK_FALSE(typed_serve(
+        CHECK_FALSE(index_records_serve(
             views::detail::scan::time_bucket(plan(b, keys, aggs), 2000),
             cut_regular, cut_profiles));
 

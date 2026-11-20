@@ -138,7 +138,7 @@ dstd::Result<dstd::String> materialize_dir(const ScanPlan& plan);
 dstd::Result<void> register_materialized(const ScanPlan& plan,
                                          dstd::StringView dir);
 dstd::Result<dstd::Vector<dstd::String>> mv_source(const ScanPlan& plan);
-coro::CoroTask<dstd::Result<TypedResult>> collect_typed(
+coro::CoroTask<dstd::Result<IndexRecords>> collect_index_records(
     ScanPlan plan, int shard_begin, int shard_end,
     const ProgressFn* progress = nullptr);
 coro::CoroTask<dstd::Result<ExportStats>> export_counters(ScanPlan plan,

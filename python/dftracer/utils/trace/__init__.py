@@ -4,6 +4,7 @@ written, and the sessions that run several plans in one scan."""
 
 from __future__ import annotations
 
+from .index_records import IndexRecords as IndexRecords
 from .live import LiveFileStatus as LiveFileStatus
 from .live import LiveTraceViewer as LiveTraceViewer
 from .viewer import Containment as Containment
@@ -14,6 +15,7 @@ from .viewer import TraceViewer as TraceViewer
 __all__ = [
     "Containment",
     "Handle",
+    "IndexRecords",
     "LiveFileStatus",
     "LiveTraceViewer",
     "Session",

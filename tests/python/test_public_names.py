@@ -231,6 +231,7 @@ _REACHED_THROUGH_PACKAGE = frozenset(
         "dftracer.utils.jit.types",
         "dftracer.utils.jit.vfold",
         "dftracer.utils.store.store",
+        "dftracer.utils.trace.index_records",
         "dftracer.utils.trace.lazy",
         "dftracer.utils.trace.live",
         "dftracer.utils.trace.partials",

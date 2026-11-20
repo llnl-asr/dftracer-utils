@@ -96,7 +96,7 @@ class ViewArgParse : public cli::ArgParse {
     std::uint64_t memory_budget = 0;
     bool no_spill = false;
     bool agg_numeric_args = false;
-    bool collect_typed = false;
+    bool index_records = false;
     bool materialize = false;
     dstd::StringView sink_name;
     dstd::Vector<dstd::StringView> sink_options;
@@ -249,7 +249,7 @@ class ViewArgParse : public cli::ArgParse {
                       "Aggregate every numeric args.* field automatically");
 
         parser().flag(
-            collect_typed, {"--collect-typed"},
+            index_records, {"--index-records"},
             "Dump the aggregation index's regular/aggregated/counters "
             "families (one pass)");
 
@@ -286,7 +286,7 @@ class ViewArgParse : public cli::ArgParse {
             // table, a trace or a rollup instead, so the two cannot both run.
             const dstd::StringView other =
                 counters          ? dstd::StringView("--counters")
-                : collect_typed   ? dstd::StringView("--collect-typed")
+                : index_records   ? dstd::StringView("--index-records")
                 : materialize     ? dstd::StringView("--materialize")
                 : merge           ? dstd::StringView("--merge")
                 : call_tree       ? dstd::StringView("--call-tree")
@@ -517,12 +517,12 @@ static void print_table(FILE* out, const dataframe::DataFrame& table) {
     }
 }
 
-// Emit the three collect_typed() families to `out` as NDJSON rows, each family
+// Emit the three index record families to `out` as NDJSON rows, each family
 // preceded by a header on stderr so the sections stay identifiable when the
 // data stream is redirected.
-static void emit_typed(FILE* out, const dataframe::DataFrame& regular,
-                       const dataframe::DataFrame& aggregated,
-                       const dataframe::DataFrame& counters) {
+static void emit_index_records(FILE* out, const dataframe::DataFrame& regular,
+                               const dataframe::DataFrame& aggregated,
+                               const dataframe::DataFrame& counters) {
     const dstd::Pair<const char*, const dataframe::DataFrame*> families[] = {
         {"regular", &regular},
         {"aggregated", &aggregated},
@@ -784,7 +784,7 @@ struct ViewRun {
     bool ct_mode = false;
     bool fg_mode = false;
     bool aggregate = false;
-    bool typed_mode = false;
+    bool records_mode = false;
     bool mv_mode = false;
     bool merge = false;
     bool no_index = false;
@@ -842,7 +842,7 @@ ViewRun::ViewRun(const ViewArgParse* c)
       counters(c->counters),
       ct_mode(c->call_tree),
       fg_mode(c->flamegraph),
-      typed_mode(c->collect_typed),
+      records_mode(c->index_records),
       mv_mode(c->materialize),
       merge(c->merge),
       no_index(c->no_index),
@@ -1160,8 +1160,8 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_shard_set() {
 }
 
 coro::CoroTask<dstd::Result<void>> ViewRun::run_local() {
-    // The typed, rollup and counter terminals read the whole aggregation; the
-    // projection and row window apply to the other outputs.
+    // The index-records, rollup and counter terminals read the whole
+    // aggregation; the projection and row window apply to the other outputs.
     View base = configure(View::from_files(view_files));
     View v = windowed(base);
 
@@ -1181,9 +1181,9 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_local() {
         if (!bootstraps.has_value()) co_return bootstraps.error();
         will_bootstrap = *bootstraps;
     }
-    // A typed collect reads the aggregation tier and fails without it, so its
-    // index is built first and never bootstrapped by the scan.
-    if (typed_mode) will_bootstrap = false;
+    // An index-records read reads the aggregation tier and fails without it, so
+    // its index is built first and never bootstrapped by the scan.
+    if (records_mode) will_bootstrap = false;
     if (!no_auto_index && !will_bootstrap) {
         auto refreshed = co_await refresh_indexes(files, index_dir_std);
         if (!refreshed) co_return refreshed.error();
@@ -1218,11 +1218,11 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_local() {
         stats = *materialized;
         std::fprintf(stderr, "Materialized rollup (%llu events).\n",
                      (unsigned long long)stats.events_matched);
-    } else if (typed_mode) {
-        auto typed = co_await base.collect_typed();
-        if (!typed) co_return typed.error();
-        auto& tr = *typed;
-        emit_typed(out_target, tr.regular, tr.aggregated, tr.counters);
+    } else if (records_mode) {
+        auto records = co_await base.collect_index_records();
+        if (!records) co_return records.error();
+        auto& tr = *records;
+        emit_index_records(out_target, tr.regular, tr.aggregated, tr.counters);
         stats.events_matched = static_cast<std::uint64_t>(
             tr.regular.num_rows() + tr.aggregated.num_rows() +
             tr.counters.num_rows());
@@ -1344,7 +1344,7 @@ static coro::CoroTask<int> run_view_body(const ViewArgParse* cli, ViewRun& run,
     // Event export to a file -> compressed, indexed trace via the parallel
     // writer. Aggregate/counter/containment tables and stdout keep their own
     // paths.
-    run.write_trace = !run.aggregate && !run.counters && !run.typed_mode &&
+    run.write_trace = !run.aggregate && !run.counters && !run.records_mode &&
                       !run.mv_mode && !run.ct_mode && !run.fg_mode &&
                       !cli->output.empty();
 
@@ -1358,7 +1358,7 @@ static coro::CoroTask<int> run_view_body(const ViewArgParse* cli, ViewRun& run,
         co_return 1;
 
     if (!run.view.query && run.duql_str.empty() && !run.time_range &&
-        !run.aggregate && !run.merge && !run.typed_mode && !run.mv_mode &&
+        !run.aggregate && !run.merge && !run.records_mode && !run.mv_mode &&
         !run.ct_mode && !run.fg_mode) {
         DFTRACER_UTILS_LOG_ERROR(
             "{}",
@@ -1416,12 +1416,12 @@ static coro::CoroTask<int> run_view_body(const ViewArgParse* cli, ViewRun& run,
 
     if (const auto probe_rc = run.probe_duql()) co_return *probe_rc;
     if (run.duql_rows &&
-        (run.aggregate || run.counters || run.typed_mode || run.mv_mode ||
+        (run.aggregate || run.counters || run.records_mode || run.mv_mode ||
          run.ct_mode || run.fg_mode || run.merge)) {
         DFTRACER_UTILS_LOG_ERROR(
             "{}",
             "--duql stages after the scan do not combine with "
-            "aggregation, counters, typed, materialize, call-tree, "
+            "aggregation, counters, index-records, materialize, call-tree, "
             "flamegraph or merge output.");
         co_return 1;
     }

@@ -156,7 +156,7 @@ coro::CoroTask<dstd::Result<void>> run_materialize_partials(
 // Read the aggregation index's three record families (regular events,
 // aggregated records, counters) from shard range [shard_begin, shard_end).
 // Empty tables when the index has no aggregation tier.
-coro::CoroTask<dstd::Result<TypedResult>> run_collect_typed(
+coro::CoroTask<dstd::Result<IndexRecords>> run_collect_index_records(
     const ViewPlan& plan, int shard_begin = 0, int shard_end = 4096,
     const ProgressFn* progress = nullptr);
 

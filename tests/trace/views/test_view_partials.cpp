@@ -329,7 +329,7 @@ TEST_SUITE("ViewPartials") {
 
     TEST_CASE("events with a time window and profiles answer without reads") {
         Fixture fx;
-        auto typed_view = [&] {
+        auto records_view = [&] {
             return fx.view()
                 .group_by({GroupKey::name(), GroupKey::pid()})
                 .time_bucket(WINDOW_US)
@@ -341,14 +341,14 @@ TEST_SUITE("ViewPartials") {
             scan_events(fx, {GroupKey::name(), GroupKey::pid()}, WINDOW_US);
 
         fx.delete_traces();
-        const TypedResult typed =
-            dftu_utils_test::ok(typed_view().collect_typed().get());
+        const IndexRecords records =
+            dftu_utils_test::ok(records_view().collect_index_records().get());
 
         auto strip = [](const dataframe::DataFrame& f) {
-            // the engine columns the typed frames share with the scan
+            // the engine columns the index record frames share with the scan
             return rows_of(f, {"time_bucket", "name", "pid"});
         };
-        const Rows events = strip(typed.regular);
+        const Rows events = strip(records.regular);
         const Rows want = strip(expected_events);
         REQUIRE(events.size() == want.size());
         REQUIRE(events.size() == 2 * FILES);  // read and fwrite of each file
@@ -364,7 +364,7 @@ TEST_SUITE("ViewPartials") {
                           key);
 
         // Each file ran COUNTERS "train" counters of 5 us.
-        const Rows profiles = strip(typed.aggregated);
+        const Rows profiles = strip(records.aggregated);
         REQUIRE(profiles.size() == FILES);
         for (int i = 0; i < FILES; ++i) {
             const dstd::String key = dstd::to_string(BASE_TS) + "|train|" +
@@ -377,7 +377,9 @@ TEST_SUITE("ViewPartials") {
         }
     }
 
-    TEST_CASE("a typed query on some files of a shared index uses the tier") {
+    TEST_CASE(
+        "an index-records query on some files of a shared index uses the "
+        "tier") {
         // One index root serves every dir of the traces, and a query on one
         // dir reads only that dir's rows.
         Fixture fx;
@@ -402,15 +404,15 @@ TEST_SUITE("ViewPartials") {
 
         fx.delete_traces();
         for (std::size_t i = 0; i < subsets.size(); ++i) {
-            const TypedResult typed = dftu_utils_test::ok(
+            const IndexRecords records = dftu_utils_test::ok(
                 View::from_files(files_of(subsets[i]))
                     .group_by({GroupKey::name(), GroupKey::pid()})
                     .agg(specs())
-                    .collect_typed()
+                    .collect_index_records()
                     .get());
-            same_rows(typed.regular, expected[i], {"name", "pid"});
+            same_rows(records.regular, expected[i], {"name", "pid"});
             // The "train" counters of the files asked for, and no others.
-            const Rows profiles = rows_of(typed.aggregated, {"name", "pid"});
+            const Rows profiles = rows_of(records.aggregated, {"name", "pid"});
             REQUIRE(profiles.size() == subsets[i].size());
             for (const int file : subsets[i])
                 CHECK(profiles.count("train|" + dstd::to_string(100 + file) +
@@ -418,7 +420,8 @@ TEST_SUITE("ViewPartials") {
         }
     }
 
-    TEST_CASE("a typed query over files of two index roots uses the tier") {
+    TEST_CASE(
+        "an index-records query over files of two index roots uses the tier") {
         Fixture fx;
         // The first two files keep the root of the fixture, and the third has
         // a root of its own.
@@ -447,17 +450,18 @@ TEST_SUITE("ViewPartials") {
             scan_only(views::detail::scan::agg(p, specs()));
 
         fx.delete_traces();
-        const TypedResult typed = dftu_utils_test::ok(
+        const IndexRecords records = dftu_utils_test::ok(
             View::from_files(files)
                 .group_by({GroupKey::name(), GroupKey::pid()})
                 .agg(specs())
-                .collect_typed()
+                .collect_index_records()
                 .get());
-        same_rows(typed.regular, expected, {"name", "pid"});
-        CHECK(rows_of(typed.aggregated, {"name", "pid"}).size() == FILES);
+        same_rows(records.regular, expected, {"name", "pid"});
+        CHECK(rows_of(records.aggregated, {"name", "pid"}).size() == FILES);
     }
 
-    TEST_CASE("a grouped typed query the tier cannot answer is an error") {
+    TEST_CASE(
+        "a grouped index-records query the tier cannot answer is an error") {
         Fixture fx;
         // The index of one file is built again with another interval, so the
         // aggregation data of the others no longer matches its config.
@@ -475,14 +479,14 @@ TEST_SUITE("ViewPartials") {
         auto grouped = fx.view()
                            .group_by({GroupKey::name(), GroupKey::pid()})
                            .agg(specs())
-                           .collect_typed()
+                           .collect_index_records()
                            .get();
         REQUIRE_FALSE(grouped.has_value());
         const dstd::String text = grouped.error().format();
         CHECK_MESSAGE(text.find("stale") != dstd::String::npos, text);
 
         // A query for rows has no groups to lose, so it still scans.
-        auto rows = fx.view().collect_typed().get();
+        auto rows = fx.view().collect_index_records().get();
         CHECK(rows.has_value());
     }
 
@@ -513,8 +517,8 @@ TEST_SUITE("ViewPartials") {
                 .get());
         same_rows(got, expected, {"name", "pid"});
 
-        // The typed read either answers from the rebuilt tier or says it
-        // cannot, here because the rebuild used another aggregation config
+        // The index-records read either answers from the rebuilt tier or says
+        // it cannot, here because the rebuild used another aggregation config
         // than the root; it never answers with the old counts.
         auto grouped =
             fx.view()
@@ -522,7 +526,7 @@ TEST_SUITE("ViewPartials") {
                     Query::from_string(R"(cat in ["POSIX", "STDIO"])").value())
                 .group_by(keys)
                 .agg(specs())
-                .collect_typed()
+                .collect_index_records()
                 .get();
         if (grouped.has_value()) {
             same_rows(grouped->regular, expected, {"name", "pid"});
@@ -530,7 +534,7 @@ TEST_SUITE("ViewPartials") {
             CHECK(grouped.error().is(dstd::Condition::Unsupported));
         }
         // A read of rows has no groups to get wrong.
-        CHECK(fx.view().collect_typed().get().has_value());
+        CHECK(fx.view().collect_index_records().get().has_value());
     }
 
     TEST_CASE("a query groups by host and keeps the hosts it is asked for") {
@@ -613,7 +617,7 @@ TEST_SUITE("ViewPartials") {
                 .group_by(
                     {GroupKey::name(), GroupKey::of_arg(dstd::String(arg))})
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}})
-                .collect_typed()
+                .collect_index_records()
                 .get();
         };
         auto events_by = [&](dstd::StringView arg) {
@@ -627,9 +631,9 @@ TEST_SUITE("ViewPartials") {
                     .collect()
                     .get());
         };
-        const TypedResult before_epoch =
+        const IndexRecords before_epoch =
             dftu_utils_test::ok(profiles_by("epoch"));
-        const TypedResult before_step =
+        const IndexRecords before_step =
             dftu_utils_test::ok(profiles_by("step"));
         dstd::Vector<dataframe::DataFrame> expected;
         for (const char* arg : {"epoch", "step"}) {
@@ -694,15 +698,15 @@ TEST_SUITE("ViewPartials") {
                   {static_cast<int>(trace::AggKind::Event), FILES * READS},
                   {static_cast<int>(trace::AggKind::Profile), FILES * MIXED}});
 
-        const TypedResult typed =
+        const IndexRecords records =
             dftu_utils_test::ok(fx.view()
                                     .group_by({GroupKey::name()})
                                     .agg({{AggOp::Count, "", "n"}})
-                                    .collect_typed()
+                                    .collect_index_records()
                                     .get());
-        CHECK(rows_of(typed.regular, {"name"}).at("read|").at("n") ==
+        CHECK(rows_of(records.regular, {"name"}).at("read|").at("n") ==
               FILES * READS);
-        CHECK(rows_of(typed.aggregated, {"name"}).at("read|").at("n") ==
+        CHECK(rows_of(records.aggregated, {"name"}).at("read|").at("n") ==
               FILES * MIXED);
     }
 }

@@ -64,13 +64,6 @@ NUM_SHARDS: int
 # A run() map result value: emitted bytes, a native frame or a lazy plan.
 _RunResultValue = Union[bytes, "DataFrame", "LazyFrame"]
 
-class CollectTypedResult(TypedDict):
-    """The three record families returned by TraceViewer.typed()."""
-
-    regular: DataFrame
-    aggregated: DataFrame
-    counters: DataFrame
-
 class IndexStatusDict(TypedDict):
     """The result of ``Indexer.status()``, ``ensure()``, ``build()`` and
     ``rebuild_extension()``."""
@@ -1729,15 +1722,15 @@ class TraceViewer:
     def sink_json(self, path: str, /) -> PublicLazyFrame:
         """Plan writing the selected events to ``path``; yields one stats row."""
         ...
-    def typed(
+    def _index_records(
         self,
         shard_begin: int = 0,
         shard_end: int = 0,
         progress: Callable[[int, int], None] | None = None,
         runtime: RuntimeArg = None,
-    ) -> CollectTypedResult:
-        """The aggregation index's record families over shard range
-        ``[shard_begin, shard_end)`` (0 = all). Runs now."""
+    ) -> tuple[DataFrame, DataFrame, DataFrame]:
+        """The aggregation index's ``(regular, aggregated, counters)`` frames
+        over shard range ``[shard_begin, shard_end)`` (0 = all). Runs now."""
         ...
     def materialize(
         self,

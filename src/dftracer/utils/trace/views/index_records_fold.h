@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_TRACE_VIEWS_TYPED_COLLECT_FOLD_H
-#define DFTRACER_UTILS_TRACE_VIEWS_TYPED_COLLECT_FOLD_H
+#ifndef DFTRACER_UTILS_TRACE_VIEWS_INDEX_RECORDS_FOLD_H
+#define DFTRACER_UTILS_TRACE_VIEWS_INDEX_RECORDS_FOLD_H
 
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
@@ -17,15 +17,15 @@
 
 namespace dftracer::utils::trace::views::detail {
 
-/// The raw-scan fallback for collect_typed: split events by phase into the
-/// three TypedResult families (regular=COMPLETE, aggregated=AGGREGATED,
+/// The raw-scan fallback for collect_index_records: split events by phase into
+/// the three IndexRecords families (regular=COMPLETE, aggregated=AGGREGATED,
 /// counters= COUNTER; metadata dropped) as per-event rows
 /// (ts/dur/pid/tid/name/cat/ph), so a query the tier cannot key on still
 /// returns rows. `intern` must be the table fuse extracts events with, and must
 /// outlive the build_* calls.
-class TypedCollectFold : public Fold {
+class IndexRecordsFold : public Fold {
    public:
-    explicit TypedCollectFold(const dftracer::utils::dstd::StringIntern& intern)
+    explicit IndexRecordsFold(const dftracer::utils::dstd::StringIntern& intern)
         : intern_(&intern) {}
 
     bool accepts(const ScanShape&) const override { return true; }
@@ -33,7 +33,7 @@ class TypedCollectFold : public Fold {
     bool wants_metadata() const override { return false; }
 
     dstd::UniquePtr<Fold> slice() const override {
-        return dstd::make_unique<TypedCollectFold>(*intern_);
+        return dstd::make_unique<IndexRecordsFold>(*intern_);
     }
 
     dstd::Result<void> step(const FoldBatch& batch) override {
@@ -60,7 +60,7 @@ class TypedCollectFold : public Fold {
     void drop_unit(const ScanUnit&) override {}
 
     dstd::Result<void> merge(Fold& other) override {
-        auto& o = static_cast<TypedCollectFold&>(other);
+        auto& o = static_cast<IndexRecordsFold&>(other);
         regular_.append(std::move(o.regular_));
         aggregated_.append(std::move(o.aggregated_));
         counters_.append(std::move(o.counters_));
@@ -182,4 +182,4 @@ class TypedCollectFold : public Fold {
 
 }  // namespace dftracer::utils::trace::views::detail
 
-#endif  // DFTRACER_UTILS_TRACE_VIEWS_TYPED_COLLECT_FOLD_H
+#endif  // DFTRACER_UTILS_TRACE_VIEWS_INDEX_RECORDS_FOLD_H

@@ -562,19 +562,20 @@ class TestDaskTraceViewer:
             assert isinstance(base.group_by("cat").time_range(0, 1), DaskAggregatedTraceViewer)
 
 
-def _typed_row_count(tables):
-    return sum(t.num_rows for t in tables.values() if t is not None)
+def _index_records_row_count(records):
+    tables = (records.regular, records.aggregated, records.counters)
+    return sum(t.num_rows for t in tables)
 
 
 @pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")
-class TestTypedFutures:
-    """DaskTraceViewer.typed_futures: one ungathered future per worker."""
+class TestIndexRecordFutures:
+    """DaskTraceViewer.index_record_futures: one ungathered future per worker."""
 
     @staticmethod
     def _rows(table):
         return sorted((r["name"], r["pid"], r["count"]) for r in table.to_pylist())
 
-    def test_futures_cover_the_local_typed_read(self):
+    def test_futures_cover_the_local_index_records_read(self):
         import time
 
         import pyarrow as pa
@@ -594,7 +595,8 @@ class TestTypedFutures:
                 dftu_utils.TraceViewer(files, index_dir=env.temp_dir)
                 .group_by("name", "pid")
                 .agg("count")
-                .collect_typed()["regular"]
+                .collect_index_records()
+                .regular
             )
             cluster = LocalCluster(processes=False, n_workers=2, threads_per_worker=2)
             client = Client(cluster)
@@ -604,28 +606,30 @@ class TestTypedFutures:
                     .group_by("name", "pid")
                     .agg("count")
                 )
-                futures = dv.typed_futures()
+                futures = dv.index_record_futures()
                 assert len(futures) == 2
                 parts = client.gather(futures)
                 regular = pa.concat_tables(
-                    [p["regular"] for p in parts if p["regular"] is not None],
+                    [p.regular for p in parts],
                     promote_options="permissive",
                 )
                 assert self._rows(regular) == self._rows(local)
-                assert self._rows(dv.collect_typed()["regular"]) == self._rows(local)
+                assert self._rows(dv.collect_index_records().regular) == self._rows(local)
 
                 seen = []
                 with ProgressAggregator(
                     client, lambda done, total, phase: seen.append((phase, done, total))
                 ):
                     counts = client.gather(
-                        dv.typed_futures(map_fn=_typed_row_count, progress="typed read")
+                        dv.index_record_futures(
+                            map_fn=_index_records_row_count, progress="index records read"
+                        )
                     )
                     deadline = time.monotonic() + 10
                     while not seen and time.monotonic() < deadline:
                         time.sleep(0.05)
-                assert sum(counts) == sum(_typed_row_count(p) for p in parts)
-                assert seen and {phase for phase, _, _ in seen} == {"typed read"}
+                assert sum(counts) == sum(_index_records_row_count(p) for p in parts)
+                assert seen and {phase for phase, _, _ in seen} == {"index records read"}
                 assert seen[-1][1] <= seen[-1][2]
             finally:
                 client.close()

@@ -84,7 +84,7 @@ dataframe::DataFrame counters_of(dstd::Vector<dstd::String> traces) {
     for (const auto& t : traces)
         files.push_back({dstd::String(t), dstd::String(index_of(t))});
     return dftu_utils_test::ok(trace::views::View::from_files(std::move(files))
-                                   .collect_typed()
+                                   .collect_index_records()
                                    .get())
         .counters;
 }

@@ -32,13 +32,6 @@ PLUGIN_ABI_VERSION: int = 0
 NUM_SHARDS: int = 0
 
 
-class CollectTypedResult(TypedDict):
-    """The three record families returned by TraceViewer.typed()."""
-    regular: DataFrame
-    aggregated: DataFrame
-    counters: DataFrame
-
-
 class IndexStatusDict(TypedDict):
     """The result of ``Indexer.status()``, ``ensure()``, ``build()`` and
     ``rebuild_extension()``."""
@@ -1685,15 +1678,15 @@ class TraceViewer:
     def sink_json(self, path: str, /) -> PublicLazyFrame:
         """Plan writing the selected events to ``path``; yields one stats row."""
         ...
-    def typed(
+    def _index_records(
         self,
         shard_begin: int = 0,
         shard_end: int = 0,
         progress: Callable[[int, int], None] | None = None,
         runtime: RuntimeArg = None,
-    ) -> CollectTypedResult:
-        """The aggregation index's record families over shard range
-        ``[shard_begin, shard_end)`` (0 = all). Runs now."""
+    ) -> tuple[DataFrame, DataFrame, DataFrame]:
+        """The aggregation index's ``(regular, aggregated, counters)`` frames
+        over shard range ``[shard_begin, shard_end)`` (0 = all). Runs now."""
         ...
     def materialize(
         self,
@@ -2030,7 +2023,6 @@ _EXPORTS = (
     "INPUT_FILE_PATTERNS",
     "PLUGIN_ABI_VERSION",
     "NUM_SHARDS",
-    "CollectTypedResult",
     "IndexStatusDict",
     "DFTUtilsError",
     "DFTUtilsValueError",

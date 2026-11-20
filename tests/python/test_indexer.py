@@ -598,7 +598,7 @@ class TestAggTierQueryFilter:
         return tv.group_by("name", "pid").agg("count")
 
     def _event_count(self, directory, pa, query=None):
-        reg = self._viewer(directory, query).collect_typed()["regular"]
+        reg = self._viewer(directory, query).collect_index_records().regular
         if reg is None:
             return 0
         t = pa.table(reg)
@@ -633,7 +633,7 @@ class TestAggTierQueryFilter:
         with Environment() as env:
             directory = env.create_indexed_traces(pids=[1])
             with pytest.raises((ValueError, RuntimeError)):
-                self._viewer(directory, "invalid ==").collect_typed()
+                self._viewer(directory, "invalid ==").collect_index_records()
 
     def test_multi_pid_filter(self):
         pa = pytest.importorskip("pyarrow")
@@ -657,7 +657,7 @@ class TestAggTierQueryFilter:
 
 
 class TestCollectTypedRawFallback:
-    """collect_typed on a query the aggregation tier cannot key on (e.g. a ts
+    """collect_index_records on a query the aggregation tier cannot key on (e.g. a ts
     predicate) falls back to a raw scan and returns per-event rows, not a silent
     empty result - consistent with the aggregate path over the same filter."""
 
@@ -676,7 +676,7 @@ class TestCollectTypedRawFallback:
         with Environment() as env:
             directory = env.create_indexed_traces(pids=[1, 2])
             base = self._viewer(directory).filter("ts >= 0")
-            reg = pa.table(base.collect_typed()["regular"])
+            reg = pa.table(base.collect_index_records().regular)
             for c in ("ts", "dur", "ph", "name", "cat", "pid", "tid"):
                 assert c in reg.column_names
             assert reg.num_rows > 0
@@ -687,8 +687,10 @@ class TestCollectTypedRawFallback:
         with Environment() as env:
             directory = env.create_indexed_traces(pids=[1, 2])
             tv = self._viewer(directory)
-            all_rows = pa.table(tv.filter("ts >= 0").collect_typed()["regular"]).num_rows
-            one = pa.table(tv.filter("ts >= 0 and pid == 1").collect_typed()["regular"]).num_rows
+            all_rows = pa.table(tv.filter("ts >= 0").collect_index_records().regular).num_rows
+            one = pa.table(
+                tv.filter("ts >= 0 and pid == 1").collect_index_records().regular
+            ).num_rows
             assert 0 < one < all_rows
 
 
@@ -912,7 +914,7 @@ class TestShardPartitionCompleteness:
         with Environment() as env:
             directory = env.create_indexed_traces(pids=[1, 2, 3, 4])
             tv = self._viewer(directory)
-            full = self._count(tv.collect_typed()["regular"], pa)
+            full = self._count(tv.collect_index_records().regular, pa)
             assert full > 0
             for parts in (2, 4, 8):
                 span = (NUM_SHARDS + parts - 1) // parts
@@ -923,7 +925,7 @@ class TestShardPartitionCompleteness:
                     if begin >= end:
                         continue
                     total += self._count(
-                        tv.collect_typed(shard_begin=begin, shard_end=end)["regular"], pa
+                        tv.collect_index_records(shard_begin=begin, shard_end=end).regular, pa
                     )
                 assert total == full, f"{parts}-way shard split summed {total}, full scan {full}"
 

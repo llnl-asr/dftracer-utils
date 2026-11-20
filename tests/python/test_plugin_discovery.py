@@ -11,7 +11,9 @@ current one.
 import os
 import time
 
-from .common import find_example_plugin
+from .common import _NATIVE_MAGIC, find_example_plugin, newest_test_plugin
+
+_FOREIGN_MAGIC = b"\xcf\xfa\xed\xfe" if _NATIVE_MAGIC == (b"\x7fELF",) else b"\x7fELF"
 
 
 def test_find_example_plugin_env_override(tmp_path, monkeypatch):
@@ -31,8 +33,8 @@ def test_find_example_plugin_picks_newest_build_tree(tmp_path, monkeypatch):
     new_dir.mkdir(parents=True)
     old_so = old_dir / "fake_plugin_mtime.so"
     new_so = new_dir / "fake_plugin_mtime.so"
-    old_so.write_bytes(b"old")
-    new_so.write_bytes(b"new")
+    old_so.write_bytes(_NATIVE_MAGIC[0] + b"old")
+    new_so.write_bytes(_NATIVE_MAGIC[0] + b"new")
     now = time.time()
     os.utime(old_so, (now - 100, now - 100))
     os.utime(new_so, (now, now))
@@ -41,6 +43,38 @@ def test_find_example_plugin_picks_newest_build_tree(tmp_path, monkeypatch):
         "fake_plugin_mtime", "DFTRACER_UTILS_TEST_PLUGIN_MTIME_PATH", tmp_path
     )
     assert result == str(new_so)
+
+
+def test_plugin_finders_skip_a_library_of_another_platform(tmp_path, monkeypatch):
+    monkeypatch.delenv("DFTRACER_UTILS_TEST_PLUGIN_FOREIGN_PATH", raising=False)
+    native = tmp_path / "build" / "build-tests" / "examples" / "plugins" / "fake_plugin_foreign.so"
+    foreign = (
+        tmp_path / "build" / "build-container" / "examples" / "plugins" / "fake_plugin_foreign.so"
+    )
+    for path in (native, foreign):
+        path.parent.mkdir(parents=True)
+    native.write_bytes(_NATIVE_MAGIC[0] + b"here")
+    foreign.write_bytes(_FOREIGN_MAGIC + b"there")
+    now = time.time()
+    os.utime(native, (now - 100, now - 100))
+    os.utime(foreign, (now, now))
+    assert find_example_plugin(
+        "fake_plugin_foreign", "DFTRACER_UTILS_TEST_PLUGIN_FOREIGN_PATH", tmp_path
+    ) == str(native)
+
+    test_native = tmp_path / "build" / "build-tests" / "tests" / "plugins" / "fake_test_plugin.so"
+    test_foreign = (
+        tmp_path / "build" / "build-container" / "tests" / "plugins" / "fake_test_plugin.so"
+    )
+    for path in (test_native, test_foreign):
+        path.parent.mkdir(parents=True)
+    test_native.write_bytes(_NATIVE_MAGIC[0] + b"here")
+    test_foreign.write_bytes(_FOREIGN_MAGIC + b"there")
+    os.utime(test_native, (now - 100, now - 100))
+    os.utime(test_foreign, (now, now))
+    assert newest_test_plugin("fake_test_plugin", tmp_path) == str(test_native)
+    test_native.unlink()
+    assert newest_test_plugin("fake_test_plugin", tmp_path) == ""
 
 
 def test_find_example_plugin_empty_when_absent(tmp_path, monkeypatch):

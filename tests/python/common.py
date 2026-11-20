@@ -18,6 +18,35 @@ import pytest
 import dftracer.utils.dftracer_utils_ext as _dftracer_utils_ext
 from dftracer.utils.dftracer_utils_ext import CheckpointIndexer as NativeIndexer
 
+_NATIVE_MAGIC = (
+    (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe")
+    if platform.system() == "Darwin"
+    else (b"\x7fELF",)
+)
+
+
+def _is_native_library(path) -> bool:
+    """Whether ``path`` is a shared library of this platform. A build tree made in
+    a Linux container sits in the same checkout and would never load here."""
+    try:
+        with open(path, "rb") as f:
+            return f.read(4) in _NATIVE_MAGIC
+    except OSError:
+        return False
+
+
+def newest_test_plugin(name: str, repo_root) -> str:
+    """The newest built ``tests/plugins/<name>`` shared library of this platform
+    under any build tree in the checkout, or an empty string."""
+    found = []
+    for suffix in ("dylib", "so"):
+        found += [
+            p
+            for p in Path(repo_root).glob(f"build/**/tests/plugins/{name}.{suffix}")
+            if _is_native_library(p)
+        ]
+    return str(max(found, key=os.path.getmtime)) if found else ""
+
 
 def find_example_plugin(name: str, env_var: str, repo_root) -> str:
     """Locate a built example plugin `.so` that matches the currently-loaded
@@ -48,6 +77,7 @@ def find_example_plugin(name: str, env_var: str, repo_root) -> str:
             os.path.join(str(repo_root), "**", "examples", "plugins", f"{name}.{suffix}"),
             recursive=True,
         )
+    candidates = [c for c in candidates if _is_native_library(c)]
     if not candidates:
         return ""
     return max(candidates, key=os.path.getmtime)

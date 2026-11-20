@@ -23,21 +23,14 @@ import pytest
 import dftracer.utils as dft
 from dftracer.utils import dftracer_utils_ext as _ext
 
-from .common import Environment
+from .common import Environment, newest_test_plugin
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _built(name: str) -> str:
-    found = []
-    for suffix in ("dylib", "so"):
-        found += _REPO_ROOT.glob(f"build/**/tests/plugins/{name}.{suffix}")
-    return str(max(found, key=lambda p: p.stat().st_mtime)) if found else ""
-
-
-_TOY = _built("toy_format_plugin")
-_TIE = _built("toy_format_tie_plugin")
-_CHUNKED = _built("chunked_format_plugin")
+_TOY = newest_test_plugin("toy_format_plugin", _REPO_ROOT)
+_TIE = newest_test_plugin("toy_format_tie_plugin", _REPO_ROOT)
+_CHUNKED = newest_test_plugin("chunked_format_plugin", _REPO_ROOT)
 
 pytestmark = [
     pytest.mark.skipif(

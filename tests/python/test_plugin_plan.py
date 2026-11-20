@@ -15,17 +15,12 @@ import dftracer.utils as dft
 from dftracer.utils import dftracer_utils_ext as _ext
 from dftracer.utils.plugins import Plugins
 
+from .common import newest_test_plugin
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _plugin() -> str:
-    found = []
-    for suffix in ("dylib", "so"):
-        found += _REPO_ROOT.glob(f"build/**/tests/plugins/sdk_plan_plugin.{suffix}")
-    return str(max(found, key=lambda p: p.stat().st_mtime)) if found else ""
-
-
-_PLUGIN = _plugin()
+_PLUGIN = newest_test_plugin("sdk_plan_plugin", _REPO_ROOT)
 
 pytestmark = [
     pytest.mark.skipif(

@@ -28,14 +28,14 @@ from typing import TYPE_CHECKING, Callable, Iterator, Mapping, Sequence, cast
 
 from . import dftracer_utils_ext as _ext
 from ._eval import Columnar
-from .expr import Expr, col, collect_columns, has_column_op
-from .series import Series
+from ._expr import Expr, col, collect_columns, has_column_op
+from ._series import Series
 
 if TYPE_CHECKING:
     from typing_extensions import TypeGuard
 
-    from .dataframe import DataFrame
-    from .jit_op import Op
+    from ._dataframe import DataFrame
+    from ._jit_op import Op
 
 _TRACE_INPUT = "__x0__"
 
@@ -51,7 +51,7 @@ def _is_jit_series(func: object) -> bool:
 
 
 def _is_jit_op(func: object) -> TypeGuard[Op]:
-    from .jit_op import Op
+    from ._jit_op import Op
 
     return isinstance(func, Op)
 
@@ -188,7 +188,7 @@ def _check_columns(expr: Expr, source: Mapping[str, Series]) -> None:
 
 
 def _apply_jit_op(series: Series, op_obj: Op, what: str) -> Series:
-    from .jit_op import lower_to_expr, run_op
+    from ._jit_op import lower_to_expr, run_op
 
     tokens = lower_to_expr(op_obj)
     if tokens is not None:

@@ -14,12 +14,12 @@ from typing import (
 
 from .._c_text import c_str_literal as _c_str_literal
 from .._jit_errors import JitError, Source, class_error
+from ._compiler import unwrap_index
 from ._emit import emit_name_lists, quantile_name
-from .compiler import unwrap_index
-from .maps import AnyMap, EachBatch, Map
-from .monoids import Counter, Monoid, Quantiles
-from .plugin import JitPlugin
-from .types import C
+from ._maps import AnyMap, EachBatch, Map
+from ._monoids import Counter, Monoid, Quantiles
+from ._plugin import JitPlugin
+from ._types import C
 
 if TYPE_CHECKING:
     pass

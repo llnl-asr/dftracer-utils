@@ -19,19 +19,19 @@ import sys
 from typing import TYPE_CHECKING, Sequence, cast
 
 from . import dftracer_utils_ext as _ext
+from ._agg import AggForm, AggKeyword, reduce_specs
 from ._apply import Row
-from .agg import AggForm, AggKeyword, reduce_specs
-from .enums import DType
-from .expr import Expr, col, collect_columns, lit, when
-from .series import Series
+from ._enums import DType
+from ._expr import Expr, col, collect_columns, lit, when
+from ._series import Series
 
 if TYPE_CHECKING:
     import numpy as np
     import pyarrow as pa
 
-    from .dataframe import DataFrame
-    from .expr import Expr
-    from .lazyframe import LazyFrame
+    from ._dataframe import DataFrame
+    from ._expr import Expr
+    from ._lazyframe import LazyFrame
 
 _ROW = "__dftu_loc_row__"
 # A plan has no length until it runs; an open slice end / a position bound.
@@ -614,7 +614,7 @@ def _scatter(value: object, mask: Series, n: int) -> object:
 def _per_column(value: object) -> list[Series] | None:
     """The columns of a frame, or the Series of a non-empty list or tuple of
     Series: one per target column, by position. None for any other value."""
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     if isinstance(value, DataFrame):
         return [value[c] for c in value.columns]
@@ -830,7 +830,7 @@ def enlarge(df: DataFrame, label: object, columns: list[str], value: object) -> 
     index columns, ``value`` in ``columns`` and null in the rest. A frame with
     no index is labelled by its positions first, so the label must fit an
     Int64. The handle is rebound to the new frame."""
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     base = df._labelled()
     names = _ext.DataFrame.index_names(base)
@@ -1214,7 +1214,7 @@ class Resampler:
         )
 
     def agg(self, *specs: AggForm, **named: AggKeyword) -> DataFrame | LazyFrame:
-        from .lazyframe import agg_spec_strings
+        from ._lazyframe import agg_spec_strings
 
         return self._run(agg_spec_strings(self._frame, [self._time], specs, named))
 

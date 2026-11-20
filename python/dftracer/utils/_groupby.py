@@ -19,8 +19,21 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
+from ._agg import (
+    PANDAS_AGG_NAMES,
+    AggForm,
+    AggKeyword,
+    flatten_agg_specs,
+    has_agg_leaf,
+    reduce_specs,
+    split_aggs,
+    to_agg,
+)
 from ._aliases import install as _install_aliases
 from ._apply import trace_errors, uses_identity_test, warn_fallback
+from ._dataframe import DataFrame, single_index
+from ._enums import DType, rule_to_units
+from ._expr import Agg, AggLeaf, Col, Expr, check_quantile, collect_columns
 from ._group_labels import (
     apply_pieces,
     group_frame,
@@ -31,28 +44,13 @@ from ._group_labels import (
 )
 from ._group_labels import take as labelled_take
 from ._group_transforms import GroupTransforms
+from ._series import Series
 from ._series_index import default_name, to_frame, with_levels
 from ._series_index import positions as row_positions
-from .agg import (
-    PANDAS_AGG_NAMES,
-    AggForm,
-    AggKeyword,
-    flatten_agg_specs,
-    has_agg_leaf,
-    reduce_specs,
-    split_aggs,
-    to_agg,
-)
-from .dataframe import DataFrame, single_index
-from .enums import DType, rule_to_units
-from .expr import Agg, AggLeaf, Col, Expr, check_quantile, collect_columns
-from .series import Series
 
 if TYPE_CHECKING:
+    from ._lazyframe import LazyFrame, LazyGroupBy
     from .dftracer_utils_ext import Scalar
-    from .lazyframe import LazyFrame, LazyGroupBy
-
-__all__ = ["GroupBy", "SeriesGroupBy"]
 
 _T = TypeVar("_T")
 

@@ -74,6 +74,25 @@ F.count`` appearing in several outputs) is computed once via common
 subexpression elimination. It returns one :class:`~dftracer.utils.Series`
 per input expression, in the same order.
 
+Conditional expressions
+-----------------------
+
+.. autofunction:: dftracer.utils.when
+
+.. autofunction:: dftracer.utils.if_else
+
+``when(cond).then(a).otherwise(b)`` is the polars spelling of
+``if_else(cond, a, b)``: a column that takes ``a`` where ``cond`` holds and ``b``
+elsewhere.
+
+UDF calls
+---------
+
+.. autofunction:: dftracer.utils.call
+
+``call(name, *args)`` is ``udf[name](*args)``: the expression that calls a
+registered scalar UDF (see :doc:`../plugins`).
+
 Row filtering
 --------------
 
@@ -99,7 +118,7 @@ methods (``sum min max mean var std skew kurt``) are added to every
 .. autoclass:: dftracer.utils.GroupBy
    :members: agg
 
-.. autoclass:: dftracer.utils.groupby.SeriesGroupBy
+.. autoclass:: dftracer.utils.typing.SeriesGroupBy
    :members: agg
 
 A ``GroupBy`` is obtained from a native ``DataFrame``'s ``group_by(key)`` and
@@ -107,7 +126,7 @@ consumed by ``.agg(*specs)``, where each spec is an ``Agg`` or a legacy
 ``"op:column"`` string; value expressions across all the aggregates compile
 in one CSE'd, pruned pass. See :doc:`../guides/analysis/aggregation` and
 :doc:`../guides/core/columnar-ops` for group-by usage alongside
-:class:`~dftracer.utils.TraceViewer`.
+:class:`~dftracer.utils.trace.TraceViewer`.
 
 See also
 --------

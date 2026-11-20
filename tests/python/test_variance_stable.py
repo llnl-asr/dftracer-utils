@@ -168,7 +168,7 @@ def test_ewm_std_is_shift_invariant():
 
 
 def test_merged_partitions_equal_one_pass():
-    from dftracer.utils.dask.frame import DaskFrame
+    from dftracer.utils.dask._frame import DaskFrame
 
     v = normal(1e9, 1.0, N, 4)
     ref = two_pass(v)
@@ -207,14 +207,15 @@ def write_trace(path, durs):
 
 def test_tier_and_scan_give_the_same_std(tmp_path):
     import dftracer.utils as du
-    from dftracer.utils import AggregationConfig, TraceViewer
+    from dftracer.utils.index import AggregationConfig
+    from dftracer.utils.trace import TraceViewer
 
     durs = np.rint(normal(1e9, 1000.0, 20000, 11)).astype(np.int64)
     ref = two_pass(durs.astype(np.float64))
     path = str(tmp_path / "t.pfw.gz")
     write_trace(path, durs)
     agg = str(tmp_path / "agg")
-    with du.Indexer(
+    with du.index.Indexer(
         files=[path], index_dir=agg, aggregation_config=AggregationConfig(time_interval_ms=100000)
     ) as ix:
         ix.ensure()

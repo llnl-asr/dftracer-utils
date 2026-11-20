@@ -10,7 +10,7 @@ import pytest
 
 import dftracer.utils as dft
 from dftracer.utils import dftracer_utils_ext as ext
-from dftracer.utils.enums import DType
+from dftracer.utils._enums import DType
 
 pytest.importorskip("dftracer.utils.dftracer_utils_ext")
 np = pytest.importorskip("numpy")
@@ -110,7 +110,7 @@ def test_as_unit_keeps_the_zone_and_rejects_other_columns_and_units():
     assert got.timezone == "UTC"
     with pytest.raises(ValueError, match="unit must be one of"):
         ours.dt.as_unit("minutes")
-    with pytest.raises(dft.DFTUtilsValueError, match="not a Timestamp or Duration"):
+    with pytest.raises(dft.errors.DFTUtilsValueError, match="not a Timestamp or Duration"):
         dft.Series([1, 2, 3]).dt.as_unit("ms")
     assert _as_ticks(_ours([], "us").dt.as_unit("ns")) == []
 
@@ -120,7 +120,7 @@ def test_as_unit_overflow_is_an_error_not_a_wrap():
     ticks = [10**12, 5]
     with pytest.raises(ValueError):
         pd.Series(_np_ticks(ticks, "s")).dt.as_unit("ns")
-    with pytest.raises(dft.DFTUtilsValueError, match="does not fit"):
+    with pytest.raises(dft.errors.DFTUtilsValueError, match="does not fit"):
         _ours(ticks, "s").dt.as_unit("ns")
     frame = dft.DataFrame({"x": _ours(ticks, "s")})
     with pytest.raises(Exception, match="dt_as_unit"):
@@ -242,11 +242,11 @@ def test_date_and_time_on_empty_and_all_null_columns():
 
 
 def test_date_and_time_refuse_other_columns():
-    with pytest.raises(dft.DFTUtilsValueError, match="dt_date: not a Timestamp"):
+    with pytest.raises(dft.errors.DFTUtilsValueError, match="dt_date: not a Timestamp"):
         dft.Series([1, 2]).dt.date
-    with pytest.raises(dft.DFTUtilsValueError, match="dt_time: not a Timestamp"):
+    with pytest.raises(dft.errors.DFTUtilsValueError, match="dt_time: not a Timestamp"):
         dft.Series([1, 2]).dt.time
     date = dft.Series([1, 2]).astype("int32")
     date = ext._series_retype(date, int(DType.DATE32), 0, "")
-    with pytest.raises(dft.DFTUtilsValueError, match="dt_time: not a Timestamp"):
+    with pytest.raises(dft.errors.DFTUtilsValueError, match="dt_time: not a Timestamp"):
         date.dt.time

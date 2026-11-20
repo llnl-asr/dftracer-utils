@@ -17,7 +17,7 @@ import re
 from typing import TYPE_CHECKING, Any, Callable, Protocol, Sequence, cast
 
 from . import dftracer_utils_ext as _ext
-from .enums import UNIT_CODES, DType
+from ._enums import UNIT_CODES, DType
 
 _ARROW_ARRAY = hasattr(_ext.Series, "__arrow_c_array__")
 _ARROW_IMPORT = hasattr(_ext, "_series_from_arrow")
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from pandas.api.extensions import ExtensionArray
     from polars import Series as PolarsSeries
 
-    from .series import Series
+    from ._series import Series
 
 
 class _MaskedDtype(Protocol):

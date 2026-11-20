@@ -1,52 +1,33 @@
 # SPDX-License-Identifier: MIT
-from . import schemas  # noqa: F401
-from ._eval import eval_many, where  # noqa: F401
-from ._tz import install_search_path as _install_tz_search_path
-from .agg import Udaf, count, udaf  # noqa: F401
-from .dataframe import DataFrame  # noqa: F401
-from .dftracer_utils_ext import (  # noqa: F401
-    CheckpointIndexer,
-    consolidate_shard_set,
-    get_log_level,
-    set_log_color,
-    set_log_level,
-    write_shard_set,
+from . import (  # noqa: F401
+    errors,
+    index,
+    plugins,
+    runtime,
+    schemas,
+    store,
+    trace,
+    typing,
 )
-from .discover import discover_trace_files  # noqa: F401
-from .enums import AggOp, DType, GroupKey, Phase, TimeUnit  # noqa: F401
-from .errors import (  # noqa: F401
-    DFTUtilsAggregationError,
-    DFTUtilsCompressionError,
-    DFTUtilsDuqlError,
-    DFTUtilsError,
-    DFTUtilsIndexerError,
-    DFTUtilsIOError,
-    DFTUtilsNotFoundError,
-    DFTUtilsParseError,
-    DFTUtilsPipelineError,
-    DFTUtilsReaderError,
-    DFTUtilsValueError,
-)
-from .expr import (  # noqa: F401
+from ._agg import Udaf, count, udaf  # noqa: F401
+from ._dataframe import DataFrame  # noqa: F401
+from ._enums import AggOp, DType, GroupKey, TimeUnit  # noqa: F401
+from ._expr import (  # noqa: F401
     Agg,
     Expr,
     F,
     Udf,
     call,
     col,
+    eval_many,
+    if_else,
     lit,
     udf,
+    when,
+    where,
 )
-from .groupby import GroupBy  # noqa: F401
-from .index import (  # noqa: F401
-    AggregationConfig,
-    BloomConfig,
-    Index,
-    Indexer,
-    IndexStatus,
-    hash_value,
-)
-from .lazyframe import (  # noqa: F401
+from ._groupby import GroupBy  # noqa: F401
+from ._lazyframe import (  # noqa: F401
     BoundColumn,
     LazyFrame,
     LazyResult,
@@ -56,21 +37,10 @@ from .lazyframe import (  # noqa: F401
     lazy,
     scan_file,
 )
-from .memory_advice import MemoryBudgetAdvice, memory_budget_advice  # noqa: F401
-from .plugins import PluginHandle, load_plugin  # noqa: F401
-from .runtime import Runtime, TaskHandle, get_default_runtime, peek_default_runtime  # noqa: F401
-from .series import Series  # noqa: F401
-from .store import Store  # noqa: F401
-from .table import TableWriter, read_table, write_table  # noqa: F401
-from .trace import (  # noqa: F401
-    Containment,
-    IndexRecords,
-    LiveFileStatus,
-    LiveTraceViewer,
-    TraceViewer,
-    TraceWriter,
-)
-from .workers import WorkerShare, apply_worker_share, worker_share  # noqa: F401
+from ._public import set_home as _set_home
+from ._series import Series  # noqa: F401
+from ._table import TableWriter, read_table, write_table  # noqa: F401
+from ._tz import install_search_path as _install_tz_search_path
 
 try:
     from ._version import __version__
@@ -84,80 +54,41 @@ except ImportError:  # a wheel built without the generated file
 
 
 __all__ = [
-    "AggregationConfig",
-    "BloomConfig",
-    "CheckpointIndexer",
+    "DataFrame",
+    "Series",
+    "LazyFrame",
+    "GroupBy",
     "Expr",
+    "F",
     "col",
     "lit",
-    "F",
-    "where",
-    "Udaf",
-    "Udf",
-    "udaf",
-    "udf",
     "call",
-    "Agg",
-    "GroupBy",
-    "count",
+    "where",
+    "when",
+    "if_else",
     "eval_many",
-    "Index",
-    "Indexer",
-    "IndexStatus",
-    "hash_value",
+    "count",
+    "Agg",
     "AggOp",
-    "DType",
-    "GroupKey",
-    "Phase",
-    "TimeUnit",
-    "Store",
-    "TraceViewer",
-    "TraceWriter",
-    "TableWriter",
-    "read_table",
-    "write_table",
-    "LiveFileStatus",
-    "LiveTraceViewer",
-    "Containment",
-    "IndexRecords",
-    "DataFrame",
-    "LazyFrame",
+    "Udf",
+    "udf",
+    "Udaf",
+    "udaf",
+    "lazy",
+    "collect_all",
     "LazyResult",
     "LazyScalar",
     "BoundColumn",
     "SinkSummary",
-    "collect_all",
-    "lazy",
+    "DType",
+    "TimeUnit",
+    "GroupKey",
+    "read_table",
+    "write_table",
+    "TableWriter",
     "scan_file",
-    "load_plugin",
-    "PluginHandle",
-    "Series",
-    "Runtime",
-    "TaskHandle",
-    "get_default_runtime",
-    "peek_default_runtime",
-    "WorkerShare",
-    "apply_worker_share",
-    "discover_trace_files",
-    "memory_budget_advice",
-    "MemoryBudgetAdvice",
-    "worker_share",
-    "get_log_level",
-    "set_log_color",
-    "set_log_level",
-    "write_shard_set",
-    "consolidate_shard_set",
-    "DFTUtilsError",
-    "DFTUtilsAggregationError",
-    "DFTUtilsCompressionError",
-    "DFTUtilsDuqlError",
-    "DFTUtilsIndexerError",
-    "DFTUtilsIOError",
-    "DFTUtilsNotFoundError",
-    "DFTUtilsParseError",
-    "DFTUtilsPipelineError",
-    "DFTUtilsReaderError",
-    "DFTUtilsValueError",
 ]
 
 _install_tz_search_path()
+
+_set_home(__name__, globals(), __all__)

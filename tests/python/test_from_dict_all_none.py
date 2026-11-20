@@ -5,7 +5,7 @@
 import pandas as pd
 
 from dftracer.utils import DataFrame, Series
-from dftracer.utils.enums import DType
+from dftracer.utils._enums import DType
 
 
 def _types(frame):

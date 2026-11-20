@@ -17,18 +17,18 @@ from typing import (
     cast,
 )
 
-from .. import jit_op
+from .. import _jit_op
 from .._c_text import c_str_literal as _c_str_literal
 from .._eval import COMPARE_SYMBOL, ENGINE_ARITH_SYMBOL
 from .._jit_errors import JitError, Source
-from ..jit_op import Op
+from .._jit_op import Op
 from . import _channels
 from ._channels import PortDecl as _PortDecl
 from ._flow import FlowFn as _FlowFn
 from ._flow import TaskSig as _TaskSig
-from .maps import AnyMap, CfgField, Map, PlainField, PortHandle, StoreField
-from .monoids import Counter, ListV, Max, Min, Monoid, SetV, Sum
-from .types import KIND_DTYPES, int_literal, is_float_dft, key_type, kind_type
+from ._maps import AnyMap, CfgField, Map, PlainField, PortHandle, StoreField
+from ._monoids import Counter, ListV, Max, Min, Monoid, SetV, Sum
+from ._types import KIND_DTYPES, int_literal, is_float_dft, key_type, kind_type
 
 if TYPE_CHECKING:
     pass
@@ -2815,11 +2815,11 @@ class Compiler:
             _reject(f"jit.op '{name}' takes exactly one positional argument", node)
         c_name = f"dftu_jitop_{name}"
         if name not in self.op_emitted:
-            self.op_defs.append(jit_op.emit_inline(op_obj, c_name))
+            self.op_defs.append(_jit_op.emit_inline(op_obj, c_name))
             self.op_emitted.add(name)
         arg_expr, _ = self._arith(node.args[0])
-        in_ct = jit_op.c_type(op_obj.in_type)
-        return f"{c_name}(({in_ct})({arg_expr}))", jit_op.is_float_type(op_obj.out_type)
+        in_ct = _jit_op.c_type(op_obj.in_type)
+        return f"{c_name}(({in_ct})({arg_expr}))", _jit_op.is_float_type(op_obj.out_type)
 
     def _lower_arg(self, method: str, name: str) -> tuple[str, bool]:
         """Lower ``e.arg_*("NAME")`` to a read of the batch-resolved "args.NAME"

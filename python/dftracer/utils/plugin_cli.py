@@ -9,7 +9,8 @@ import sys
 from pathlib import Path
 
 from . import _build, jit
-from .jit.package import build, is_jit_plugin, provided_names
+from ._public import set_home as _set_home
+from .jit._package import build as _build_class
 
 __all__ = [
     "main",
@@ -156,7 +157,7 @@ def _resolve_plugin_spec(spec: str) -> type:
     cls = getattr(module, attr, None)
     if cls is None:
         raise ValueError(f"dftracer_plugin: module '{module_name}' has no attribute '{attr}'")
-    if not is_jit_plugin(cls):
+    if not jit.is_jit_plugin(cls):
         raise ValueError(f"dftracer_plugin: '{spec}' is not a @jit.plugin class")
     return cls
 
@@ -168,7 +169,7 @@ def _mangle(name: str) -> str:
 def _render_header(cls: type) -> str:
     """A C header of ``#define`` name constants for every name ``cls``
     provides, guarded under the mangled class identity."""
-    provided = provided_names(cls)
+    provided = jit.provided_names(cls)
     stem = next(iter(provided.values()))
     attr = next(iter(provided.keys()))
     stem = stem[: -(len(attr) + 1)]
@@ -217,7 +218,7 @@ def _cmd_build_spec(args: argparse.Namespace, spec: str) -> int:
         return 1
     out = args.output or f"{cls.__name__.lower()}.so"
     try:
-        so = build(cls, out=out)
+        so = _build_class(cls, out=out)
     except jit.JitError as exc:
         print(f"dftracer_plugin: {exc}", file=sys.stderr)
         return 1
@@ -311,3 +312,5 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+_set_home(__name__, globals(), __all__)

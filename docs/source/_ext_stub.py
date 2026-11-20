@@ -384,7 +384,7 @@ class TaskHandle(Generic[_T]):
 class Runtime:
     """Lightweight coroutine runtime wrapping Executor + Watchdog.
 
-    Note: For user-facing API, use dftracer.utils.Runtime (Python wrapper)
+    Note: For user-facing API, use dftracer.utils.runtime.Runtime (Python wrapper)
     which adds submit(), Python callable support, and error handling.
     """
     def __init__(self, threads: int = 0, io_threads: int = 0) -> None: ...
@@ -486,7 +486,7 @@ class TraceWriter:
 
 
 class _RuntimeHolder(Protocol):
-    """An object that owns a native ``Runtime``, as ``dftracer.utils.Runtime`` does."""
+    """An object that owns a native ``Runtime``, as ``dftracer.utils.runtime.Runtime`` does."""
     @property
     def _native(self) -> Runtime: ...
 
@@ -621,7 +621,7 @@ def plan_lpt_partition(
 
 class StrAccessor:
     """The string methods of a Series, the base of ``Series.str``. The methods
-    that are exactly one kernel come from api.def; ``dftracer.utils.series``
+    that are exactly one kernel come from api.def; ``dftracer.utils.Series``
     adds the rest."""
     def __new__(cls, series: PublicSeries[Scalar]) -> Self: ...
     @property
@@ -659,7 +659,7 @@ class StrAccessor:
 
 class DtAccessor:
     """The temporal methods of a Series, the base of ``Series.dt``;
-    ``dftracer.utils.series`` adds the methods."""
+    ``dftracer.utils.Series`` adds the methods."""
     def __new__(cls, series: PublicSeries[Scalar]) -> Self: ...
     @property
     def _s(self) -> PublicSeries[Scalar]: ...
@@ -667,7 +667,7 @@ class DtAccessor:
 
 class ListAccessor:
     """The list methods of a Series, the base of ``Series.list``. The methods
-    that are exactly one kernel come from api.def; ``dftracer.utils.series``
+    that are exactly one kernel come from api.def; ``dftracer.utils.Series``
     adds the rest."""
     def __new__(cls, series: PublicSeries[Scalar]) -> Self: ...
     @property
@@ -2094,7 +2094,7 @@ def _memory_budget_advice(
     required_bytes: int, available_bytes: int = ...
 ) -> tuple[bool, int, int, int, int, str]:
     """(fits, required_bytes, peak_bytes, available_bytes, suggested_nodes,
-    warning); `dftracer.utils.memory_budget_advice` wraps it."""
+    warning); `dftracer.utils.runtime.memory_budget_advice` wraps it."""
     ...
 
 

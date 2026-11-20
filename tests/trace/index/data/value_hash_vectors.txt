@@ -1,4 +1,4 @@
-# kind value hash; str and bytes values are hex, '-' is empty; produced by dft.hash_value and checked by tests/trace/index/test_value_hash.cpp and tests/python/test_index_summaries.py
+# kind value hash; str and bytes values are hex, '-' is empty; produced by dftracer.utils.index.hash_value and checked by tests/trace/index/test_value_hash.cpp and tests/python/test_index_summaries.py
 null - 541ff5361fdf12ce
 bool 1 bf0327e6b4205436
 bool 0 de2ec8ed59964b28

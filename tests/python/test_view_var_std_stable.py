@@ -11,7 +11,8 @@ import pytest
 
 pytest.importorskip("pyarrow")
 
-from dftracer.utils import AggregationConfig, Indexer, TraceViewer  # noqa: E402
+from dftracer.utils.index import AggregationConfig, Indexer
+from dftracer.utils.trace import TraceViewer
 
 REL = 1e-9
 

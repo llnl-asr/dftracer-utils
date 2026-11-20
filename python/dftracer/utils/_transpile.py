@@ -25,7 +25,7 @@ import tokenize
 from typing import Any, Callable, Sequence, cast
 
 from ._eval import COMPARE_NAME, ENGINE_ARITH_SYMBOL
-from .expr import Expr, Select, col, lit
+from ._expr import Expr, Select, col, lit
 
 # Python 3.8 wraps a subscript's slice in ast.Index; 3.9+ stores the value
 # directly.

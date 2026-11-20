@@ -31,8 +31,8 @@ from typing import (
 from .._c_text import c_str_literal as _c_str_literal
 from .._jit_errors import JitError, class_error
 from ._channels import PortDecl as _PortDecl
-from .monoids import Monoid, Product, Quantiles
-from .types import (
+from ._monoids import Monoid, Product, Quantiles
+from ._types import (
     K1,
     K2,
     K3,
@@ -331,7 +331,7 @@ class Store(Generic[SK, SV]):
     ``plugin.<plugin name>.<field name>``, so the same plugin keeps one
     namespace across runs. The plugin name is the stem of its ``.so``: the class
     identity for a plugin built from the cache, the file name for ``build(out=)``.
-    Keys and values go through the :mod:`dftracer.utils.store.codec` encoding, so
+    Keys and values go through the :mod:`dftracer.utils.store` encoding, so
     ``Store.namespace(name, 1, durable=True, shared=True)`` of the same index
     root reads and writes it from Python as a ``Namespace[K, V]``.
 

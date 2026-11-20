@@ -11,8 +11,9 @@ import json
 
 import pytest
 
-from dftracer.utils import DataFrame, LazyFrame, TraceViewer
+from dftracer.utils import DataFrame, LazyFrame
 from dftracer.utils import dftracer_utils_ext as _ext
+from dftracer.utils.trace import TraceViewer
 
 # Accepted losses: `DataFrame.__contains__(name=)` and `__getitem__(key=)` no
 # longer take their keyword. They are slot wrappers of the C type, which cannot

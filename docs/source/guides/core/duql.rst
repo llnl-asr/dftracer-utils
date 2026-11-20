@@ -20,7 +20,8 @@ Start from a field, compare it, and combine.
 
       .. code-block:: python
 
-         from dftracer.utils import F, TraceViewer
+         from dftracer.utils import F
+         from dftracer.utils.trace import TraceViewer
 
          # F.<name> is a field; compare and combine with & | ~
          q = (F.cat == "POSIX") & (F.dur > 1000)
@@ -202,7 +203,7 @@ files)`` on the scan, so the index still skips chunks. Arrows also work in
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          tv = TraceViewer("trace.pfw.gz")
          df = tv.duql('where fhash -> files.path like "%/scratch/%"').collect()
@@ -302,7 +303,7 @@ instead of formatting values into the text.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          tv = TraceViewer("traces/")
          q = "where cat == $cat and dur > 250us | derive ms = dur / 1000 | sort -ms | take $n"
@@ -361,7 +362,7 @@ Time per function
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          tv = TraceViewer("traces/")
          q = (
@@ -704,7 +705,7 @@ keep it alive while the query runs.
 
 .. code-block:: python
 
-   from dftracer.utils import TraceViewer
+   from dftracer.utils.trace import TraceViewer
    from dftracer.utils.plugins import Plugins
 
    plugins = Plugins(["myplug.so"])

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Iterator, NamedTuple, Sequence
 
 from .. import dftracer_utils_ext as _ext
 from ..schemas import RecordSchema, schema_id
-from .viewer import TraceViewer
+from ._viewer import TraceViewer
 
 if TYPE_CHECKING:
     from ..runtime import Runtime

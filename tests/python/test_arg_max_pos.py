@@ -109,7 +109,7 @@ def test_lazy_string_spec_and_a_text_column():
 
 
 def test_a_trace_aggregate_refuses_a_position():
-    from dftracer.utils.trace import partials
+    from dftracer.utils.trace import _partials as partials
 
     for method in ("arg_max", "arg_min"):
         with pytest.raises(ValueError, match="no meaning across trace files"):

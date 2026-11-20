@@ -11,7 +11,7 @@ from typing import (
 )
 
 from .._jit_errors import JitError
-from .types import DFT_DTYPES, Str, T, TypeTag, i64, str_, u64
+from ._types import DFT_DTYPES, Str, T, TypeTag, i64, str_, u64
 
 if TYPE_CHECKING:
     pass

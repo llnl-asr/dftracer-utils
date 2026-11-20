@@ -13,8 +13,8 @@ pa = pytest.importorskip("pyarrow")
 pytest.importorskip("numpy")
 
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
-from dftracer.utils.dataframe import _dataframe_from_arrow  # noqa: E402
-from dftracer.utils.series import _series_from_arrow  # noqa: E402
+from dftracer.utils._dataframe import _dataframe_from_arrow  # noqa: E402
+from dftracer.utils._series import _series_from_arrow  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     not hasattr(_ext, "_series_from_arrow"),
@@ -220,13 +220,14 @@ def test_columnar_over_view_batch_stays_in_vec():
     # collect() returns a native VecBatch; the DSL operates on it directly and
     # Arrow appears only at the explicit .to_arrow() edge, never as an input.
     import dftracer.utils as dft
-    from dftracer.utils import DataFrame, TraceViewer
+    from dftracer.utils import DataFrame
+    from dftracer.utils.trace import TraceViewer
 
     from .common import Environment
 
     with Environment(lines=100) as env:
         gz = env.create_test_gzip_file()
-        with dft.Indexer(files=[gz]) as ix:
+        with dft.index.Indexer(files=[gz]) as ix:
             ix.ensure()
 
         batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur", "mean:dur").collect()
@@ -247,13 +248,13 @@ def test_columnar_over_view_batch_stays_in_vec():
 
 def test_columnar_batch_to_arrow_and_pandas_roundtrip():
     import dftracer.utils as dft
-    from dftracer.utils import TraceViewer
+    from dftracer.utils.trace import TraceViewer
 
     from .common import Environment
 
     with Environment(lines=100) as env:
         gz = env.create_test_gzip_file()
-        with dft.Indexer(files=[gz]) as ix:
+        with dft.index.Indexer(files=[gz]) as ix:
             ix.ensure()
         batch = TraceViewer(gz).group_by("cat").agg("count").collect()
         tbl = batch.to_arrow()
@@ -267,13 +268,14 @@ def test_columnar_batch_and_column_pickle_roundtrip():
     import pickle
 
     import dftracer.utils as dft
-    from dftracer.utils import DataFrame, Series, TraceViewer
+    from dftracer.utils import DataFrame, Series
+    from dftracer.utils.trace import TraceViewer
 
     from .common import Environment
 
     with Environment(lines=100) as env:
         gz = env.create_test_gzip_file()
-        with dft.Indexer(files=[gz]) as ix:
+        with dft.index.Indexer(files=[gz]) as ix:
             ix.ensure()
         batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur").collect()
 
@@ -292,13 +294,14 @@ def test_columnar_batch_and_column_pickle_roundtrip():
 def test_vecbatch_native_frame_ops():
     # select / rename / with_column / sort_by / head stay entirely in vec.
     import dftracer.utils as dft
-    from dftracer.utils import DataFrame, TraceViewer
+    from dftracer.utils import DataFrame
+    from dftracer.utils.trace import TraceViewer
 
     from .common import Environment
 
     with Environment(lines=200) as env:
         gz = env.create_test_gzip_file()
-        with dft.Indexer(files=[gz]) as ix:
+        with dft.index.Indexer(files=[gz]) as ix:
             ix.ensure()
         batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur").collect()
 
@@ -586,13 +589,14 @@ def test_series_a2_shift_topk_sample():
 
 def test_vecbatch_topk_and_concat():
     import dftracer.utils as dft
-    from dftracer.utils import DataFrame, TraceViewer
+    from dftracer.utils import DataFrame
+    from dftracer.utils.trace import TraceViewer
 
     from .common import Environment
 
     with Environment(lines=200) as env:
         gz = env.create_test_gzip_file()
-        with dft.Indexer(files=[gz]) as ix:
+        with dft.index.Indexer(files=[gz]) as ix:
             ix.ensure()
         batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur").collect()
 

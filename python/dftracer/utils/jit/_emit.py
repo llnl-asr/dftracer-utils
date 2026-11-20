@@ -14,10 +14,10 @@ from typing import (
 
 from .._c_text import c_str_literal as _c_str_literal
 from .._jit_errors import Source
-from ..jit_op import Op
+from .._jit_op import Op
 from . import _channels, _flow
 from ._channels import PortDecl as _PortDecl
-from .compiler import (
+from ._compiler import (
     ARG_HELPER_DEFS,
     COLBUF_HELPERS,
     ERROR_HELPER,
@@ -25,9 +25,9 @@ from .compiler import (
     RAW_EVENT_SHIM_TYPE,
     out_name,
 )
-from .maps import AnyMap, CfgField, PortHandle, StoreField
-from .monoids import Quantiles
-from .types import key_type, kind_type
+from ._maps import AnyMap, CfgField, PortHandle, StoreField
+from ._monoids import Quantiles
+from ._types import key_type, kind_type
 
 if TYPE_CHECKING:
     from ._batch import BatchHook
@@ -336,7 +336,7 @@ def _emit_frees(attr: str, decl: AnyMap) -> list[str]:
     return out
 
 
-# The store codec of dftracer.utils.store.codec in C, for int, float, str and
+# The store codec of dftracer.utils.store in C, for int, float, str and
 # tuple keys and int and float values, so a Python Namespace reads and writes
 # what compiled code does.
 _STORE_HELPERS = [

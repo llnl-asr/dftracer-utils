@@ -13,7 +13,8 @@ import pytest
 pytest.importorskip("dftracer.utils.dftracer_utils_ext")
 
 import dftracer.utils as dft  # noqa: E402
-from dftracer.utils import DFTUtilsValueError, col  # noqa: E402
+from dftracer.utils import col
+from dftracer.utils.errors import DFTUtilsValueError
 
 pd = pytest.importorskip("pandas")
 

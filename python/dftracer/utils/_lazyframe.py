@@ -5,7 +5,7 @@
 and return a new ``LazyFrame``; nothing runs until :meth:`collect`, which
 materializes a :class:`~dftracer.utils.DataFrame`. Start one with
 ``df.lazy()`` or ``lazy(df)``. A ``filter``/``with_column`` expression is a
-:mod:`~dftracer.utils.expr` ``Expr`` (``col("dur") > 100``); its column
+:class:`~dftracer.utils.Expr` (``col("dur") > 100``); its column
 references resolve by position against the frame's schema at that point, so a
 ``filter``/``with_column`` after a data-dependent op (``pivot`` / ``to_dummies``
 / ``describe``, whose schema is known only after running) is rejected.
@@ -29,12 +29,7 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
-from ._aliases import install as _install_aliases
-from ._expr_ops import lower_column_ops
-from ._group_transforms import GroupTransforms
-from ._series_index import default_name
-from ._window_spec import norm_window_spec
-from .agg import (
+from ._agg import (
     PANDAS_AGG_NAMES,
     AggForm,
     AggKeyword,
@@ -44,9 +39,10 @@ from .agg import (
     select_aggs,
     split_aggs,
 )
-from .dataframe import DataFrame, JoinHow, WindowSpec, as_names, single_index
-from .enums import CAST_DTYPES, rule_to_units
-from .expr import (
+from ._aliases import install as _install_aliases
+from ._dataframe import DataFrame, JoinHow, WindowSpec, as_names, single_index
+from ._enums import CAST_DTYPES, rule_to_units
+from ._expr import (
     Agg,
     AggLeaf,
     Col,
@@ -61,32 +57,25 @@ from .expr import (
     has_column_op,
     resolve_selectors,
 )
-from .groupby import GroupKey, GroupResample, GroupRolling, group_quantile, trace_group
+from ._expr_ops import lower_column_ops
+from ._group_transforms import GroupTransforms
+from ._groupby import GroupKey, GroupResample, GroupRolling, group_quantile, trace_group
+from ._series import Series
+from ._series_index import default_name
+from ._window_spec import norm_window_spec
 from .runtime import TaskHandle
-from .series import Series
 
 if TYPE_CHECKING:
     from typing_extensions import Concatenate, ParamSpec
 
+    from ._enums import DType
     from ._loc import LazyILoc, LazyLoc, Resampler
-    from .enums import DType
     from .runtime import Runtime
-    from .trace.viewer import TraceViewer
+    from .trace._viewer import TraceViewer
 
     _P = ParamSpec("_P")
     _R = TypeVar("_R")
 
-__all__ = [
-    "BoundColumn",
-    "LazyFrame",
-    "LazyGroupBy",
-    "LazyResult",
-    "LazyScalar",
-    "SinkSummary",
-    "collect_all",
-    "lazy",
-    "scan_file",
-]
 Value = Union[int, float]
 
 
@@ -238,7 +227,7 @@ class LazyFrame(_ext.LazyFrame):
         """Output column names and dtypes without running; a dtype the plan
         cannot know before it runs is ``DType.UNKNOWN``. Empty where
         :attr:`columns` is."""
-        from .enums import DType
+        from ._enums import DType
 
         return {
             name: DType(code) for name, code, _unit, _zone in _ext.LazyFrame.output_schema(self)

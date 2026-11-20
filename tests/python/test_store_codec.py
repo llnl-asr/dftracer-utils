@@ -13,8 +13,8 @@ import sys
 import pytest
 
 from dftracer.utils.store import Store
-from dftracer.utils.store import codec as store_codec
-from dftracer.utils.store.codec import (
+from dftracer.utils.store import _codec as store_codec
+from dftracer.utils.store._codec import (
     MAX_DEPTH,
     decode,
     encode,
@@ -305,7 +305,7 @@ def test_decode_in_process_that_registered_but_never_encoded(tmp_path):
     data = encode((Auto(5), "x"))
     script = (
         "import sys\n"
-        "from dftracer.utils.store.codec import decode, register_type\n"
+        "from dftracer.utils.store._codec import decode, register_type\n"
         "@register_type\n"
         "class Auto:\n"
         "    store_type_id = 9101\n"
@@ -320,7 +320,7 @@ def test_decode_in_process_that_registered_but_never_encoded(tmp_path):
         "assert out[0].n == 5 and out[1] == 'x'\n"
     )
     subprocess.run([sys.executable, "-c", script, data.hex()], check=True)
-    bare = f"from dftracer.utils.store.codec import decode\ntry:\n    decode(bytes.fromhex({data.hex()!r}))\nexcept ValueError as e:\n    assert 'register_type' in str(e)\n    raise SystemExit(0)\nraise SystemExit(1)\n"
+    bare = f"from dftracer.utils.store._codec import decode\ntry:\n    decode(bytes.fromhex({data.hex()!r}))\nexcept ValueError as e:\n    assert 'register_type' in str(e)\n    raise SystemExit(0)\nraise SystemExit(1)\n"
     subprocess.run([sys.executable, "-c", bare], check=True)
 
 

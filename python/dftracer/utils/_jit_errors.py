@@ -23,7 +23,7 @@ _UTILS_DIR = os.path.dirname(os.path.abspath(__file__))
 _JIT_DIR = os.path.join(_UTILS_DIR, "jit")
 _JIT_FILES = (
     os.path.join(_UTILS_DIR, "plugins.py"),
-    os.path.join(_UTILS_DIR, "jit_op.py"),
+    os.path.join(_UTILS_DIR, "_jit_op.py"),
 )
 
 

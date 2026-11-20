@@ -7,7 +7,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from dftracer.utils import DataFrame, DFTUtilsValueError, Series
+from dftracer.utils import DataFrame, Series
+from dftracer.utils.errors import DFTUtilsValueError
 
 N = 1003  # not a multiple of 8, so the last validity byte is partial
 

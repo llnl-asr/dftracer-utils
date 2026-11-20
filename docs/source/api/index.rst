@@ -15,11 +15,13 @@ This section contains the Python API documentation for dftracer utilities.
    duql
    columnar
    dataframe
+   lazyframe
    series
    enums
    runtime
    errors
    indexer
+   store
    schemas
    jit
    plugins
@@ -37,11 +39,13 @@ The dftracer utilities Python package provides the following main modules:
 - :doc:`dataframe` - **DataFrame**, the columnar frame type (the relational and
   reshape primitives - joins, window functions, gap fill, unnest - are native
   methods here)
+- :doc:`lazyframe` - **LazyFrame**, **lazy** and **scan_file**, the deferred query plan
 - :doc:`series` - **Series**, the columnar column type
-- :doc:`enums` - typed vocabularies (``Phase``, ``GroupKey``, ``AggOp``) and the
-  ``TimeUnit`` scaling target for the builder API
+- :doc:`enums` - typed vocabularies (``GroupKey``, ``AggOp``) and the
+  ``TimeUnit`` scaling target (``Phase`` lives in ``dftracer.utils.trace``)
 - :doc:`runtime` - Coroutine runtime and Dask integration
 - :doc:`errors` - The ``DFTUtilsError`` hierarchy every call raises
 - :doc:`plugins` - ``load_plugin`` and ``PluginHandle``, which load a compiled plugin for a block of code
 - :doc:`indexer` - Indexing and searching capabilities
+- :doc:`store` - **Store**, the key-value store
 - :doc:`schemas` - Record schemas: declare, register, detect and explain record formats

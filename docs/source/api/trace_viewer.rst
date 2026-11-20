@@ -15,7 +15,7 @@ index exists next to the traces, the same query is served from the index
 
 .. code-block:: python
 
-   from dftracer.utils import TraceViewer
+   from dftracer.utils.trace import TraceViewer
 
    # A directory is scanned recursively for .pfw.gz traces, in parallel.
    view = TraceViewer("traces/")           # index_dir optional; sidecar used when present
@@ -39,7 +39,7 @@ Constructing a view
 ``files`` is a directory (scanned recursively for ``.pfw.gz`` traces), a single
 file path, or a list of file paths. Pass ``index_dir`` to point at an index
 directory explicitly; omit it to use the sidecar convention. An optional
-:class:`~dftracer.utils.Runtime` controls the thread pool.
+:class:`~dftracer.utils.runtime.Runtime` controls the thread pool.
 
 The fluent builder
 ------------------
@@ -150,7 +150,7 @@ the columnar engine (see :doc:`../columnar-engine`):
 
 ``collect_index_records`` does a single pass over an aggregation index and
 returns its three record families at once as an
-:class:`~dftracer.utils.IndexRecords`, useful for building several frames from
+:class:`~dftracer.utils.trace.IndexRecords`, useful for building several frames from
 one scan:
 
 .. code-block:: python
@@ -269,7 +269,7 @@ lane (rows sharing ``partition``, ``("pid", "tid")`` by default; ``ts`` /
   ``level``, ``total`` (inclusive), ``self`` (exclusive), ``count``.
 - ``containment(partition, ts, dur, name)`` returns a
   :class:`~dftracer.utils.LazyResult` that buffers one fold; its ``collect()``
-  gives a :class:`~dftracer.utils.Containment` whose ``call_tree`` and
+  gives a :class:`~dftracer.utils.trace.Containment` whose ``call_tree`` and
   ``flamegraph`` fields hold both frames from the shared scan, cheaper than
   collecting both terminals separately.
 
@@ -340,7 +340,7 @@ In C++ the same calls are ``trace::views::LiveView::snapshot()`` and ``status()`
 
 .. code-block:: python
 
-   from dftracer.utils import LiveTraceViewer
+   from dftracer.utils.trace import LiveTraceViewer
 
    live = LiveTraceViewer("traces/")      # a file, a directory or a list
    view = live.snapshot()
@@ -381,23 +381,23 @@ How the viewer types relate and what they return:
 
 .. mermaid:: /_generated/py_trace_viewer.mmd
 
-.. autoclass:: dftracer.utils.TraceViewer
+.. autoclass:: dftracer.utils.trace.TraceViewer
    :members:
    :undoc-members:
 
-.. autoclass:: dftracer.utils.LiveTraceViewer
+.. autoclass:: dftracer.utils.trace.LiveTraceViewer
    :members:
    :undoc-members:
 
-.. autoclass:: dftracer.utils.LiveFileStatus
+.. autoclass:: dftracer.utils.trace.LiveFileStatus
    :members:
    :undoc-members:
 
-.. autoclass:: dftracer.utils.Containment
+.. autoclass:: dftracer.utils.trace.Containment
    :members:
    :undoc-members:
 
-.. autoclass:: dftracer.utils.IndexRecords
+.. autoclass:: dftracer.utils.trace.IndexRecords
    :members:
    :undoc-members:
 

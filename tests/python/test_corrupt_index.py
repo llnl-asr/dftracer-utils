@@ -17,7 +17,7 @@ import textwrap
 
 import pytest
 
-from dftracer.utils import AggregationConfig, Indexer
+from dftracer.utils.index import AggregationConfig, Indexer
 
 ADVICE = "delete that directory and build the index again"
 
@@ -90,7 +90,7 @@ def test_an_index_built_by_the_released_version_is_reused_or_rebuilt(tmp_path):
     index = str(tmp_path / ".dftindex")
     script = textwrap.dedent(
         f"""
-        from dftracer.utils import Indexer, AggregationConfig
+        from dftracer.utils.index import Indexer, AggregationConfig
         with Indexer(files=[{trace!r}], index_dir={index!r},
                      aggregation_config=AggregationConfig(time_interval_ms=5000)) as ix:
             ix.ensure()
@@ -98,7 +98,7 @@ def test_an_index_built_by_the_released_version_is_reused_or_rebuilt(tmp_path):
     )
     subprocess.run([os.environ["DFTRACER_UTILS_TEST_RELEASED_PYTHON"], "-c", script], check=True)
     build([trace], index)  # opens the older index: no error, whether it is reused or rebuilt
-    from dftracer.utils import TraceViewer
+    from dftracer.utils.trace import TraceViewer
 
     counted = (
         TraceViewer([trace], index_dir=index).group_by("name").agg("count").collect().to_pandas()

@@ -13,9 +13,10 @@ from typing import Tuple
 
 import pytest
 
-from dftracer.utils import Runtime, jit
-from dftracer.utils.jit.plugin import store_plugin_name
+from dftracer.utils import jit
+from dftracer.utils.jit._plugin import store_plugin_name
 from dftracer.utils.plugins import Plugins
+from dftracer.utils.runtime import Runtime
 from dftracer.utils.store import Store as PyStore
 
 pa = pytest.importorskip("pyarrow")

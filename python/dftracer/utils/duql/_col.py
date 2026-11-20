@@ -16,8 +16,8 @@ from typing import (
     runtime_checkable,
 )
 
-from ..enums import DUQL_DURATION_UNITS
-from ..expr import duql_string
+from .._enums import DUQL_DURATION_UNITS
+from .._expr import duql_string
 
 if TYPE_CHECKING:
     pass

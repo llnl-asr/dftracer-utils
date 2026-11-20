@@ -18,7 +18,7 @@ How the runtime types relate:
 
 .. mermaid:: /_generated/py_runtime.mmd
 
-.. autoclass:: dftracer.utils.Runtime(threads: int = 0, io_threads: int = 0, python_threads: int = 0)
+.. autoclass:: dftracer.utils.runtime.Runtime(threads: int = 0, io_threads: int = 0, python_threads: int = 0)
    :members:
    :undoc-members:
    :show-inheritance:
@@ -34,7 +34,7 @@ sizes from the host.
 TaskHandle Class
 ----------------
 
-.. autoclass:: dftracer.utils.TaskHandle
+.. autoclass:: dftracer.utils.runtime.TaskHandle
    :members:
    :undoc-members:
    :show-inheritance:
@@ -42,9 +42,9 @@ TaskHandle Class
 Module-level Functions
 ----------------------
 
-.. autofunction:: dftracer.utils.get_default_runtime
+.. autofunction:: dftracer.utils.runtime.get_default_runtime
 
-.. autofunction:: dftracer.utils.peek_default_runtime
+.. autofunction:: dftracer.utils.runtime.peek_default_runtime
 
 Worker Processes
 ----------------
@@ -52,11 +52,11 @@ Worker Processes
 Several worker processes on one host split it with these (see
 :doc:`../environment`).
 
-.. autofunction:: dftracer.utils.worker_share
+.. autofunction:: dftracer.utils.runtime.worker_share
 
-.. autofunction:: dftracer.utils.apply_worker_share
+.. autofunction:: dftracer.utils.runtime.apply_worker_share
 
-.. autoclass:: dftracer.utils.WorkerShare
+.. autoclass:: dftracer.utils.runtime.WorkerShare
    :members:
 
 Memory Advice
@@ -64,9 +64,9 @@ Memory Advice
 
 Check a footprint before a run (see :doc:`../guides/runtime/memory-budget`).
 
-.. autofunction:: dftracer.utils.memory_budget_advice
+.. autofunction:: dftracer.utils.runtime.memory_budget_advice
 
-.. autoclass:: dftracer.utils.MemoryBudgetAdvice
+.. autoclass:: dftracer.utils.runtime.MemoryBudgetAdvice
    :members:
 
 Submitting Tasks
@@ -80,7 +80,7 @@ without a return value.
 
    import dftracer.utils as dft
 
-   rt = dft.Runtime(threads=8, io_threads=4)
+   rt = dft.runtime.Runtime(threads=8, io_threads=4)
 
    # Submit a Python callable
    h = rt.submit(lambda x, y: x + y, 3, 4)
@@ -106,7 +106,7 @@ needs nothing else.
 
    import dftracer.utils as dft
 
-   indexer = dft.Indexer("traces/")
+   indexer = dft.index.Indexer("traces/")
    building = indexer.build_async()    # returns at once
    frame = lazy_frame.collect_async()  # a TaskHandle[DataFrame]
    print(building.done())              # False until the build ends
@@ -272,14 +272,14 @@ Control the native C++ logger from Python. These are process-global.
 
 .. code-block:: python
 
-   from dftracer.utils import set_log_level, get_log_level, set_log_color
+   from dftracer.utils.runtime import set_log_level, get_log_level, set_log_color
 
    set_log_level("debug")   # trace | debug | info | warn | error | off
    set_log_color("never")   # auto | always | never
    level = get_log_level()  # current level as a string
 
-.. autofunction:: dftracer.utils.set_log_level
+.. autofunction:: dftracer.utils.runtime.set_log_level
 
-.. autofunction:: dftracer.utils.get_log_level
+.. autofunction:: dftracer.utils.runtime.get_log_level
 
-.. autofunction:: dftracer.utils.set_log_color
+.. autofunction:: dftracer.utils.runtime.set_log_color

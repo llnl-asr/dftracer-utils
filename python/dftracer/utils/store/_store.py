@@ -26,7 +26,7 @@ from ..dftracer_utils_ext import Store as _NativeStore
 from ..dftracer_utils_ext import StoreBatch as _NativeBatch
 from ..dftracer_utils_ext import StoreNamespace as _NativeNamespace
 from ..dftracer_utils_ext import StoreSnapshot as _NativeSnapshot
-from .codec import (
+from ._codec import (
     BytesLike,
     Encodable,
     decode,

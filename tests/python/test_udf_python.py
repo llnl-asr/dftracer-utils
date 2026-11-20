@@ -241,7 +241,7 @@ def test_jit_udf_runs_in_duql_by_name(tmp_path):
     path = tmp_path / "t.pfw.gz"
     path.write_bytes(gzip.compress(("\n".join(json.dumps(e) for e in events) + "\n").encode()))
     got = (
-        dft.TraceViewer(str(path))
+        dft.trace.TraceViewer(str(path))
         .duql("derive h = half(dur) | where h > 100 | select tid, h")
         .collect()
         .to_dict()

@@ -923,7 +923,7 @@ offending node, the reason, then the source line.
 ``reason``. A construct in an ``each_event``, ``each_batch``, ``finalize`` or
 ``task`` body points at the node inside it; a class-level mistake points at the
 class or at the attribute; a bad ``jit.map(...)`` or ``jit.topk(...)`` call points
-at the call in your code. ``@jit.op`` bodies raise ``JitOpError``, a subclass of
+at the call in your code. ``@jit.op`` bodies raise :exc:`~dftracer.utils.jit.JitOpError`, a subclass of
 ``JitError``, with the same position form. ``Plugins(...)`` raises ``JitError`` too
 for a config that does not fit its dataclass and for a port plan that the host
 refuses, located at the field or port.
@@ -1133,8 +1133,8 @@ state of an empty chunk), and three methods:
            return True
 
    so = jit.build(SizeRange)
-   with dft.load_plugin(so):
-       ix = dft.Indexer("traces/", summaries={"size": ["acme.size_range"]})
+   with dft.plugins.load_plugin(so):
+       ix = dft.index.Indexer("traces/", summaries={"size": ["acme.size_range"]})
        ix.ensure()
        print(ix.explain_text("size >= 1000"))
        # traces/a.pfw.gz: read 2 of 12 chunks

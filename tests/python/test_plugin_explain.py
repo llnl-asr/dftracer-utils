@@ -45,7 +45,7 @@ def test_explain_shows_the_format_lines(tmp_path):
     index_dir.mkdir()
     plugins = Plugins([_PLUGIN])
     try:
-        with dft.Indexer([str(rows)], index_dir=str(index_dir)) as indexer:
+        with dft.index.Indexer([str(rows)], index_dir=str(index_dir)) as indexer:
             indexer.build()
         plan = dft.scan_file(str(rows), str(index_dir)).filter(dft.col("id") > 12).explain()
         assert "file format 'sdk_chunked': chunks=1 of 4 read; rows_per_chunk=4" in plan
@@ -59,7 +59,7 @@ def test_explain_analyze_counts_what_the_run_did(tmp_path):
     index_dir.mkdir()
     plugins = Plugins([_PLUGIN])
     try:
-        with dft.Indexer([str(rows)], index_dir=str(index_dir)) as indexer:
+        with dft.index.Indexer([str(rows)], index_dir=str(index_dir)) as indexer:
             indexer.build()
         lf = dft.scan_file(str(rows), str(index_dir)).filter(dft.col("id") > 12)
         text = lf.explain(analyze=True)

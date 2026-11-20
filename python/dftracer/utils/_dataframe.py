@@ -8,7 +8,7 @@ reshape primitive - ``join``/``asof``/``interval``, ``window``/``gap_fill``,
 ``sample``, ``top_k``, ``sort`` - is a native method that takes and returns
 ``DataFrame``s, running the SIMD kernels on the native columns; Arrow is crossed
 only at the edge (``to_arrow``/``from_arrow``), never as the operating boundary.
-See :mod:`dftracer.utils.series` for the column counterpart.
+See :class:`~dftracer.utils.Series` for the column counterpart.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
+from ._agg import AggForm, AggKeyword, select_aggs
 from ._aliases import install as _install_aliases
 from ._convert import (
     _apply_index,
@@ -42,16 +43,15 @@ from ._convert import (
     _to_pandas,
     index_columns,
 )
+from ._enums import DType, rule_to_units
 from ._eval import Columnar
+from ._expr import Agg, Expr, Lit, Named, SelectItem, col, resolve_selectors, when
 from ._levels import LevelArg, pick_levels
 from ._pandas_frame import FramePandasMixin
 from ._polars_frame import FramePolarsMixin
+from ._series import Series
 from ._series_index import default_name, positions, public_name, shown_name
 from ._window_spec import norm_window_spec
-from .agg import AggForm, AggKeyword, select_aggs
-from .enums import DType, rule_to_units
-from .expr import Agg, Expr, Lit, Named, SelectItem, col, resolve_selectors, when
-from .series import Series
 
 if TYPE_CHECKING:
     import numpy as np
@@ -61,16 +61,13 @@ if TYPE_CHECKING:
     from pandas.api.extensions import ExtensionArray
     from typing_extensions import Self
 
+    from ._groupby import GroupBy
+    from ._lazyframe import LazyFrame
     from ._loc import At, ILoc, Loc, Resampler
     from ._time_index import TimeResampler
     from .dftracer_utils_ext import Scalar
-    from .groupby import GroupBy
-    from .lazyframe import LazyFrame
 
 
-__all__ = [
-    "DataFrame",
-]
 # Finite value sets for the viewer builder args (kept as reusable aliases so the
 # wrappers, the dask plan, and the stub share one definition).
 PhaseArg = Literal["events", "counters", "aggregated", "metadata", "any"]
@@ -267,9 +264,9 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
     :meth:`from_dict` takes the columns only."""
 
     # The header a table file gave this frame; only read_table sets it, and
-    # to_pandas() reads it (see dftracer.utils.table).
+    # to_pandas() reads it (see _table.py).
     __slots__ = ("_table_header",)
-    _table_header: dict[str, Any]
+    _table_header: Mapping[str, Any]
 
     # The native type has no constructor of its own: its factories build this
     # class directly (_bind_types), so only a Python-data call comes through
@@ -656,9 +653,9 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
             raise ValueError("to_pandas: pass either arrow=True or nullable=True, not both")
         header = getattr(self, "_table_header", None)
         if header is not None and not arrow and not nullable and index is None:
-            from .table import exact_pandas
+            from ._table import _exact_pandas
 
-            exact = exact_pandas(self, header)
+            exact = _exact_pandas(self, header)
             if exact is not None:
                 return exact
         if arrow:
@@ -1465,7 +1462,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         set of aggregate expressions (``col("a").sum()``) gives the one-row
         frame ``group_by().agg(...)`` does, each unaliased aggregate of a
         column named after that column (the polars ``select``)."""
-        from .groupby import GroupBy
+        from ._groupby import GroupBy
 
         if items and all(isinstance(i, Agg) for i in items):
             return GroupBy(self, []).agg(*select_aggs(items))
@@ -1809,7 +1806,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         window grid at ``origin + k*every`` (default: the classic ts-floored
         grid); pass a window's begin, or ``"min"`` to align buckets to the
         minimum timestamp (the frame-native ``time_bucket("min")``)."""
-        from .lazyframe import dynamic_aggs
+        from ._lazyframe import dynamic_aggs
 
         return _bound(
             _ext.DataFrame.group_by_dynamic(
@@ -1904,7 +1901,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         included) and ``.sum()`` / ``.mean()`` / ... broadcast one. A row
         whose key is null is left out, as pandas; ``dropna=False`` keeps the
         null keys as their own group (polars), the key null in the result."""
-        from .groupby import GroupBy
+        from ._groupby import GroupBy
 
         given = [] if key is None else [key] if isinstance(key, (str, Series)) else list(key)
         if not given:
@@ -1973,7 +1970,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
             return self._reduce_rows(func)
         if axis not in (0, "index"):
             raise ValueError(f"agg: axis must be 0/'index' or 1/'columns', got {axis!r}")
-        from .groupby import GroupBy
+        from ._groupby import GroupBy
 
         return GroupBy(self._data_only(), []).agg(*([] if func is None else [func]), **named)
 

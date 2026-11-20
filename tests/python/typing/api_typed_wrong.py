@@ -5,9 +5,10 @@ from typing import List, cast
 
 from typing_extensions import assert_type
 
-from dftracer.utils import DataFrame, GroupBy, Indexer, LazyFrame, LazyResult, TraceViewer
+from dftracer.utils import DataFrame, GroupBy, LazyFrame, LazyResult
 from dftracer.utils import collect_all as collect_all
-from dftracer.utils.trace import Handle
+from dftracer.utils.index import Indexer
+from dftracer.utils.trace import Handle, TraceViewer
 
 df = cast("DataFrame", None)
 lf = cast("LazyFrame", None)

@@ -13,11 +13,11 @@ from typing import (
     Union,
 )
 
-from ..dataframe import DataFrame
+from .._dataframe import DataFrame
+from .._expr import Expr, duql_string
 from ..dftracer_utils_ext import duql_canonical, duql_load_path
-from ..expr import Expr, duql_string
-from ..trace.viewer import TraceViewer
-from .col import Col, Item, Named, ParamValue, SortKey, Value, fn, value_text
+from ..trace._viewer import TraceViewer
+from ._col import Col, Item, Named, ParamValue, SortKey, Value, fn, value_text
 
 if TYPE_CHECKING:
     from ..dftracer_utils_ext import Scalar

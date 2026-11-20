@@ -12,7 +12,8 @@ import pytest
 pa = pytest.importorskip("pyarrow")
 pd = pytest.importorskip("pandas")
 
-from dftracer.utils import DataFrame, DFTUtilsValueError, Series, col  # noqa: E402
+from dftracer.utils import DataFrame, Series, col  # noqa: E402
+from dftracer.utils.errors import DFTUtilsValueError  # noqa: E402
 
 # include_groups= landed in pandas 2.2; before it, apply() forwards the keyword
 # to the function.
@@ -1621,7 +1622,7 @@ def test_sketch_quantile_matches_duql_merge(tmp_path):
     import gzip
     import random
 
-    from dftracer.utils import TraceViewer
+    from dftracer.utils.trace import TraceViewer
 
     trace = str(tmp_path / "t.pfw.gz")
     rng = random.Random(3)

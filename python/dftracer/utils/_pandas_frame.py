@@ -22,6 +22,7 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
+from ._enums import DType, rule_to_units
 from ._label_align import LabelAlignMixin
 from ._levels import (
     LevelArg,
@@ -33,6 +34,7 @@ from ._levels import (
 )
 from ._pandas_series import OMITTED, Omitted, replace_in, replace_pairs, valid_edge
 from ._reshape import stack_frame, unstack_frame
+from ._series import Series
 from ._series_index import (
     default_name,
     drop_levels,
@@ -43,18 +45,16 @@ from ._series_index import (
 )
 from ._time_index import TimeIndexMixin
 from ._value_counts import frame_value_counts, native_counts
-from .enums import DType, rule_to_units
-from .series import Series
 
 if TYPE_CHECKING:
     import numpy as np
     from typing_extensions import Concatenate, ParamSpec, Self
 
     from ._apply import Row
+    from ._dataframe import DataFrame
+    from ._groupby import GroupBy
     from ._pandas_series import ReplaceKey, ReplaceValue
-    from .dataframe import DataFrame
     from .dftracer_utils_ext import Scalar
-    from .groupby import GroupBy
 
 _R = TypeVar("_R")
 if TYPE_CHECKING:
@@ -70,7 +70,7 @@ def is_numeric_series(s: Series) -> bool:
 
 
 def _group(frame: DataFrame, keys: Sequence[str]) -> GroupBy:
-    from .groupby import GroupBy
+    from ._groupby import GroupBy
 
     return GroupBy(frame, list(keys))
 
@@ -88,7 +88,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
     columns: List[str]
 
     def _frame(self) -> DataFrame:
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         assert isinstance(self, DataFrame)
         return self
@@ -124,7 +124,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
     def _operand(self, other: Operand, name: str) -> int | float | Series:
         """The right-hand side for column ``name``: a scalar, a row-aligned
         Series (positional), or the same-named column of a frame."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         if isinstance(other, DataFrame):
             if name not in other:
@@ -143,7 +143,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         return other
 
     def _binary(self, other: Operand, op: str, reverse: bool = False) -> DataFrame:
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         names = [c for c in self.columns if is_numeric_series(self._col(c))]
         if isinstance(other, DataFrame):
@@ -245,7 +245,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
 
     # -- comparisons: a Bool frame ---------------------------------------------
     def _compare(self, other: Operand, op: str) -> DataFrame:
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         out: dict[str, Series] = {}
         for name in self.columns:
@@ -415,7 +415,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
     def _reduce_scalar(
         self, fn: Callable[[Series], object], numeric_only: bool = True
     ) -> DataFrame:
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         out: dict[str, list[object]] = {}
         for name in self.columns:
@@ -500,8 +500,8 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         return self._pairwise("covar_samp")
 
     def _pairwise(self, agg: str) -> DataFrame:
-        from .dataframe import DataFrame
-        from .expr import Agg, Col
+        from ._dataframe import DataFrame
+        from ._expr import Agg, Col
 
         names = [c for c in self.columns if is_numeric_series(self._col(c))]
         specs = [Agg(agg, Col(b), f"{a}__{b}", by=Col(a)) for a in names for b in names]
@@ -614,7 +614,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
     def transpose(self) -> DataFrame:
         """Rows become columns named ``0``.. (``T``); values widen to one type
         as pandas does."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         rows = self._frame().to_dict()
         names = self.columns
@@ -824,7 +824,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         return self._frame().rename(dict(zip(self.columns, names)))
 
     def equals(self, other: object) -> bool:
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         if not isinstance(other, DataFrame) or self.columns != other.columns:
             return False
@@ -863,7 +863,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
 
     def truncate(self, before: object | None = None, after: object | None = None) -> DataFrame:
         """Rows with index labels in ``[before, after]`` (:attr:`loc`)."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         out = self._frame().loc[slice(before, after)]
         assert isinstance(out, DataFrame)
@@ -972,7 +972,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
 
     def memory_usage(self) -> DataFrame:
         """One row: the bytes each column's Arrow buffers hold."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         return DataFrame({c: [self._col(c).nbytes] for c in self.columns})
 
@@ -1016,7 +1016,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         one row per differing cell with ``row``, ``column``, ``self`` and
         ``other`` (the two values as strings; a null on one side is a
         difference), by column then row; :meth:`Series.compare` per column."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         if self.columns != other.columns:
             raise ValueError("compare: the frames must hold the same columns")
@@ -1045,7 +1045,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
     def corrwith(self, other: DataFrame) -> DataFrame:
         """One row: each numeric column's Pearson correlation with ``other``'s
         same-named column (positional), pandas ``DataFrame.corrwith``."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         out: dict[str, list[float]] = {}
         for name in self.columns:
@@ -1191,7 +1191,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
     def dot(self, other: Series | DataFrame) -> Series | DataFrame:
         """Matrix product with a Series (one value per column) or a frame
         (each column of ``other`` against each of ours)."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         names = [c for c in self.columns if is_numeric_series(self._col(c))]
         if isinstance(other, Series):
@@ -1207,7 +1207,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         columns: Sequence[str] | None = None,
     ) -> DataFrame:
         """A frame from row dicts or row tuples (with ``columns``)."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         rows = list(records)
         if not rows:
@@ -1224,7 +1224,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
 
     # -- the datetime-index methods, over the one index column (or `on`) ------
     def _time_column(self, on: str | None, op: str) -> tuple[str, Series]:
-        from .dataframe import single_index
+        from ._dataframe import single_index
 
         name = on if on is not None else single_index(self.index_names(), op)
         if name not in self._frame():

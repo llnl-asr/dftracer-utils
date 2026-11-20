@@ -17,7 +17,8 @@ try:
 except ImportError:
     DASK_AVAILABLE = False
 
-from dftracer.utils import AggregationConfig, Indexer, TraceViewer
+from dftracer.utils.index import AggregationConfig, Indexer
+from dftracer.utils.trace import TraceViewer
 
 from .common import Environment
 

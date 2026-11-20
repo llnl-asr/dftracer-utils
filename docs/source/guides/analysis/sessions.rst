@@ -56,7 +56,7 @@ exit, or call ``s.execute()`` (the first ``handle.result()`` also triggers it):
 
 .. code-block:: python
 
-   from dftracer.utils import TraceViewer
+   from dftracer.utils.trace import TraceViewer
 
    tv = TraceViewer("trace.pfw.gz")
 

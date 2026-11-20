@@ -8,7 +8,7 @@ Each region lies between `# BEGIN GENERATED` and `# END GENERATED` lines:
   in python/dftracer/utils/dftracer_utils_ext.pyi, one per PY_METHOD row of the
   class Series, Str, Dt or List, typed from its `args` and `result` tokens;
 * the Expr methods declared under `if TYPE_CHECKING:` in
-  python/dftracer/utils/expr.py, one per row with on_expr YES;
+  python/dftracer/utils/_expr.py, one per row with on_expr YES;
 * the aliases of python/dftracer/utils/_aliases.py in the class bodies of
   Series, Expr, DataFrame and LazyFrame, between
   `# BEGIN GENERATED aliases` and `# END GENERATED aliases`, so a type checker
@@ -209,34 +209,34 @@ TARGETS: List[Tuple[str, Callable, Callable, str, str, str]] = [
         BEGIN,
         END,
     ),
-    ("expr.py", expr_lines, lambda r: r.on_expr, "class Expr(", BEGIN, END),
+    ("_expr.py", expr_lines, lambda r: r.on_expr, "class Expr(", BEGIN, END),
     (
-        "series.py",
-        alias_lines("Series", "series.py"),
+        "_series.py",
+        alias_lines("Series", "_series.py"),
         lambda r: False,
         "class Series(",
         ALIAS_BEGIN,
         ALIAS_END,
     ),
     (
-        "expr.py",
-        alias_lines("Expr", "expr.py"),
+        "_expr.py",
+        alias_lines("Expr", "_expr.py"),
         lambda r: False,
         "class Expr(",
         ALIAS_BEGIN,
         ALIAS_END,
     ),
     (
-        "dataframe.py",
-        alias_lines("DataFrame", "dataframe.py"),
+        "_dataframe.py",
+        alias_lines("DataFrame", "_dataframe.py"),
         lambda r: False,
         "class DataFrame(",
         ALIAS_BEGIN,
         ALIAS_END,
     ),
     (
-        "lazyframe.py",
-        alias_lines("LazyFrame", "lazyframe.py"),
+        "_lazyframe.py",
+        alias_lines("LazyFrame", "_lazyframe.py"),
         lambda r: False,
         "class LazyFrame(",
         ALIAS_BEGIN,

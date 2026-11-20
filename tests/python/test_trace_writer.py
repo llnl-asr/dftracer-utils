@@ -11,7 +11,7 @@ import struct
 import pytest
 
 import dftracer.utils as dftu_utils
-from dftracer.utils import TraceViewer, TraceWriter
+from dftracer.utils.trace import TraceViewer, TraceWriter
 
 
 def read_lines(path):
@@ -32,8 +32,9 @@ def write_all(w):
 
 
 def test_exported():
-    assert dftu_utils.TraceWriter is TraceWriter
-    assert "TraceWriter" in dftu_utils.__all__
+    assert dftu_utils.trace.TraceWriter is TraceWriter
+    assert "TraceWriter" in dftu_utils.trace.__all__
+    assert "TraceWriter" not in dftu_utils.__all__
 
 
 def test_every_method_writes_one_json_line(tmp_path):
@@ -201,7 +202,7 @@ def test_exception_in_block_discards_the_file(tmp_path):
 
 
 def test_unwritable_path_raises(tmp_path):
-    with pytest.raises(dftu_utils.DFTUtilsError):
+    with pytest.raises(dftu_utils.errors.DFTUtilsError):
         TraceWriter(tmp_path / "missing_dir" / "x.pfw.gz")
 
 

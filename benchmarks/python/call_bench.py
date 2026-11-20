@@ -55,7 +55,7 @@ def main() -> None:
     print(f"df.head()         {per_call_ns(df.head) - empty:8.1f} ns/call (net)")
     print(f"lf.collect()      {per_call_ns(lf.collect, 20_000) - empty:8.1f} ns/call (net)")
     with tempfile.TemporaryDirectory() as directory:
-        tv = dft.TraceViewer(tiny_trace(directory))
+        tv = dft.trace.TraceViewer(tiny_trace(directory))
         tv.columns
         print(
             f"tv.columns        {per_call_ns(lambda: tv.columns, 20_000) - empty:8.1f} ns/call (net)"

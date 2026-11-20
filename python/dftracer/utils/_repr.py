@@ -7,9 +7,9 @@ import math
 from typing import TYPE_CHECKING, List, Sequence, Tuple
 
 if TYPE_CHECKING:
-    from .dataframe import DataFrame
-    from .enums import DType
-    from .series import Series
+    from ._dataframe import DataFrame
+    from ._enums import DType
+    from ._series import Series
 
 MAX_ROWS = 60
 EDGE_ROWS = 5

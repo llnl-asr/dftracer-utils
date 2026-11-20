@@ -52,7 +52,8 @@ from typing import (
 
 from . import dftracer_utils_ext as _ext
 from ._aliases import install as _install_aliases
-from .enums import (
+from ._convert import _arrow_native
+from ._enums import (
     CAST_DTYPES,
     DT_UNIT_CODES,
     EPOCH_NS,
@@ -61,8 +62,7 @@ from .enums import (
     coerce_duration,
     rule_to_units,
 )
-from .errors import DFTUtilsValueError
-from .series import (
+from ._series import (
     NormForm,
     Series,
     norm_form_code,
@@ -70,30 +70,16 @@ from .series import (
     translate_pairs,
     wrap_flag_bits,
 )
+from .errors import DFTUtilsValueError
 
 if TYPE_CHECKING:
     from typing_extensions import Concatenate, ParamSpec
 
-    from ._eval import Source
+    from ._eval import Columnar, Frame, Source
 
 _R = TypeVar("_R")
 if TYPE_CHECKING:
     _P = ParamSpec("_P")
-
-__all__ = [
-    "col",
-    "lit",
-    "Expr",
-    "F",
-    "Value",
-    "when",
-    "udf",
-    "call",
-    "Udf",
-    "if_else",
-    "Agg",
-    "Named",
-]
 
 
 # SPDX-License-Identifier: MIT
@@ -2826,6 +2812,61 @@ class _Then:
 
     def otherwise(self, value: Expr | int | float) -> Expr:
         return Select(self._cond, self._value, wrap(value))
+
+
+def where(table: Frame, pred: Expr | str) -> Frame:
+    """Keep the rows where ``pred`` is true.
+
+    ``pred`` is either an expression (numeric comparisons / ``& | ~``),
+    evaluated on the DataFrame engine to a boolean mask, or a duql
+    **string** (e.g. ``"dur > 100 and cat == 'io'"``), parsed by the duql
+    library and evaluated as a SIMD mask. A native ``DataFrame`` in stays fully
+    columnar (returns a filtered ``DataFrame``); a ``pyarrow.Table`` in returns
+    a filtered ``pyarrow.Table``."""
+    from ._eval import Columnar
+
+    native = table
+    if isinstance(pred, str):
+        if isinstance(native, _ext.DataFrame):
+            return _ext.DataFrame.query(native, pred)
+        import pyarrow as pa
+
+        return pa.table(_arrow_native("_dataframe_from_arrow")(native).query(pred))
+    mask = Columnar(pred).apply(native)  # a wrapped Series
+    if isinstance(native, _ext.DataFrame):
+        return _ext.DataFrame.filter(native, mask)
+    import pyarrow as pa
+
+    return native.filter(pa.array(mask))
+
+
+def eval_many(exprs: list[Expr | Columnar], source: Source) -> list[Series]:
+    """Evaluate several value expressions in ONE compiled pass over `source`.
+
+    CSE spans all of them, so a subexpression shared across outputs is computed
+    once. Returns one :class:`Series` per input expression, aligned to `exprs`.
+    `source` is a native vec batch or a pyarrow Table, as for :meth:`Columnar.apply`."""
+    from ._eval import Columnar, _import_vec_columns
+
+    cs = [e if isinstance(e, Columnar) else Columnar(e) for e in exprs]
+    union: list[str] = []
+    seen = set()
+    for c in cs:
+        for name in c.columns:
+            if name not in seen:
+                seen.add(name)
+                union.append(name)
+    if not union:  # all-constant expressions: no shared program to build
+        return [c.apply(source) for c in cs]
+    cols = _import_vec_columns(union, source)
+    inputs = [cols[name] for name in union]
+    index = {name: i for i, name in enumerate(union)}
+    asts: list[list[tuple[object, ...]]] = []
+    for c in cs:
+        ast: list[tuple[object, ...]] = []
+        emit_ast(c._expr, index.__getitem__, ast)
+        asts.append(ast)
+    return list(_ext.vec_eval_many(asts, inputs))
 
 
 def when(cond: Expr) -> _When:

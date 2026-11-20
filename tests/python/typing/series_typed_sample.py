@@ -11,9 +11,8 @@ from typing import List, Optional, cast
 
 from typing_extensions import assert_type
 
-from dftracer.utils import Series
+from dftracer.utils import DType, Series
 from dftracer.utils.dftracer_utils_ext import Scalar
-from dftracer.utils.enums import DType
 
 ints = cast("Series[int]", None)
 floats = cast("Series[float]", None)

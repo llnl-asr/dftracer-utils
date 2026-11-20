@@ -19,7 +19,8 @@ Where a plan comes from
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer, DataFrame, col
+         from dftracer.utils import DataFrame, col
+         from dftracer.utils.trace import TraceViewer
 
          plan = TraceViewer("traces/").filter('cat == "POSIX"')  # a plan over the scan
          plan = df.lazy()                                        # a plan over a frame

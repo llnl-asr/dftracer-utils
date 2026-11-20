@@ -118,7 +118,7 @@ def test_trace_viewer_duql(tmp_path, twice):
     path = tmp_path / "t.pfw.gz"
     path.write_bytes(gzip.compress(("\n".join(json.dumps(e) for e in events) + "\n").encode()))
     got = (
-        dft.TraceViewer(str(path))
+        dft.trace.TraceViewer(str(path))
         .duql("derive d = twice(dur) | agg { n = count() }")
         .collect()
         .to_dict()

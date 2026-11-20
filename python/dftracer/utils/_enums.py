@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: MIT
-"""Typed vocabularies for the TraceViewer builder API, and the one table of
-each fact the package keeps about dtypes and time units.
+"""Typed vocabularies for the group-by and aggregation ops, and the one table
+of each fact the package keeps about dtypes and time units.
 
-The ``str`` enums pass straight into the string-accepting builder ops
-(``phase``/``group_by``/``agg``) - ``phase(Phase.EVENTS)`` is the same call as
-``phase("events")`` - while giving callers a discoverable, typo-safe set instead
-of bare strings.
+The ``str`` enums pass straight into the string-accepting ops
+(``group_by``/``agg``) - ``AggOp.SUM.of("dur")`` is the same spec as
+``"sum:dur"`` - while giving callers a discoverable, typo-safe set instead of
+bare strings.
 
 Every other module reads a dtype set from a ``DType`` property and a time unit
 from ``UNIT_NS`` or ``UNIT_CODES``; none keeps a table of its own.
@@ -14,22 +14,6 @@ from ``UNIT_NS`` or ``UNIT_CODES``; none keeps a table of its own.
 import re
 from enum import Enum, IntEnum
 from typing import Dict, Optional, Tuple, Union
-
-__all__ = [
-    "Phase",
-    "GroupKey",
-    "AggOp",
-    "TimeUnit",
-    "DType",
-]
-
-
-class Phase(str, Enum):
-    """Which records a view scans."""
-
-    EVENTS = "events"  # ph=1
-    COUNTERS = "counters"  # ph=2
-    ANY = "any"
 
 
 class GroupKey(str, Enum):

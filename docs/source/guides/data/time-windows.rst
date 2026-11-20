@@ -104,7 +104,7 @@ first - add ``time_bucket`` (microseconds) to a trace query. Combined with a
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          timeline = (TraceViewer("traces/")
                      .group_by("cat")

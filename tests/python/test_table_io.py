@@ -373,20 +373,20 @@ def test_reader_refusals(tmp_path):
 
     header["args"]["format_version"] = 2
     bad.write_text(json.dumps(header) + "\n" + "\n".join(lines[1:]) + "\n")
-    with pytest.raises(dftu.DFTUtilsParseError, match="format_version"):
+    with pytest.raises(dftu.errors.DFTUtilsParseError, match="format_version"):
         read_pandas(str(bad))
 
     header["args"]["format_version"] = 1
     header["args"]["nrows"] = 5
     bad.write_text(json.dumps(header) + "\n" + "\n".join(lines[1:]) + "\n")
-    with pytest.raises(dftu.DFTUtilsParseError, match="rows"):
+    with pytest.raises(dftu.errors.DFTUtilsParseError, match="rows"):
         read_pandas(str(bad))
 
     header["args"]["nrows"] = 2
     bad.write_text(
         json.dumps(header) + "\n" + lines[1] + "\n" + json.dumps({"ph": 3, "args": {"b": 1}}) + "\n"
     )
-    with pytest.raises(dftu.DFTUtilsParseError, match="field"):
+    with pytest.raises(dftu.errors.DFTUtilsParseError, match="field"):
         read_pandas(str(bad))
 
     bad.write_text(
@@ -397,7 +397,7 @@ def test_reader_refusals(tmp_path):
         + json.dumps({"ph": 3, "args": {"a": "x"}})
         + "\n"
     )
-    with pytest.raises(dftu.DFTUtilsParseError):
+    with pytest.raises(dftu.errors.DFTUtilsParseError):
         read_pandas(str(bad))
 
 

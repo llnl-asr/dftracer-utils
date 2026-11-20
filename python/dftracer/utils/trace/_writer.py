@@ -4,5 +4,3 @@
 from __future__ import annotations
 
 from ..dftracer_utils_ext import TraceWriter as TraceWriter
-
-__all__ = ["TraceWriter"]

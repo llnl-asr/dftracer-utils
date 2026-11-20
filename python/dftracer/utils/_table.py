@@ -22,7 +22,7 @@ import types
 from typing import TYPE_CHECKING, Any, Protocol, Union, cast, runtime_checkable
 
 from . import dftracer_utils_ext as _ext
-from .dataframe import DataFrame, _bound
+from ._dataframe import DataFrame, _bound
 
 if TYPE_CHECKING:
     import numpy as np
@@ -635,7 +635,7 @@ def _read_one(path: str, threads: int) -> tuple[DataFrame, Header]:
     return _bound(frame), header
 
 
-def exact_pandas(frame: DataFrame, header: Header) -> pd.DataFrame | None:
+def _exact_pandas(frame: DataFrame, header: Header) -> pd.DataFrame | None:
     """The exact pandas frame a table header describes, or None when a column of
     ``frame`` no longer has the name or Arrow type the header implies."""
     _, pd, pa = _libs()
@@ -847,6 +847,3 @@ class TableWriter:
             self.close()
         else:
             self.discard()
-
-
-__all__ = ["TableWriter", "read_table", "write_table"]

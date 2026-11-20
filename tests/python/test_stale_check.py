@@ -12,7 +12,7 @@ from .common import Environment, determine_index_path
 
 
 def _build_index(directory):
-    with dftu_utils.Indexer(directory) as indexer:
+    with dftu_utils.index.Indexer(directory) as indexer:
         indexer.ensure()
 
 

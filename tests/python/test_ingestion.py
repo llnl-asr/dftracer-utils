@@ -9,8 +9,8 @@ import pytest
 np = pytest.importorskip("numpy")
 
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
-from dftracer.utils.dataframe import DataFrame  # noqa: E402
-from dftracer.utils.series import Series  # noqa: E402
+from dftracer.utils._dataframe import DataFrame  # noqa: E402
+from dftracer.utils._series import Series  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     not hasattr(_ext, "_series_from_numpy"),

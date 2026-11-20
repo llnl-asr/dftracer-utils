@@ -7,7 +7,7 @@ import pytest
 
 import dftracer.utils as dft
 from dftracer.utils import dftracer_utils_ext as ext
-from dftracer.utils.enums import DType
+from dftracer.utils._enums import DType
 
 MS_PER_DAY = 86_400_000
 SECONDS = [0, 365 * 86400, None, -1, 1_700_000_000, 59 * 86400 + 3601]

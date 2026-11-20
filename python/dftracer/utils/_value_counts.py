@@ -12,8 +12,8 @@ from . import dftracer_utils_ext as _ext
 from ._series_index import drop_levels, internal_name, with_levels
 
 if TYPE_CHECKING:
-    from .dataframe import DataFrame
-    from .series import Series
+    from ._dataframe import DataFrame
+    from ._series import Series
 
 _ROW = "__dftu_row__"
 _COUNT = "__dftu_count__"
@@ -23,7 +23,7 @@ _NAME = "count"
 def native_counts(s: Series) -> DataFrame:
     """The engine's count of each distinct value: ``value`` and ``count``
     columns, most frequent first, ties by first appearance."""
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     return DataFrame(_ext.Series.value_counts(s))
 
@@ -42,8 +42,8 @@ def _counted(
     rows. Ties keep the order in which a row first appeared, as pandas;
     ``sort=False`` orders the rows by first appearance. The group-by runs over
     positional names, so a key named ``count`` or like a helper column is safe."""
-    from .expr import Agg, Col
-    from .groupby import GroupBy
+    from ._expr import Agg, Col
+    from ._groupby import GroupBy
 
     inner = [f"__dftu_key{i}__" for i in range(len(keys))]
     work = frame.select(*keys).rename(dict(zip(keys, inner))).with_row_index(_ROW)
@@ -81,7 +81,7 @@ def series_value_counts(
     bins: int | Sequence[float] | None,
     dropna: bool,
 ) -> Series:
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     if bins is not None:
         return _binned(s, normalize, sort, ascending, bins, dropna)
@@ -189,7 +189,7 @@ def _binned(
     """The counts per interval of ``cut(bins)`` as pandas: every interval is
     listed, empty ones with a zero, and the labels are the interval text. With
     ``dropna`` (the default) and no value in any interval the result is empty."""
-    from .series import Series
+    from ._series import Series
 
     if not s.dtype.is_numeric:
         raise TypeError("value_counts(bins=) needs a numeric Series")

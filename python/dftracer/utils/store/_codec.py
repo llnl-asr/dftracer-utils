@@ -471,14 +471,3 @@ def decode(data: BytesLike) -> object:
     if pos != len(raw):
         raise ValueError(f"{len(raw) - pos} trailing bytes")
     return value
-
-
-__all__ = [
-    "encode",
-    "decode",
-    "encode_prefix",
-    "matches_prefix",
-    "register_type",
-    "StoreAware",
-    "MAX_DEPTH",
-]

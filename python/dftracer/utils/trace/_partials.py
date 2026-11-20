@@ -5,9 +5,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Sequence, cast
 
-from ..agg import UdafAgg
-from ..dataframe import DataFrame
-from ..expr import Agg, Col, Wildcard
+from .._agg import UdafAgg
+from .._dataframe import DataFrame
+from .._expr import Agg, Col, Wildcard
 
 if TYPE_CHECKING:
     from ..schemas import JsonValue

@@ -12,10 +12,10 @@ from typing import (
 )
 
 from .. import _build
+from .._expr import Expr
 from .._jit_errors import JitError
-from ..expr import Expr
-from .maps import PortHandle
-from .plugin import (
+from ._maps import PortHandle
+from ._plugin import (
     JitPlugin,
     build_plugin,
     check_namespace,
@@ -25,13 +25,13 @@ from .plugin import (
     series_impl,
     top_level_package,
 )
-from .types import C
+from ._types import C
 
 if TYPE_CHECKING:
     from typing_extensions import TypeGuard
 
-    from ..expr import Expr
-    from .ops import Result
+    from .._expr import Expr
+    from .ops import _Result as Result
 
 
 class JitPackage:

@@ -44,7 +44,7 @@ def _events(seed, calls, phases):
 def _viewer(tmp_path, events):
     path = tmp_path / "t.pfw.gz"
     path.write_bytes(gzip.compress(("\n".join(json.dumps(e) for e in events) + "\n").encode()))
-    return dftu.TraceViewer(str(path))
+    return dftu.trace.TraceViewer(str(path))
 
 
 @pytest.mark.parametrize("budget", [1024, 0])

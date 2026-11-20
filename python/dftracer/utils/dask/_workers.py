@@ -9,7 +9,7 @@ import weakref
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
-from ..workers import apply_worker_share
+from .._workers import apply_worker_share
 
 if TYPE_CHECKING:
     from dask.distributed import Client
@@ -90,7 +90,7 @@ def _share_worker_processes(client: Client) -> None:
     """Give each worker process its share of the host it runs on.
 
     Worker processes are counted per host from ``scheduler_info()``, and each runs
-    :func:`~dftracer.utils.apply_worker_share` with its host's count, so ``n``
+    :func:`~dftracer.utils.runtime.apply_worker_share` with its host's count, so ``n``
     worker processes on one host do not each size to the whole host. Each call
     compares the workers the scheduler lists with the ones already shared out
     (a local comparison, and one ``os.getpid`` call for an address not seen

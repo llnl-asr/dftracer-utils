@@ -399,7 +399,7 @@ class Environment:
 
         Returns the temp directory path (pass it to Indexer).
         """
-        from dftracer.utils import AggregationConfig, Indexer
+        from dftracer.utils.index import AggregationConfig, Indexer
 
         if pids is None:
             pids = [1]

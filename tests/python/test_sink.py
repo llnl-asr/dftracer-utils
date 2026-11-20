@@ -58,7 +58,7 @@ def test_sink_runs_the_pipeline_and_writes_what_it_keeps(tmp_path, plugin):
 
 
 def test_an_unknown_sink_names_the_registered_ones(tmp_path, plugin):
-    with pytest.raises(dft.DFTUtilsNotFoundError) as failed:
+    with pytest.raises(dft.errors.DFTUtilsNotFoundError) as failed:
         _df().lazy().sink("no_such.sink", path=str(tmp_path / "x.csv"))
     assert "no sink named 'no_such.sink'" in str(failed.value)
     assert "csv.write" in str(failed.value)
@@ -74,7 +74,7 @@ def test_a_non_str_option_value_is_a_type_error(tmp_path, plugin):
 
 
 def test_a_sink_without_its_required_option_fails(tmp_path, plugin):
-    with pytest.raises(dft.DFTUtilsError) as failed:
+    with pytest.raises(dft.errors.DFTUtilsError) as failed:
         _df().lazy().sink("csv.write")
     assert "path" in str(failed.value)
     assert plugin is not None

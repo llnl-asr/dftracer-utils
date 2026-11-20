@@ -55,7 +55,7 @@ Pick group keys, pick aggregates, collect.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          df = (TraceViewer("traces/")
                .group_by("cat")
@@ -92,7 +92,8 @@ top-level and ``args.*`` alike (``F("args.level").mean()``).
 
       .. code-block:: python
 
-         from dftracer.utils import F, TraceViewer
+         from dftracer.utils import F
+         from dftracer.utils.trace import TraceViewer
 
          df = (TraceViewer("trace.pfw.gz")
                .group_by("cat")
@@ -311,7 +312,8 @@ the number of concurrent ``pread`` calls per file is a ``concurrency`` (or
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer, AggOp
+         from dftracer.utils import AggOp
+         from dftracer.utils.trace import TraceViewer
 
          df = (TraceViewer("trace.pfw.gz")
                .group_by("name")

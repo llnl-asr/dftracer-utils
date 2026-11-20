@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 
 from dftracer.utils import jit
+from dftracer.utils._series import Series
 from dftracer.utils.jit import ops
-from dftracer.utils.series import Series
 
 MOD = __name__
 

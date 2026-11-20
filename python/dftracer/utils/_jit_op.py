@@ -29,25 +29,14 @@ from typing import TYPE_CHECKING, Callable, List, Optional, Sequence, TypedDict,
 
 from . import _build
 from ._c_text import c_str_literal as _c_str_literal
+from ._enums import DType
 from ._eval import ARITH_CODE, ARITH_SYMBOL, COMPARE_SYMBOL
 from ._jit_errors import JitError, Source
+from ._series import Series
 from .dftracer_utils_ext import jit_run_op, vec_eval
-from .enums import DType
-from .series import Series
 
 if TYPE_CHECKING:
     from typing_extensions import TypeGuard
-
-__all__ = [
-    "op",
-    "compile_op",
-    "run_op",
-    "run_op_array",
-    "lower_to_expr",
-    "can_fuse",
-    "Op",
-    "JitOpError",
-]
 
 # POD value types that cross the compose ABI as bytes, with their C type + size.
 # DFTU_T_STR is an interned-string id (dftu_str, a uint32_t): supports only

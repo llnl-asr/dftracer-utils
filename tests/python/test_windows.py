@@ -8,10 +8,10 @@ import weakref
 
 import pytest
 
-import dftracer.utils.series as series_module
+import dftracer.utils._series as series_module
 from dftracer.utils import DataFrame
 from dftracer.utils import dftracer_utils_ext as _ext
-from dftracer.utils.series import Series
+from dftracer.utils._series import Series
 
 
 def _s(values=(1.0, 2.0, 3.0, 4.0, 5.0), name="x"):

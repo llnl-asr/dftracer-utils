@@ -30,7 +30,7 @@ an index reads gzip only (see :doc:`troubleshooting`).
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          view = TraceViewer("traces/")
 
@@ -61,7 +61,7 @@ last indexed, so explicit indexing only warms it.
 
       .. code-block:: python
 
-         from dftracer.utils import Indexer
+         from dftracer.utils.index import Indexer
 
          with Indexer("traces/") as ix:
              ix.ensure()   # no-op if already built

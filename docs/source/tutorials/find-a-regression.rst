@@ -50,7 +50,7 @@ picture.
 
    import dftracer.utils as dft
 
-   with dft.Indexer(files=["baseline.pfw.gz", "variant.pfw.gz"]) as ix:
+   with dft.index.Indexer(files=["baseline.pfw.gz", "variant.pfw.gz"]) as ix:
        ix.ensure()
 
 Compare them
@@ -67,7 +67,7 @@ Compare them
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          baseline = (
              TraceViewer("baseline.pfw.gz")

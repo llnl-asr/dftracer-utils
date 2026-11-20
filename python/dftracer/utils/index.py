@@ -20,14 +20,21 @@ from typing import (
     overload,
 )
 
-from .dataframe import DataFrame
+from ._dataframe import DataFrame as _DataFrame
+from ._enums import coerce_bytes as _coerce_bytes
+from ._enums import coerce_duration as _coerce_duration
+from ._public import set_home as _set_home
+from .dftracer_utils_ext import CheckpointIndexer as CheckpointIndexer
 from .dftracer_utils_ext import CheckpointIndexer as _NativeCheckpointIndexer
 from .dftracer_utils_ext import Index as _NativeIndex
 from .dftracer_utils_ext import Indexer as _NativeIndexer
 from .dftracer_utils_ext import _hash_value
-from .enums import coerce_bytes, coerce_duration
-from .runtime import Runtime, TaskHandle
-from .schemas import RecordSchema, schema_id
+from .dftracer_utils_ext import consolidate_shard_set as consolidate_shard_set
+from .dftracer_utils_ext import write_shard_set as write_shard_set
+from .runtime import Runtime as _Runtime
+from .runtime import TaskHandle as _TaskHandle
+from .schemas import RecordSchema as _RecordSchema
+from .schemas import schema_id as _schema_id
 
 if TYPE_CHECKING:
     from .dftracer_utils_ext import IndexStatusDict
@@ -35,6 +42,7 @@ if TYPE_CHECKING:
 __all__ = [
     "AggregationConfig",
     "BloomConfig",
+    "CheckpointIndexer",
     "ExplainEntry",
     "ExplainExtension",
     "ExplainSummary",
@@ -43,11 +51,13 @@ __all__ = [
     "Indexer",
     "ManifestEntry",
     "ManifestExtension",
+    "consolidate_shard_set",
     "hash_value",
+    "write_shard_set",
 ]
-DEFAULT_CHECKPOINT_SIZE = 32 * 1024 * 1024  # 32MB
+_DEFAULT_CHECKPOINT_SIZE = 32 * 1024 * 1024  # 32MB
 
-FileInfo = Dict[str, Set[int]]
+_FileInfo = Dict[str, Set[int]]
 
 
 @dataclass
@@ -202,7 +212,7 @@ class Indexer:
 
     Args:
         files: A path (``str`` or ``os.PathLike``) or a sequence of paths,
-            with the same rule as :class:`~dftracer.utils.TraceViewer`. One
+            with the same rule as :class:`~dftracer.utils.trace.TraceViewer`. One
             path that names a directory is scanned recursively for trace
             gzip files (``*.gz``); a directory
             inside a sequence raises ``ValueError``. A repeated path is
@@ -281,16 +291,16 @@ class Indexer:
         require_bloom: Union[bool, BloomConfig] = True,
         build_bloom: bool = True,
         aggregation_config: Optional[AggregationConfig] = None,
-        checkpoint_size: Union[int, str] = DEFAULT_CHECKPOINT_SIZE,
+        checkpoint_size: Union[int, str] = _DEFAULT_CHECKPOINT_SIZE,
         parallelism: int = 0,
-        runtime: Optional[Runtime] = None,
+        runtime: Optional[_Runtime] = None,
         extensions: Optional[Sequence[str]] = None,
         memory_budget: Union[int, str] = 0,
-        schema: "Union[str, Type[RecordSchema], None]" = None,
+        schema: "Union[str, Type[_RecordSchema], None]" = None,
         format: Optional[str] = None,
         summaries: Optional[Mapping[str, Sequence[str]]] = None,
     ) -> None:
-        checkpoint_size = coerce_bytes(checkpoint_size, "checkpoint_size")
+        checkpoint_size = _coerce_bytes(checkpoint_size, "checkpoint_size")
         if summaries is not None and not isinstance(summaries, Mapping):
             raise TypeError("summaries must be a mapping of path to a list of summary names")
 
@@ -306,7 +316,7 @@ class Indexer:
             require_checkpoint=require_checkpoint,
             require_bloom=bool(require_bloom),
             build_bloom=build_bloom,
-            time_interval_ms=coerce_duration(agg_config.time_interval_ms, 1e3, "time_interval_ms"),
+            time_interval_ms=_coerce_duration(agg_config.time_interval_ms, 1e3, "time_interval_ms"),
             group_keys=agg_config.group_keys,
             compute_percentiles=agg_config.compute_percentiles,
             group_by_file=agg_config.group_by_file,
@@ -320,13 +330,13 @@ class Indexer:
             stats_share=bloom.stats_share,
             auto_max_distinct=bloom.auto_max_distinct,
             extensions=list(extensions) if extensions is not None else None,
-            memory_budget=coerce_bytes(memory_budget, "memory_budget"),
-            schema=schema_id(schema) if schema is not None else None,
+            memory_budget=_coerce_bytes(memory_budget, "memory_budget"),
+            schema=_schema_id(schema) if schema is not None else None,
             format=format,
             summaries=dict(summaries) if summaries is not None else None,
         )
         self._aggregation_config = agg_config
-        self._file_info_cache: Optional[FileInfo] = None
+        self._file_info_cache: Optional[_FileInfo] = None
         self._closed = False
 
     def __enter__(self) -> "Indexer":
@@ -379,7 +389,7 @@ class Indexer:
         """
         return IndexStatus._from_dict(self._native.build(force=force))
 
-    def build_async(self, force: bool = False) -> TaskHandle[IndexStatus]:
+    def build_async(self, force: bool = False) -> _TaskHandle[IndexStatus]:
         """Start :meth:`build` on the native pool and return at once.
 
         ``get()`` on the handle returns the :class:`IndexStatus` that ``build``
@@ -389,7 +399,7 @@ class Indexer:
         and a :meth:`build` of the same index that starts meanwhile waits for it.
         """
         native = self._native.build_async(force=force)
-        return TaskHandle(
+        return _TaskHandle(
             native=native,
             name=native.name,
             task_id=native.task_id,
@@ -429,7 +439,7 @@ class Indexer:
         rules chunks out."""
         return self._native.explain_text(duql)
 
-    def summaries(self, file: "Union[str, os.PathLike[str]]") -> DataFrame:
+    def summaries(self, file: "Union[str, os.PathLike[str]]") -> _DataFrame:
         """The summaries stored for an indexed file, as :meth:`Index.summaries`
         returns them.
 
@@ -474,7 +484,7 @@ class Indexer:
         """
         return self._native.get_checkpoint_indexer(file_path)
 
-    def rowset(self, name: str) -> "DataFrame":
+    def rowset(self, name: str) -> "_DataFrame":
         """The rows the index build stored for row set `name` of the files'
         source, every indexed file's in order.
 
@@ -493,7 +503,7 @@ class Indexer:
             >>> files = indexer.rowset("files").to_dict()
             >>> # files = {"fhash": ["abc123", ...], "path": ["/data.h5", ...]}
         """
-        return DataFrame(self._native.rowset(name))
+        return _DataFrame(self._native.rowset(name))
 
     def query_file_pids(self, path: str) -> Set[int]:
         """Query PIDs observed in a specific file.
@@ -519,7 +529,7 @@ class Indexer:
         """
         return self._native.query_all_file_pids()
 
-    def query_file_info(self) -> FileInfo:
+    def query_file_info(self) -> _FileInfo:
         """Query every indexed file with its PIDs in a single DB open.
 
         Returns:
@@ -541,7 +551,7 @@ class Index:
     def __init__(self, index_dir: str) -> None:
         self._native = _NativeIndex(index_dir)
 
-    def summaries(self, file: "Union[str, os.PathLike[str]]") -> DataFrame:
+    def summaries(self, file: "Union[str, os.PathLike[str]]") -> _DataFrame:
         """What the index stores about the chunks of one trace file.
 
         Args:
@@ -558,7 +568,7 @@ class Index:
         Raises:
             DFTUtilsNotFoundError: The index holds no entry for `file`.
         """
-        return DataFrame(self._native.summaries(os.fspath(file)))
+        return _DataFrame(self._native.summaries(os.fspath(file)))
 
 
 @overload
@@ -589,3 +599,6 @@ def hash_value(x: Union[None, bool, int, float, str, bytes]) -> int:
         TypeError: Any other type.
     """
     return _hash_value(x)
+
+
+_set_home(__name__, globals(), __all__)

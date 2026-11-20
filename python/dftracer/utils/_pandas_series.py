@@ -21,6 +21,7 @@ from typing import (
     cast,
 )
 
+from ._enums import DType
 from ._label_align import LabelAlignMixin
 from ._levels import (
     LevelArg,
@@ -47,7 +48,6 @@ from ._series_index import (
     with_levels,
 )
 from ._time_index import TimeIndexMixin
-from .enums import DType
 
 if TYPE_CHECKING:
     import numpy as np
@@ -56,10 +56,10 @@ if TYPE_CHECKING:
     from pandas._libs.missing import NAType
     from typing_extensions import Concatenate, ParamSpec
 
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
+    from ._groupby import GroupBy
+    from ._series import Series
     from .dftracer_utils_ext import Scalar
-    from .groupby import GroupBy
-    from .series import Series
 
     # A value of ``replace`` as the caller writes it, and as the engine takes it.
     PlainScalar = Union[int, float, str, None, NAType]
@@ -151,7 +151,7 @@ def differs(a: Series, b: Series) -> Series[bool]:
         else:
             a, b = a.dt.epoch("ns"), b.dt.epoch("ns")
     if by_value:
-        from .series import Series
+        from ._series import Series
 
         return cast(
             "Series[bool]",
@@ -243,8 +243,8 @@ def replace_in(
 ) -> Series:
     """``s`` with every pair applied together. ``column`` names a frame column in
     errors; ``strict`` False leaves a column of an unsupported type alone."""
-    from .enums import DType
-    from .series import Series
+    from ._enums import DType
+    from ._series import Series
 
     dtype = s.dtype
     if dtype == DType.STRING:
@@ -292,7 +292,7 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
     __slots__ = ()
 
     def _s(self) -> Series:
-        from .series import Series
+        from ._series import Series
 
         assert isinstance(self, Series)
         return self
@@ -589,7 +589,7 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         that came from ``df[col]`` are the frame's row index; they follow the
         rows through ``sort_values``, ``filter``, ``head`` and the like, and
         two labelled Series align on them in arithmetic."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         s = self._s()
         names = names_of(s)
@@ -679,14 +679,14 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         for p in gone:
             if p < 0 or p >= len(s):
                 raise KeyError(p)
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         index = DataFrame.from_dict({"v": s}).with_row_index("_i")["_i"]
         return s.filter(~index.is_in(sorted(gone)))
 
     def equals(self, other: object) -> bool:
         """Same type, length and values, null for null (pandas ``equals``)."""
-        from .series import Series
+        from ._series import Series
 
         s = self._s()
         if not isinstance(other, Series) or s.dtype != other.dtype or len(s) != len(other):
@@ -823,9 +823,9 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         return self._pair(other, "covar_samp")
 
     def _pair(self, other: Series, agg: str) -> float:
-        from .dataframe import DataFrame
-        from .expr import Agg, Col
-        from .groupby import GroupBy
+        from ._dataframe import DataFrame
+        from ._expr import Agg, Col
+        from ._groupby import GroupBy
 
         s = self._s()
         # pandas gives NaN below two complete pairs; the engine's readout 0.
@@ -847,7 +847,7 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         """count / mean / std / min / 25% / 50% / 75% / max as a two-column
         frame (``statistic``, ``value``); the quantiles are the engine's
         sketch."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         s = self._s()
         rows = [
@@ -870,7 +870,7 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         s = self._s()
         if isinstance(func, str):
             return cast("Scalar", getattr(s, func)())
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         names = list(func)
         return DataFrame({"statistic": names, "value": [getattr(s, n)() for n in names]})
@@ -910,14 +910,14 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
     def groupby(self, by: Series) -> GroupBy:
         """Group this Series' values by ``by`` (positional): a frame
         ``GroupBy`` over columns ``key`` and ``value``."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         frame = DataFrame.from_dict({"key": by, "value": self._s()})
         return frame.group_by("key")
 
     def explode(self) -> Series:
         """A List Series flattened to one row per element."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         return DataFrame.from_dict({"v": self._s()}).explode("v")["v"]
 
@@ -956,7 +956,7 @@ class _SeriesILoc:
 
     def __getitem__(self, key: object) -> object:
         from ._loc import rows_by_position
-        from .series import Series
+        from ._series import Series
 
         s = self._s
         if isinstance(key, bool):

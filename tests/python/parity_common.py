@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from dftracer.utils import DataFrame, LazyFrame, Series
-from dftracer.utils.enums import DType
+from dftracer.utils._enums import DType
 
 
 class R:

@@ -6,7 +6,7 @@ DataFrame
 ``DataFrame`` is the Python wrapper over the native columnar frame: a named,
 ordered set of typed :doc:`Series <series>`, computed with SIMD kernels and
 bridged zero-copy to Arrow, pandas, NumPy, and polars only at the edge. It is
-what :class:`~dftracer.utils.TraceViewer` terminals (``collect``,
+what :class:`~dftracer.utils.trace.TraceViewer` terminals (``collect``,
 ``merge_partials``) return, and what the constructors below
 build from other sources.
 

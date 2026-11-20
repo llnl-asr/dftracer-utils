@@ -372,7 +372,7 @@ def test_expressions_have_no_truth_value():
 
 
 def test_text_reports_a_parse_error():
-    with pytest.raises(dftu.DFTUtilsValueError):
+    with pytest.raises(dftu.errors.DFTUtilsValueError):
         Pipe().where(c("a..b") == 1).text()
 
 
@@ -404,7 +404,7 @@ def test_builder_query_runs_as_its_text(tmp_path):
         .sort("pid")
         .bind(n="read")
     )
-    want = dftu.TraceViewer(path).duql(
+    want = dftu.trace.TraceViewer(path).duql(
         f'from "{path}" | where name == $n and dur > 4us | group pid {{ total = sum(dur), n = count() }} | sort pid',
         n="read",
     )
@@ -427,7 +427,7 @@ def test_bucket_fill_range_runs_as_its_text(tmp_path):
         .bucket(duration(10, "us"), fill=True, low=0, high=duration(80, "us"))
         .agg(n=fn.count())
     )
-    want = dftu.TraceViewer(path).duql(
+    want = dftu.trace.TraceViewer(path).duql(
         f'from "{path}" | bucket 10us fill from 0 to 80us | agg {{ n = count() }}'
     )
     assert q.collect().to_dict() == want.collect().to_dict()
@@ -440,7 +440,7 @@ def test_bucket_fill_range_runs_as_its_text(tmp_path):
 def test_bucket_hopping_runs_as_its_text(tmp_path):
     path = _trace(tmp_path)
     q = source(path).bucket(duration(20, "us"), every=duration(10, "us")).agg(n=fn.count())
-    want = dftu.TraceViewer(path).duql(
+    want = dftu.trace.TraceViewer(path).duql(
         f'from "{path}" | bucket 20us every 10us | agg {{ n = count() }}'
     )
     assert q.collect().to_dict() == want.collect().to_dict()
@@ -460,7 +460,7 @@ def test_bucket_rejects_a_range_without_fill_and_a_bad_mode():
 def test_over_rows_frame_runs_as_its_text(tmp_path):
     path = _trace(tmp_path)
     q = source(path).window("pid", sort=["ts"], s=c("dur").sum().over(rows=2)).sort("pid", "ts")
-    want = dftu.TraceViewer(path).duql(
+    want = dftu.trace.TraceViewer(path).duql(
         f'from "{path}" | window pid sort ts {{ s = sum(dur) over 2 rows }} | sort pid, ts'
     )
     assert q.collect().to_dict() == want.collect().to_dict()
@@ -482,7 +482,7 @@ def test_unnamed_aggregates_and_case_run_as_their_text(tmp_path):
         .group("s", n=fn.count())
         .sort("s")
     )
-    want = dftu.TraceViewer(path).duql(
+    want = dftu.trace.TraceViewer(path).duql(
         f'from "{path}" | derive s = case {{ dur > 100 => "slow", else => "fast" }} | group s {{ n = count() }} | sort s'
     )
     assert q.collect().to_dict() == want.collect().to_dict() == {"s": ["fast", "slow"], "n": [4, 2]}
@@ -493,7 +493,7 @@ def test_unnamed_aggregates_and_case_run_as_their_text(tmp_path):
 def test_on_runs_a_sourceless_query_on_a_viewer(tmp_path):
     path = _trace(tmp_path)
     q = Pipe().where(c("name") == 'a"b').select("dur")
-    assert q.on(dftu.TraceViewer(path)).collect().to_dict() == {"dur": [7]}
+    assert q.on(dftu.trace.TraceViewer(path)).collect().to_dict() == {"dur": [7]}
     with pytest.raises(ValueError, match="on"):
         q.collect()
     bound = source(param("f")).where(c("dur") > 100).bind(f=path)
@@ -502,7 +502,7 @@ def test_on_runs_a_sourceless_query_on_a_viewer(tmp_path):
 
 def test_filter_builder_quotes_a_value_with_a_quote(tmp_path):
     path = _trace(tmp_path)
-    tv = dftu.TraceViewer(path)
+    tv = dftu.trace.TraceViewer(path)
     assert tv.filter(F("name") == 'a"b').collect().to_dict()["dur"] == [7]
     tricky = "q\"s'b\\d"
     assert tv.filter(F("name") == tricky).collect().to_dict()["dur"] == [11]
@@ -513,7 +513,7 @@ def test_filter_builder_quotes_a_value_with_a_quote(tmp_path):
 
 def test_list_and_pattern_parameters(tmp_path):
     path = _trace(tmp_path)
-    tv = dftu.TraceViewer(path)
+    tv = dftu.trace.TraceViewer(path)
     want = tv.duql('where name in ["read", "write"] | select dur').collect().to_dict()
     assert (
         tv.duql("where name in $names | select dur", names=["read", "write"]).collect().to_dict()
@@ -536,9 +536,9 @@ def test_list_and_pattern_parameters(tmp_path):
         .to_dict()
         == tv.duql('where name like "wr%" | select dur').collect().to_dict()
     )
-    with pytest.raises(dftu.DFTUtilsError):
+    with pytest.raises(dftu.errors.DFTUtilsError):
         tv.duql("where name == $names", names=["read"]).collect()
-    with pytest.raises(dftu.DFTUtilsError):
+    with pytest.raises(dftu.errors.DFTUtilsError):
         tv.duql("where name in $one", one="read").collect()
 
 
@@ -547,7 +547,7 @@ def test_lookup_kinds_run_as_their_text(tmp_path):
     side = rowset("data").where(c("name") == "write").group("pid", hit=fn.count())
     for how in ("inner", "anti"):
         q = source(path).lookup(side, ["pid"], how=how).sort("ts")
-        want = dftu.TraceViewer(path).duql(
+        want = dftu.trace.TraceViewer(path).duql(
             f'from "{path}" | lookup (from data | where name == "write" | group pid {{ hit = count() }}) on pid {how} | sort ts'
         )
         got = q.collect().to_dict()

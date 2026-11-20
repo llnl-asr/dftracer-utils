@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 """The aggregate builders: ``count()``, user-defined aggregates (``udaf``), the
 pandas ``agg`` argument forms and the helpers that name and split the
-aggregates of a ``select`` or a group-by. The :class:`~dftracer.utils.expr.Agg`
-class itself is in :mod:`dftracer.utils.expr`, because ``Expr`` builds it."""
+aggregates of a ``select`` or a group-by. The :class:`~dftracer.utils.Agg`
+class itself is in the expression module, because ``Expr`` builds it."""
 
 from __future__ import annotations
 
@@ -18,13 +18,11 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
-from .expr import AGG_CODE, Agg, AggLeaf, Col, Expr, Lit, SelectItem, emit_ast, wrap
+from ._expr import AGG_CODE, Agg, AggLeaf, Col, Expr, Lit, SelectItem, emit_ast, wrap
 
 if TYPE_CHECKING:
-    from .dataframe import DataFrame
-    from .lazyframe import LazyFrame
-
-__all__ = ["Udaf", "count", "udaf"]
+    from ._dataframe import DataFrame
+    from ._lazyframe import LazyFrame
 
 
 class NamedAggLike(Protocol):

@@ -12,8 +12,9 @@ import shutil
 
 import pytest
 
-from dftracer.utils import jit, jit_op
-from dftracer.utils.jit_op import JitOpError
+from dftracer.utils import _jit_op as jit_op
+from dftracer.utils import jit
+from dftracer.utils._jit_op import JitOpError
 from dftracer.utils.plugins import Plugins
 
 _HAS_CXX = bool(shutil.which("c++") or shutil.which("clang++") or shutil.which("g++"))

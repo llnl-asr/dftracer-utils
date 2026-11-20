@@ -314,6 +314,8 @@ piped = plus_one | plus_one
 assert_type(piped, jit.Op)
 compiled: str = jit.compile_op(piped)
 ran = jit.run_op(piped, 3)
+fusable: bool = jit.can_fuse(piped)
+op_error: type[jit.JitError] = jit.JitOpError
 
 # A plugin's runtime config is a frozen dataclass named by ``config: Cfg``; the
 # body reads each field as ``self.config.<field>`` with the dataclass type.

@@ -10,7 +10,7 @@ indexer read it in parallel. ``compress=False`` writes a plain ``.pfw`` file.
 
 .. code-block:: python
 
-   from dftracer.utils import TraceViewer, TraceWriter
+   from dftracer.utils.trace import TraceViewer, TraceWriter
 
    with TraceWriter("run.pfw.gz", level=6) as w:
        w.write_metadata("HH", {"name": "node-0", "value": "h0"})
@@ -46,6 +46,6 @@ thread is inside a write raises ``RuntimeError``.
 TraceWriter Class
 -----------------
 
-.. autoclass:: dftracer.utils.TraceWriter
+.. autoclass:: dftracer.utils.trace.TraceWriter
    :members:
    :special-members: __enter__, __exit__

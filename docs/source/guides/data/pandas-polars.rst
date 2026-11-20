@@ -16,6 +16,12 @@ is the proof at scale: its pandas column and ours are the same code
 ``nlargest``, ``.str.contains``), checked for the same result and timed
 side by side; see :doc:`../runtime/performance`.
 
+``dftracer.utils.pandas`` and ``dftracer.utils.polars`` are compatibility
+namespaces: they re-export the same engine classes that ``dftracer.utils``
+exports, with the pandas or polars module-level functions beside them, so
+``import dftracer.utils.polars as pl`` reads like polars. They are the one place
+a name has a second import path.
+
 
 .. _pandas-polars-names:
 
@@ -56,7 +62,7 @@ the polars call.
    * - ``GroupBy``
      - ``aggregate`` = ``agg``, ``product`` = ``prod``
      - none
-   * - ``LazyGroupBy``
+   * - ``dftracer.utils.typing.LazyGroupBy``
      - ``aggregate`` = ``agg``, ``product`` = ``prod``
      - none
 

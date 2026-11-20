@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from dftracer.utils import DataFrame, Series
-from dftracer.utils.series import _native_numpy, _polars_native
+from dftracer.utils._series import _native_numpy, _polars_native
 
 pa = pytest.importorskip("pyarrow")
 pd = pytest.importorskip("pandas")

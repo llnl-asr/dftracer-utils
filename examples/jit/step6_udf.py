@@ -15,7 +15,7 @@ with dft.udf.scope():
     def over(x: float) -> bool:
         return x > 50.0
 
-    view = dft.TraceViewer(sys.argv[1] + "/trace.pfw.gz")
+    view = dft.trace.TraceViewer(sys.argv[1] + "/trace.pfw.gz")
     got = (
         view.duql("derive c = cost(dur, pid) | where over(c) | select pid, c").collect().to_pandas()
     )

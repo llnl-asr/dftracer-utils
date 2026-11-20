@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
-"""Human-readable byte/duration parsing (dftracer.utils.enums)."""
+"""Human-readable byte/duration parsing (dftracer.utils._enums)."""
 
 import pytest
 
-from dftracer.utils.enums import (
+from dftracer.utils._enums import (
     _parse_bytes,
     _parse_duration_seconds,
     coerce_bytes,

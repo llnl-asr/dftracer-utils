@@ -8,7 +8,7 @@ import pytest
 
 import dftracer.utils as dft
 from dftracer.utils import dftracer_utils_ext as ext
-from dftracer.utils.enums import DType
+from dftracer.utils._enums import DType
 
 VALUES = [10, 20, 30, 40, 50, 60]
 KEYS = ["a", "a", "b", "b", "a", "b"]

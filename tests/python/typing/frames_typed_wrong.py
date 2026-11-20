@@ -5,7 +5,8 @@ from typing import cast
 
 from typing_extensions import assert_type
 
-from dftracer.utils import DataFrame, LazyFrame, Series, TraceViewer
+from dftracer.utils import DataFrame, LazyFrame, Series
+from dftracer.utils.trace import TraceViewer
 
 df = cast("DataFrame", None)
 lf = cast("LazyFrame", None)

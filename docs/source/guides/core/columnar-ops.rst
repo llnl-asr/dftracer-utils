@@ -17,7 +17,7 @@ Get a DataFrame
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          df = TraceViewer("traces/").group_by("cat").agg("count", "sum:dur").collect()
          # the chain is lazy; collect() runs it (-> DataFrame)

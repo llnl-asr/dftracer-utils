@@ -49,12 +49,13 @@ chunks; too many on a shared or oversubscribed node hurts more than it helps.
 
    .. tab-item:: Python
 
-      ``Runtime`` (``dftracer.utils.Runtime``) wraps the same C++ executor and
+      ``Runtime`` (``dftracer.utils.runtime.Runtime``) wraps the same C++ executor and
       adds a separate pool for plain Python callables:
 
       .. code-block:: python
 
-         from dftracer.utils import Runtime, TraceViewer
+         from dftracer.utils.runtime import Runtime
+         from dftracer.utils.trace import TraceViewer
 
          rt = Runtime(threads=8, io_threads=8, python_threads=4)
          tv = TraceViewer("./traces", runtime=rt)  # view execution uses rt's pool
@@ -77,7 +78,7 @@ Many worker processes on one host
 
 A pool of worker processes that each start a default runtime sizes every one
 to the whole host. Give each worker its share with
-:func:`~dftracer.utils.apply_worker_share` as the pool initializer: it sets
+:func:`~dftracer.utils.runtime.apply_worker_share` as the pool initializer: it sets
 the thread counts and the memory budget of the process to the usable CPUs and
 the budget divided by the worker count.
 
@@ -85,7 +86,7 @@ the budget divided by the worker count.
 
    from concurrent.futures import ProcessPoolExecutor
 
-   from dftracer.utils import apply_worker_share, get_default_runtime
+   from dftracer.utils.runtime import apply_worker_share, get_default_runtime
 
 
    def threads_of_worker(_: int) -> int:
@@ -100,7 +101,7 @@ the budget divided by the worker count.
            print(list(pool.map(threads_of_worker, range(workers))))
 
 Each worker reports the usable CPUs divided by 4, at least 1.
-:func:`~dftracer.utils.worker_share` returns the same numbers without applying
+:func:`~dftracer.utils.runtime.worker_share` returns the same numbers without applying
 them, with the environment variables a launcher can set for its workers. See
 :doc:`../../environment` for the variables and the CPU and thread limits that
 the default sizes follow.

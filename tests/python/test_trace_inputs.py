@@ -16,11 +16,11 @@ from .common import Environment
 
 
 def _viewer(files, index_dir):
-    return dftu.TraceViewer(files, index_dir=index_dir)
+    return dftu.trace.TraceViewer(files, index_dir=index_dir)
 
 
 def _indexer(files, index_dir):
-    return dftu.Indexer(files, index_dir=index_dir)
+    return dftu.index.Indexer(files, index_dir=index_dir)
 
 
 def _rows(files, index_dir):
@@ -100,9 +100,9 @@ class TestOneInputRule:
             ):
                 # Indexer stats its files on the first call, TraceViewer reads
                 # them when the plan runs.
-                with pytest.raises(dftu.DFTUtilsNotFoundError):
+                with pytest.raises(dftu.errors.DFTUtilsNotFoundError):
                     _indexer(spec, index_dir).status()
-                with pytest.raises(dftu.DFTUtilsError):
+                with pytest.raises(dftu.errors.DFTUtilsError):
                     _viewer(spec, index_dir).lazy().collect()
 
     def test_an_empty_directory_has_no_files(self):
@@ -121,11 +121,11 @@ class TestOneInputRule:
             pathlib.Path(junk).write_text("hello\n")
             index_dir = os.path.join(env.temp_dir, "idx")
             viewer = _viewer(junk, index_dir)
-            with pytest.raises(dftu.DFTUtilsIOError):
+            with pytest.raises(dftu.errors.DFTUtilsIOError):
                 viewer.lazy().collect()
             indexer = _indexer(junk, index_dir)
             assert indexer.status().needs_work == [junk]
-            with pytest.raises(dftu.DFTUtilsIOError):
+            with pytest.raises(dftu.errors.DFTUtilsIOError):
                 indexer.ensure()
 
 

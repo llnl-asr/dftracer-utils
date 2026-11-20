@@ -9,16 +9,10 @@ import os
 import pytest
 
 import dftracer.utils as dft
-from dftracer.utils import (
-    DFTUtilsValueError,
-    F,
-    LazyFrame,
-    LazyResult,
-    LazyScalar,
-    TraceViewer,
-    col,
-)
-from dftracer.utils.enums import DType
+from dftracer.utils import F, LazyFrame, LazyResult, LazyScalar, col
+from dftracer.utils._enums import DType
+from dftracer.utils.errors import DFTUtilsValueError
+from dftracer.utils.trace import TraceViewer
 
 # Two lanes of nested calls: "step" holds "read", which holds "decode"; then a
 # sibling "write". 32 events, 16 POSIX.
@@ -224,7 +218,7 @@ class TestColumnsAndSchema:
         assert sorted(set(out.to_dict()["args.size"])) == [200, 600, 800, 1800]
 
     def test_column_info_reads_the_index(self, trace, tv):
-        with dft.Indexer(files=[trace]) as indexer:
+        with dft.index.Indexer(files=[trace]) as indexer:
             indexer.ensure()
         info = tv.column_info()
         assert info["dur"] == "int64"
@@ -355,7 +349,7 @@ class TestRuntimeAndStream:
         assert sum(sizes) == 32
 
     def test_runtime_runs_the_plan(self, trace):
-        rt = dft.Runtime(threads=2)
+        rt = dft.runtime.Runtime(threads=2)
         try:
             viewer = TraceViewer(trace, runtime=rt)
             assert viewer.filter('cat == "POSIX"').collect().height == 16

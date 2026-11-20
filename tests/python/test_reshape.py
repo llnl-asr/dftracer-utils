@@ -11,7 +11,7 @@ import pytest
 pd = pytest.importorskip("pandas")
 
 from dftracer.utils import DataFrame, Series  # noqa: E402
-from dftracer.utils.enums import DType  # noqa: E402
+from dftracer.utils._enums import DType  # noqa: E402
 
 pytestmark = pytest.mark.filterwarnings("ignore::FutureWarning", "ignore::DeprecationWarning")
 

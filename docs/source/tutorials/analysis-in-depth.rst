@@ -51,7 +51,7 @@ by name so the output is stable.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          df = (
              TraceViewer("app.pfw.gz")
@@ -130,7 +130,8 @@ duration is at least 100 microseconds.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer, col
+         from dftracer.utils import col
+         from dftracer.utils.trace import TraceViewer
 
          q = col("name").like("%r%") & (col("dur") >= 100)
 
@@ -263,7 +264,8 @@ see it match.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer, F
+         from dftracer.utils import F
+         from dftracer.utils.trace import TraceViewer
 
          df = (
              TraceViewer("app.pfw.gz")

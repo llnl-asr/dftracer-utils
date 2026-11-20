@@ -14,7 +14,7 @@ pytest.importorskip("dftracer.utils.dftracer_utils_ext")
 
 import dftracer.utils as dft  # noqa: E402
 from dftracer.utils import DataFrame, Series, col  # noqa: E402
-from dftracer.utils.enums import DType  # noqa: E402
+from dftracer.utils._enums import DType  # noqa: E402
 
 MATH = [
     "sin", "cos", "tan", "cot", "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh",
@@ -106,7 +106,7 @@ def test_math_expr_matches_series_and_polars_in_select_and_lazy(name):
 @pytest.mark.parametrize("name", MATH)
 def test_math_refuses_text_and_bool_with_a_clear_message(name):
     for bad in (Series(["a", "b"]), Series([True, False])):
-        with pytest.raises(dft.DFTUtilsValueError, match=f"{name}: .*float or an integer"):
+        with pytest.raises(dft.errors.DFTUtilsValueError, match=f"{name}: .*float or an integer"):
             getattr(bad, name)()
 
 
@@ -160,7 +160,7 @@ def test_bit_counts_on_bool(name):
 @pytest.mark.parametrize("name", BIT_COUNT)
 def test_bit_counts_refuse_floats_and_text(name):
     for bad in (Series([1.5, 2.0]), Series(["a"])):
-        with pytest.raises(dft.DFTUtilsValueError, match=f"{name}: .*integer or a bool"):
+        with pytest.raises(dft.errors.DFTUtilsValueError, match=f"{name}: .*integer or a bool"):
             getattr(bad, name)()
 
 

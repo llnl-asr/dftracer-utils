@@ -9,20 +9,11 @@ from typing import Dict, List, Set, Union, cast
 
 from typing_extensions import assert_type
 
-from dftracer.utils import (
-    DataFrame,
-    Expr,
-    GroupBy,
-    Indexer,
-    LazyFrame,
-    LazyResult,
-    TraceViewer,
-    col,
-)
+from dftracer.utils import DataFrame, Expr, GroupBy, LazyFrame, LazyResult, col
 from dftracer.utils import collect_all as collect_all
-from dftracer.utils.index import ExplainEntry, IndexStatus, ManifestEntry
+from dftracer.utils.index import ExplainEntry, Indexer, IndexStatus, ManifestEntry
 from dftracer.utils.schemas import JsonValue
-from dftracer.utils.trace import Handle
+from dftracer.utils.trace import Handle, TraceViewer
 
 df = cast("DataFrame", None)
 lf = cast("LazyFrame", None)

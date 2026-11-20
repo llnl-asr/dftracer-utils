@@ -47,6 +47,16 @@ from ._convert import (
     pandas_to_native,
     polars_to_native,
 )
+from ._enums import (
+    DT_UNIT_CODES,
+    DTYPE_BY_NAME,
+    EPOCH_NS,
+    FREQ_NS,
+    UNIT_CODES,
+    DType,
+    dt_unit,
+    rule_to_units,
+)
 from ._pandas_series import SeriesPandasMixin, differs
 from ._series_index import (
     default_name,
@@ -60,16 +70,6 @@ from ._series_index import (
     with_levels,
 )
 from ._value_counts import series_value_counts
-from .enums import (
-    DT_UNIT_CODES,
-    DTYPE_BY_NAME,
-    EPOCH_NS,
-    FREQ_NS,
-    UNIT_CODES,
-    DType,
-    dt_unit,
-    rule_to_units,
-)
 
 if TYPE_CHECKING:
     import numpy as np
@@ -78,15 +78,12 @@ if TYPE_CHECKING:
     import pyarrow as pa
     from typing_extensions import Self
 
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
     from .dftracer_utils_ext import Scalar, T_co
 else:
     # The checkers read T_co (covariant, defaulting to Scalar) from the stub.
     T_co = TypeVar("T_co", covariant=True)
 
-__all__ = [
-    "Series",
-]
 # Python types and the NumPy names that differ from a DType member name.
 _PY_DTYPES: dict[type, DType] = {
     str: DType.STRING,
@@ -677,7 +674,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
     @overload
     def cast(self, dtype: builtins.str | int | DType | builtins.type) -> Series[Scalar]: ...
     def cast(self, dtype: builtins.str | int | DType | builtins.type) -> Series[Scalar]:
-        """Cast to ``dtype``: a :class:`~dftracer.utils.enums.DType`, its
+        """Cast to ``dtype``: a :class:`~dftracer.utils.DType`, its
         int code, a dtype name (``"int64"``, ``"Float64"``, case-insensitive;
         matches the ``DType`` member names), a Python type (``str``, ``int``,
         ``float``, ``bool``) or a NumPy scalar type or dtype. Integers, floats
@@ -710,7 +707,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         there are none), as pandas ``Series.compare``. ``keep_shape`` keeps every row; ``keep_equal``
         keeps the equal values instead of nulling them. The engine's
         ``compare(op, scalar)`` kernel is ``s.ops.series.compare``."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         if not isinstance(other, Series):
             raise TypeError("compare() expects a Series; the scalar kernel is s.ops.series.compare")
@@ -983,7 +980,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
     # that differs stays alongside.
     @property
     def dtype(self) -> DType:
-        """The element type as a :class:`~dftracer.utils.enums.DType`."""
+        """The element type as a :class:`~dftracer.utils.DType`."""
         return DType(self.type)
 
     @property
@@ -1394,8 +1391,8 @@ class _DtAccessor(_ext.DtAccessor):
         """Each instant as an integer count of ``time_unit`` (``"ns"``,
         ``"us"``, ``"ms"``, ``"s"`` or ``"d"``) since the epoch, from the
         column's own unit; a coarser unit floors."""
+        from ._expr import ColumnOp
         from ._expr_ops import run_column_op
-        from .expr import ColumnOp
 
         if time_unit not in EPOCH_NS:
             raise ValueError("epoch: time_unit must be ns, us, ms, s or d")
@@ -1406,7 +1403,7 @@ class _DtAccessor(_ext.DtAccessor):
 
     def isocalendar(self) -> DataFrame:
         """A frame of ISO ``year``, ``week`` and ``day`` (Monday = 1)."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         return DataFrame.from_dict(
             {
@@ -1708,7 +1705,7 @@ class _StrAccessor(_ext.StrAccessor):
         parts = self._s.str_split(pat)
         if not expand:
             return parts
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         width = parts.list_len().max()
         n = int(width) if width is not None else 0
@@ -1881,7 +1878,7 @@ class _StrAccessor(_ext.StrAccessor):
         ``str.extractall`` with its index as columns)."""
         import re
 
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         rx = re.compile(pat)
         if rx.groups == 0:
@@ -1912,7 +1909,7 @@ class _StrAccessor(_ext.StrAccessor):
     def _expand3(self, parts: Series, expand: bool) -> Series | DataFrame:
         if not expand:
             return parts
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         return DataFrame.from_dict({str(i): parts.list_get(i) for i in range(3)})
 
@@ -1924,7 +1921,7 @@ class _StrAccessor(_ext.StrAccessor):
         """The element at ``i`` of each row: a list's element (negative
         counts from the end), or a string's byte ``i`` (non-negative; empty
         past the end)."""
-        from .enums import DType
+        from ._enums import DType
 
         s = self._s
         if s.dtype == DType.LIST:
@@ -1946,7 +1943,7 @@ class _StrAccessor(_ext.StrAccessor):
     def get_dummies(self, sep: str = "|") -> DataFrame:
         """One column per distinct ``sep``-separated token, 1 where a row
         holds it (pandas ``str.get_dummies``)."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         parts = self._s.str_split(sep)
         exploded = DataFrame.from_dict({"v": parts}).with_row_index("r").explode("v")

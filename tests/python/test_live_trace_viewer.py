@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from dftracer.utils import LiveTraceViewer, TraceViewer
+from dftracer.utils.trace import LiveTraceViewer, TraceViewer
 
 MEMBERS = 8
 ROWS = 20

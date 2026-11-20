@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -37,14 +38,14 @@ from typing import (
 
 from .. import dftracer_utils_ext as _ext
 from .._aliases import install as _install_aliases
-from ..dataframe import DataFrame, PhaseArg, TimeUnitArg
-from ..enums import coerce_bytes, coerce_duration
-from ..expr import Agg, Expr, Named, SelectItem
-from ..lazyframe import BoundColumn, LazyFrame, LazyResult, collect_all
+from .._dataframe import DataFrame, PhaseArg, TimeUnitArg
+from .._enums import coerce_bytes, coerce_duration
+from .._expr import Agg, Expr, Named, SelectItem
+from .._lazyframe import BoundColumn, LazyFrame, LazyResult, collect_all
 from ..schemas import JsonValue, RecordSchema, schema_id
-from .index_records import IndexRecords
-from .lazy import LazyOps
-from .partials import agg_specs, export_stats, partial_bytes, stats_row
+from ._index_records import IndexRecords
+from ._lazy import LazyOps
+from ._partials import agg_specs, export_stats, partial_bytes, stats_row
 
 _S = TypeVar("_S", bound=RecordSchema)
 T = TypeVar("T")
@@ -54,14 +55,22 @@ _scan_columns = _ext.TraceViewer.columns
 _plan_columns = _ext.LazyFrame.schema
 
 if TYPE_CHECKING:
+    from .._enums import DType
     from ..dftracer_utils_ext import Scalar
-    from ..enums import DType
     from ..plugins import Plugins
     from ..runtime import Runtime
     from ..schemas import JsonValue
 
 
 DuqlParam = Union[bool, int, float, str, Sequence[Union[bool, int, float, str]]]
+
+
+class Phase(str, Enum):
+    """Which records a view scans; ``phase(Phase.EVENTS)`` is ``phase("events")``."""
+
+    EVENTS = "events"  # ph=1
+    COUNTERS = "counters"  # ph=2
+    ANY = "any"
 
 
 class Containment(NamedTuple):
@@ -75,7 +84,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
     """A lazy view over trace files; see the module docstring.
 
     ``files`` is a path (``str`` or ``os.PathLike``) or a sequence of paths,
-    with the same rule as :class:`~dftracer.utils.Indexer`. One path that names
+    with the same rule as :class:`~dftracer.utils.index.Indexer`. One path that names
     a directory is scanned recursively for trace files; a directory inside a
     sequence raises ``ValueError``. A repeated path is read once. A glob is not
     expanded, so it is a missing path. Nothing is read when the view is

@@ -18,12 +18,21 @@ from typing import (
     overload,
 )
 
+from ._enums import coerce_duration as _coerce_duration
+from ._memory_advice import MemoryBudgetAdvice as MemoryBudgetAdvice
+from ._memory_advice import memory_budget_advice as memory_budget_advice
+from ._public import set_home as _set_home
+from ._workers import WorkerShare as WorkerShare
+from ._workers import apply_worker_share as apply_worker_share
+from ._workers import worker_share as worker_share
 from .dftracer_utils_ext import Runtime as _NativeRuntime
 from .dftracer_utils_ext import TaskHandle as _NativeTaskHandle
 from .dftracer_utils_ext import _close_task_callbacks
 from .dftracer_utils_ext import get_default_runtime as _get_default_native_runtime
+from .dftracer_utils_ext import get_log_level as get_log_level
 from .dftracer_utils_ext import peek_default_runtime as _peek_default_native_runtime
-from .enums import coerce_duration
+from .dftracer_utils_ext import set_log_color as set_log_color
+from .dftracer_utils_ext import set_log_level as set_log_level
 
 if TYPE_CHECKING:
     import asyncio
@@ -38,19 +47,27 @@ if TYPE_CHECKING:
     P = ParamSpec("P")
 
 __all__ = [
+    "MemoryBudgetAdvice",
     "Runtime",
     "RuntimeProgress",
     "TaskHandle",
     "TaskProgress",
     "WorkerProgress",
+    "WorkerShare",
+    "apply_worker_share",
     "get_default_runtime",
+    "get_log_level",
+    "memory_budget_advice",
     "peek_default_runtime",
+    "set_log_color",
+    "set_log_level",
+    "worker_share",
 ]
-# Covariant (get() -> T_co only) so the runtime can hold one list of handles
+# Covariant (get() -> _T_co only) so the runtime can hold one list of handles
 # typed TaskHandle[object] instead of Any.
-T_co = TypeVar("T_co", covariant=True)
+_T_co = TypeVar("_T_co", covariant=True)
 # Invariant binder for submit(): ties the callable's return to TaskHandle[R].
-R = TypeVar("R")
+_R = TypeVar("_R")
 # The result type of a native handle that a wrapper maps to its own type.
 _N = TypeVar("_N")
 
@@ -117,7 +134,7 @@ def _derive_name(fn: object) -> str:
     return f"{base} ({location})" if location else base
 
 
-class TaskHandle(Generic[T_co]):
+class TaskHandle(Generic[_T_co]):
     """Unified handle for both C++ and Python tasks.
 
     Wraps either a native task handle, as ``Indexer.build_async()`` and
@@ -138,7 +155,7 @@ class TaskHandle(Generic[T_co]):
     @overload
     def __init__(
         self,
-        native: _NativeTaskHandle[T_co],
+        native: _NativeTaskHandle[_T_co],
         future: None = None,
         name: str = "",
         task_id: int = -1,
@@ -151,39 +168,39 @@ class TaskHandle(Generic[T_co]):
         name: str = "",
         task_id: int = -1,
         *,
-        finish: Callable[[_N], T_co],
+        finish: Callable[[_N], _T_co],
     ) -> None: ...
     @overload
     def __init__(
         self,
         native: None = None,
-        future: Future[T_co] | None = None,
+        future: Future[_T_co] | None = None,
         name: str = "",
         task_id: int = -1,
     ) -> None: ...
     def __init__(
         self,
         native: _NativeTaskHandle[_N] | None = None,
-        future: Future[T_co] | None = None,
+        future: Future[_T_co] | None = None,
         name: str = "",
         task_id: int = -1,
-        finish: Callable[[_N], T_co] | None = None,
+        finish: Callable[[_N], _T_co] | None = None,
     ) -> None:
-        self._native = cast("_NativeTaskHandle[T_co] | None", native)
-        self._get: Callable[[], T_co] | None = None
+        self._native = cast("_NativeTaskHandle[_T_co] | None", native)
+        self._get: Callable[[], _T_co] | None = None
         if native is not None:
             if finish is not None:
                 convert = finish
                 self._get = lambda: convert(native.get())
             else:
-                self._get = cast("Callable[[], T_co]", native.get)
+                self._get = cast("Callable[[], _T_co]", native.get)
         self._future = future
         self._name = name
         self._task_id = task_id
         self._exception: BaseException | None = None
-        self._finished: tuple[T_co] | None = None
+        self._finished: tuple[_T_co] | None = None
 
-    def get(self) -> T_co:
+    def get(self) -> _T_co:
         """Block until task completes and return result. Raises on error.
 
         A native task converts its result once, so every get() returns the
@@ -194,9 +211,9 @@ class TaskHandle(Generic[T_co]):
             return self._finished[0]
         if self._future is not None:
             return self._future.result()
-        return cast("T_co", None)  # no backing future
+        return cast("_T_co", None)  # no backing future
 
-    def add_done_callback(self, fn: Callable[[TaskHandle[T_co]], None]) -> None:
+    def add_done_callback(self, fn: Callable[[TaskHandle[_T_co]], None]) -> None:
         """Call ``fn(handle)`` once when the task ends, at once if it has.
 
         A native task calls it on the pool worker that finished it, which takes
@@ -218,7 +235,7 @@ class TaskHandle(Generic[T_co]):
         elif self._future is not None:
             self._future.cancel()
 
-    def __await__(self) -> Generator[None, None, T_co]:
+    def __await__(self) -> Generator[None, None, _T_co]:
         """Wait for the task from asyncio or uvloop without blocking the loop.
 
         Cancelling the awaiting task asks a native task to stop. A loop that
@@ -228,7 +245,7 @@ class TaskHandle(Generic[T_co]):
 
         if self._native is None:
             if self._future is None:
-                return cast("T_co", None)  # no backing task
+                return cast("_T_co", None)  # no backing task
             return (yield from asyncio.wrap_future(self._future).__await__())
         native = self._native
         loop = asyncio.get_running_loop()
@@ -242,19 +259,19 @@ class TaskHandle(Generic[T_co]):
             except Exception as error:
                 waiting.set_exception(error)
 
-        def on_done(_native: _NativeTaskHandle[T_co]) -> None:
+        def on_done(_native: _NativeTaskHandle[_T_co]) -> None:
             try:
                 loop.call_soon_threadsafe(settle)
             except RuntimeError:
                 pass
 
-        def on_waiting_done(future: asyncio.Future[T_co]) -> None:
+        def on_waiting_done(future: asyncio.Future[_T_co]) -> None:
             if future.cancelled():
                 native.cancel()
 
         waiting.add_done_callback(on_waiting_done)
         native.add_done_callback(on_done)
-        return cast("T_co", (yield from waiting))
+        return cast("_T_co", (yield from waiting))
 
     def wait(self) -> None:
         """Block until task completes. Raises on error."""
@@ -354,21 +371,21 @@ class Runtime:
         return self._py_pool
 
     @overload
-    def submit(self, task_or_fn: _NativeTaskHandle[R]) -> TaskHandle[R]: ...
+    def submit(self, task_or_fn: _NativeTaskHandle[_R]) -> TaskHandle[_R]: ...
     @overload
     def submit(
-        self, task_or_fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs
-    ) -> TaskHandle[R]: ...
+        self, task_or_fn: Callable[P, _R], *args: P.args, **kwargs: P.kwargs
+    ) -> TaskHandle[_R]: ...
 
     # Erased dispatcher; the overloads carry the precise contract. There is no
     # name= arg because PEP 612 forbids a keyword alongside **P.kwargs, so the
     # name is derived from the callable and its source location.
     def submit(
         self,
-        task_or_fn: _NativeTaskHandle[R] | Callable[P, R],
+        task_or_fn: _NativeTaskHandle[_R] | Callable[P, _R],
         *args: P.args,
         **kwargs: P.kwargs,
-    ) -> TaskHandle[R]:
+    ) -> TaskHandle[_R]:
         """Submit a task for async execution.
 
         Accepts either a native TaskHandle (pass-through) or a Python callable; the
@@ -382,7 +399,7 @@ class Runtime:
         """
         if isinstance(task_or_fn, _NativeTaskHandle):
             # Native path: wrap a handle from a build_async-style binding.
-            native_handle: TaskHandle[R] = TaskHandle(native=task_or_fn, name=task_or_fn.name)
+            native_handle: TaskHandle[_R] = TaskHandle(native=task_or_fn, name=task_or_fn.name)
             with self._lock:
                 self._handles.append(native_handle)
             return native_handle
@@ -394,11 +411,11 @@ class Runtime:
             task_id = self._py_task_counter
             self._py_task_counter += 1
 
-        handle = TaskHandle[R](name=_derive_name(task_or_fn), task_id=task_id)
+        handle = TaskHandle[_R](name=_derive_name(task_or_fn), task_id=task_id)
 
         # The result is opaque at the pool layer; callers retrieve it typed
         # through the handle's overloaded get().
-        def wrapper() -> R:
+        def wrapper() -> _R:
             try:
                 return task_or_fn(*args, **kwargs)
             except BaseException as e:
@@ -420,7 +437,7 @@ class Runtime:
 
         return handle
 
-    def wait(self, handle: TaskHandle[R]) -> None:
+    def wait(self, handle: TaskHandle[_R]) -> None:
         """Block until a specific task completes."""
         handle.wait()
 
@@ -516,13 +533,13 @@ class Runtime:
     def set_timeout(self, global_ms: int | float | str = 0) -> None:
         """Set the global timeout. A bare number is milliseconds; a string such
         as "30s" or "5m" is converted."""
-        ms = int(round(coerce_duration(global_ms, 1e3, "global_ms")))
+        ms = int(round(_coerce_duration(global_ms, 1e3, "global_ms")))
         self._native.set_timeout(global_ms=ms)
 
     def set_default_task_timeout(self, ms: int | float | str = 0) -> None:
         """Set the default per-task timeout. A bare number is milliseconds; a
         string such as "30s" or "5m" is converted."""
-        ms_val = int(round(coerce_duration(ms, 1e3, "ms")))
+        ms_val = int(round(_coerce_duration(ms, 1e3, "ms")))
         self._native.set_default_task_timeout(ms=ms_val)
 
     @property
@@ -611,3 +628,5 @@ def _shutdown_default_runtime() -> None:
 # Registered after the shutdown above, so it runs first: done callbacks of
 # native tasks that have not started are dropped before the interpreter ends.
 atexit.register(_close_task_callbacks)
+
+_set_home(__name__, globals(), __all__)

@@ -9,7 +9,8 @@ import os
 import pytest
 
 import dftracer.utils as dftu_utils
-from dftracer.utils import DataFrame, Series, TraceViewer
+from dftracer.utils import DataFrame, Series
+from dftracer.utils.trace import TraceViewer
 
 from .common import Environment
 
@@ -45,7 +46,7 @@ def _collect(env, query=None):
     path = os.path.join(env.temp_dir, "dict.pfw.gz")
     with gzip.open(path, "wt") as f:
         f.write("\n".join(json.dumps(r) for r in _rows()) + "\n")
-    with dftu_utils.Indexer(files=[path]) as indexer:
+    with dftu_utils.index.Indexer(files=[path]) as indexer:
         indexer.ensure()
     view = TraceViewer(path)
     if query:

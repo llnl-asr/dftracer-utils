@@ -214,7 +214,7 @@ result frames equi-join on the shared group key.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          base = TraceViewer("baseline.pfw.gz").group_by("cat").agg("count")
          vary = TraceViewer("variant.pfw.gz").group_by("cat").agg("count")

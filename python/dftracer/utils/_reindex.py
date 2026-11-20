@@ -15,12 +15,12 @@ import sys
 from typing import TYPE_CHECKING, Sequence, Union, cast
 
 from . import dftracer_utils_ext as _ext
+from ._enums import DType
+from ._series import Series
 from ._series_index import default_name, internal_name, labels_from, levels_of, names_of
-from .enums import DType
-from .series import Series
 
 if TYPE_CHECKING:
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
 Frameish = Union[Series, "DataFrame"]
 
@@ -324,7 +324,7 @@ def label_keys(other: Frameish) -> object:
         from ._series_index import positions
 
         return positions(len(other))
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     if len(names) == 1:
         return levels[0].rename(names[0])
@@ -335,7 +335,7 @@ def reindex_like(
     obj: Frameish, other: Frameish, method: str | None, limit: int | None, tolerance: object
 ) -> Frameish:
     """``obj`` on the row labels of ``other`` and, for a frame, its columns."""
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     out = obj
     if not isinstance(obj, Series):
@@ -380,7 +380,7 @@ def align_series(
     if isinstance(other, Series):
         a, b = s._align(other, code)
         return _filled(a, fill_value), _filled(b, fill_value)
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     if not isinstance(other, DataFrame):
         raise TypeError(f"unsupported type: {type(other)}")
@@ -411,7 +411,7 @@ def align_frame(
         return with_columns(df, columns, fill_value), cast(
             Series, reindex_rows(other, columns, None, fill_value, None, None)
         )
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     if not isinstance(other, DataFrame):
         raise TypeError(f"unsupported type: {type(other)}")

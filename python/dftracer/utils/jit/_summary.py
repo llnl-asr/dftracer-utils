@@ -51,9 +51,9 @@ import re
 from typing import Callable, Sequence, TypeVar, cast
 
 from .._jit_errors import JitError, Source, class_error
-from .maps import own_annotations
-from .package import DEFAULT_PACKAGE
-from .plugin import JitPlugin
+from ._maps import own_annotations
+from ._package import DEFAULT_PACKAGE
+from ._plugin import JitPlugin
 
 C = TypeVar("C", bound=type)
 

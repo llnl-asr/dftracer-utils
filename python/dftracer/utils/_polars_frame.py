@@ -10,13 +10,13 @@ from typing import TYPE_CHECKING, Iterator, Literal, Sequence
 
 from ._convert import _require_pyarrow
 from ._pandas_frame import column_series, is_numeric_series
-from .series import Series
+from ._series import Series
 
 if TYPE_CHECKING:
-    from .dataframe import DataFrame
-    from .enums import DType
-    from .expr import Expr
-    from .groupby import GroupKey
+    from ._dataframe import DataFrame
+    from ._enums import DType
+    from ._expr import Expr
+    from ._groupby import GroupKey
 
 
 class FramePolarsMixin:
@@ -26,7 +26,7 @@ class FramePolarsMixin:
     __slots__ = ()
 
     def _frame(self) -> DataFrame:
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         assert isinstance(self, DataFrame)
         return self
@@ -87,7 +87,7 @@ class FramePolarsMixin:
     def hstack(self, columns: DataFrame | Sequence[Series] | dict[str, Series]) -> DataFrame:
         """This frame with ``columns`` (a frame, a ``{name: Series}`` or
         Series with names) appended on the right (polars ``hstack``)."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         out = self._frame()
         if isinstance(columns, DataFrame):
@@ -151,7 +151,7 @@ class FramePolarsMixin:
         """One frame per distinct key (polars ``partition_by``), in first-seen
         key order; ``as_dict`` keys them by the key value (a tuple for several
         columns)."""
-        from .groupby import GroupBy
+        from ._groupby import GroupBy
 
         f = self._frame()
         keys = [by] if isinstance(by, str) else list(by)

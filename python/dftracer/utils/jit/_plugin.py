@@ -14,18 +14,18 @@ from typing import (
     get_origin,
 )
 
+from .._expr import Expr, col
 from .._jit_errors import JitError, Source, class_error
-from ..expr import Expr, col
 from . import _channels, _flow
 from . import ops as _ops
 from ._batch import HELPERS, lower_batch
 from ._channels import Channel, Latest, Phase, Receiver, Sender
 from ._channels import PortDecl as _PortDecl
+from ._compiler import ALL_FIXED_FIELDS, Compiler
 from ._emit import RAW_ROWS_PER_EVENT, emit_plugin, raw_body, referenced_ops
 from ._flow import FlowFn as _FlowFn
 from ._flow import TaskSig as _TaskSig
-from .compiler import ALL_FIXED_FIELDS, Compiler
-from .maps import (
+from ._maps import (
     PORT_ID_CHARS,
     RESERVED_NAMESPACE,
     AnyMap,
@@ -40,11 +40,11 @@ from .maps import (
     resolve_hint,
     state_fields,
 )
-from .monoids import Counter, Monoid, Sum
+from ._monoids import Counter, Monoid, Sum
 
 if TYPE_CHECKING:
-    from .ops import Result
-    from .package import JitPackage
+    from ._package import JitPackage
+    from .ops import _Result as Result
 
 
 class JitPlugin:

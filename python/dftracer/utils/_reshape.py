@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Sequence, cast
 
 from . import dftracer_utils_ext as _ext
+from ._enums import DType
 from ._levels import Level, LevelArg, pick_levels
 from ._series_index import (
     default_name,
@@ -28,11 +29,10 @@ from ._series_index import (
     public_name,
     with_levels,
 )
-from .enums import DType
 
 if TYPE_CHECKING:
-    from .dataframe import DataFrame
-    from .series import Series
+    from ._dataframe import DataFrame
+    from ._series import Series
 
 _NOT_UNIQUE = "Index contains duplicate entries, cannot reshape"
 
@@ -85,7 +85,7 @@ def _fill(column: Series, fill_value: object, seen: Series | None) -> Series:
     if not fits:
         raise TypeError(f"Invalid fill_value {fill_value!r} for a {kind.name.lower()} column")
     if kind in (DType.STRING, DType.BOOL):
-        from .series import Series
+        from ._series import Series
 
         keep = seen.is_not_null() if seen is not None else column.is_not_null()
         return column.where(keep, Series.from_list([fill_value] * len(column)))
@@ -109,7 +109,7 @@ def _wide(
     order given, for a tuple). ``None`` names a lone Series, whose columns are
     the labels themselves. One level's labels are sorted; several are in order
     of first appearance, as pandas has them."""
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     keep = [i for i in range(len(names)) if i not in picked]
     rows, row_first, row_count = _first_rows([levels[i] for i in keep], sort)
@@ -143,7 +143,7 @@ def _tuple(label: object) -> tuple[object, ...]:
 
 
 def _empty(names: list[str], levels: list[Series], picked: list[int]) -> DataFrame:
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     keep = [names[i] for i in range(len(names)) if i not in picked]
     frame = DataFrame.from_dict({name: levels[names.index(name)][0:0] for name in keep})
@@ -243,7 +243,7 @@ def _typed(frame: DataFrame, shown: list[str]) -> DataFrame:
     """The shown columns, where a column of only nulls (it has no type of its
     own, from_pandas makes it text) takes the type of the first column that holds
     a value, so the unpivot sees one type, as pandas stacks it."""
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     columns = {c: drop_levels(_ext.DataFrame.__getitem__(frame, c)) for c in shown}
     live = [s for s in columns.values() if s.null_count < len(s)]
@@ -264,7 +264,7 @@ def stack_frame(
     are refused as pandas refuses them; otherwise null cells are dropped unless
     ``dropna=False``. The column names are one level, so ``level`` is 0, -1 or
     that level's (absent) name."""
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     if future:
         if dropna is not None:

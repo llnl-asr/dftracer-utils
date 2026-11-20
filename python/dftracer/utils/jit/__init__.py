@@ -47,10 +47,13 @@ from .._jit_errors import JitError as JitError
 from .._jit_errors import NotFound as NotFound
 from .._jit_errors import ParseError as ParseError
 from .._jit_errors import SkipRest as SkipRest
-from ..jit_op import Op as Op
-from ..jit_op import compile_op as compile_op
-from ..jit_op import op as op
-from ..jit_op import run_op as run_op
+from .._jit_op import JitOpError as JitOpError
+from .._jit_op import Op as Op
+from .._jit_op import can_fuse as can_fuse
+from .._jit_op import compile_op as compile_op
+from .._jit_op import op as op
+from .._jit_op import run_op as run_op
+from .._public import set_home as _set_home
 from . import ops as ops
 from ._channels import Channel as Channel
 from ._channels import Latest as Latest
@@ -73,6 +76,336 @@ from ._flow import open as open
 from ._flow import sleep as sleep
 from ._flow import task as task
 from ._flow import yaml as yaml
+from ._maps import (
+    Column as Column,
+)
+from ._maps import (
+    Event as Event,
+)
+from ._maps import (
+    Frame as Frame,
+)
+from ._maps import (
+    Map as Map,
+)
+from ._maps import (
+    Mask as Mask,
+)
+from ._maps import (
+    Port as Port,
+)
+from ._maps import (
+    Store as Store,
+)
+from ._maps import (
+    consume as consume,
+)
+from ._maps import (
+    each_batch as each_batch,
+)
+from ._maps import (
+    each_event as each_event,
+)
+from ._maps import (
+    map as map,
+)
+from ._maps import (
+    plugin_config as plugin_config,
+)
+from ._maps import (
+    publish as publish,
+)
+from ._maps import (
+    record as record,
+)
+from ._monoids import (
+    ApproxTopK as ApproxTopK,
+)
+from ._monoids import (
+    ArgMax as ArgMax,
+)
+from ._monoids import (
+    ArgMin as ArgMin,
+)
+from ._monoids import (
+    BottomK as BottomK,
+)
+from ._monoids import (
+    Counter as Counter,
+)
+from ._monoids import (
+    Distinct as Distinct,
+)
+from ._monoids import (
+    ListV as ListV,
+)
+from ._monoids import (
+    Max as Max,
+)
+from ._monoids import (
+    Mean as Mean,
+)
+from ._monoids import (
+    Min as Min,
+)
+from ._monoids import (
+    Product as Product,
+)
+from ._monoids import (
+    Quantiles as Quantiles,
+)
+from ._monoids import (
+    Sample as Sample,
+)
+from ._monoids import (
+    SetV as SetV,
+)
+from ._monoids import (
+    Stddev as Stddev,
+)
+from ._monoids import (
+    Sum as Sum,
+)
+from ._monoids import (
+    TopK as TopK,
+)
+from ._monoids import (
+    Variance as Variance,
+)
+from ._monoids import (
+    active as active,
+)
+from ._monoids import (
+    approx_topk as approx_topk,
+)
+from ._monoids import (
+    argmax as argmax,
+)
+from ._monoids import (
+    argmin as argmin,
+)
+from ._monoids import (
+    bitset as bitset,
+)
+from ._monoids import (
+    bottomk as bottomk,
+)
+from ._monoids import (
+    busy as busy,
+)
+from ._monoids import (
+    concurrency as concurrency,
+)
+from ._monoids import (
+    corr as corr,
+)
+from ._monoids import (
+    count as count,
+)
+from ._monoids import (
+    count_valid as count_valid,
+)
+from ._monoids import (
+    covar_pop as covar_pop,
+)
+from ._monoids import (
+    covar_samp as covar_samp,
+)
+from ._monoids import (
+    distinct as distinct,
+)
+from ._monoids import (
+    first as first,
+)
+from ._monoids import (
+    hist as hist,
+)
+from ._monoids import (
+    kurt as kurt,
+)
+from ._monoids import (
+    last as last,
+)
+from ._monoids import (
+    list as list,
+)
+from ._monoids import (
+    max as max,
+)
+from ._monoids import (
+    maxf as maxf,
+)
+from ._monoids import (
+    mean as mean,
+)
+from ._monoids import (
+    min as min,
+)
+from ._monoids import (
+    minf as minf,
+)
+from ._monoids import (
+    prod as prod,
+)
+from ._monoids import (
+    quantiles as quantiles,
+)
+from ._monoids import (
+    regr_intercept as regr_intercept,
+)
+from ._monoids import (
+    regr_r2 as regr_r2,
+)
+from ._monoids import (
+    regr_slope as regr_slope,
+)
+from ._monoids import (
+    sample as sample,
+)
+from ._monoids import (
+    set as set,
+)
+from ._monoids import (
+    skew as skew,
+)
+from ._monoids import (
+    std as std,
+)
+from ._monoids import (
+    stddev as stddev,
+)
+from ._monoids import (
+    sum as sum,
+)
+from ._monoids import (
+    sumsq as sumsq,
+)
+from ._monoids import (
+    topk as topk,
+)
+from ._monoids import (
+    utilization as utilization,
+)
+from ._monoids import (
+    var as var,
+)
+from ._monoids import (
+    variance as variance,
+)
+from ._package import (
+    JitPackage as JitPackage,
+)
+from ._package import (
+    build as build,
+)
+from ._package import (
+    compile_class as compile_class,
+)
+from ._package import (
+    is_jit_plugin as is_jit_plugin,
+)
+from ._package import (
+    plugin as plugin,
+)
+from ._package import (
+    plugin_result_names as plugin_result_names,
+)
+from ._package import (
+    provided_names as provided_names,
+)
+from ._package import (
+    series as series,
+)
+from ._prims import (
+    abs as abs,
+)
+from ._prims import (
+    align_down as align_down,
+)
+from ._prims import (
+    align_up as align_up,
+)
+from ._prims import (
+    bit_width as bit_width,
+)
+from ._prims import (
+    ceil_pow2 as ceil_pow2,
+)
+from ._prims import (
+    clamp as clamp,
+)
+from ._prims import (
+    clampf as clampf,
+)
+from ._prims import (
+    clz as clz,
+)
+from ._prims import (
+    copysign as copysign,
+)
+from ._prims import (
+    ctz as ctz,
+)
+from ._prims import (
+    div_ceil as div_ceil,
+)
+from ._prims import (
+    div_round as div_round,
+)
+from ._prims import (
+    exp as exp,
+)
+from ._prims import (
+    fastrange as fastrange,
+)
+from ._prims import (
+    floor_pow2 as floor_pow2,
+)
+from ._prims import (
+    fma as fma,
+)
+from ._prims import (
+    fmax as fmax,
+)
+from ._prims import (
+    fmin as fmin,
+)
+from ._prims import (
+    gcd as gcd,
+)
+from ._prims import (
+    ilog2 as ilog2,
+)
+from ._prims import (
+    isqrt as isqrt,
+)
+from ._prims import (
+    lerp as lerp,
+)
+from ._prims import (
+    log as log,
+)
+from ._prims import (
+    log2 as log2,
+)
+from ._prims import (
+    mix64 as mix64,
+)
+from ._prims import (
+    mul_hi as mul_hi,
+)
+from ._prims import (
+    popcount as popcount,
+)
+from ._prims import (
+    rotl as rotl,
+)
+from ._prims import (
+    rotr as rotr,
+)
+from ._prims import (
+    sqrt as sqrt,
+)
 from ._summary import (
     EQ as EQ,
 )
@@ -94,379 +427,49 @@ from ._summary import (
 from ._summary import (
     summary as summary,
 )
-from .maps import (
-    Column as Column,
-)
-from .maps import (
-    Event as Event,
-)
-from .maps import (
-    Frame as Frame,
-)
-from .maps import (
-    Map as Map,
-)
-from .maps import (
-    Mask as Mask,
-)
-from .maps import (
-    Port as Port,
-)
-from .maps import (
-    Store as Store,
-)
-from .maps import (
-    consume as consume,
-)
-from .maps import (
-    each_batch as each_batch,
-)
-from .maps import (
-    each_event as each_event,
-)
-from .maps import (
-    map as map,
-)
-from .maps import (
-    plugin_config as plugin_config,
-)
-from .maps import (
-    publish as publish,
-)
-from .maps import (
-    record as record,
-)
-from .monoids import (
-    ApproxTopK as ApproxTopK,
-)
-from .monoids import (
-    ArgMax as ArgMax,
-)
-from .monoids import (
-    ArgMin as ArgMin,
-)
-from .monoids import (
-    BottomK as BottomK,
-)
-from .monoids import (
-    Counter as Counter,
-)
-from .monoids import (
-    Distinct as Distinct,
-)
-from .monoids import (
-    ListV as ListV,
-)
-from .monoids import (
-    Max as Max,
-)
-from .monoids import (
-    Mean as Mean,
-)
-from .monoids import (
-    Min as Min,
-)
-from .monoids import (
-    Product as Product,
-)
-from .monoids import (
-    Quantiles as Quantiles,
-)
-from .monoids import (
-    Sample as Sample,
-)
-from .monoids import (
-    SetV as SetV,
-)
-from .monoids import (
-    Stddev as Stddev,
-)
-from .monoids import (
-    Sum as Sum,
-)
-from .monoids import (
-    TopK as TopK,
-)
-from .monoids import (
-    Variance as Variance,
-)
-from .monoids import (
-    active as active,
-)
-from .monoids import (
-    approx_topk as approx_topk,
-)
-from .monoids import (
-    argmax as argmax,
-)
-from .monoids import (
-    argmin as argmin,
-)
-from .monoids import (
-    bitset as bitset,
-)
-from .monoids import (
-    bottomk as bottomk,
-)
-from .monoids import (
-    busy as busy,
-)
-from .monoids import (
-    concurrency as concurrency,
-)
-from .monoids import (
-    corr as corr,
-)
-from .monoids import (
-    count as count,
-)
-from .monoids import (
-    count_valid as count_valid,
-)
-from .monoids import (
-    covar_pop as covar_pop,
-)
-from .monoids import (
-    covar_samp as covar_samp,
-)
-from .monoids import (
-    distinct as distinct,
-)
-from .monoids import (
-    first as first,
-)
-from .monoids import (
-    hist as hist,
-)
-from .monoids import (
-    kurt as kurt,
-)
-from .monoids import (
-    last as last,
-)
-from .monoids import (
-    list as list,
-)
-from .monoids import (
-    max as max,
-)
-from .monoids import (
-    maxf as maxf,
-)
-from .monoids import (
-    mean as mean,
-)
-from .monoids import (
-    min as min,
-)
-from .monoids import (
-    minf as minf,
-)
-from .monoids import (
-    prod as prod,
-)
-from .monoids import (
-    quantiles as quantiles,
-)
-from .monoids import (
-    regr_intercept as regr_intercept,
-)
-from .monoids import (
-    regr_r2 as regr_r2,
-)
-from .monoids import (
-    regr_slope as regr_slope,
-)
-from .monoids import (
-    sample as sample,
-)
-from .monoids import (
-    set as set,
-)
-from .monoids import (
-    skew as skew,
-)
-from .monoids import (
-    std as std,
-)
-from .monoids import (
-    stddev as stddev,
-)
-from .monoids import (
-    sum as sum,
-)
-from .monoids import (
-    sumsq as sumsq,
-)
-from .monoids import (
-    topk as topk,
-)
-from .monoids import (
-    utilization as utilization,
-)
-from .monoids import (
-    var as var,
-)
-from .monoids import (
-    variance as variance,
-)
-from .package import (
-    JitPackage as JitPackage,
-)
-from .package import (
-    build as build,
-)
-from .package import (
-    compile_class as compile_class,
-)
-from .package import (
-    is_jit_plugin as is_jit_plugin,
-)
-from .package import (
-    plugin as plugin,
-)
-from .package import (
-    plugin_result_names as plugin_result_names,
-)
-from .package import (
-    provided_names as provided_names,
-)
-from .package import (
-    series as series,
-)
-from .prims import (
-    abs as abs,
-)
-from .prims import (
-    align_down as align_down,
-)
-from .prims import (
-    align_up as align_up,
-)
-from .prims import (
-    bit_width as bit_width,
-)
-from .prims import (
-    ceil_pow2 as ceil_pow2,
-)
-from .prims import (
-    clamp as clamp,
-)
-from .prims import (
-    clampf as clampf,
-)
-from .prims import (
-    clz as clz,
-)
-from .prims import (
-    copysign as copysign,
-)
-from .prims import (
-    ctz as ctz,
-)
-from .prims import (
-    div_ceil as div_ceil,
-)
-from .prims import (
-    div_round as div_round,
-)
-from .prims import (
-    exp as exp,
-)
-from .prims import (
-    fastrange as fastrange,
-)
-from .prims import (
-    floor_pow2 as floor_pow2,
-)
-from .prims import (
-    fma as fma,
-)
-from .prims import (
-    fmax as fmax,
-)
-from .prims import (
-    fmin as fmin,
-)
-from .prims import (
-    gcd as gcd,
-)
-from .prims import (
-    ilog2 as ilog2,
-)
-from .prims import (
-    isqrt as isqrt,
-)
-from .prims import (
-    lerp as lerp,
-)
-from .prims import (
-    log as log,
-)
-from .prims import (
-    log2 as log2,
-)
-from .prims import (
-    mix64 as mix64,
-)
-from .prims import (
-    mul_hi as mul_hi,
-)
-from .prims import (
-    popcount as popcount,
-)
-from .prims import (
-    rotl as rotl,
-)
-from .prims import (
-    rotr as rotr,
-)
-from .prims import (
-    sqrt as sqrt,
-)
-from .types import (
+from ._types import (
     NONE as NONE,
 )
-from .types import (
+from ._types import (
     Str as Str,
 )
-from .types import (
+from ._types import (
     bytes as bytes,
 )
-from .types import (
+from ._types import (
     f32 as f32,
 )
-from .types import (
+from ._types import (
     f64 as f64,
 )
-from .types import (
+from ._types import (
     i8 as i8,
 )
-from .types import (
+from ._types import (
     i16 as i16,
 )
-from .types import (
+from ._types import (
     i32 as i32,
 )
-from .types import (
+from ._types import (
     i64 as i64,
 )
-from .types import (
+from ._types import (
     str_ as str_,
 )
-from .types import (
+from ._types import (
     u8 as u8,
 )
-from .types import (
+from ._types import (
     u16 as u16,
 )
-from .types import (
+from ._types import (
     u32 as u32,
 )
-from .types import (
+from ._types import (
     u64 as u64,
 )
-from .vfold import (
+from ._vfold import (
     vfold as vfold,
 )
 
@@ -498,7 +501,14 @@ __all__ = [
     "File",
     "Value",
     "Op",
+    "JitOpError",
+    "compile_class",
+    "is_jit_plugin",
+    "plugin_config",
+    "plugin_result_names",
+    "provided_names",
     "op",
+    "can_fuse",
     "compile_op",
     "run_op",
     "plugin",
@@ -637,3 +647,5 @@ __all__ = [
 JitError.__module__ = __name__
 for _runtime_exc in (Error, NotFound, Closed, IoError, ParseError, Fatal, SkipRest, Cancelled):
     _runtime_exc.__module__ = __name__
+
+_set_home(__name__, globals(), __all__)

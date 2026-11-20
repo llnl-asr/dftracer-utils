@@ -11,8 +11,9 @@ import shutil
 
 import pytest
 
-from dftracer.utils import Runtime, jit
+from dftracer.utils import jit
 from dftracer.utils.plugins import Plugins
+from dftracer.utils.runtime import Runtime
 
 pa = pytest.importorskip("pyarrow")
 

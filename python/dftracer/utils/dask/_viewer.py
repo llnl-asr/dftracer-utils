@@ -27,11 +27,11 @@ if TYPE_CHECKING:
     from dask.distributed import Client, Future
 
 
-from ..dataframe import DataFrame, PhaseArg, TimeUnitArg
+from .._dataframe import DataFrame, PhaseArg, TimeUnitArg
+from .._enums import coerce_bytes, coerce_duration
 from ..dftracer_utils_ext import NUM_SHARDS
-from ..enums import coerce_bytes, coerce_duration
-from ..trace.index_records import IndexRecords
-from ..trace.viewer import TraceViewer
+from ..trace._index_records import IndexRecords
+from ..trace._viewer import TraceViewer
 from ._workers import _require_workers
 
 _T = TypeVar("_T")
@@ -205,7 +205,7 @@ def _dv_collect_index_records_task(
     each into a pyarrow Table here so a process cluster can ship them."""
     import pyarrow as pa
 
-    from .progress import worker_progress_forwarder
+    from ._progress import worker_progress_forwarder
 
     forward = (
         None
@@ -427,7 +427,7 @@ class DaskTraceViewer:
 
         The aggregation tier is index-wide, so each worker reads a disjoint range
         of its hash shards over all files and gives an
-        :class:`~dftracer.utils.IndexRecords` of pyarrow Tables. ``map_fn``, when
+        :class:`~dftracer.utils.trace.IndexRecords` of pyarrow Tables. ``map_fn``, when
         given, runs on the worker on those records and its result is what the
         future holds; it must be a
         top-level function a process cluster can pickle. ``progress`` names a

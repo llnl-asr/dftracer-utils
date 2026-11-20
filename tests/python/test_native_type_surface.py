@@ -11,7 +11,7 @@ import pytest
 
 import dftracer.utils as d
 from dftracer.utils import dftracer_utils_ext as _ext
-from dftracer.utils.series import Series
+from dftracer.utils._series import Series
 
 _PYI = Path(__file__).resolve().parents[2] / "python/dftracer/utils/dftracer_utils_ext.pyi"
 _TYPES = (

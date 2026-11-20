@@ -132,7 +132,8 @@ A worked round trip
 .. code-block:: python
 
    import pandas as pd
-   from dftracer.utils import Series, TraceViewer
+   from dftracer.utils import Series
+   from dftracer.utils.trace import TraceViewer
 
    result = (
        TraceViewer("traces/")

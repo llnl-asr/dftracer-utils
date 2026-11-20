@@ -8,7 +8,7 @@ import pytest
 
 import dftracer.utils as dft
 from dftracer.utils import dftracer_utils_ext as ext
-from dftracer.utils.enums import DType
+from dftracer.utils._enums import DType
 
 pytest.importorskip("dftracer.utils.dftracer_utils_ext")
 

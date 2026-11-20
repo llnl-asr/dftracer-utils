@@ -7,7 +7,7 @@ import random
 import pytest
 
 from dftracer.utils import DataFrame, Series, col
-from dftracer.utils.enums import DType
+from dftracer.utils._enums import DType
 
 _ALPHABET = "abcxyzABCXYZ0189 \t+-_,.|ab--,,"
 

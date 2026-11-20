@@ -3,7 +3,7 @@
 """Plugins loaded for the process, and one reader probe.
 
 ``DFTRACER_UTILS_PLUGINS`` loads plugins once, at the first call that reads a
-trace. ``dft.load_plugin(path)`` loads one for a ``with`` block. The built-in
+trace. ``dft.plugins.load_plugin(path)`` loads one for a ``with`` block. The built-in
 trace reader scores in the same probe as a plugin file format, the highest score
 wins and a tie is refused. ``format=`` names the reader.
 
@@ -102,10 +102,10 @@ def test_the_environment_plugin_reads_through_the_indexer_and_the_viewer_refuses
     index.mkdir()
     code = f"""
 import dftracer.utils as dft
-with dft.Indexer([{str(rows)!r}], index_dir={str(index)!r}) as indexer:
+with dft.index.Indexer([{str(rows)!r}], index_dir={str(index)!r}) as indexer:
     indexer.build()
 try:
-    dft.TraceViewer([{str(rows)!r}], index_dir={str(index)!r}).collect()
+    dft.trace.TraceViewer([{str(rows)!r}], index_dir={str(index)!r}).collect()
 except Exception as exc:
     print(type(exc).__name__, exc)
 """
@@ -118,8 +118,8 @@ except Exception as exc:
 def test_a_tie_is_refused_with_both_names(tmp_path):
     rows = tmp_path / "rows.toy"
     rows.write_text(_TOY_ROWS)
-    with dft.load_plugin(_TOY), dft.load_plugin(_TIE):
-        with pytest.raises(dft.DFTUtilsValueError) as caught:
+    with dft.plugins.load_plugin(_TOY), dft.plugins.load_plugin(_TIE):
+        with pytest.raises(dft.errors.DFTUtilsValueError) as caught:
             dft.scan_file(str(rows)).collect()
         message = str(caught.value)
         assert "toy_format.rows" in message
@@ -130,7 +130,7 @@ def test_a_tie_is_refused_with_both_names(tmp_path):
 def test_format_forces_a_reader(tmp_path):
     rows = tmp_path / "rows.toy"
     rows.write_text(_TOY_ROWS)
-    with dft.load_plugin(_TOY), dft.load_plugin(_TIE):
+    with dft.plugins.load_plugin(_TOY), dft.plugins.load_plugin(_TIE):
         got = dft.scan_file(str(rows), format="toy_format.rows").collect()
         assert got.to_arrow().to_pydict()["id"] == [1, 2, 3]
 
@@ -138,15 +138,15 @@ def test_format_forces_a_reader(tmp_path):
 def test_an_unknown_format_lists_the_known_names(tmp_path):
     rows = tmp_path / "rows.toy"
     rows.write_text(_TOY_ROWS)
-    with dft.load_plugin(_TOY):
-        with pytest.raises(dft.DFTUtilsValueError) as caught:
+    with dft.plugins.load_plugin(_TOY):
+        with pytest.raises(dft.errors.DFTUtilsValueError) as caught:
             dft.scan_file(str(rows), format="nope").collect()
         assert "unknown format 'nope'" in str(caught.value)
         assert "jsonl, toy_format.low, toy_format.rows" in str(caught.value)
-        with pytest.raises(dft.DFTUtilsValueError, match="unknown format 'nope'"):
-            dft.Indexer([str(rows)], format="nope").status()
-        with pytest.raises(dft.DFTUtilsValueError, match="unknown format 'nope'"):
-            dft.TraceViewer([str(rows)], format="nope").lazy().collect()
+        with pytest.raises(dft.errors.DFTUtilsValueError, match="unknown format 'nope'"):
+            dft.index.Indexer([str(rows)], format="nope").status()
+        with pytest.raises(dft.errors.DFTUtilsValueError, match="unknown format 'nope'"):
+            dft.trace.TraceViewer([str(rows)], format="nope").lazy().collect()
 
 
 def test_a_trace_file_is_read_by_the_built_in_reader_with_plugins_loaded():
@@ -154,23 +154,23 @@ def test_a_trace_file_is_read_by_the_built_in_reader_with_plugins_loaded():
         trace = env.create_dft_trace_file(num_events=64)
         index = Path(env.temp_dir) / "index"
         index.mkdir()
-        with dft.Indexer([trace], index_dir=str(index)) as indexer:
+        with dft.index.Indexer([trace], index_dir=str(index)) as indexer:
             indexer.build()
         before = {p: p.stat().st_mtime_ns for p in index.rglob("*") if p.is_file()}
         assert before
 
-        with dft.load_plugin(_TOY), dft.load_plugin(_CHUNKED):
-            viewer = dft.TraceViewer([trace], index_dir=str(index))
+        with dft.plugins.load_plugin(_TOY), dft.plugins.load_plugin(_CHUNKED):
+            viewer = dft.trace.TraceViewer([trace], index_dir=str(index))
             assert viewer.lazy().collect().num_rows == 64
             assert dft.scan_file(trace, str(index)).collect().num_rows == 64
             assert (
-                dft.TraceViewer([trace], index_dir=str(index), format="jsonl")
+                dft.trace.TraceViewer([trace], index_dir=str(index), format="jsonl")
                 .lazy()
                 .collect()
                 .num_rows
                 == 64
             )
-            with dft.Indexer([trace], index_dir=str(index)) as indexer:
+            with dft.index.Indexer([trace], index_dir=str(index)) as indexer:
                 assert indexer.status().needs_work == []
                 indexer.build()
 
@@ -181,33 +181,33 @@ def test_a_trace_file_is_read_by_the_built_in_reader_with_plugins_loaded():
 def test_a_loaded_plugin_is_unloaded_at_the_end_of_the_block(tmp_path):
     rows = tmp_path / "rows.toy"
     rows.write_text(_TOY_ROWS)
-    with dft.load_plugin(_TOY) as handle:
+    with dft.plugins.load_plugin(_TOY) as handle:
         assert handle.path == _TOY
         assert dft.scan_file(str(rows)).collect().num_rows == 3
     assert handle.closed
-    with pytest.raises(dft.DFTUtilsNotFoundError, match="no format claims"):
+    with pytest.raises(dft.errors.DFTUtilsNotFoundError, match="no format claims"):
         dft.scan_file(str(rows)).collect()
 
 
 def test_loading_the_same_path_twice_keeps_it_until_the_last_close(tmp_path):
     rows = tmp_path / "rows.toy"
     rows.write_text(_TOY_ROWS)
-    first = dft.load_plugin(_TOY)
-    second = dft.load_plugin(_TOY)
+    first = dft.plugins.load_plugin(_TOY)
+    second = dft.plugins.load_plugin(_TOY)
     first.close()
     assert dft.scan_file(str(rows)).collect().num_rows == 3
     second.close()
     second.close()
-    with pytest.raises(dft.DFTUtilsNotFoundError):
+    with pytest.raises(dft.errors.DFTUtilsNotFoundError):
         dft.scan_file(str(rows)).collect()
 
 
 def test_unloading_while_a_scan_is_open_is_an_error_not_a_crash(tmp_path):
     rows = tmp_path / "rows.toy"
     rows.write_text(_TOY_ROWS)
-    handle = dft.load_plugin(_TOY)
+    handle = dft.plugins.load_plugin(_TOY)
     plan = dft.scan_file(str(rows))
-    with pytest.raises(dft.DFTUtilsValueError, match="still open"):
+    with pytest.raises(dft.errors.DFTUtilsValueError, match="still open"):
         handle.close()
     assert not handle.closed
     assert plan.collect().num_rows == 3
@@ -218,8 +218,8 @@ def test_unloading_while_a_scan_is_open_is_an_error_not_a_crash(tmp_path):
 
 def test_a_plugin_that_does_not_load_raises_and_names_the_path(tmp_path):
     missing = str(tmp_path / "no_such_plugin.so")
-    with pytest.raises(dft.DFTUtilsError, match="no_such_plugin"):
-        dft.load_plugin(missing)
+    with pytest.raises(dft.errors.DFTUtilsError, match="no_such_plugin"):
+        dft.plugins.load_plugin(missing)
 
 
 def test_a_plugins_set_shares_a_plugin_that_is_already_loaded(tmp_path):
@@ -227,7 +227,7 @@ def test_a_plugins_set_shares_a_plugin_that_is_already_loaded(tmp_path):
 
     rows = tmp_path / "rows.toy"
     rows.write_text(_TOY_ROWS)
-    with dft.load_plugin(_TOY):
+    with dft.plugins.load_plugin(_TOY):
         built = Plugins([_TOY])
         assert built.describe()[0].file_formats
         del built

@@ -31,10 +31,10 @@ from typing import (
 )
 
 from .. import dftracer_utils_ext as _ext
-from ..agg import UdafAgg
-from ..dataframe import DataFrame, JoinHow
-from ..expr import Agg, Expr, col
-from ..series import Series
+from .._agg import UdafAgg
+from .._dataframe import DataFrame, JoinHow
+from .._expr import Agg, Expr, col
+from .._series import Series
 from ._workers import _require_workers
 
 if TYPE_CHECKING:
@@ -43,8 +43,6 @@ if TYPE_CHECKING:
     from typing_extensions import ParamSpec
 
     _P = ParamSpec("_P")
-
-__all__ = ["DaskFrame"]
 
 Keys = Union[str, Sequence[str]]
 _Interpolation = Literal["linear", "nearest", "lower", "higher", "midpoint"]

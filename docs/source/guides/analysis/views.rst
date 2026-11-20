@@ -60,7 +60,7 @@ another registered record schema instead of the one detected from them.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          view = TraceViewer("traces/")                 # directory, file, or list of files
          filtered = view.filter('cat == "POSIX" and dur >= 1000')
@@ -180,7 +180,8 @@ while a bare envelope field such as ``dur`` keeps the event's own value:
 
 .. code-block:: python
 
-   from dftracer.utils import TraceViewer, col
+   from dftracer.utils import col
+   from dftracer.utils.trace import TraceViewer
 
    slow = (
        TraceViewer("dist.pfw.gz")

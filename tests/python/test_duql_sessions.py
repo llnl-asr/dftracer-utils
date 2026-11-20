@@ -55,7 +55,7 @@ def test_sessions_match_a_reference(tmp_path, gap, span, text):
     events = _events(7, 5000)
     path = tmp_path / "t.pfw.gz"
     path.write_bytes(gzip.compress(("\n".join(json.dumps(e) for e in events) + "\n").encode()))
-    tv = dftu.TraceViewer(str(path))
+    tv = dftu.trace.TraceViewer(str(path))
     got = (
         tv.duql(
             f"session pid, tid gap {text} | group pid, tid, session {{ n = count(), d = sum(dur) }}"

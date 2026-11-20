@@ -6,8 +6,8 @@ from __future__ import annotations
 import builtins
 from typing import Generic, NamedTuple, TypeVar
 
+from .._enums import DType
 from .._jit_errors import JitError
-from ..enums import DType
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)

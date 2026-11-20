@@ -19,10 +19,10 @@ import re
 from typing import TYPE_CHECKING, cast
 
 from . import dftracer_utils_ext as _ext
+from ._dataframe import DataFrame
+from ._enums import EPOCH_NS, DType, dt_unit, rule_to_units
 from ._eval import Columnar, Source, unwrap_source_columns
-from .dataframe import DataFrame
-from .enums import EPOCH_NS, DType, dt_unit, rule_to_units
-from .expr import (
+from ._expr import (
     CAST_CODES,
     RANK_METHODS,
     Col,
@@ -31,11 +31,11 @@ from .expr import (
     has_column_op,
     split_column_ops,
 )
-from .groupby import GroupBy
-from .series import Series
+from ._groupby import GroupBy
+from ._series import Series
 
 if TYPE_CHECKING:
-    from .lazyframe import LazyFrame, LazyGroupBy
+    from ._lazyframe import LazyFrame, LazyGroupBy
 
 
 def _tokens(op: str) -> tuple[list[str], str]:

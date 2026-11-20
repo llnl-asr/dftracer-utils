@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Callable, List, Literal, Sequence, TypedDict
 if TYPE_CHECKING:
     from dask.distributed import Client
 
+from .._enums import coerce_bytes
 from ..dftracer_utils_ext import (
     INPUT_FILE_PATTERNS,
     build_index_batch,
@@ -25,10 +26,9 @@ from ..dftracer_utils_ext import (
 from ..dftracer_utils_ext import Index as _Index
 from ..dftracer_utils_ext import plan_lpt_partition as _plan_lpt_partition
 from ..dftracer_utils_ext import scan_files as _scan_files
-from ..enums import coerce_bytes
 from ..index import AggregationConfig, Indexer
+from ._progress import ProgressAggregator, worker_progress_forwarder
 from ._workers import _require_workers
-from .progress import ProgressAggregator, worker_progress_forwarder
 
 
 class DistributedIndexResult(TypedDict):
@@ -155,7 +155,7 @@ def distributed_index(
 
     Args:
         files: A trace file, a directory scanned for trace files, or a list of
-            file paths, as for :class:`~dftracer.utils.Indexer`.
+            file paths, as for :class:`~dftracer.utils.index.Indexer`.
         index_dir: Target .dftindex path (coordinator-writable).
         client: Dask distributed Client. None -> run tasks inline.
         partition: "lpt" (greedy longest-processing-time bin-pack) or

@@ -61,6 +61,7 @@ from .plugins import PluginHandle, load_plugin  # noqa: F401
 from .runtime import Runtime, TaskHandle, get_default_runtime, peek_default_runtime  # noqa: F401
 from .series import Series  # noqa: F401
 from .store import Store  # noqa: F401
+from .table import TableWriter, read_table, write_table  # noqa: F401
 from .trace import (  # noqa: F401
     Containment,
     IndexRecords,
@@ -112,6 +113,9 @@ __all__ = [
     "Store",
     "TraceViewer",
     "TraceWriter",
+    "TableWriter",
+    "read_table",
+    "write_table",
     "LiveFileStatus",
     "LiveTraceViewer",
     "Containment",

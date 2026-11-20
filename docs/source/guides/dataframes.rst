@@ -38,6 +38,12 @@ The columnar engine behind every result: build, compute, join and reshape column
 
       Import from and export to pandas, polars, Arrow and NumPy.
 
+   .. grid-item-card:: Save a frame as a table file
+      :link: data/save-tables
+      :link-type: doc
+
+      Store a pandas frame as a typed JSON-lines file and read it back.
+
    .. grid-item-card:: Compute and reshape columns
       :link: core/columnar-ops
       :link-type: doc
@@ -76,6 +82,7 @@ The columnar engine behind every result: build, compute, join and reshape column
    data/series
    data/pandas-polars
    data/ingest
+   data/save-tables
    core/columnar-ops
    data/joins
    data/time-windows

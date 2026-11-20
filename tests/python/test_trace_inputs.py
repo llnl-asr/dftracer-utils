@@ -290,7 +290,7 @@ class TestEveryInputForm:
             if make is _indexer:
                 assert _listed([notes], idx) == [notes]
             else:
-                with pytest.raises(dftu.DFTUtilsIOError):
+                with pytest.raises(dftu.errors.DFTUtilsIOError):
                     _viewer(notes, idx).lazy().collect()
 
 

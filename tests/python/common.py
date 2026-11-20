@@ -107,6 +107,14 @@ VALGRIND_ROUNDS_TIES_TO_EVEN = bool(
 ) and platform.machine() in ("aarch64", "arm64")
 
 
+def valgrind_io_threads(n: int) -> int:
+    """The I/O threads of a runtime asked for ``n``: Valgrind builds cap the I/O
+    pool at 2 (``ThreadPoolExecutor``)."""
+    if os.environ.get("DFTRACER_UTILS_VALGRIND"):
+        return min(n, 2)
+    return n
+
+
 def valgrind_scale(n: int, divisor: int = 10) -> int:
     """Return n/divisor when running under Valgrind, else n."""
     if os.environ.get("DFTRACER_UTILS_VALGRIND"):

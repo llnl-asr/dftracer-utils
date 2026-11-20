@@ -188,17 +188,19 @@ inline bool string_ranks(const dftu_series* v,
     return true;
 }
 
-/// Stable row order by `ranks` (-1 sorts last in both directions): one
-/// histogram pass and one placement pass.
-inline void counting_order(const dstd::Vector<std::int32_t>& ranks,
+/// Stable row order by `ranks` (-1 is a null, which sorts last in both
+/// directions, or first when `nulls_last` is false): one histogram pass and
+/// one placement pass.
+inline void counting_order(dstd::Span<const std::int32_t> ranks,
                            std::int32_t nranks, bool descending,
-                           std::int64_t* order) {
+                           std::int64_t* order, bool nulls_last = true) {
     const auto k = static_cast<std::size_t>(nranks);
     dstd::Vector<std::int64_t> start(k + 2, 0);
+    const std::size_t shift = nulls_last ? 0 : 1;
     auto bucket = [&](std::int32_t r) -> std::size_t {
-        return r < 0
-                   ? k
-                   : static_cast<std::size_t>(descending ? nranks - 1 - r : r);
+        if (r < 0) return nulls_last ? k : 0;
+        return shift +
+               static_cast<std::size_t>(descending ? nranks - 1 - r : r);
     };
     for (std::int32_t r : ranks) ++start[bucket(r) + 1];
     for (std::size_t b = 1; b < start.size(); ++b) start[b] += start[b - 1];

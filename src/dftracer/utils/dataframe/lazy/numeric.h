@@ -16,16 +16,18 @@ enum class NumClass { Signed, Unsigned, Float };
 // it once after its row loop and fails with @ref error, so the loop itself
 // carries no result.
 struct WindowOverflow {
-    const char* func = nullptr;
-    const char* type = nullptr;
+    dstd::StringView func;
+    dstd::StringView type;
+    bool is_set = false;
 
-    void set(const char* f, const char* t) noexcept {
-        if (!func) {
+    void set(dstd::StringView f, dstd::StringView t) noexcept {
+        if (!is_set) {
+            is_set = true;
             func = f;
             type = t;
         }
     }
-    bool hit() const noexcept { return func != nullptr; }
+    bool hit() const noexcept { return is_set; }
     dstd::Unexpected<dstd::Error> error() const {
         return common::make_error(common::ErrorCode::InvalidArgument,
                                   steps::overflow_message(func, type));
@@ -136,8 +138,8 @@ inline NumCells read_cells(const Series& col) {
 
 // A column of 64-bit patterns of class `cls`, narrowed or widened to the type
 // the plan declares, with a null where `ok` is zero.
-inline Series make_numeric(const dstd::Vector<std::uint64_t>& bits,
-                           const dstd::Vector<std::uint8_t>& ok, NumClass cls,
+inline Series make_numeric(dstd::Span<const std::uint64_t> bits,
+                           dstd::Span<const std::uint8_t> ok, NumClass cls,
                            TypeId out) {
     const auto n = static_cast<std::int64_t>(bits.size());
     bool any_null = false;

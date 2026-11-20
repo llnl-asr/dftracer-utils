@@ -14,7 +14,7 @@ namespace {
 using yaml::Document;
 using yaml::Value;
 
-dstd::Result<void> overlay_field(const Value& selector, const char* field,
+dstd::Result<void> overlay_field(const Value& selector, dstd::StringView field,
                                  dstd::StringView component,
                                  dstd::StringView path, dstd::String& out) {
     const auto node = selector.find(field);
@@ -28,7 +28,7 @@ dstd::Result<void> overlay_field(const Value& selector, const char* field,
     return {};
 }
 
-dstd::Result<void> overlay_selector(const Value& root, const char* key,
+dstd::Result<void> overlay_selector(const Value& root, dstd::StringView key,
                                     dstd::StringView path, EventSelector& sel) {
     const auto node = root.find(key);
     if (!node || !node->is_object()) return {};

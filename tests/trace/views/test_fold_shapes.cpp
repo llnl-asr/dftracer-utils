@@ -113,7 +113,7 @@ TEST_SUITE("FoldShapes") {
             CAPTURE(pinned.line);
             StringIntern intern;
             FoldEvent ev;
-            REQUIRE(read_dom_captures(pinned.line, ev, intern, true, names));
+            REQUIRE(read_dom_captures(pinned.line, ev, intern, true, &names));
             CHECK(describe(ev, intern) == pinned.expected);
         }
     }

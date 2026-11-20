@@ -17,14 +17,15 @@ using StringView = std::string_view;
 
 }  // namespace dftracer::utils::dstd
 
-/// libstdc++ before 13 hashes only a std::string with std::allocator (LWG
-/// 3705). The value matches std::hash<std::string> for the same text.
+/// @cond INTERNAL
+// libstdc++ before 13 hashes only a std::string with std::allocator (LWG
+// 3705). The value matches std::hash<std::string> for the same text.
 template <>
 struct std::hash<dftracer::utils::dstd::String> {
-    std::size_t operator()(
-        const dftracer::utils::dstd::String& s) const noexcept {
+    std::size_t operator()(dftracer::utils::dstd::StringView s) const noexcept {
         return std::hash<std::string_view>{}(s);
     }
 };
+/// @endcond
 
 #endif  // DFTRACER_UTILS_DSTD_STRING_H

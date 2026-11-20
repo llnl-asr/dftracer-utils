@@ -30,8 +30,7 @@ void append_number(double v, dstd::String& out) {
     }
 }
 
-int col_index(const dstd::Vector<dstd::String>& cols,
-              const dstd::String& name) {
+int col_index(dstd::Span<const dstd::String> cols, dstd::StringView name) {
     for (std::size_t i = 0; i < cols.size(); ++i)
         if (cols[i] == name) return static_cast<int>(i);
     return -1;
@@ -39,12 +38,12 @@ int col_index(const dstd::Vector<dstd::String>& cols,
 
 }  // namespace
 
-dstd::String counter_line(
-    const dstd::Vector<dstd::String>& group_cols,
-    const dstd::Vector<dstd::Optional<dstd::String>>& keys,
-    const dstd::Vector<dstd::String>& value_cols,
-    const dstd::Vector<double>& values, const dstd::String& entity_col,
-    const dstd::String& lane_col) {
+dstd::String counter_line(dstd::Span<const dstd::String> group_cols,
+                          dstd::Span<const dstd::Optional<dstd::String>> keys,
+                          dstd::Span<const dstd::String> value_cols,
+                          dstd::Span<const double> values,
+                          dstd::StringView entity_col,
+                          dstd::StringView lane_col) {
     const int i_bucket = col_index(group_cols, "time_bucket");
     const int i_name = col_index(group_cols, "name");
     const int i_cat = col_index(group_cols, "cat");

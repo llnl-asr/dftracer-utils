@@ -12,7 +12,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-dstd::StringView text_of(const dstd::String& value) {
+dstd::StringView text_of(dstd::StringView value) {
     return dstd::StringView(value);
 }
 

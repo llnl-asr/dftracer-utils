@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/yaml/line_index.h>
 
 #include <cstddef>
@@ -59,11 +60,12 @@ std::uint64_t Bits64(D d, M m0, M m1, M m2, M m3) {
         hwy::HWY_NAMESPACE::Repartition<std::uint64_t, D>(), s3));
 }
 
-std::size_t CountNewlines(const char* text, std::size_t size) {
+std::size_t CountNewlines(dstd::StringView text) {
+    const std::size_t size = text.size();
     const Tag d;
     const std::size_t n = hwy::HWY_NAMESPACE::Lanes(d);
     const auto lf = hwy::HWY_NAMESPACE::Set(d, '\n');
-    const auto* p = reinterpret_cast<const std::uint8_t*>(text);
+    const auto* p = reinterpret_cast<const std::uint8_t*>(text.data());
     std::size_t total = 0;
     std::size_t i = 0;
     for (; i + n <= size; i += n)
@@ -94,8 +96,8 @@ constexpr std::uint8_t RARE_BITS = 0xE0;
 // compares: the structure of the first stage of simdjson (as above). The
 // special, control and high masks are rare, so a block makes each only when
 // one of its bytes is of that class.
-void LineMasks(const char* text, std::size_t block_count,
-               const MaskArrays& out) {
+void LineMasks(dstd::StringView text, const MaskArrays& out) {
+    const std::size_t block_count = text.size() / 64;
     const Tag d;
     const std::size_t n = hwy::HWY_NAMESPACE::Lanes(d);
     const auto lf = hwy::HWY_NAMESPACE::Set(d, '\n');
@@ -118,7 +120,7 @@ void LineMasks(const char* text, std::size_t block_count,
         return !hwy::HWY_NAMESPACE::AllTrue(
             d, hwy::HWY_NAMESPACE::Eq(x, hwy::HWY_NAMESPACE::Zero(d)));
     };
-    const auto* p = reinterpret_cast<const std::uint8_t*>(text);
+    const auto* p = reinterpret_cast<const std::uint8_t*>(text.data());
     for (std::size_t b = 0; b < block_count; ++b) {
         const std::uint8_t* q = p + b * 64;
         std::uint64_t nlm = 0;
@@ -216,13 +218,12 @@ namespace dftracer::utils::yaml::detail {
 HWY_EXPORT(CountNewlines);
 HWY_EXPORT(LineMasks);
 
-std::size_t count_newlines(const char* text, std::size_t size) {
-    return HWY_DYNAMIC_DISPATCH(CountNewlines)(text, size);
+std::size_t count_newlines(dstd::StringView text) {
+    return HWY_DYNAMIC_DISPATCH(CountNewlines)(text);
 }
 
-void line_masks(const char* text, std::size_t block_count,
-                const MaskArrays& out) {
-    HWY_DYNAMIC_DISPATCH(LineMasks)(text, block_count, out);
+void line_masks(dstd::StringView text, const MaskArrays& out) {
+    HWY_DYNAMIC_DISPATCH(LineMasks)(text, out);
 }
 
 void set_scalar_line_masks_for_test(bool scalar) {

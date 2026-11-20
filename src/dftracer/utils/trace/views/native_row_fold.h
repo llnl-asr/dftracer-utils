@@ -93,7 +93,7 @@ dataframe::Series interned_column(
 /// collect and the streaming chunk builder.
 dataframe::DataFrame build_row_frame(
     EventRows events, const dftracer::utils::dstd::StringIntern& intern,
-    const dstd::Vector<dstd::String>& select, double time_scale = 1.0,
+    dstd::Span<const dstd::String> select, double time_scale = 1.0,
     bool by_path = false);
 
 /// The per-batch auto-numeric dyn value columns for `events`: one Float64
@@ -107,7 +107,7 @@ dataframe::DataFrame build_row_frame(
 dstd::Vector<dstd::Pair<dstd::String, dataframe::Series>>
 build_dyn_numeric_columns(EventRows events,
                           const dftracer::utils::dstd::StringIntern& intern,
-                          const dstd::Vector<dstd::String>& select);
+                          dstd::Span<const dstd::String> select);
 
 /// The non-scalar fields a `select` needs the scan to capture: nested paths and
 /// non-POD top-level fields the scan does not carry by default (args, nested
@@ -116,13 +116,13 @@ build_dyn_numeric_columns(EventRows events,
 /// returns this from extra_captures() so build_row_frame's select branch can
 /// resolve those fields.
 dstd::Vector<dstd::String> row_fold_extra_captures(
-    const dstd::Vector<dstd::String>& select);
+    dstd::Span<const dstd::String> select);
 
 /// True when every column of a non-empty `select` comes from the event's own
 /// scalar fields (name, cat, pid, tid, ts, dur, ph, fhash, hhash, io_cat,
 /// acc_pat), so the scan can skip decoding args. An empty `select` emits
 /// every arg column and is never arg free.
-bool row_select_is_arg_free(const dstd::Vector<dstd::String>& select);
+bool row_select_is_arg_free(dstd::Span<const dstd::String> select);
 
 /// True when a query field `f` reads only the event's own scalar fields (name,
 /// cat, pid, tid, ts, dur, ph, fhash, hhash). Any other name is read from args.
@@ -177,7 +177,7 @@ RowKeySource row_key_source(dstd::StringView sel, bool by_path = false);
 /// `select` projects a subset (top-level names or arg keys, bare or
 /// "args."-prefixed), and an empty
 /// `select` emits every column (the union of all args seen, null-filled where
-/// an event lacks a key). ph="M" metadata is skipped unless `keep_metadata` is
+/// an event lacks a key). ph=4 metadata is skipped unless `keep_metadata` is
 /// set (phase("metadata")), which emits the records as rows with their args
 /// flattened like any event's.
 ///
@@ -244,7 +244,7 @@ class NativeRowFold : public Fold {
     const dftracer::utils::dstd::StringIntern* intern_;
     dstd::Vector<dstd::String> select_;  // empty = every column
     double time_scale_;                  // ts/dur multiplier (1.0 = none)
-    bool keep_metadata_;                 // phase("metadata"): keep ph=M records
+    bool keep_metadata_;                 // phase("metadata"): keep ph=4 records
     bool by_path_;
     dstd::Vector<FoldEvent> events_;
 };

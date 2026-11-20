@@ -89,7 +89,7 @@ dstd::String format_count(std::uint64_t count) {
 }
 
 dstd::String format_range(std::uint64_t lo, std::uint64_t hi,
-                          const dstd::String& unit) {
+                          dstd::StringView unit) {
     if (lo == hi && lo == 0) return dstd::fmt<"0 {}">(unit);
     return dstd::fmt<"[{}, {}) {}">(format_count(lo), format_count(hi), unit);
 }
@@ -101,7 +101,7 @@ dstd::String pad_right(dstd::String s, std::size_t width) {
 }  // namespace
 
 dstd::String Log2Histogram::render_ascii(std::size_t max_width,
-                                         const dstd::String& unit) const {
+                                         dstd::StringView unit) const {
     if (total_count_ == 0) return "    (no data)\n";
 
     // Find max count for scaling
@@ -135,8 +135,8 @@ dstd::String Log2Histogram::render_ascii(std::size_t max_width,
 }
 
 dstd::String Log2Histogram::render_blocks(std::size_t max_width,
-                                          const dstd::String& unit,
-                                          const dstd::String& indent) const {
+                                          dstd::StringView unit,
+                                          dstd::StringView indent) const {
     if (total_count_ == 0) return dstd::fmt<"{}(no data)\n">(indent);
 
     // Unicode block elements: 8 levels from thinnest to fullest
@@ -244,7 +244,7 @@ dstd::String Log2Histogram::to_json_detailed() const {
     return ss;
 }
 
-Log2Histogram Log2Histogram::from_json(const dstd::String& json) {
+Log2Histogram Log2Histogram::from_json(dstd::StringView json) {
     Log2Histogram hist;
 
     simdjson::dom::parser parser;

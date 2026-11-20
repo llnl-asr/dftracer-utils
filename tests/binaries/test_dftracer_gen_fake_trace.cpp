@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -25,8 +27,7 @@ dstd::String find_gen_fake_trace_binary() {
         "DFTRACER_UTILS_GEN_FAKE_TRACE_PATH", "dftracer_gen_fake_trace");
 }
 
-int run_gen_fake_trace(const dstd::String& binary,
-                       const dstd::Vector<dstd::String>& args) {
+int run_gen_fake_trace(dstd::String binary, dstd::Vector<dstd::String> args) {
     return dftu_utils_test::run_process(binary, args);
 }
 

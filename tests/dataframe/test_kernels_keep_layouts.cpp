@@ -15,6 +15,7 @@
 #include <dftracer/utils/dataframe/mask.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -24,6 +25,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -104,7 +106,7 @@ Rows pick(const Rows& rows, const Idx& idx) {
     return r;
 }
 
-Series mask_of(const dstd::Vector<bool>& v) {
+Series mask_of(dstd::Span<const std::uint8_t> v) {
     dstd::Vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
         if (v[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
@@ -234,12 +236,12 @@ const Pred INT_PREDS[] = {
 const dftu_cmp_op CMP_OPS[] = {DFTU_CMP_EQ, DFTU_CMP_NE, DFTU_CMP_LT,
                                DFTU_CMP_LE, DFTU_CMP_GT, DFTU_CMP_GE};
 
-Series run(StrFn fn, const Series& col, const char* arg) {
+Series run(StrFn fn, const Series& col, dstd::CStringView arg) {
     return Series{
-        fn(col.handle(), arg, static_cast<std::int32_t>(std::strlen(arg)))};
+        fn(col.handle(), arg.c_str(), static_cast<std::int32_t>(arg.size()))};
 }
 
-Series cmp_str(const Series& col, dftu_cmp_op op, const dstd::String& lit) {
+Series cmp_str(const Series& col, dftu_cmp_op op, dstd::StringView lit) {
     dftu_scalar rhs{};
     rhs.kind = DFTU_SCALAR_TAG_STR;
     rhs.len = static_cast<std::uint32_t>(lit.size());
@@ -247,7 +249,7 @@ Series cmp_str(const Series& col, dftu_cmp_op op, const dstd::String& lit) {
     return Series{dftu_series_compare(col.handle(), op, rhs)};
 }
 
-dstd::String in_truth(const Series& col, const dstd::String& query) {
+dstd::String in_truth(const Series& col, dstd::StringView query) {
     DataFrame f;
     f.names = dstd::make_shared_strings({"name"});
     f.columns.push_back(col.share());
@@ -265,7 +267,7 @@ TEST_SUITE("kernels keep layouts") {
         for (int i = 0; i < 1000; ++i)
             cats.push_back(i % 3 == 0 ? "read" : i % 3 == 1 ? "write" : "open");
         dstd::Vector<std::int64_t> ids;
-        dstd::Vector<bool> keep;
+        dstd::Vector<std::uint8_t> keep;
         for (int i = 0; i < 1000; ++i) {
             ids.push_back(i);
             keep.push_back(i % 10 == 3);
@@ -311,7 +313,7 @@ TEST_SUITE("kernels keep layouts") {
             check_layout(c, ts);
             CHECK(rows_of(ts) == pick(c.rows, tl));
 
-            dstd::Vector<bool> keep;
+            dstd::Vector<std::uint8_t> keep;
             Idx kept;
             for (std::int64_t i = 0; i < n; ++i) {
                 keep.push_back(i % 4 == 1);
@@ -392,7 +394,7 @@ TEST_SUITE("kernels keep layouts") {
             df.columns.push_back(Series::flat_i64(key.data(), 120));
             return df;
         };
-        dstd::Vector<bool> keep;
+        dstd::Vector<std::uint8_t> keep;
         for (int i = 0; i < 120; ++i) keep.push_back(i % 5 == 0);
         for (const Case& c : cases()) {
             if (c.kind == Kind::Flat || c.kind == Kind::SelFlat) continue;
@@ -409,11 +411,18 @@ TEST_SUITE("kernels keep layouts") {
             same(df.head(10), flat.head(10));
             same(df.tail(10), flat.tail(10));
             same(df.slice(20, 30), flat.slice(20, 30));
-            same(df.take({3, -1, 3, 80}), flat.take({3, -1, 3, 80}));
+            same(
+                df.take(dftu_utils_test::span_of<std::int64_t>({3, -1, 3, 80})),
+                flat.take(
+                    dftu_utils_test::span_of<std::int64_t>({3, -1, 3, 80})));
             same(dftu_utils_test::ok(df.sort_by("id")),
                  dftu_utils_test::ok(flat.sort_by("id")));
-            same(dftu_utils_test::ok(df.sort_by_multi({"key", "id"}, true)),
-                 dftu_utils_test::ok(flat.sort_by_multi({"key", "id"}, true)));
+            same(dftu_utils_test::ok(df.sort_by_multi(
+                     dftu_utils_test::span_of<dstd::String>({"key", "id"}),
+                     true)),
+                 dftu_utils_test::ok(flat.sort_by_multi(
+                     dftu_utils_test::span_of<dstd::String>({"key", "id"}),
+                     true)));
 
             DataFrame right;
             right.names = dstd::make_shared_strings({"key", "w"});
@@ -421,9 +430,12 @@ TEST_SUITE("kernels keep layouts") {
             right.columns.push_back(Series::flat_i64(rk.data(), 4));
             right.columns.push_back(Series::flat_i64(rw.data(), 4));
             for (JoinHow how : {JoinHow::Inner, JoinHow::Left}) {
-                DataFrame j = dftu_utils_test::ok(df.join(right, {"key"}, how));
-                DataFrame jf =
-                    dftu_utils_test::ok(flat.join(right, {"key"}, how));
+                DataFrame j = dftu_utils_test::ok(df.join(
+                    right, dftu_utils_test::span_of<dstd::String>({"key"}),
+                    how));
+                DataFrame jf = dftu_utils_test::ok(flat.join(
+                    right, dftu_utils_test::span_of<dstd::String>({"key"}),
+                    how));
                 REQUIRE(j.num_rows() == jf.num_rows());
                 CHECK(rows_of(j.columns[0]) == rows_of(jf.columns[0]));
                 check_layout(c, j.columns[0]);
@@ -614,7 +626,7 @@ dstd::Vector<dstd::String> int_cells(const DataFrame& df) {
 }
 
 dstd::Vector<AggSpec> scale_specs() {
-    auto s = [](AggOp op, std::int32_t col, const char* out) {
+    auto s = [](AggOp op, std::int32_t col, dstd::StringView out) {
         AggSpec sp;
         sp.op = op;
         sp.value_col = col;
@@ -635,8 +647,10 @@ void scale_case(bool long_keys) {
     const Series c = Series::flat_i64(f.c.data(), SCALE_ROWS);
     const dstd::Vector<const Series*> values{&a, &b, &c};
     const auto names = dstd::Vector<dstd::String>{"k"};
-    const DataFrame want =
-        dftu_utils_test::ok(group_agg({&flat}, values, scale_specs(), names));
+    const DataFrame want = dftu_utils_test::ok(group_agg(
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&flat}),
+        values, scale_specs(), names));
     REQUIRE(want.num_rows() > 2048);
     ViewBuilder vb;
     vb.append_column(*flat.handle());
@@ -645,8 +659,10 @@ void scale_case(bool long_keys) {
     REQUIRE(view.encoding() == Encoding::View);
     REQUIRE(dict.encoding() == Encoding::Dictionary);
     for (const Series* key : {&view, &dict}) {
-        const DataFrame got =
-            dftu_utils_test::ok(group_agg({key}, values, scale_specs(), names));
+        const DataFrame got = dftu_utils_test::ok(group_agg(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {key}),
+            values, scale_specs(), names));
         CHECK(int_cells(got) == int_cells(want));
     }
 }
@@ -786,11 +802,18 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
                 const Idx one = expected(k.rows, desc, false);
                 CHECK(ids_of(dftu_utils_test::ok(df.sort_by("s", desc))
                                  .columns[1]) == one);
-                CHECK(ids_of(dftu_utils_test::ok(df.sort_by_multi({"s"}, desc))
-                                 .columns[1]) == one);
+                CHECK(ids_of(
+                          dftu_utils_test::ok(
+                              df.sort_by_multi(
+                                  dftu_utils_test::span_of<dstd::String>({"s"}),
+                                  desc))
+                              .columns[1]) == one);
                 CHECK(ids_of(k.col.argsort(desc)) == one);
                 CHECK(ids_of(dftu_utils_test::ok(
-                                 df.sort_by_multi({"s", "o"}, desc))
+                                 df.sort_by_multi(
+                                     dftu_utils_test::span_of<dstd::String>(
+                                         {"s", "o"}),
+                                     desc))
                                  .columns[1]) == expected(k.rows, desc, true));
             }
         }

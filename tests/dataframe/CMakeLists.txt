@@ -3,7 +3,7 @@
 # DataFrame Library Tests
 # ##############################################################################
 
-set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
+set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_series_math_bitwise.cpp test_methods.cpp
                            test_types_compute.cpp test_large_types_compute.cpp
                            test_types_matrix.cpp test_types_tail.cpp
                            test_types_lazy.cpp
@@ -12,15 +12,15 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_lazyframe.cpp test_join.cpp test_concat.cpp test_lazy_frame_ops.cpp
                            test_lazyframe_abi.cpp test_drop_rename_by_name.cpp test_lazy_ops.cpp test_lazy_plan.cpp test_source_hooks.cpp test_spill.cpp test_native_frame.cpp test_native_frame_alignment.cpp test_join_spill.cpp test_agg_state.cpp
                            test_agg_extended_ops.cpp test_sketch_quantile.cpp
-                           test_expr_string.cpp test_expr_string_ops.cpp test_expr_duql.cpp
+                           test_expr_string.cpp test_expr_string_ops.cpp test_expr_duql.cpp test_filter_duql.cpp
                            test_expr_infer_type.cpp
                            test_type_parameter_propagation.cpp
                            test_lazyframe_output_schema.cpp
                            test_node_registry.cpp
                            test_morsel_ordering.cpp
-                           test_order.cpp test_frame_window.cpp test_output_morsels.cpp
+                           test_order.cpp test_sort_nulls.cpp test_value_ids_parallel.cpp test_frame_window.cpp test_output_morsels.cpp
                            test_frame_gap_fill.cpp test_frame_asof.cpp test_lazy_asof_interval.cpp
-                           test_frame_ops.cpp test_reduce_types.cpp
+                           test_frame_ops.cpp test_frame_index.cpp test_series_index.cpp test_label_lookup.cpp test_reindex.cpp test_reduce_types.cpp
                            test_count_nulls.cpp test_set_union.cpp test_cast_pairs.cpp
                            test_filter_columns.cpp test_rank_pct.cpp test_rank_nan.cpp test_cut_flags.cpp test_fillna_bool_string.cpp test_cast_followups.cpp
                            test_where_null.cpp test_constant_column.cpp
@@ -29,6 +29,7 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_join_null_keys.cpp test_join_contract.cpp
                            test_concat_large_string.cpp
                            test_groupby_scale.cpp
+                           test_float_keys.cpp
                            test_string_simd.cpp test_string_match.cpp test_expr_string_methods.cpp
                            test_concat_text.cpp test_struct_concat_by_name.cpp
                            test_rest_column.cpp
@@ -37,6 +38,7 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_groupby_string_encodings.cpp
                            test_kernels_keep_layouts.cpp
                            test_parallel_region.cpp
+                           test_shared_series_threads.cpp
                            test_collect_concat.cpp
                            test_slice_views.cpp
                            test_chunked_columns.cpp
@@ -48,9 +50,10 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_governor.cpp
                            test_ddsketch.cpp test_distinct_sketch.cpp
                            test_field_stat.cpp test_log2_histogram.cpp
-                           test_validate.cpp
+                           test_validate.cpp test_reader_probe.cpp
                            test_plugin_frame.cpp test_udf_adapter.cpp
-                           test_timestamp_histogram.cpp)
+                           test_timestamp_histogram.cpp test_tz.cpp
+                           test_tz_kernels.cpp)
 
 foreach(test_file ${DATAFRAME_TEST_SOURCES})
   string(REPLACE ".cpp" "" bin_exec ${test_file})
@@ -91,6 +94,11 @@ foreach(test_file ${DATAFRAME_TEST_SOURCES})
   add_test(NAME dataframe/${bin_exec} COMMAND ${target_name})
   set_tests_properties(dataframe/${bin_exec} PROPERTIES
                        WORKING_DIRECTORY "${test_working_directory}")
+  if(bin_exec STREQUAL "test_tz" OR bin_exec STREQUAL "test_tz_kernels")
+    target_compile_definitions(
+      ${target_name} PRIVATE
+      DFTRACER_UTILS_TZ_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/tz")
+  endif()
   # 1.2M rows folded per case on every thread count, which is slower still
   # under coverage.
   if(bin_exec STREQUAL "test_groupby_scale")

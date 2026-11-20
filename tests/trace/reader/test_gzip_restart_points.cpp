@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
@@ -39,7 +40,7 @@ dstd::String hex_lines(std::size_t bytes, std::uint32_t seed) {
     return s;
 }
 
-dstd::Vector<std::uint8_t> gzip(const dstd::String& text) {
+dstd::Vector<std::uint8_t> gzip(dstd::StringView text) {
     fileio::compress::GzipMemberCompressor c;
     dstd::Vector<std::uint8_t> out(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), out.data(), out.size());
@@ -54,7 +55,7 @@ struct Fixture {
     dstd::String index_path;
     dstd::SharedPtr<trace::index::gzip::GzipIndexer> indexer;
 
-    explicit Fixture(const dstd::Vector<std::uint8_t>& bytes) {
+    explicit Fixture(dstd::Span<const std::uint8_t> bytes) {
         char tmpl[] = "/tmp/dftu_restart_XXXXXX";
         REQUIRE(::mkdtemp(tmpl) != nullptr);
         dir = tmpl;
@@ -106,7 +107,7 @@ struct Fixture {
 };
 
 void check_pieces_cover(
-    const dstd::Vector<trace::index::gzip::GzipMemberRecord>& pieces,
+    dstd::Span<const trace::index::gzip::GzipMemberRecord> pieces,
     std::size_t total) {
     std::uint64_t uc = 0;
     for (const auto& p : pieces) {
@@ -116,7 +117,7 @@ void check_pieces_cover(
     CHECK(uc == total);
 }
 
-void check_reads_from_every_piece(Fixture& fx, const dstd::String& text) {
+void check_reads_from_every_piece(Fixture& fx, dstd::StringView text) {
     for (const auto& p : fx.indexer->members()) {
         CAPTURE(p.member_idx);
         CHECK(fx.read_from(p.uc_offset) == text.substr(p.uc_offset));

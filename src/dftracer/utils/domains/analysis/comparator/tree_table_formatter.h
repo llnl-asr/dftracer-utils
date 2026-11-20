@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_DOMAINS_ANALYSIS_COMPARATOR_TREE_TABLE_FORMATTER_H
 
 #include <dftracer/utils/domains/analysis/comparator/comparison_result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -64,29 +65,27 @@ class TreeTableFormatter {
     const char* color_dim() const;
     const char* color_reset() const;
 
-    dstd::String format_value(double value, const dstd::String& metric) const;
-    dstd::String format_delta(double delta, const dstd::String& metric) const;
+    dstd::String format_value(double value, dstd::StringView metric) const;
+    dstd::String format_delta(double delta, dstd::StringView metric) const;
     dstd::String format_pct(double pct) const;
     dstd::String format_significance(Significance sig) const;
     dstd::String format_val_str(const MetricComparison& mc, bool is_base) const;
 
-    void measure_metrics_tree(const dstd::Vector<MetricComparison>& metrics,
-                              const dstd::String& prefix,
-                              ColumnWidths& cw) const;
-    void measure_node(const NodeResult& node, const dstd::String& prefix,
+    void measure_metrics_tree(dstd::Span<const MetricComparison> metrics,
+                              dstd::StringView prefix, ColumnWidths& cw) const;
+    void measure_node(const NodeResult& node, dstd::StringView prefix,
                       bool is_last, bool is_top_level, ColumnWidths& cw) const;
 
     void render_leaf(std::FILE* out, const MetricComparison& mc,
-                     const dstd::String& leaf_prefix,
-                     const dstd::String& leaf_name,
+                     dstd::StringView leaf_prefix, dstd::StringView leaf_name,
                      const ColumnWidths& cw) const;
     void render_metrics_tree(std::FILE* out,
-                             const dstd::Vector<MetricComparison>& metrics,
-                             const dstd::String& prefix, bool is_last_section,
+                             dstd::Span<const MetricComparison> metrics,
+                             dstd::StringView prefix, bool is_last_section,
                              const ColumnWidths& cw) const;
     void render_node(std::FILE* out, const NodeResult& node,
-                     const dstd::String& prefix, bool is_last,
-                     bool is_top_level, const ColumnWidths& cw) const;
+                     dstd::StringView prefix, bool is_last, bool is_top_level,
+                     const ColumnWidths& cw) const;
 };
 
 }  // namespace dftracer::utils::domains::analysis::comparator

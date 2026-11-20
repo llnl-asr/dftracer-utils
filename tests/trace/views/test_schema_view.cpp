@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
@@ -77,7 +78,7 @@ void register_log_schema() {
         "test_schema_view"));
 }
 
-View view_of(const dstd::String& gz) {
+View view_of(dstd::CStringView gz) {
     return View::from_file(
         dstd::String(gz),
         dstd::String(dstd::String(determine_index_path(gz, ""))));
@@ -218,7 +219,8 @@ TEST_SUITE("SchemaView") {
         CHECK(tree["meta.host"].count == 0);
         CHECK(tree["meta.host"].type.empty());
         CHECK(tree["op"].field == "op");
-        CHECK(dstd::String(schema_tree_json({tree["meta.host"]})) ==
+        const SchemaLeaf host_leaf[] = {tree["meta.host"]};
+        CHECK(dstd::String(schema_tree_json(host_leaf)) ==
               R"([{"path":"meta.host","type":null,"count":0,"field":"host",)"
               R"("declared_type":"string"}])");
     }

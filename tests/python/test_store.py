@@ -10,7 +10,6 @@ import sys
 import pytest
 
 import dftracer.utils as dftu_utils
-from dftracer.utils import store_codec
 from dftracer.utils.store import (
     Namespace,
     RawBatch,
@@ -20,6 +19,7 @@ from dftracer.utils.store import (
     decode,
     encode,
 )
+from dftracer.utils.store import codec as store_codec
 
 FILE_A = "/traces/a.pfw"
 FILE_B = "/traces/b.pfw"

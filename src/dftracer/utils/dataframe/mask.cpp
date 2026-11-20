@@ -107,9 +107,10 @@ dstd::Result<Series> compare_mask(const Series& col, CompareOp op,
         return want ? col.share() : negate(col.share());
     }
     if (is_bool(col)) {
+        const Series* const col_ptr = &col;
         return eval(expr_cmp_expr(static_cast<CmpOp>(cmp_code(op)), expr_col(0),
                                   expr_lit_bool(std::get<bool>(v))),
-                    {&col});
+                    dstd::Span<const Series* const>(&col_ptr, 1));
     }
     Series m{dftu_series_compare(col.handle(),
                                  static_cast<dftu_cmp_op>(cmp_code(op)),
@@ -212,8 +213,10 @@ dstd::Result<Series> lower(const duql::detail::QueryNode& node,
                     b, n.field, [&](const Series& c) -> dstd::Result<Series> {
                         if (!is_string(c) || !n.compiled)
                             return unknown(c.length());
-                        dstd::Result<Series> m = eval(
-                            expr_str_pattern(expr_col(0), n.compiled), {&c});
+                        const Series* const c_ptr = &c;
+                        dstd::Result<Series> m =
+                            eval(expr_str_pattern(expr_col(0), n.compiled),
+                                 dstd::Span<const Series* const>(&c_ptr, 1));
                         if (!m) return m.error();
                         return n.negated ? negate(std::move(*m))
                                          : std::move(*m);

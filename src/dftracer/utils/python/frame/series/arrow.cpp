@@ -36,7 +36,7 @@ void array_capsule_destructor(PyObject* cap) {
 }  // namespace
 
 PyObject* Series_arrow_c_array(PyObject* self, PyObject* /*args*/) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     dftracer::utils::dstd::UniquePtr<ArrowSchema> schema;
     dftracer::utils::dstd::UniquePtr<ArrowArray> array;
@@ -44,7 +44,7 @@ PyObject* Series_arrow_c_array(PyObject* self, PyObject* /*args*/) {
     array = dftracer::utils::dstd::make_unique<ArrowArray>();
     auto batch = arrow::to_arrow(*a);
     if (!batch) {
-        PyErr_SetString(PyExc_RuntimeError, batch.error().c_str());
+        dftracer::utils::python::core::set_py_error(batch.error());
         return nullptr;
     }
     batch->release_into(schema.get(), array.get());
@@ -91,20 +91,18 @@ Series import_arrow_column(PyObject* obj) {
         return Series{};
     }
     Series col;
-    try {
+    guard([&] {
         // Batch::adopt takes both structs, so both capsules' destructors become
         // no-ops; the batch releases the schema and the array.
         auto imported =
             arrow::series_from_arrow(arrow::Batch::adopt(schema, array));
         if (!imported) {
-            PyErr_SetString(PyExc_ValueError, imported.error().c_str());
-        } else {
-            col = std::move(*imported);
+            core::set_py_error(imported.error());
+            return false;
         }
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_ValueError, e.what());
-        col = Series{};
-    }
+        col = std::move(*imported);
+        return true;
+    });
     Py_DECREF(capsules);
     return col;
 }
@@ -126,7 +124,7 @@ Series import_arrow_stream(PyObject* obj) {
     Py_DECREF(cap);
     auto imported = arrow::series_from_arrow_stream(moved.get());
     if (!imported) {
-        PyErr_SetString(PyExc_ValueError, imported.error().c_str());
+        core::set_py_error(imported.error());
         return Series{};
     }
     return std::move(*imported);

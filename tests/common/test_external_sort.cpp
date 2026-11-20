@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/external_sort.h>
 #include <dftracer/utils/common/spill_file.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -36,8 +37,8 @@ dstd::Vector<Rec> shuffled(std::size_t n) {
     return v;
 }
 
-dstd::Vector<Rec> sorted_through(const dstd::Vector<Rec>& in,
-                                 std::uint64_t budget, std::size_t* runs) {
+dstd::Vector<Rec> sorted_through(dstd::Span<const Rec> in, std::uint64_t budget,
+                                 std::size_t* runs) {
     dftracer::utils::common::ExternalSorter<Rec, Less> s(Less{}, budget);
     for (const Rec& r : in) REQUIRE(s.add(r).has_value());
     dstd::Vector<Rec> out;

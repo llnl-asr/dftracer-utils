@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -160,8 +161,8 @@ coro::CoroTask<dstd::Result<void>> ReplayEngine::replay_file(
 }
 
 coro::CoroTask<dstd::Result<void>> ReplayEngine::run_pipelined(
-    coro::Scope& scope, const dstd::Vector<dstd::String>& files,
-    ReplayResult& result, std::size_t channel_capacity) {
+    coro::Scope& scope, dstd::Vector<dstd::String> files, ReplayResult& result,
+    std::size_t channel_capacity) {
     admitted_.store(0, std::memory_order_relaxed);
     dstd::Vector<Lane> lanes(files.size());
     coro::Executor* executor = coro::detail::resume_executor_for(nullptr);
@@ -273,8 +274,7 @@ ReplayResult ReplayEngine::replay_file_sync(dstd::StringView trace_file,
     return result;
 }
 
-ReplayResult ReplayEngine::replay(
-    const dstd::Vector<dstd::String>& trace_files) {
+ReplayResult ReplayEngine::replay(dstd::Span<const dstd::String> trace_files) {
     ReplayResult aggregated_result;
 
     admitted_.store(0, std::memory_order_relaxed);

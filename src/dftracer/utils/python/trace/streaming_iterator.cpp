@@ -7,10 +7,10 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/python/core/arrow_batch_capsule.h>
 #include <dftracer/utils/python/core/method.h>
 #include <dftracer/utils/python/frame/dataframe.h>
 #include <dftracer/utils/python/trace/streaming_iterator.h>
-#include <dftracer/utils/python/trace/trace_reader_iterator.h>
 
 namespace dftracer::utils::python::trace {
 
@@ -126,12 +126,9 @@ PyTypeObject ArrowStreamingIteratorType = {
     .tp_new = ArrowStreamingIterator_new,
 };
 
-int init_arrow_streaming_iterator(PyObject* m) {
-    if (register_type(m, &ArrowStreamingIteratorType,
-                      "_ArrowStreamingIterator") < 0)
-        return -1;
-
-    return 0;
+// LazyFrame.stream builds these; the type is not a module attribute.
+int init_arrow_streaming_iterator(PyObject*) {
+    return PyType_Ready(&ArrowStreamingIteratorType);
 }
 
 }  // namespace dftracer::utils::python::trace

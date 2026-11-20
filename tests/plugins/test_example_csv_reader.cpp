@@ -36,7 +36,8 @@ TEST_CASE("rows and order hold across the chunk boundary") {
     REQUIRE(plugins.has_value());
 
     dftu_lazyframe* frame = nullptr;
-    REQUIRE(dftu_lazyframe_scan_file(CSV_READER_CHUNKS_CSV, &frame) == 0);
+    REQUIRE(dftu_lazyframe_scan_file(CSV_READER_CHUNKS_CSV, nullptr, 0,
+                                     &frame) == 0);
     REQUIRE(frame);
     const char* names[2] = {"id", "label"};
     dftu_lazyframe* projected = dftu_lazyframe_select(frame, names, 2);

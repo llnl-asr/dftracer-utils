@@ -33,7 +33,7 @@ def write_trace(directory, name="t.pfw.gz", n=50):
                         "cat": "POSIX",
                         "pid": 1,
                         "tid": 1,
-                        "ph": "X",
+                        "ph": 1,
                         "ts": 1000 + i,
                         "dur": 5,
                         "args": {"fhash": "f", "hhash": "h", "ret": 10},
@@ -50,7 +50,7 @@ def build(files, index_dir):
         index_dir=index_dir,
         aggregation_config=AggregationConfig(time_interval_ms=5000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
 
 @pytest.mark.skipif(
@@ -93,7 +93,7 @@ def test_an_index_built_by_the_released_version_is_reused_or_rebuilt(tmp_path):
         from dftracer.utils import Indexer, AggregationConfig
         with Indexer(files=[{trace!r}], index_dir={index!r},
                      aggregation_config=AggregationConfig(time_interval_ms=5000)) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         """
     )
     subprocess.run([os.environ["DFTRACER_UTILS_TEST_RELEASED_PYTHON"], "-c", script], check=True)
@@ -101,7 +101,7 @@ def test_an_index_built_by_the_released_version_is_reused_or_rebuilt(tmp_path):
     from dftracer.utils import TraceViewer
 
     counted = (
-        TraceViewer([trace], index_path=index).group_by("name").agg("count").collect().to_pandas()
+        TraceViewer([trace], index_dir=index).group_by("name").agg("count").collect().to_pandas()
     )
     assert int(counted["count"].sum()) == 50  # every event once, never twice
 

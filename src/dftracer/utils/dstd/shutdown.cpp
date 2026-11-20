@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/no_destructor.h>
 #include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/detail/manager.h>
 
 #include <algorithm>
@@ -28,8 +29,8 @@ Table& table() {
     return *value;
 }
 
-[[noreturn]] void abort_with(const char* text) {
-    std::fputs(text, stderr);
+[[noreturn]] void abort_with(StringView text) {
+    std::fwrite(text.data(), 1, text.size(), stderr);
     std::abort();
 }
 

@@ -202,6 +202,9 @@ struct ExtentWriterTestHook {
     /// appender meets it when another thread has not installed the next yet.
     static bool seal_in_place(ExtentWriter& writer, std::uint32_t namespace_id);
 
+    /// The bytes of the buffers that the namespace slots hold open now.
+    static std::size_t open_bytes(ExtentWriter& writer);
+
     static std::size_t retired_bytes(ExtentWriter& writer);
 
     static std::size_t retired_extents(ExtentWriter& writer);

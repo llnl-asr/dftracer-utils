@@ -17,6 +17,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -230,8 +231,8 @@ struct SumBuild {
     dstd::Vector<dstd::Vector<VizSummary::ForkEdge>> forks;
     dstd::Vector<dftracer::utils::dstd::StringViewMap<dstd::String>> hh_parts;
 
-    // Per-worker ph="C" counter samples: series key ("name\x1fkey") -> its
-    // family cat + a sparse map of fine-bucket -> {sum, count}. ph="C" is rare,
+    // Per-worker ph=2 counter samples: series key ("name\x1fkey") -> its
+    // family cat + a sparse map of fine-bucket -> {sum, count}. ph=2 is rare,
     // so this stays small; merged after the scan into
     // VizSummary::counter_series.
     struct CtrAccum {
@@ -418,7 +419,7 @@ static void fold_summary(std::size_t w, dstd::StringView event, SumBuild& b) {
             name0 = nr.get_string().value_unsafe();
     }
 
-    // ph="C" counter events carry no dur, so handle them before the dur gate:
+    // ph=2 counter events carry no dur, so handle them before the dur gate:
     // fold each numeric arg into its (name, key) series at this ts's fine
     // bucket. They are neither cells nor I/O counters.
     {
@@ -850,8 +851,7 @@ static coro::CoroTask<dstd::Result<void>> build_viz_summary(TraceIndex& index) {
             .phase(views::Phase::Any)  // every record: cells,
                                        // counters, metadata
             .for_each_batch(
-                [&b](std::size_t w,
-                     const dstd::Vector<dstd::StringView>& events) {
+                [&b](std::size_t w, dstd::Span<const dstd::StringView> events) {
                     b.fields.for_each_event(events, [&](dstd::StringView ev) {
                         fold_summary(w, ev, b);
                     });
@@ -871,7 +871,7 @@ static coro::CoroTask<dstd::Result<void>> build_viz_summary(TraceIndex& index) {
     summary->long_threshold_us = b.enc_threshold_us;
     summary->fine_bucket_us = b.fine_bucket_us;
 
-    // Merge per-worker ph="C" samples by series key into sparse, ascending
+    // Merge per-worker ph=2 samples by series key into sparse, ascending
     // fine-bucket series.
     {
         dstd::HashMap<dstd::String, SumBuild::CtrAccum> merged;
@@ -1010,7 +1010,7 @@ static coro::CoroTask<dstd::Result<void>> build_viz_summary(TraceIndex& index) {
                 }
                 merged.resize(out);
                 nb_fine >>= 2;
-                auto fold = [](const dstd::Vector<double>& src, std::size_t n) {
+                auto fold = [](dstd::Span<const double> src, std::size_t n) {
                     dstd::Vector<double> dst(n, 0.0);
                     for (std::size_t i = 0; i < src.size(); ++i) {
                         std::size_t j = i >> 2;
@@ -1126,9 +1126,9 @@ static coro::CoroTask<dstd::Result<void>> build_viz_summary(TraceIndex& index) {
 
         auto resolve =
             [](dftracer::utils::dstd::StringViewMap<dstd::String>& tbl,
-               const dstd::String& h) -> dstd::String {
+               dstd::StringView h) -> dstd::String {
             auto it = tbl.find(h);
-            return it != tbl.end() ? it->second : h;
+            return it != tbl.end() ? it->second : dstd::String(h);
         };
         dftracer::utils::json::RecordParser sp, ep;
         for (auto& [pid, sjson] : starts) {
@@ -1143,12 +1143,13 @@ static coro::CoroTask<dstd::Result<void>> build_viz_summary(TraceIndex& index) {
             auto se = sr.value_unsafe();
             auto ee = er.value_unsafe();
 
-            auto num = [](simdjson::dom::element r, const char* k) -> double {
+            auto num = [](simdjson::dom::element r,
+                          dstd::StringView k) -> double {
                 auto v = r[k];
                 return v.error() ? 0.0 : json_number(v.value_unsafe());
             };
             auto sarg = [](simdjson::dom::element r,
-                           const char* k) -> dstd::String {
+                           dstd::StringView k) -> dstd::String {
                 auto a = r["args"];
                 if (a.error()) return "";
                 auto v = a[k];
@@ -1156,7 +1157,8 @@ static coro::CoroTask<dstd::Result<void>> build_viz_summary(TraceIndex& index) {
                            ? dstd::String(v.get_string().value_unsafe())
                            : "";
             };
-            auto narg = [](simdjson::dom::element r, const char* k) -> double {
+            auto narg = [](simdjson::dom::element r,
+                           dstd::StringView k) -> double {
                 auto a = r["args"];
                 if (a.error()) return 0.0;
                 auto v = a[k];

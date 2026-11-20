@@ -22,7 +22,7 @@ How the indexer types relate:
 .. mermaid:: /_generated/py_indexer.mmd
 
 .. autoclass:: dftracer.utils.Indexer
-   :members: resolve, build, ensure_indexed, get_checkpoint_indexer, rowset, query_file_pids, query_all_file_pids, query_file_info
+   :members: status, ensure, build, explain, explain_text, summaries, get_checkpoint_indexer, rowset, query_file_pids, query_all_file_pids, query_file_info
    :undoc-members:
    :show-inheritance:
 
@@ -32,7 +32,10 @@ aggregation knobs (``time_interval_ms``, ``group_keys``,
 ``compute_percentiles``, ``group_by_file``) are
 fields of :class:`~dftracer.utils.AggregationConfig`, not direct ``Indexer``
 arguments, and ``aggregation_config=AggregationConfig(...)`` customizes the
-tier. There is no switch that turns it off.
+tier. There is no switch that turns it off. A tier built with the percentile
+sketches also serves a config that differs only by
+``compute_percentiles=False``: the root keeps its sketches, and a changed file
+is rebuilt with them. Any other change to the config rebuilds the tier.
 
 Three arguments steer what the build keeps. ``extensions`` picks the pruning
 extensions from ``"zonemap"``, ``"bloom"``, ``"counts"`` and ``"postings"``
@@ -69,8 +72,9 @@ Exported from ``dftracer.utils``.
 IndexStatus
 -----------
 
-Result of :meth:`~dftracer.utils.Indexer.resolve` /
-:meth:`~dftracer.utils.Indexer.ensure_indexed`. Exported from
+Result of :meth:`~dftracer.utils.Indexer.status`,
+:meth:`~dftracer.utils.Indexer.ensure` and
+:meth:`~dftracer.utils.Indexer.build`. Exported from
 ``dftracer.utils``.
 
 .. autoclass:: dftracer.utils.IndexStatus
@@ -78,10 +82,32 @@ Result of :meth:`~dftracer.utils.Indexer.resolve` /
    :no-index:
    :undoc-members:
 
+Index and hash_value
+--------------------
+
+:class:`~dftracer.utils.Index` reads what an index root stores about a trace.
+:func:`~dftracer.utils.hash_value` is the canonical typed hash the index
+builds its filters with. Both are exported from ``dftracer.utils``; the guide
+:doc:`/guides/core/indexing` shows them in use.
+
+.. autoclass:: dftracer.utils.Index
+   :members:
+   :no-index:
+   :undoc-members:
+
+.. autofunction:: dftracer.utils.hash_value
+   :no-index:
+
+Input Files
+-----------
+
+.. autofunction:: dftracer.utils.discover_trace_files
+
+
 CheckpointIndexer Class
 -----------------------
 
-.. autoclass:: dftracer.utils.CheckpointIndexer(gz_path: str, index_path: str | None = None, checkpoint_size: int = 1048576, force_rebuild: bool = False, build_bloom: bool = False, runtime: Runtime | None = None)
+.. autoclass:: dftracer.utils.CheckpointIndexer(gz_path: str, index_dir: str | None = None, checkpoint_size: int = 1048576, force: bool = False, build_bloom: bool = False, runtime: Runtime | None = None)
    :members:
    :undoc-members:
    :show-inheritance:

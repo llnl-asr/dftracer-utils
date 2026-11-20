@@ -26,7 +26,7 @@ def _write_trace(path: str, n: int) -> None:
         for i in range(n):
             f.write(
                 f'{{"name":"read","cat":"POSIX","pid":{1 + i % 2},"tid":1,'
-                f'"ts":{1000 + i},"dur":{10 + i},"ph":"X","args":{{}}}}\n'
+                f'"ts":{1000 + i},"dur":{10 + i},"ph":1,"args":{{}}}}\n'
             )
 
 
@@ -86,11 +86,11 @@ def test_new_scaffolds_cpp_source(tmp_path):
 
 
 def test_generated_abi_version_header_carries_the_host_version(tmp_path, monkeypatch):
-    from dftracer.utils import _plugin_build
+    from dftracer.utils import _build
     from dftracer.utils.dftracer_utils_ext import PLUGIN_ABI_VERSION
 
     monkeypatch.setenv("DFTRACER_UTILS_JIT_CACHE", str(tmp_path / "cache"))
-    overlay = _plugin_build._ensure_abi_version_header(str(tmp_path / "no_include"))
+    overlay = _build._ensure_abi_version_header(str(tmp_path / "no_include"))
     assert overlay is not None
     text = (
         tmp_path
@@ -180,14 +180,39 @@ def test_plugin_out_of_memory_raises_memory_error(tmp_path):
     ],
 )
 def test_cflags_drop_gnu_unique_only_for_gcc(tmp_path, monkeypatch, banner, wanted):
-    from dftracer.utils import _plugin_build
+    from dftracer.utils import _build
 
     fake = tmp_path / "fake-cxx"
     fake.write_text(f"#!/bin/sh\ncat <<'EOF'\n{banner}\nEOF\n")
     fake.chmod(0o755)
     monkeypatch.setenv("CXX", str(fake))
-    _plugin_build._is_gcc.cache_clear()
+    _build._is_gcc.cache_clear()
     try:
-        assert ("-fno-gnu-unique" in _plugin_build.cflags()) is wanted
+        assert ("-fno-gnu-unique" in _build.cflags()) is wanted
     finally:
-        _plugin_build._is_gcc.cache_clear()
+        _build._is_gcc.cache_clear()
+
+
+@pytest.mark.skipif(not _HAS_CXX, reason="no C++ compiler available")
+def test_threads_building_one_source_all_get_the_library(tmp_path):
+    import threading
+
+    from dftracer.utils import _build
+
+    source = 'extern "C" int answer() { return 42; }\n'
+    paths, errors = [], []
+
+    def build():
+        try:
+            paths.append(_build.compile_source(source, "race", cache=tmp_path, group="g"))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=build) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert len(set(paths)) == 1
+    assert ctypes.CDLL(paths[0]).answer() == 42

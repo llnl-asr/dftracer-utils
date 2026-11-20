@@ -23,7 +23,7 @@ class GzipByteStream : public GzipStream {
 
     using GzipStream::read_async;
 
-    void initialize(const dstd::String &gz_path, std::size_t start_bytes,
+    void initialize(dstd::StringView gz_path, std::size_t start_bytes,
                     std::size_t end_bytes,
                     dftracer::utils::trace::index::gzip::CheckpointIndexer
                         &indexer) override {
@@ -54,10 +54,10 @@ class GzipByteStream : public GzipStream {
             co_return dstd::Span<const char>{};
         }
 
-        size_t max_read = target_end_bytes_ - current_position_;
-        size_t read_size = std::min(buffer_size_, max_read);
+        std::size_t max_read = target_end_bytes_ - current_position_;
+        std::size_t read_size = std::min(buffer_size_, max_read);
 
-        size_t bytes_read;
+        std::size_t bytes_read;
         DFTRACER_UTILS_LOG_DEBUG(
             "GzipByteStream::read (zero-copy) - about to read: read_size={}, "
             "current_position_={}",

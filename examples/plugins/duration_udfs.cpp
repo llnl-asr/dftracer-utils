@@ -38,7 +38,7 @@ bool is_number(dataframe::TypeId type) {
            type == dataframe::TypeId::Float64;
 }
 
-dstd::Unexpected<dstd::Error> refuse(const char* why) {
+dstd::Unexpected<dstd::Error> refuse(dstd::StringView why) {
     return dstd::Unexpected<dstd::Error>(invalid_argument(why));
 }
 

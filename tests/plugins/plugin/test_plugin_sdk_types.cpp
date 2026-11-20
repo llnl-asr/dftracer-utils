@@ -83,10 +83,10 @@ dftu_expr* make_compare(std::int32_t column, std::int32_t op, dftu_scalar rhs) {
 
 // `column <op> pattern`, ownership as make_compare.
 dftu_expr* make_str_pred(std::int32_t column, std::int32_t op,
-                         const char* pattern) {
+                         dstd::CStringView pattern) {
     dftu_expr* const col = dftu_expr_col(column);
     dftu_expr* const pred = dftu_expr_str_pred(
-        op, col, pattern, static_cast<std::int32_t>(std::strlen(pattern)));
+        op, col, pattern.c_str(), static_cast<std::int32_t>(pattern.size()));
     dftu_expr_free(col);
     return pred;
 }

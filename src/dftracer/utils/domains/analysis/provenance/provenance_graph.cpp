@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -401,7 +402,7 @@ ProvenanceGraph finish(Acc&& a) {
 }
 
 void str_array(simdjson::builder::string_builder& b,
-               const dstd::Vector<dstd::String>& v) {
+               dstd::Span<const dstd::String> v) {
     b.start_array();
     for (std::size_t i = 0; i < v.size(); ++i) {
         if (i) b.append_comma();
@@ -420,7 +421,7 @@ struct Span {
 };
 using SpanIndex = dstd::HashMap<std::int64_t, dstd::Vector<Span>>;
 
-SpanIndex index_spans(const dstd::Vector<ProvenanceActivity>& acts) {
+SpanIndex index_spans(dstd::Span<const ProvenanceActivity> acts) {
     SpanIndex idx;
     for (const auto& a : acts) {
         if (!a.has_main) continue;
@@ -602,7 +603,7 @@ bool excluded(dstd::StringView p) {
 }
 
 dstd::Vector<ProvenanceMount> host_mount_table(
-    const dstd::Vector<dstd::String>& extra) {
+    dstd::Span<const dstd::String> extra) {
     dstd::Vector<ProvenanceMount> t;
     for (const auto& m : extra) {
         dstd::String p = m;
@@ -659,7 +660,7 @@ dstd::Vector<ProvenanceMount> host_mount_table(
 }  // namespace
 
 dstd::Pair<dstd::String, dstd::String> split_mount(
-    const dstd::String& path, const dstd::Vector<ProvenanceMount>& table) {
+    dstd::StringView path, dstd::Span<const ProvenanceMount> table) {
     const ProvenanceMount* best = nullptr;
     for (const auto& m : table) {
         if (m.path.size() <= 1) continue;
@@ -669,23 +670,24 @@ dstd::Pair<dstd::String, dstd::String> split_mount(
         }
     }
     auto rel_of = [&](std::size_t n) {
-        return n >= path.size() ? dstd::String(".") : path.substr(n + 1);
+        return n >= path.size() ? dstd::String(".")
+                                : dstd::String(path.substr(n + 1));
     };
     if (best) return {best->path, rel_of(best->path.size())};
     // Rabbit (NNF) staging mounts are per-job and absent on the serving host.
     if (starts_with(path, "/mnt/nnf/")) {
         auto e = path.find('/', 9);
-        dstd::String m = e == dstd::String::npos ? path : path.substr(0, e);
+        dstd::String m(e == dstd::StringView::npos ? path : path.substr(0, e));
         return {m, rel_of(m.size())};
     }
     // Fallback: first two components (/p/lustre5, /usr/WS2, /tmp/x).
     std::size_t n = 0;
     for (int k = 0; k < 2; ++k) {
         auto e = path.find('/', n + 1);
-        if (e == dstd::String::npos) return {path, "."};
+        if (e == dstd::StringView::npos) return {dstd::String(path), "."};
         n = e;
     }
-    return {path.substr(0, n), rel_of(n)};
+    return {dstd::String(path.substr(0, n)), rel_of(n)};
 }
 
 dstd::String ProvenanceGraph::to_json() const {
@@ -896,7 +898,7 @@ dstd::String ProvenanceGraph::to_json() const {
     return dstd::String(text);
 }
 
-duql::Query constant_query(const char* text) {
+duql::Query constant_query(dstd::StringView text) {
     auto query = duql::Query::from_string(text);
     if (!query)
         dstd::fatal("provenance: a constant query does not parse", text);
@@ -912,7 +914,7 @@ coro::CoroTask<dstd::Result<ProvenanceGraph>> extract_provenance_graph(
     // byte-level prefilter skip lines that cannot hold provenance.
     trace::views::View v = view.phase(trace::views::Phase::Any);
     auto scanned = co_await v.map_batches<Acc>(
-        [](Acc& a, const dstd::Vector<dstd::StringView>& events) {
+        [](Acc& a, dstd::Span<const dstd::StringView> events) {
             for (auto ev : events)
                 if (maybe_provenance(ev)) ingest(a, ev);
         },
@@ -930,7 +932,7 @@ coro::CoroTask<dstd::Result<ProvenanceGraph>> extract_provenance_graph(
     trace::views::View io =
         view.phase(trace::views::Phase::Any).filter(std::move(io_query));
     auto scanned_io = co_await io.map_batches<IoAcc>(
-        [&spans](IoAcc& a, const dstd::Vector<dstd::StringView>& events) {
+        [&spans](IoAcc& a, dstd::Span<const dstd::StringView> events) {
             for (auto ev : events) ingest_io(a, spans, ev);
         },
         [](IoAcc&& x, IoAcc&& y) {
@@ -942,14 +944,14 @@ coro::CoroTask<dstd::Result<ProvenanceGraph>> extract_provenance_graph(
     g.stats.io_events = io_acc.events;
     g.stats.io_attributed = io_acc.attributed;
 
-    auto keep = [&](const dstd::String& path) {
+    auto keep = [&](dstd::StringView path) {
         return options.include_all_files || !excluded(path);
     };
     dstd::HashMap<dstd::String, std::int64_t> pid_of;  // aid -> pid
     for (const auto& a : g.activities) pid_of[a.aid] = a.pid;
     // fhash as seen by `pid` -> absolute path ("" when it cannot be resolved).
     // Relative FH paths resolve against that process's cwd (start record).
-    auto resolve = [&](const dstd::String& fhash,
+    auto resolve = [&](dstd::StringView fhash,
                        std::int64_t pid) -> dstd::String {
         if (auto it = io_acc.fh.find(fhash); it != io_acc.fh.end())
             return it->second;
@@ -967,15 +969,15 @@ coro::CoroTask<dstd::Result<ProvenanceGraph>> extract_provenance_graph(
     };
     dstd::HashMap<dstd::String, ProvenanceFile> files;  // by abs path
     dstd::HashSet<dstd::String> dropped;
-    auto add_file = [&](const dstd::String& fhash,
-                        const dstd::String& path) -> bool {
+    auto add_file = [&](dstd::StringView fhash, dstd::StringView path) -> bool {
         if (path.empty()) return false;
         if (files.count(path)) return true;
         if (!keep(path)) {
-            dropped.insert(path);
+            dropped.insert(dstd::String(path));
             return false;
         }
-        files[path] = ProvenanceFile{fhash, path, "", ""};
+        files[dstd::String(path)] =
+            ProvenanceFile{dstd::String(fhash), dstd::String(path), "", ""};
         return true;
     };
     for (auto& [key, agg] : io_acc.agg) {

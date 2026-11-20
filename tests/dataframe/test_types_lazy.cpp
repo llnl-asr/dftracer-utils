@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -115,7 +116,8 @@ TEST_SUITE("dataframe_types_lazy") {
 
         {
             INFO("Float16");
-            Series s = make_float16({1.5f, -2.25f, 0.0f, 65504.0f});
+            Series s = make_float16(dftu_utils_test::span_of<float>(
+                {1.5f, -2.25f, 0.0f, 65504.0f}));
             auto m = spill_round_trip(s, dir, 0);
             REQUIRE(m.has_value());
             REQUIRE(m->columns.size() == 1);
@@ -127,7 +129,9 @@ TEST_SUITE("dataframe_types_lazy") {
         }
         {
             INFO("Decimal128 (non-zero scale)");
-            Series s = make_decimal128({12345, -100, 0, 999999}, 38, 3);
+            Series s = make_decimal128(dftu_utils_test::span_of<std::int64_t>(
+                                           {12345, -100, 0, 999999}),
+                                       38, 3);
             auto m = spill_round_trip(s, dir, 1);
             REQUIRE(m.has_value());
             const Series& back = m->columns[0];
@@ -143,7 +147,8 @@ TEST_SUITE("dataframe_types_lazy") {
         }
         {
             INFO("Decimal256");
-            Series s = make_decimal256({300, 100, 200, 100});
+            Series s = make_decimal256(
+                dftu_utils_test::span_of<std::int64_t>({300, 100, 200, 100}));
             auto m = spill_round_trip(s, dir, 2);
             REQUIRE(m.has_value());
             const Series& back = m->columns[0];
@@ -156,7 +161,9 @@ TEST_SUITE("dataframe_types_lazy") {
         {
             INFO("FixedSizeBinary");
             Series s =
-                make_fixed_size_binary({"cccc", "aaaa", "bbbb", "dddd"}, 4);
+                make_fixed_size_binary(dftu_utils_test::span_of<dstd::String>(
+                                           {"cccc", "aaaa", "bbbb", "dddd"}),
+                                       4);
             auto m = spill_round_trip(s, dir, 3);
             REQUIRE(m.has_value());
             const Series& back = m->columns[0];
@@ -196,7 +203,8 @@ TEST_SUITE("dataframe_types_lazy") {
         }
         {
             INFO("Date32");
-            Series s = make_date32({19000, -5, 0, 20000});
+            Series s = make_date32(
+                dftu_utils_test::span_of<std::int32_t>({19000, -5, 0, 20000}));
             auto m = spill_round_trip(s, dir, 2);
             REQUIRE(m.has_value());
             const Series& back = m->columns[0];
@@ -206,7 +214,8 @@ TEST_SUITE("dataframe_types_lazy") {
         }
         {
             INFO("Date64");
-            Series s = make_date64({1'700'000'000'000, -5, 0, 2'000'000'000});
+            Series s = make_date64(dftu_utils_test::span_of<std::int64_t>(
+                {1'700'000'000'000, -5, 0, 2'000'000'000}));
             auto m = spill_round_trip(s, dir, 3);
             REQUIRE(m.has_value());
             const Series& back = m->columns[0];
@@ -216,7 +225,8 @@ TEST_SUITE("dataframe_types_lazy") {
         }
         {
             INFO("Time32");
-            Series s = make_time32({1000, -1, 0, 86399000});
+            Series s = make_time32(dftu_utils_test::span_of<std::int32_t>(
+                {1000, -1, 0, 86399000}));
             REQUIRE(s.data<std::int32_t>()[1] == -1);
             REQUIRE(s.data<std::int32_t>()[3] == 86399000);
             auto m = spill_round_trip(s, dir, 4);
@@ -228,7 +238,8 @@ TEST_SUITE("dataframe_types_lazy") {
         }
         {
             INFO("Time64");
-            Series s = make_time64({1000, -1, 0, 86399000000});
+            Series s = make_time64(dftu_utils_test::span_of<std::int64_t>(
+                {1000, -1, 0, 86399000000}));
             auto m = spill_round_trip(s, dir, 5);
             REQUIRE(m.has_value());
             const Series& back = m->columns[0];
@@ -238,7 +249,8 @@ TEST_SUITE("dataframe_types_lazy") {
         }
         {
             INFO("Timestamp");
-            Series s = make_timestamp({300, -1, 100, 0});
+            Series s = make_timestamp(
+                dftu_utils_test::span_of<std::int64_t>({300, -1, 100, 0}));
             auto m = spill_round_trip(s, dir, 6);
             REQUIRE(m.has_value());
             const Series& back = m->columns[0];
@@ -248,7 +260,8 @@ TEST_SUITE("dataframe_types_lazy") {
         }
         {
             INFO("Duration");
-            Series s = make_duration({300, -1, 100, 0});
+            Series s = make_duration(
+                dftu_utils_test::span_of<std::int64_t>({300, -1, 100, 0}));
             auto m = spill_round_trip(s, dir, 7);
             REQUIRE(m.has_value());
             const Series& back = m->columns[0];
@@ -261,7 +274,9 @@ TEST_SUITE("dataframe_types_lazy") {
     TEST_CASE("spill round-trips a LargeList") {
         const auto dir_owner = dftu_utils_test::ok(spill::Dir::create());
         spill::Dir& dir = *dir_owner;
-        Series large_list = make_large_list_i64({{3}, {1, 2}, {}, {1}});
+        Series large_list = make_large_list_i64(
+            dftu_utils_test::span_of<dstd::Vector<std::int64_t>>(
+                {{3}, {1, 2}, {}, {1}}));
         auto m = spill_round_trip(large_list, dir, 0);
         REQUIRE(m.has_value());
         const Series& back = m->columns[0];
@@ -275,15 +290,18 @@ TEST_SUITE("dataframe_types_lazy") {
     TEST_CASE("spill round-trips FixedSizeList and Map") {
         const auto dir_owner = dftu_utils_test::ok(spill::Dir::create());
         spill::Dir& dir = *dir_owner;
-        Series fixed_list =
-            make_fixed_size_list_i64({{3, 3}, {1, 1}, {2, 2}, {1, 1}});
+        Series fixed_list = make_fixed_size_list_i64(
+            dftu_utils_test::span_of<dstd::Vector<std::int64_t>>(
+                {{3, 3}, {1, 1}, {2, 2}, {1, 1}}));
         auto f = spill_round_trip(fixed_list, dir, 0);
         REQUIRE(f.has_value());
         CHECK(f->columns[0].type() == TypeId::FixedSizeList);
         CHECK(f->columns[0].length() == 4);
         CHECK(f->columns[0].child(0).length() == 8);
         Series map_col = make_map_string_i64(
-            {{{"c", 3}}, {{"a", 1}}, {{"b", 2}}, {{"a", 1}}});
+            dftu_utils_test::span_of<
+                dstd::Vector<dstd::Pair<dstd::String, std::int64_t>>>(
+                {{{"c", 3}}, {{"a", 1}}, {{"b", 2}}, {{"a", 1}}}));
         auto m = spill_round_trip(map_col, dir, 1);
         REQUIRE(m.has_value());
         CHECK(m->columns[0].type() == TypeId::Map);
@@ -298,11 +316,17 @@ TEST_SUITE("dataframe_types_lazy") {
         "lazy filter/select/head/with_column match eager for the "
         "opaque-value types") {
         dstd::Vector<Series> values;
-        values.push_back(make_float16({10.0f, 20.0f, 30.0f, 40.0f}));
-        values.push_back(make_decimal128({100, 200, 300, 400}, 38, 2));
-        values.push_back(make_decimal256({100, 200, 300, 400}));
+        values.push_back(make_float16(
+            dftu_utils_test::span_of<float>({10.0f, 20.0f, 30.0f, 40.0f})));
+        values.push_back(make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({100, 200, 300, 400}), 38,
+            2));
+        values.push_back(make_decimal256(
+            dftu_utils_test::span_of<std::int64_t>({100, 200, 300, 400})));
         values.push_back(
-            make_fixed_size_binary({"aaaa", "bbbb", "cccc", "dddd"}, 4));
+            make_fixed_size_binary(dftu_utils_test::span_of<dstd::String>(
+                                       {"aaaa", "bbbb", "cccc", "dddd"}),
+                                   4));
         values.push_back(make_large_utf8({"a", "b", "c", "d"}));
         values.push_back(make_large_binary({"a", "b", "c", "d"}));
         for (Series& v : values) {
@@ -324,7 +348,8 @@ TEST_SUITE("dataframe_types_lazy") {
             {
                 LazyFrame lf = src.lazy().select({"v"});
                 DataFrame lazy_r = run(lf.collect());
-                DataFrame eager_r = dftu_utils_test::ok(src.select({"v"}));
+                DataFrame eager_r = dftu_utils_test::ok(
+                    src.select(dftu_utils_test::span_of<dstd::String>({"v"})));
                 REQUIRE(lazy_r.columns.size() == 1);
                 check_v_equal(lazy_r.columns[0], eager_r.columns[0]);
             }
@@ -350,11 +375,17 @@ TEST_SUITE("dataframe_types_lazy") {
 
     TEST_CASE("lazy sort_by on the value column matches eager") {
         dstd::Vector<Series> values;
-        values.push_back(make_float16({30.0f, 10.0f, 20.0f, 10.0f}));
-        values.push_back(make_decimal128({300, 100, 200, 100}, 38, 1));
-        values.push_back(make_decimal256({300, 100, 200, 100}));
+        values.push_back(make_float16(
+            dftu_utils_test::span_of<float>({30.0f, 10.0f, 20.0f, 10.0f})));
+        values.push_back(make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({300, 100, 200, 100}), 38,
+            1));
+        values.push_back(make_decimal256(
+            dftu_utils_test::span_of<std::int64_t>({300, 100, 200, 100})));
         values.push_back(
-            make_fixed_size_binary({"cccc", "aaaa", "bbbb", "aaaa"}, 4));
+            make_fixed_size_binary(dftu_utils_test::span_of<dstd::String>(
+                                       {"cccc", "aaaa", "bbbb", "aaaa"}),
+                                   4));
         values.push_back(make_large_utf8({"c", "a", "b", "a"}));
         values.push_back(make_large_binary({"c", "a", "b", "a"}));
         for (Series& v : values) {

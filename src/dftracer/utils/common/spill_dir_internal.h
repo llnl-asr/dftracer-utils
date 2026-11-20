@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 
 namespace dftracer::utils::common::detail {
@@ -14,7 +15,7 @@ namespace dftracer::utils::common::detail {
 /// never used; a network one is.
 dstd::Result<dstd::Path> choose_spill_dir(
     dstd::StringView env, const dstd::Path& local_root,
-    const dstd::Vector<dstd::Path>& fallbacks);
+    dstd::Span<const dstd::Path> fallbacks);
 
 }  // namespace dftracer::utils::common::detail
 

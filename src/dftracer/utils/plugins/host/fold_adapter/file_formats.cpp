@@ -39,7 +39,7 @@ const ::dftu_svc_file_formats g_file_formats = {
 }  // namespace
 
 dftu_status detail::register_plugin_file_format(
-    ::dftu_ctx* ctx, dstd::StringView plugin, const char* name,
+    ::dftu_ctx* ctx, dstd::StringView plugin, dstd::StringView name,
     const ::dftu_file_format_vt* vt, void* self,
     dstd::SharedPtr<PluginLibrary> library,
     dstd::SharedPtr<PluginMemory> memory) {
@@ -48,22 +48,20 @@ dftu_status detail::register_plugin_file_format(
             ctx, DFTU_E_INVALID,
             dstd::fmt<"file format '{}' refused: a file format name must be "
                       "'{}' or '{}.<name>'; the bare and 'dftu.' namespaces "
-                      "belong to the host">(
-                dstd::StringView(name ? name : "(null)"), plugin, plugin));
+                      "belong to the host">(name, plugin, plugin));
     }
     auto registered = register_file_format_vtable(
         name, vt, self, std::move(library), std::move(memory));
     if (!registered) {
-        return host_fail(
-            ctx, common::to_status(registered.error().condition()),
-            dstd::fmt<"file format '{}' refused: {}">(
-                dstd::StringView(name), registered.error().message()));
+        return host_fail(ctx, common::to_status(registered.error().condition()),
+                         dstd::fmt<"file format '{}' refused: {}">(
+                             name, registered.error().message()));
     }
     return DFTU_OK;
 }
 
 dftu_status detail::register_plugin_sink(
-    ::dftu_ctx* ctx, dstd::StringView plugin, const char* name,
+    ::dftu_ctx* ctx, dstd::StringView plugin, dstd::StringView name,
     const ::dftu_sink_vt* vt, void* self,
     dstd::SharedPtr<PluginLibrary> library) {
     if (!name_in_plugin_namespace(name, plugin)) {
@@ -71,15 +69,13 @@ dftu_status detail::register_plugin_sink(
             ctx, DFTU_E_INVALID,
             dstd::fmt<"sink '{}' refused: a sink name must be '{}' or "
                       "'{}.<name>'; the bare and 'dftu.' namespaces belong to "
-                      "the host">(dstd::StringView(name ? name : "(null)"),
-                                  plugin, plugin));
+                      "the host">(name, plugin, plugin));
     }
     auto registered = register_sink_vtable(name, vt, self, std::move(library));
     if (!registered) {
-        return host_fail(
-            ctx, common::to_status(registered.error().condition()),
-            dstd::fmt<"sink '{}' refused: {}">(dstd::StringView(name),
-                                               registered.error().message()));
+        return host_fail(ctx, common::to_status(registered.error().condition()),
+                         dstd::fmt<"sink '{}' refused: {}">(
+                             name, registered.error().message()));
     }
     return DFTU_OK;
 }

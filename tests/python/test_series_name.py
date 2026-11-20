@@ -145,7 +145,7 @@ def test_pickle_keeps_the_name():
 
 def test_share_and_slice_keep_the_name():
     s = Series([1, 2, 3], name="x")
-    assert s._native.share().name == "x"
-    assert s._native.slice(1, 2).name == "x"
-    assert s._native.rename("y").name == "y"
-    assert s._native.name == "x"
+    assert s.share().name == "x"
+    assert s.slice(1, 2).name == "x"
+    assert s.rename("y").name == "y"
+    assert s.name == "x"

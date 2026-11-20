@@ -228,7 +228,7 @@ void watch_declaration(const dstd::WeakPtr<ChannelState>& weak_channel,
 
 void watch_declarations(const dstd::SharedPtr<ChannelState>& channel,
                         const dstd::SharedPtr<PendingOp>& call,
-                        const dstd::Vector<PeerWait>& waiting) {
+                        dstd::Span<const PeerWait> waiting) {
     for (const PeerWait& wait : waiting)
         watch_declaration(channel, call, wait.peer, wait.seen);
 }

@@ -3,12 +3,12 @@
 Write a plugin by hand in C++
 ================================
 
-:doc:`extending-the-engine` shows a plugin as one tab of a two-language
-lesson. This one is C++ only, and goes one step further: scaffold the source
+:doc:`extending-the-engine` writes plugins in Python. This lesson is C++ and
+goes one step further: scaffold the source
 with the ``dftracer_plugin`` CLI, write the fold yourself against
-``Host::agg`` and the ``agg::`` factories, and run it with ``dftracer_run``. It assumes :doc:`extending-the-engine`, so the plugin model
-(a fold over one fused scan, mergeable state, host-owned maps) is not
-re-explained here.
+``Host::agg`` and the ``agg::`` factories, and run it with ``dftracer_run``. The plugin model
+(a fold over one fused scan, mergeable state, host-owned maps) is the one in
+:doc:`extending-the-engine`.
 
 You need a C++ compiler on your ``PATH``; this lesson compiles the plugin to a
 ``.so`` once, ahead of time, rather than JIT-compiling it on first load like
@@ -29,7 +29,7 @@ The plugin counts events per process, so the trace needs more than one
            pid = 2 if i % 3 == 0 else 1
            f.write(
                f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":1,'
-               f'"ts":{1000 + i},"dur":10,"ph":"X","args":{{}}}}\n'
+               f'"ts":{1000 + i},"dur":10,"ph":1,"args":{{}}}}\n'
            )
 
 That is 100 events for ``pid`` 2 (every third event) and 200 for ``pid`` 1.

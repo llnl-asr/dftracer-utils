@@ -323,7 +323,7 @@ class FirstRowsSpill {
 
     // A partition that fits a fraction of the budget is counted in memory; a
     // larger one is split again (until the depth limit or too few rows).
-    coro::CoroTask<dstd::Result<void>> settle(const dstd::String& path,
+    coro::CoroTask<dstd::Result<void>> settle(dstd::String path,
                                               std::uint64_t bytes,
                                               std::int64_t rows, int depth) {
         if (depth < UNIQUE_SPILL_MAX_DEPTH && bytes > budget_ / share::SMALL &&
@@ -496,7 +496,7 @@ class HeadByCursor : public Cursor {
         if (!external_) {
             auto made = FirstRowsSpill::make(
                 budget_, n_, next_row_id_,
-                [this](const dstd::String& key) {
+                [this](dstd::StringView key) {
                     const auto it = counts_.find(key);
                     return it == counts_.end() ? std::int64_t{0} : it->second;
                 },
@@ -621,9 +621,10 @@ class UniqueCursor : public Cursor {
                         refusals.merge(refusal);
                     });
                 if (refusals.get().refused()) co_return refusals.get().error();
-                auto key_ptr = [&](std::size_t at) {
-                    return chunk_bytes[at / KEY_CHUNK_ROWS].data() +
-                           key_off[at];
+                auto key_view = [&](std::size_t at) {
+                    return dstd::StringView(
+                        chunk_bytes[at / KEY_CHUNK_ROWS].data() + key_off[at],
+                        key_size[at]);
                 };
                 dstd::Vector<std::uint8_t> keep_mask(nz, 0);
                 // The arenas reserve before they grow. The bound is what they
@@ -643,7 +644,7 @@ class UniqueCursor : public Cursor {
                                     seen_.bytes_after(nz, key_total, key_max));
                     }
                     for (std::size_t at = 0; at < nz; ++at)
-                        if (seen_.insert(hashes[at], key_ptr(at), key_size[at]))
+                        if (seen_.insert(hashes[at], key_view(at)))
                             keep_mask[at] = 1;
                 } else {
                     const std::size_t p = seen_p_.size();
@@ -672,8 +673,7 @@ class UniqueCursor : public Cursor {
                                 for (std::size_t at :
                                      buckets[static_cast<std::size_t>(g)])
                                     if (seen_p_[static_cast<std::size_t>(g)]
-                                            ->insert(hashes[at], key_ptr(at),
-                                                     key_size[at]))
+                                            ->insert(hashes[at], key_view(at)))
                                         keep_mask[at] = 1;
                         });
                 }
@@ -700,7 +700,7 @@ class UniqueCursor : public Cursor {
         if (!external_) {
             auto made = FirstRowsSpill::make(
                 budget_, 1, next_row_id_,
-                [this](const dstd::String& key) {
+                [this](dstd::StringView key) {
                     return already_seen(key) ? std::int64_t{1}
                                              : std::int64_t{0};
                 },
@@ -738,7 +738,7 @@ class UniqueCursor : public Cursor {
    private:
     // The columns the row key hashes: every data column, or the subset the
     // op names (positions against the plan schema).
-    dstd::Vector<Series> key_cols(const dstd::Vector<Series>& data) const {
+    dstd::Vector<Series> key_cols(dstd::Span<const Series> data) const {
         dstd::Vector<Series> out;
         if (key_idx_.empty()) {
             out.reserve(data.size());
@@ -751,12 +751,11 @@ class UniqueCursor : public Cursor {
         return out;
     }
 
-    bool already_seen(const dstd::String& key) const {
+    bool already_seen(dstd::StringView key) const {
         const std::uint64_t h = dstd::hash::xxh3_64(key.data(), key.size());
-        const auto len = static_cast<std::uint32_t>(key.size());
         if (!seen_p_.empty())
-            return seen_p_[h % seen_p_.size()]->contains(h, key.data(), len);
-        return seen_.contains(h, key.data(), len);
+            return seen_p_[h % seen_p_.size()]->contains(h, key);
+        return seen_.contains(h, key);
     }
 
     // The arenas never leave the cursor, so they live in its Scratch pool.

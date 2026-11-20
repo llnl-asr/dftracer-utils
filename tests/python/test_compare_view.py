@@ -15,7 +15,7 @@ from .common import Environment
 def _indexed(env):
     gz = env.create_test_gzip_file()
     with dftu_utils.Indexer(files=[gz]) as indexer:
-        indexer.ensure_indexed()
+        indexer.ensure()
     return gz
 
 

@@ -55,8 +55,14 @@ class ScalableBloomFilter {
     static dstd::Result<ScalableBloomFilter> from_blob(
         const unsigned char* data, std::size_t size);
 
+    /// A string value, hashed as @ref dstd::hash::value_hash_string.
     void add(dstd::StringView value);
     bool possibly_contains(dstd::StringView value) const;
+    /// A value by its canonical hash: @ref dstd::hash::value_hash_int64 and
+    /// its siblings. A chain with a level of another hash version answers
+    /// "may contain".
+    void add_hashed(std::uint64_t value_hash);
+    bool possibly_contains_hashed(std::uint64_t value_hash) const;
     /// One per add() call, whatever the chain's length.
     std::size_t hash_computations() const { return hashed_; }
     void merge_from(const ScalableBloomFilter& other);
@@ -69,6 +75,10 @@ class ScalableBloomFilter {
     /// already probe as present.
     std::size_t entry_count() const { return distinct_; }
     std::size_t level_count() const { return levels_.size(); }
+    /// False when a level was saved with another hash version.
+    bool has_known_hash_version() const;
+    /// The hash version of the first level, as written in its header.
+    std::uint8_t hash_version() const;
     std::size_t size_bytes() const;
 
    private:

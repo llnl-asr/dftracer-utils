@@ -84,8 +84,8 @@ coro::CoroTask<dstd::Result<ExportStats>> run_export_trace_indexed(
 
     // Index folds key their state per file_path, so one fold set spans all
     // parts; finalize (after the members are committed) writes the bloom.
-    const dstd::String index_path = trace::internal::determine_index_path(
-        opts.output_path, opts.index_path);
+    const dstd::String index_path =
+        trace::internal::determine_index_path(opts.output_path, opts.index_dir);
     const auto& schema = plan_record_schema(plan);
     dftracer::utils::dstd::StringIntern intern;
     dftracer::utils::trace::index::extensions::BloomFold bloom(

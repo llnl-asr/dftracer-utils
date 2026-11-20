@@ -143,7 +143,7 @@ Built-in schemas
 ----------------
 
 ``dftracer`` reads DFTracer traces; its source declares ``data`` (every
-record but the ``ph: M`` metadata records), the row sets ``files``,
+record but the ``ph: 4`` metadata records), the row sets ``files``,
 ``hosts``, ``strings`` and ``ranks``, and ``args_fallback``. ``genesis`` is path-decoded: it requires
 ``gtype`` and ``run``, binds ``ts`` as time in microseconds and declares
 ``data`` (every record but the ``run`` records) and the row set ``runs``.

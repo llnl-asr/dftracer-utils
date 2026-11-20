@@ -29,8 +29,10 @@
 //                                              positive and correct)
 
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/thread.h>
@@ -192,11 +194,11 @@ dftracer::utils::dstd::Vector<Case> make_cases() {
     dftracer::utils::dstd::Vector<Case> cases;
     auto add =
         [&cases](
-            const char* name, std::size_t full_ops,
+            dftracer::utils::dstd::CStringView name, std::size_t full_ops,
             dftracer::utils::dstd::Function<Result(std::size_t)> run,
             dftracer::utils::dstd::Function<std::size_t(std::size_t)> ops) {
             cases.push_back(
-                Case{name, full_ops, std::move(run), std::move(ops)});
+                Case{name.c_str(), full_ops, std::move(run), std::move(ops)});
         };
     add("get_or_insert_known", 20000000, get_or_insert_known, exact);
     add("get_or_insert_new", NEW_STRINGS, get_or_insert_new, exact);
@@ -230,9 +232,9 @@ struct Recorded {
     double spread_pct = 0.0;
 };
 
-bool write_record(const char* path,
-                  const dftracer::utils::dstd::Vector<Recorded>& rows) {
-    std::FILE* f = std::fopen(path, "w");
+bool write_record(dftracer::utils::dstd::CStringView path,
+                  dftracer::utils::dstd::Span<const Recorded> rows) {
+    std::FILE* f = std::fopen(path.c_str(), "w");
     if (f == nullptr) return false;
     std::fprintf(f, "{\n");
     for (std::size_t i = 0; i < rows.size(); ++i) {
@@ -245,9 +247,9 @@ bool write_record(const char* path,
     return std::fclose(f) == 0;
 }
 
-bool read_record(const char* path,
+bool read_record(dftracer::utils::dstd::CStringView path,
                  dftracer::utils::dstd::Vector<Recorded>& rows) {
-    std::FILE* f = std::fopen(path, "r");
+    std::FILE* f = std::fopen(path.c_str(), "r");
     if (f == nullptr) return false;
     char line[512];
     while (std::fgets(line, sizeof(line), f) != nullptr) {
@@ -264,11 +266,11 @@ bool read_record(const char* path,
     return !rows.empty();
 }
 
-int check_record(const char* path,
-                 const dftracer::utils::dstd::Vector<Recorded>& now) {
+int check_record(dftracer::utils::dstd::CStringView path,
+                 dftracer::utils::dstd::Span<const Recorded> now) {
     dftracer::utils::dstd::Vector<Recorded> base;
     if (!read_record(path, base)) {
-        std::fprintf(stderr, "cannot read record: %s\n", path);
+        std::fprintf(stderr, "cannot read record: %s\n", path.c_str());
         return 1;
     }
     int slower = 0;
@@ -289,8 +291,9 @@ int check_record(const char* path,
     return slower == 0 ? 0 : 1;
 }
 
-int run(const dftracer::utils::dstd::Vector<Case>& cases, int reps, bool smoke,
-        bool csv, const char* record, const char* check) {
+int run(dftracer::utils::dstd::Span<const Case> cases, int reps, bool smoke,
+        bool csv, dftracer::utils::dstd::CStringView record,
+        dftracer::utils::dstd::CStringView check) {
     dftracer::utils::dstd::Vector<Recorded> rows;
     if (csv) {
         std::printf("name,median_ns_per_op,min,max,spread_pct\n");
@@ -333,11 +336,11 @@ int run(const dftracer::utils::dstd::Vector<Case>& cases, int reps, bool smoke,
         std::fflush(stdout);
     }
     int status = failures == 0 ? 0 : 1;
-    if (record != nullptr && !write_record(record, rows)) {
-        std::fprintf(stderr, "cannot write record: %s\n", record);
+    if (!record.empty() && !write_record(record, rows)) {
+        std::fprintf(stderr, "cannot write record: %s\n", record.c_str());
         status = 1;
     }
-    if (check != nullptr && check_record(check, rows) != 0) status = 1;
+    if (!check.empty() && check_record(check, rows) != 0) status = 1;
     return status;
 }
 
@@ -361,8 +364,8 @@ int main(int argc, char** argv) {
     bool smoke = false;
     bool csv = false;
     dftracer::utils::dstd::String only;
-    const char* record = nullptr;
-    const char* check = nullptr;
+    dftracer::utils::dstd::CStringView record;
+    dftracer::utils::dstd::CStringView check;
     for (int i = 1; i < argc; ++i) {
         dftracer::utils::dstd::StringView arg = argv[i];
         bool has_value = i + 1 < argc;

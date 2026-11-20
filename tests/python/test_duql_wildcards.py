@@ -15,7 +15,7 @@ N = 60
 
 def _record(i):
     return {
-        "ph": "X",
+        "ph": 1,
         "name": "ev%d" % i,
         "cat": "POSIX",
         "pid": 1,
@@ -36,7 +36,7 @@ def path(tmp_path_factory):
         for i in range(N):
             f.write(json.dumps(_record(i)) + "\n")
     with dftu.Indexer(files=[p]) as indexer:
-        indexer.ensure_indexed()
+        indexer.ensure()
     return p
 
 

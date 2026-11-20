@@ -64,6 +64,12 @@ typedef struct dftu_node_vt {
     /** Release the node; called once, after every cursor opened against it
        has been destroyed. May be NULL for a stateless node. */
     void (*destroy)(void* self);
+    /** Optional (NULL means nothing to add to an explain). Append to `out` the
+       key and value lines that describe this step of a plan with `args`
+       (borrowed for the call), as dftu_source_vt::explain does. Called on any
+       thread with a `ctx` the host frees when the call returns. */
+    dftu_status (*explain)(dftu_ctx* ctx, void* self, const dftu_op_arg* args,
+                           const dftu_explain_out* out);
 } dftu_node_vt;
 
 /** Build-phase registry of named plan nodes. Fetched via

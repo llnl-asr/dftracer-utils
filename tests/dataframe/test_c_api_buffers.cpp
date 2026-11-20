@@ -49,7 +49,7 @@ struct ViewFixture {
     std::int64_t sizes[2] = {static_cast<std::int64_t>(blob_a.size()),
                              static_cast<std::int64_t>(blob_b.size())};
 
-    static void put(std::uint8_t* view, const dstd::String& s,
+    static void put(std::uint8_t* view, dstd::StringView s,
                     std::int32_t index) {
         const auto size = static_cast<std::int32_t>(s.size());
         std::memcpy(view, &size, sizeof(size));
@@ -90,7 +90,7 @@ Series chunked_i64() {
 TEST_SUITE("c_api_buffers") {
     TEST_CASE("validity of a flat column, NULL when there are no nulls") {
         Series col = flat_i64();
-        int64_t bit_offset = -1;
+        std::int64_t bit_offset = -1;
         const std::uint8_t* bits =
             dftu_series_validity(col.handle(), &bit_offset);
         REQUIRE(bits != nullptr);
@@ -111,7 +111,7 @@ TEST_SUITE("c_api_buffers") {
         ViewFixture fixture;
         Series view = view_column(fixture);
         REQUIRE(view.valid());
-        int64_t bit_offset = -1;
+        std::int64_t bit_offset = -1;
         const std::uint8_t* bits =
             dftu_series_validity(view.handle(), &bit_offset);
         REQUIRE(bits != nullptr);
@@ -146,7 +146,7 @@ TEST_SUITE("c_api_buffers") {
         const std::uint8_t bits[2] = {0x55, 0x0F};
         Series parent = Series::flat_i64(values, 16, bits);
 
-        int64_t parent_offset = -1;
+        std::int64_t parent_offset = -1;
         const std::uint8_t* parent_bits =
             dftu_series_validity(parent.handle(), &parent_offset);
         REQUIRE(parent_bits != nullptr);
@@ -155,13 +155,13 @@ TEST_SUITE("c_api_buffers") {
         // slice is bit 0 of the caller's second byte.
         Series aligned = parent.slice(8, 4);
         REQUIRE(aligned.valid());
-        int64_t bit_offset = -1;
+        std::int64_t bit_offset = -1;
         const std::uint8_t* aligned_bits =
             dftu_series_validity(aligned.handle(), &bit_offset);
         REQUIRE(aligned_bits != nullptr);
         CHECK(bit_offset == 0);
         CHECK(aligned_bits == parent_bits + 1);
-        for (int64_t i = 0; i < 4; ++i)
+        for (std::int64_t i = 0; i < 4; ++i)
             CHECK(((aligned_bits[i >> 3] >> (i & 7)) & 1) ==
                   ((parent_bits[(8 + i) >> 3] >> ((8 + i) & 7)) & 1));
         // Those rows are all valid, yet the column keeps a bitmap: the getter
@@ -176,7 +176,7 @@ TEST_SUITE("c_api_buffers") {
             dftu_series_validity(unaligned.handle(), &bit_offset);
         REQUIRE(unaligned_bits != nullptr);
         CHECK(bit_offset == 0);
-        for (int64_t i = 0; i < 4; ++i)
+        for (std::int64_t i = 0; i < 4; ++i)
             CHECK(((unaligned_bits[i >> 3] >> (i & 7)) & 1) ==
                   ((parent_bits[(3 + i) >> 3] >> ((3 + i) & 7)) & 1));
         // Rows 4 and 6 are valid there and rows 3 and 5 are null.
@@ -195,7 +195,7 @@ TEST_SUITE("c_api_buffers") {
         CHECK(dftu_series_chunk_count(nullptr) == 0);
 
         std::int64_t total = 0;
-        for (int32_t k = 0; k < 3; ++k) {
+        for (std::int32_t k = 0; k < 3; ++k) {
             dftu_series* part = dftu_series_chunk(chunks.handle(), k);
             REQUIRE(part != nullptr);
             CHECK(dftu_series_length(part) == 4);
@@ -262,8 +262,8 @@ TEST_SUITE("c_api_buffers") {
         CHECK(dftu_series_view_buffer_count(view.handle()) == 2);
         // Borrowed: the caller's own views and buffers come straight back.
         CHECK(dftu_series_view_data(view.handle()) == fixture.views);
-        for (int32_t i = 0; i < 2; ++i) {
-            int64_t size = -1;
+        for (std::int32_t i = 0; i < 2; ++i) {
+            std::int64_t size = -1;
             const void* buffer =
                 dftu_series_view_buffer(view.handle(), i, &size);
             CHECK(buffer == fixture.buffers[i]);
@@ -274,7 +274,7 @@ TEST_SUITE("c_api_buffers") {
               fixture.buffers[0]);
 
         // A bad index is an error, not an empty buffer.
-        int64_t size = -1;
+        std::int64_t size = -1;
         CHECK(dftu_series_view_buffer(view.handle(), 2, &size) == nullptr);
         CHECK(size == 0);
         CHECK(dftu_series_view_buffer(view.handle(), -1, &size) == nullptr);
@@ -427,7 +427,7 @@ TEST_SUITE("c_api_buffers") {
         Series src = flat_i64();
         const void* data = dftu_series_data(src.handle());
         REQUIRE(data != nullptr);
-        int64_t bit_offset = -1;
+        std::int64_t bit_offset = -1;
         const std::uint8_t* bits =
             dftu_series_validity(src.handle(), &bit_offset);
         REQUIRE(bits != nullptr);
@@ -478,15 +478,16 @@ TEST_SUITE("c_api_buffers") {
     TEST_CASE("a VIEW column round-trips through its own buffers") {
         ViewFixture fixture;
         Series src = view_column(fixture);
-        const int32_t n_buffers = dftu_series_view_buffer_count(src.handle());
+        const std::int32_t n_buffers =
+            dftu_series_view_buffer_count(src.handle());
         REQUIRE(n_buffers == 2);
         const void* views = dftu_series_view_data(src.handle());
         REQUIRE(views != nullptr);
         const void* buffers[2] = {nullptr, nullptr};
-        int64_t sizes[2] = {0, 0};
-        for (int32_t i = 0; i < n_buffers; ++i)
+        std::int64_t sizes[2] = {0, 0};
+        for (std::int32_t i = 0; i < n_buffers; ++i)
             buffers[i] = dftu_series_view_buffer(src.handle(), i, &sizes[i]);
-        int64_t bit_offset = -1;
+        std::int64_t bit_offset = -1;
         const std::uint8_t* bits =
             dftu_series_validity(src.handle(), &bit_offset);
         REQUIRE(bits != nullptr);
@@ -504,7 +505,7 @@ TEST_SUITE("c_api_buffers") {
                 CHECK(back.string_at(i) == src.string_at(i));
             }
             // The rebuilt column points at the very same views and buffers.
-            int64_t size_again = -1;
+            std::int64_t size_again = -1;
             CHECK(dftu_series_view_data(back.handle()) == views);
             CHECK(dftu_series_view_buffer(back.handle(), 0, &size_again) ==
                   buffers[0]);

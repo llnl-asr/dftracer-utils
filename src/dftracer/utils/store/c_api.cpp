@@ -252,8 +252,8 @@ dftu_status dftu_store_open(const char* dir, dftu_store_t** out,
 void dftu_store_free(dftu_store_t* store) { delete store; }
 
 dftu_status dftu_store_ns(dftu_store_t* store, const char* name,
-                          uint32_t format_version, int32_t fold,
-                          int32_t durable, int32_t shared,
+                          std::uint32_t format_version, std::int32_t fold,
+                          std::int32_t durable, std::int32_t shared,
                           dftu_store_ns_t** out, dftu_error* err) {
     if (!clear_out(out)) return invalid_argument(err, "out is NULL");
     if (!store || !name || !*name) {
@@ -278,10 +278,10 @@ void dftu_store_ns_free(dftu_store_ns_t* ns) { delete ns; }
 
 dftu_status dftu_store_batch(dftu_store_t* store, const dftu_store_ns_t* ns,
                              const dftu_store_scope* scope,
-                             uint64_t params_hash,
+                             std::uint64_t params_hash,
                              const dftu_store_source_stat* sources,
-                             uint64_t source_count, dftu_store_batch_t** out,
-                             dftu_error* err) {
+                             std::uint64_t source_count,
+                             dftu_store_batch_t** out, dftu_error* err) {
     return make_batch(store, ns, scope, params_hash, sources, source_count,
                       false, out, err);
 }
@@ -294,21 +294,25 @@ dftu_status dftu_store_building_batch(dftu_store_t* store,
     return make_batch(store, ns, scope, 0, nullptr, 0, true, out, err);
 }
 
-dftu_status dftu_store_batch_put(dftu_store_batch_t* batch, const uint8_t* key,
-                                 uint64_t key_size, const uint8_t* value,
-                                 uint64_t value_size, dftu_error* err) {
+dftu_status dftu_store_batch_put(dftu_store_batch_t* batch,
+                                 const std::uint8_t* key,
+                                 std::uint64_t key_size,
+                                 const std::uint8_t* value,
+                                 std::uint64_t value_size, dftu_error* err) {
     return write_entry(batch, key, key_size, value, value_size, false, err);
 }
 
-dftu_status dftu_store_batch_fold(dftu_store_batch_t* batch, const uint8_t* key,
-                                  uint64_t key_size, const uint8_t* value,
-                                  uint64_t value_size, dftu_error* err) {
+dftu_status dftu_store_batch_fold(dftu_store_batch_t* batch,
+                                  const std::uint8_t* key,
+                                  std::uint64_t key_size,
+                                  const std::uint8_t* value,
+                                  std::uint64_t value_size, dftu_error* err) {
     return write_entry(batch, key, key_size, value, value_size, true, err);
 }
 
 dftu_status dftu_store_batch_erase(dftu_store_batch_t* batch,
-                                   const uint8_t* key, uint64_t key_size,
-                                   dftu_error* err) {
+                                   const std::uint8_t* key,
+                                   std::uint64_t key_size, dftu_error* err) {
     if (!batch || !bytes_ok(key, key_size)) {
         return invalid_argument(err,
                                 "batch is NULL, or key is NULL with a size");
@@ -318,9 +322,10 @@ dftu_status dftu_store_batch_erase(dftu_store_batch_t* batch,
 }
 
 dftu_status dftu_store_batch_erase_range(dftu_store_batch_t* batch,
-                                         const uint8_t* begin,
-                                         uint64_t begin_size,
-                                         const uint8_t* end, uint64_t end_size,
+                                         const std::uint8_t* begin,
+                                         std::uint64_t begin_size,
+                                         const std::uint8_t* end,
+                                         std::uint64_t end_size,
                                          dftu_error* err) {
     if (!batch || !bytes_ok(begin, begin_size) || !bytes_ok(end, end_size)) {
         return invalid_argument(
@@ -346,7 +351,7 @@ void dftu_store_batch_free(dftu_store_batch_t* batch) { delete batch; }
 
 dftu_status dftu_store_publish(dftu_store_t* store,
                                const dftu_store_publish_target* targets,
-                               uint64_t n, dftu_error* err) {
+                               std::uint64_t n, dftu_error* err) {
     if (!store || (n > 0 && !targets)) {
         return invalid_argument(
             err, "store is NULL, or targets is NULL with a count");
@@ -391,8 +396,8 @@ dftu_status dftu_store_publish(dftu_store_t* store,
 }
 
 dftu_status dftu_store_fail(dftu_store_t* store, const dftu_store_ns_t* ns,
-                            const dftu_store_scope* scope, uint64_t params_hash,
-                            dftu_error* err) {
+                            const dftu_store_scope* scope,
+                            std::uint64_t params_hash, dftu_error* err) {
     if (!store || !ns) return invalid_argument(err, "store or ns is NULL");
     auto key = scope_of(scope);
     if (!key) return common::fill_error(err, key.error());
@@ -436,7 +441,7 @@ void dftu_store_pack_options_init(dftu_store_pack_options* out) {
     if (!out) return;
     const PackOptions defaults;
     *out = dftu_store_pack_options{
-        static_cast<uint32_t>(sizeof(dftu_store_pack_options)),
+        static_cast<std::uint32_t>(sizeof(dftu_store_pack_options)),
         defaults.small_file_bytes, defaults.dead_ratio, defaults.keep_seconds};
 }
 
@@ -483,7 +488,7 @@ void dftu_store_snapshot_free(dftu_store_snapshot_t* snapshot) {
 dftu_status dftu_store_snapshot_copy_info(
     const dftu_store_snapshot_t* snapshot, const dftu_store_ns_t* ns,
     const dftu_store_scope* scope, dftu_store_source_stat* sources,
-    uint64_t capacity, dftu_store_copy* out, dftu_error* err) {
+    std::uint64_t capacity, dftu_store_copy* out, dftu_error* err) {
     if (!snapshot || !ns || !out || (capacity > 0 && !sources)) {
         return invalid_argument(
             err,
@@ -502,15 +507,17 @@ dftu_status dftu_store_snapshot_copy_info(
                                                 info.sources[i].hash};
         }
     }
-    *out = dftu_store_copy{static_cast<int32_t>(info.state), info.generation,
-                           info.params_hash, info.sources.size()};
+    *out =
+        dftu_store_copy{static_cast<std::int32_t>(info.state), info.generation,
+                        info.params_hash, info.sources.size()};
     return DFTU_OK;
 }
 
 dftu_status dftu_store_snapshot_get(const dftu_store_snapshot_t* snapshot,
                                     const dftu_store_ns_t* ns,
                                     const dftu_store_scope* scope,
-                                    const uint8_t* key, uint64_t key_size,
+                                    const std::uint8_t* key,
+                                    std::uint64_t key_size,
                                     dftu_store_value_t** out, dftu_error* err) {
     if (!clear_out(out)) return invalid_argument(err, "out is NULL");
     if (!snapshot || !ns || !bytes_ok(key, key_size)) {
@@ -529,8 +536,8 @@ dftu_status dftu_store_snapshot_get(const dftu_store_snapshot_t* snapshot,
 
 dftu_status dftu_store_snapshot_multi_get(
     const dftu_store_snapshot_t* snapshot, const dftu_store_ns_t* ns,
-    const dftu_store_scope* scope, const dftu_store_bytes* keys, uint64_t n,
-    dftu_store_value_list_t** out, dftu_error* err) {
+    const dftu_store_scope* scope, const dftu_store_bytes* keys,
+    std::uint64_t n, dftu_store_value_list_t** out, dftu_error* err) {
     if (!clear_out(out)) return invalid_argument(err, "out is NULL");
     if (!snapshot || !ns || (n > 0 && !keys)) {
         return invalid_argument(
@@ -564,12 +571,12 @@ dftu_store_bytes dftu_store_value_bytes(const dftu_store_value_t* v) {
 
 void dftu_store_value_free(dftu_store_value_t* v) { delete v; }
 
-uint64_t dftu_store_value_list_count(const dftu_store_value_list_t* list) {
+std::uint64_t dftu_store_value_list_count(const dftu_store_value_list_t* list) {
     return list ? list->values.size() : 0;
 }
 
-int32_t dftu_store_value_list_at(const dftu_store_value_list_t* list,
-                                 uint64_t i, dftu_store_bytes* out) {
+std::int32_t dftu_store_value_list_at(const dftu_store_value_list_t* list,
+                                      std::uint64_t i, dftu_store_bytes* out) {
     if (!list || !out || i >= list->values.size()) return -1;
     const auto& entry = list->values[static_cast<std::size_t>(i)];
     if (!entry.has_value()) return 0;
@@ -581,8 +588,8 @@ void dftu_store_value_list_free(dftu_store_value_list_t* list) { delete list; }
 
 dftu_status dftu_store_snapshot_scan_prefix(
     const dftu_store_snapshot_t* snapshot, const dftu_store_ns_t* ns,
-    const dftu_store_scope* scope, const uint8_t* prefix, uint64_t prefix_size,
-    dftu_store_cursor_t** out, dftu_error* err) {
+    const dftu_store_scope* scope, const std::uint8_t* prefix,
+    std::uint64_t prefix_size, dftu_store_cursor_t** out, dftu_error* err) {
     if (!clear_out(out)) return invalid_argument(err, "out is NULL");
     if (!snapshot || !ns || !bytes_ok(prefix, prefix_size)) {
         return invalid_argument(
@@ -597,9 +604,9 @@ dftu_status dftu_store_snapshot_scan_prefix(
 
 dftu_status dftu_store_snapshot_scan_range(
     const dftu_store_snapshot_t* snapshot, const dftu_store_ns_t* ns,
-    const dftu_store_scope* scope, const uint8_t* begin, uint64_t begin_size,
-    const uint8_t* end, uint64_t end_size, dftu_store_cursor_t** out,
-    dftu_error* err) {
+    const dftu_store_scope* scope, const std::uint8_t* begin,
+    std::uint64_t begin_size, const std::uint8_t* end, std::uint64_t end_size,
+    dftu_store_cursor_t** out, dftu_error* err) {
     if (!clear_out(out)) return invalid_argument(err, "out is NULL");
     if (!snapshot || !ns || !bytes_ok(begin, begin_size) ||
         !bytes_ok(end, end_size)) {

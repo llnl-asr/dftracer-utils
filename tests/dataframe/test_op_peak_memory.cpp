@@ -21,6 +21,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/map.h>
@@ -409,8 +410,9 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
          [](const LazyFrame& b) {
              const char* by[] = {"k", "v"};
              const std::int32_t descending[] = {1, 0};
+             const std::int32_t last[] = {1};
              OpArgs args;
-             args.strlist(1, by, 2).i32list(2, descending);
+             args.strlist(1, {by, 2}).i32list(2, descending).i32list(3, last);
              return b.frame_op("dftu.frame.sort_by_multi_per_col", args);
          }},
         // One partition far past the budget, with the functions that used to
@@ -441,7 +443,7 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
              const dstd::Vector<dftu_window_spec> specs{var, run, first, last};
              const char* order[] = {"t"};
              OpArgs args;
-             args.strlist(1, nullptr, 0).strlist(2, order, 1).winlist(3, specs);
+             args.strlist(1, {}).strlist(2, {order, 1}).winlist(3, specs);
              dstd::Vector<dstd::String> names = b.schema();
              for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
              return b.frame_op("dftu.frame.window", args, {}, names);
@@ -450,17 +452,17 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
         // end or over all of it, and a text minimum from its start.
         {"window_end",
          [](const LazyFrame& b) {
-             const auto frame = [](dftu_window_func func, const char* value,
-                                   const char* out, std::int64_t pre,
-                                   std::int64_t fol) {
-                 dftu_window_spec w{};
-                 w.func = func;
-                 w.value = value;
-                 w.out = out;
-                 w.param.frame = {0,   pre,    fol, DFTU_WINDOW_FRAME_ROWS,
-                                  0.5, nullptr};
-                 return w;
-             };
+             const auto frame =
+                 [](dftu_window_func func, dstd::CStringView value,
+                    dstd::CStringView out, std::int64_t pre, std::int64_t fol) {
+                     dftu_window_spec w{};
+                     w.func = func;
+                     w.value = value.c_str();
+                     w.out = out.c_str();
+                     w.param.frame = {0,   pre,    fol, DFTU_WINDOW_FRAME_ROWS,
+                                      0.5, nullptr};
+                     return w;
+                 };
              const std::int64_t ALL = DFTU_WINDOW_UNBOUNDED;
              const dstd::Vector<dftu_window_spec> specs{
                  frame(DFTU_WINDOW_FRAME_VAR, "v", "var", ALL, ALL),
@@ -469,7 +471,7 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
                  frame(DFTU_WINDOW_FRAME_MIN, "s", "lo", ALL, 0)};
              const char* order[] = {"t"};
              OpArgs args;
-             args.strlist(1, nullptr, 0).strlist(2, order, 1).winlist(3, specs);
+             args.strlist(1, {}).strlist(2, {order, 1}).winlist(3, specs);
              dstd::Vector<dstd::String> names = b.schema();
              for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
              return b.frame_op("dftu.frame.window", args, {}, names);
@@ -480,13 +482,14 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
         // kernel's steps, and a text maximum that reads rows ahead.
         {"window_suffix",
          [](const LazyFrame& b) {
-             const auto frame = [](dftu_window_func func, const char* value,
-                                   const char* out, std::int64_t pre,
+             const auto frame = [](dftu_window_func func,
+                                   dstd::CStringView value,
+                                   dstd::CStringView out, std::int64_t pre,
                                    std::int64_t fol, bool range = false) {
                  dftu_window_spec w{};
                  w.func = func;
-                 w.value = value;
-                 w.out = out;
+                 w.value = value.c_str();
+                 w.out = out.c_str();
                  w.param.frame = {
                      0,
                      pre,
@@ -506,7 +509,7 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
                  frame(DFTU_WINDOW_FRAME_MAX, "s", "ahead", ALL, 2)};
              const char* order[] = {"t"};
              OpArgs args;
-             args.strlist(1, nullptr, 0).strlist(2, order, 1).winlist(3, specs);
+             args.strlist(1, {}).strlist(2, {order, 1}).winlist(3, specs);
              dstd::Vector<dstd::String> names = b.schema();
              for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
              return b.frame_op("dftu.frame.window", args, {}, names);
@@ -682,11 +685,11 @@ coro::CoroTask<std::int64_t> drain_count(LazyFrame lf) {
     co_return n;
 }
 
-int child_main(const dstd::String& op) {
+int child_main(dstd::CStringView op) {
     LazyFrame base = gen(ROWS, ROWS).memory_budget(BUDGET);
     LazyFrame plan = base;
-    if (op != "input_only") {
-        const auto it = recipes().find(op);
+    if (op.view() != "input_only") {
+        const auto it = recipes().find(dstd::String(op.view()));
         if (it == recipes().end()) return 2;
         plan = it->second(base).memory_budget(BUDGET);
     }
@@ -719,7 +722,7 @@ constexpr std::size_t MAX_PARALLEL_CHILDREN = 4;
 
 // Runs on worker threads, so it makes no assertion. The caller checks `piped`
 // and `forked`.
-ChildResult run_child(const dstd::String& op) {
+ChildResult run_child(dstd::CStringView op) {
     const auto started = dstd::steady_now();
     ChildResult r;
     int fds[2];

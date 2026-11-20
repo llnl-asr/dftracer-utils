@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/spill_dir.h>
 #include <dftracer/utils/common/spill_dir_internal.h>
 #include <dftracer/utils/common/spill_file.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
@@ -29,7 +30,7 @@ namespace {
 // directory refuses as a fallback and warns about.
 class DiskDir {
    public:
-    explicit DiskDir(const dstd::String& tag)
+    explicit DiskDir(dstd::StringView tag)
         : path_(dstd::fs::current_path().value() /
                 (dstd::fmt<"{}_{}_{}">(tag, ::getpid(), next_id()))) {
         REQUIRE(dstd::fs::remove_all(path_).has_value());
@@ -49,12 +50,12 @@ class DiskDir {
 };
 
 struct EnvGuard {
-    explicit EnvGuard(const char* value) {
-        if (value)
-            ::setenv(dftracer::utils::common::constants::SPILL_DIR_ENV, value,
-                     1);
-        else
-            ::unsetenv(dftracer::utils::common::constants::SPILL_DIR_ENV);
+    EnvGuard() {
+        ::unsetenv(dftracer::utils::common::constants::SPILL_DIR_ENV);
+    }
+    explicit EnvGuard(dstd::CStringView value) {
+        ::setenv(dftracer::utils::common::constants::SPILL_DIR_ENV,
+                 value.c_str(), 1);
     }
     ~EnvGuard() {
         ::unsetenv(dftracer::utils::common::constants::SPILL_DIR_ENV);
@@ -86,7 +87,7 @@ TEST_CASE("a set variable that cannot be used is an error naming it") {
 }
 
 TEST_CASE("an unset variable gives a writable directory that is not RAM") {
-    EnvGuard env(nullptr);
+    EnvGuard env;
     auto dir = dftracer::utils::common::spill_dir();
     REQUIRE(dir.has_value());
     CHECK(dstd::fs::is_directory(dir->c_str()).value());
@@ -105,8 +106,10 @@ TEST_CASE("without a variable or a local disk the first usable fallback wins") {
     dftu_utils_test::FileOut(file) << "x";
     const dstd::String good =
         dstd::String((d.path() / "cache" / "spill").str());
-    auto dir = dftracer::utils::common::detail::choose_spill_dir(
-        "", {}, {dstd::Path((file / "sub").str()), dstd::Path(good)});
+    const dstd::Path fallbacks[] = {dstd::Path((file / "sub").str()),
+                                    dstd::Path(good)};
+    auto dir =
+        dftracer::utils::common::detail::choose_spill_dir("", {}, fallbacks);
     REQUIRE(dir.has_value());
     CHECK(dir->str() == good);
     CHECK(dstd::fs::is_directory(good).value());
@@ -121,12 +124,13 @@ TEST_CASE("a RAM-backed fallback is never the spill directory") {
     DiskDir d("spill_dir_ram");
     const dstd::String disk = dstd::String((d.path() / "spill").str());
     const dstd::String ram = "/dev/shm/dftu_spill_dir_test";
-    auto dir = dftracer::utils::common::detail::choose_spill_dir(
-        "", {}, {dstd::Path(ram), dstd::Path(disk)});
+    const dstd::Path both[] = {dstd::Path(ram), dstd::Path(disk)};
+    auto dir = dftracer::utils::common::detail::choose_spill_dir("", {}, both);
     REQUIRE(dir.has_value());
     CHECK(dir->str() == disk);
-    auto none = dftracer::utils::common::detail::choose_spill_dir(
-        "", {}, {dstd::Path(ram)});
+    const dstd::Path only_ram[] = {dstd::Path(ram)};
+    auto none =
+        dftracer::utils::common::detail::choose_spill_dir("", {}, only_ram);
     REQUIRE_FALSE(none.has_value());
     CHECK(none.error().message().find("DFTRACER_UTILS_SPILL_DIR") !=
           dstd::String::npos);
@@ -137,8 +141,9 @@ TEST_CASE("no usable spill directory is an error naming the variable") {
     DiskDir d("spill_dir_none");
     const dstd::Path file = d.path() / "file";
     dftu_utils_test::FileOut(file) << "x";
-    auto dir = dftracer::utils::common::detail::choose_spill_dir(
-        "", {}, {dstd::Path((file / "sub").str())});
+    const dstd::Path unusable[] = {dstd::Path((file / "sub").str())};
+    auto dir =
+        dftracer::utils::common::detail::choose_spill_dir("", {}, unusable);
     REQUIRE_FALSE(dir.has_value());
     CHECK(dir.error().message().find("DFTRACER_UTILS_SPILL_DIR") !=
           dstd::String::npos);

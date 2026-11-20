@@ -35,7 +35,14 @@ void Watchdog::start() {
 
     running_ = true;
     shutdown_requested_ = false;
-    watchdog_thread_ = dstd::Thread([this] { watchdog_loop(); });
+    auto thread = dstd::Thread::try_start([this] { watchdog_loop(); });
+    if (!thread) {
+        running_ = false;
+        DFTRACER_UTILS_LOG_WARN("Watchdog not started: {}",
+                                thread.error().c_str());
+        return;
+    }
+    watchdog_thread_ = std::move(*thread);
 
     DFTRACER_UTILS_LOG_DEBUG("{}", "Watchdog started");
 }
@@ -117,7 +124,7 @@ void Watchdog::set_default_task_timeout(std::chrono::milliseconds timeout) {
     default_task_timeout_ = timeout;
 }
 
-size_t Watchdog::active_task_count() const {
+std::size_t Watchdog::active_task_count() const {
     std::lock_guard<std::mutex> lock(active_tasks_mutex_);
     return active_tasks_.size();
 }
@@ -264,7 +271,8 @@ void Watchdog::trigger_timeout(dstd::StringView reason) {
     }
 }
 
-void Watchdog::trigger_warning(dstd::StringView task_name, int64_t elapsed_ms) {
+void Watchdog::trigger_warning(dstd::StringView task_name,
+                               std::int64_t elapsed_ms) {
     if (warning_callback_) {
         warning_callback_(task_name, elapsed_ms);
     }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -35,7 +36,7 @@ struct AdmittedRun {
     std::uint64_t peak_reserved = 0;
 };
 
-AdmittedRun run_admitted(const dstd::String& file, const dstd::String& out_dir,
+AdmittedRun run_admitted(dstd::CStringView file, dstd::CStringView out_dir,
                          std::size_t groups, std::uint64_t total_bytes,
                          std::uint64_t reserve_bytes) {
     ExtractionAdmission admission(total_bytes, reserve_bytes, groups);
@@ -167,7 +168,7 @@ TEST_SUITE("ChunkExtractor") {
         const dstd::String plain = env.dir() + "/plain.pfw.gz";
         {
             dftu_utils_test::FileOut out(plain);
-            out << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\"}\n";
+            out << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":1}\n";
         }
 
         auto input =

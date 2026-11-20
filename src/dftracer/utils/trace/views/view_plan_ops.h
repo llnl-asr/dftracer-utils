@@ -33,7 +33,8 @@ using detail::ScanPlan;
 ScanPlan from_files(dstd::Vector<ViewFile> files);
 ScanPlan from_file(dstd::String file_path, dstd::String index_path = "");
 coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
-                                        dstd::String index_path = "");
+                                        dstd::String index_dir = "",
+                                        dstd::String format = "");
 dstd::Result<dstd::Vector<TraceConfig>> config(const ScanPlan& plan);
 dstd::Result<dstd::Vector<dstd::String>> columns(const ScanPlan& plan);
 dstd::Result<dstd::Vector<ColumnInfo>> schema(const ScanPlan& plan);
@@ -89,14 +90,14 @@ ScanPlan materialize(const ScanPlan& plan, std::uint64_t checkpoint_size,
                      std::uint64_t part_size);
 /// The plan read by a trace operation: records without a time are skipped.
 ScanPlan timed(const ScanPlan& plan);
-ScanPlan record_schema(const ScanPlan& plan, const dstd::String& id);
+ScanPlan record_schema(const ScanPlan& plan, dstd::StringView id);
 ScanPlan cancel_when(const ScanPlan& plan, dstd::Function<bool()> pred);
 ScanPlan ordered(const ScanPlan& plan);
 ScanPlan rollup_root(const ScanPlan& plan, dstd::String dir);
 ScanPlan views_root(const ScanPlan& plan, dstd::String dir);
 coro::CoroTask<dstd::Result<ExportStats>> for_each_batch(
     ScanPlan plan,
-    dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
+    dstd::Function<void(std::size_t, dstd::Span<const dstd::StringView>)>
         on_batch,
     std::size_t slot_count, std::uint64_t limit = 0);
 dstd::Result<bool> export_would_bootstrap(const ScanPlan& plan);
@@ -125,7 +126,7 @@ coro::CoroTask<dstd::Result<dstd::String>> flamegraph_partial(
     ScanPlan plan, dstd::Vector<dstd::String> partition, dstd::String ts,
     dstd::String dur, dstd::String name, dstd::Vector<dstd::String> group);
 dataframe::DataFrame merge_flamegraph_partials(
-    const dstd::Vector<dstd::StringView>& partials);
+    dstd::Span<const dstd::StringView> partials);
 coro::CoroTask<dstd::Result<ExportStats>> run_folds(
     ScanPlan plan, dstd::Span<detail::Fold* const> folds,
     dftracer::utils::dstd::StringIntern& intern,
@@ -135,22 +136,22 @@ coro::CoroTask<dstd::Result<ExportStats>> run(
     ScanPlan plan, const ProgressFn* progress = nullptr);
 dstd::Result<dstd::String> materialize_dir(const ScanPlan& plan);
 dstd::Result<void> register_materialized(const ScanPlan& plan,
-                                         const dstd::String& dir);
+                                         dstd::StringView dir);
 dstd::Result<dstd::Vector<dstd::String>> mv_source(const ScanPlan& plan);
-coro::CoroTask<dstd::Result<TypedResult>> collect_typed(
+coro::CoroTask<dstd::Result<IndexRecords>> collect_index_records(
     ScanPlan plan, int shard_begin, int shard_end,
     const ProgressFn* progress = nullptr);
 coro::CoroTask<dstd::Result<ExportStats>> export_counters(ScanPlan plan,
                                                           ExportSink& sink);
 coro::CoroTask<dstd::Result<void>> materialize_partials(
-    ScanPlan plan, const dstd::Vector<dstd::StringView>& partials);
+    ScanPlan plan, dstd::Vector<dstd::StringView> partials);
 dstd::Result<dstd::Optional<dataframe::DataFrame>> reconstruct_if_cached(
     const ScanPlan& plan);
 coro::CoroTask<dstd::Result<dstd::String>> aggregate_partial(ScanPlan plan);
 dstd::Result<dataframe::DataFrame> merge_partials_to_table(
-    const ScanPlan& plan, const dstd::Vector<dstd::StringView>& partials);
+    const ScanPlan& plan, dstd::Span<const dstd::StringView> partials);
 dstd::Result<ExportStats> merge_counter_partials(
-    const ScanPlan& plan, const dstd::Vector<dstd::StringView>& partials,
+    const ScanPlan& plan, dstd::Span<const dstd::StringView> partials,
     ExportSink& sink);
 
 }  // namespace dftracer::utils::trace::views::detail::scan

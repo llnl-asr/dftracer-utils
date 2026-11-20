@@ -17,11 +17,11 @@ import pytest
 
 pa = pytest.importorskip("pyarrow")
 
-from dftracer.utils import DataFrame  # noqa: E402
+from dftracer.utils import DataFrame, DFTUtilsNotFoundError  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
 
 # The analytical kernels only exist when the extension was built with Arrow.
-_HAS_ARROW = hasattr(_ext._DataFrame, "window")
+_HAS_ARROW = hasattr(_ext.DataFrame, "window")
 pytestmark = pytest.mark.skipif(not _HAS_ARROW, reason="extension built without Arrow support")
 
 
@@ -373,7 +373,7 @@ def test_lazy_join_matches_eager():
         assert _dict(plan.collect()) == _dict(eager)
         assert _dict(plan.collect(batch_size=1)) == _dict(eager)
     assert "join left [k] = [k]" in left.lazy().join(right.lazy(), "k", "left").explain()
-    with pytest.raises(ValueError):
+    with pytest.raises(DFTUtilsNotFoundError):
         left.lazy().join(right.lazy(), "nope").columns
 
 
@@ -403,7 +403,7 @@ def test_lazy_concat_and_union_match_eager():
     assert _dict(a.lazy().union(b.lazy()).collect()) == _dict(a.union(b))
     assert _dict(a.lazy().concat(b.lazy(), a.lazy()).collect()) == _dict(a.concat(b, a))
     # A filter after the concat applies to both sides.
-    from dftracer.utils.columnar import col
+    from dftracer.utils import col
 
     filtered = plan.filter(col("k") > 1).collect()
     assert _dict(filtered) == {"k": [2, 2, 4], "s": ["y", "y", "w"]}
@@ -486,9 +486,9 @@ def test_lazy_asof_and_interval_errors():
     left, right = _random_frames(1, 10, 10)
     with pytest.raises(ValueError, match="tolerance"):
         left.lazy().asof(right.lazy(), "ts", "g", "backward", -1)
-    with pytest.raises((KeyError, IndexError, ValueError)):
+    with pytest.raises(DFTUtilsNotFoundError):
         left.lazy().asof(right.lazy(), "nope", "g", "backward")
-    with pytest.raises(ValueError):
+    with pytest.raises(DFTUtilsNotFoundError):
         left.lazy().interval(right.lazy(), "ts", "ts", "nope")
 
 
@@ -573,7 +573,7 @@ def test_lazy_relational_ops_match_eager():
         nested.unnest("tk", keep_empty=True)
     )
     # The flattened field is addressable by name in a later filter.
-    from dftracer.utils.columnar import col
+    from dftracer.utils import col
 
     assert _dict(un.filter(col("count") > 6).collect()) == {
         "pid": [1],
@@ -737,13 +737,13 @@ def test_melt_concat_union_distinct_sample_topk_sort():
         da.concat(db, how="sideways")
 
     dup = _df({"k": [1, 1, 2]})
-    assert sorted(_col(dup.distinct(), "k")) == [1, 2]
+    assert sorted(_col(dup.unique(), "k")) == [1, 2]
 
     big = _df({"k": list(range(100))})
     assert big.sample(5, seed=1).num_rows == 5
 
     scores = _df({"name": ["a", "b", "c"], "v": [3, 1, 2]})
-    assert _col(scores.top_k("v", 2), "v") == [3, 2]
+    assert _col(scores.top_k(2, by="v"), "v") == [3, 2]
     assert _col(scores.sort("v"), "v") == [1, 2, 3]
     assert _col(scores.sort("v", descending=True), "v") == [3, 2, 1]
 
@@ -903,8 +903,9 @@ def test_sort_nulls_first_select_expr_and_with_columns():
     from dftracer.utils import col
 
     df = _df({"k": [1, None, 3, 2], "v": [1.0, 2.0, 3.0, 4.0]})
-    assert _col(df.sort("k"), "k") == [1, 2, 3, None]
-    assert _col(df.sort("k", nulls_last=False), "k") == [None, 1, 2, 3]
+    assert _col(df.sort("k"), "k") == [None, 1, 2, 3]
+    assert _col(df.sort("k", nulls_last=True), "k") == [1, 2, 3, None]
+    assert _col(df.sort_values("k"), "k") == [1, 2, 3, None]
     assert _col(df.sort("k", descending=True, nulls_last=False), "v") == [2.0, 3.0, 4.0, 1.0]
     assert _col(df.sort_values("k", na_position="first"), "v") == [2.0, 1.0, 4.0, 3.0]
     assert df.sort("k", nulls_last=False).columns == ["k", "v"]
@@ -919,8 +920,8 @@ def test_sort_nulls_first_select_expr_and_with_columns():
         assert [list(r) for r in zip(_col(ours, "a"), _col(ours, "b"))] == exp, ascending
         assert ours.columns == ["a", "b"]
         lazy = two.lazy().sort_values(["a", "b"], ascending=ascending, na_position="first")
-        assert _dict(lazy.collect()) == _dict(ours)
-    with pytest.raises(ValueError, match="one direction per key"):
+        assert _dict(lazy.collect()) == _dict(ours.reset_index(drop=True))
+    with pytest.raises(ValueError, match="descending must be empty"):
         two.sort(["a", "b"], descending=[True, False, True], nulls_last=False)
 
     out = df.select("k", (col("v") * 2).alias("w"))

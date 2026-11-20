@@ -8,10 +8,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -59,14 +61,14 @@ struct HostFixture {
     }
 };
 
-std::uint64_t file_size(const dstd::String& path) {
+std::uint64_t file_size(dstd::CStringView path) {
     struct stat st{};
     return ::stat(path.c_str(), &st) == 0
                ? static_cast<std::uint64_t>(st.st_size)
                : 0;
 }
 
-dstd::String read_all(const dstd::String& path) {
+dstd::String read_all(dstd::CStringView path) {
     return dstd::fs::read_file(dstd::PathView(path)).value_or(dstd::String());
 }
 
@@ -90,7 +92,7 @@ dftu_status drive_status(dftu_plugin_host& host, MakeTask make,
 
 // Vectored write then vectored positional read back, with an lseek in between.
 dftracer::utils::plugins::Task vectored_roundtrip(
-    dftracer::utils::plugins::Host h, const char* path, std::int64_t* wrote,
+    dftracer::utils::plugins::Host h, dstd::String path, std::int64_t* wrote,
     std::int64_t* off, dstd::String* got) {
     dftracer::utils::plugins::Io io = h.io();
     int fd = -1;
@@ -127,7 +129,7 @@ dftracer::utils::plugins::Task vectored_roundtrip(
 // sendfile the whole of src into an already-open destination fd (a socket, so
 // the path is portable: macOS sendfile only targets sockets).
 dftracer::utils::plugins::Task sendfile_to_fd(dftracer::utils::plugins::Host h,
-                                              const char* src, int out_fd,
+                                              dstd::String src, int out_fd,
                                               std::uint64_t count,
                                               std::int64_t* sent) {
     dftracer::utils::plugins::Io io = h.io();
@@ -140,7 +142,7 @@ dftracer::utils::plugins::Task sendfile_to_fd(dftracer::utils::plugins::Host h,
 
 // pwrite a payload, then pwritev-append after it, and pread the whole back.
 dftracer::utils::plugins::Task positional_vectored(
-    dftracer::utils::plugins::Host h, const char* path, dstd::String* got) {
+    dftracer::utils::plugins::Host h, dstd::String path, dstd::String* got) {
     dftracer::utils::plugins::Io io = h.io();
     int fd = -1;
     co_await io.open(path, O_RDWR | O_CREAT | O_TRUNC, 0644, &fd);
@@ -214,7 +216,7 @@ dftracer::utils::plugins::Task job_ops(dftracer::utils::plugins::Host h,
 
 // Free function (not a coroutine lambda) so the frame's captures cannot dangle.
 dftracer::utils::plugins::Task write_via_writer(
-    dftracer::utils::plugins::Host h, const char* path) {
+    dftracer::utils::plugins::Host h, dstd::CStringView path) {
     dftracer::utils::plugins::Writer w =
         co_await h.writer(path, 1, /*gzip=*/false);
     co_await w.open();
@@ -226,7 +228,7 @@ dftracer::utils::plugins::Task write_via_writer(
 using dftracer::utils::plugins::Host;
 using dftracer::utils::plugins::Task;
 
-Task read_lines_sdk(Host h, const char* path, std::uint64_t start,
+Task read_lines_sdk(Host h, dstd::String path, std::uint64_t start,
                     std::uint64_t end, dstd::Vector<dstd::String>* out,
                     dstd::Vector<std::uint64_t>* firsts) {
     auto reader = co_await h.fileio().lines(path, start, end);
@@ -238,7 +240,7 @@ Task read_lines_sdk(Host h, const char* path, std::uint64_t start,
     }
 }
 
-Task read_chunks_sdk(Host h, const char* path, std::uint64_t chunk_size,
+Task read_chunks_sdk(Host h, dstd::String path, std::uint64_t chunk_size,
                      dstd::String* out) {
     auto reader = co_await h.fileio().chunks(path, chunk_size);
     for (;;) {
@@ -248,7 +250,7 @@ Task read_chunks_sdk(Host h, const char* path, std::uint64_t chunk_size,
     }
 }
 
-Task gz_roundtrip_sdk(Host h, const char* path,
+Task gz_roundtrip_sdk(Host h, dstd::String path,
                       dftracer::utils::plugins::GzSummary* summary,
                       dstd::Vector<dstd::String>* back) {
     auto fio = h.fileio();
@@ -266,30 +268,30 @@ Task gz_roundtrip_sdk(Host h, const char* path,
     }
 }
 
-Task gz_bad_append_sdk(Host h, const char* path) {
+Task gz_bad_append_sdk(Host h, dstd::CStringView path) {
     auto writer = co_await h.fileio().gz(path);
     co_await writer.open();
     co_await writer.append("no newline");
 }
 
-Task compress_roundtrip_sdk(Host h, const char* in, const char* gz,
-                            const char* back, std::uint64_t* gz_size,
+Task compress_roundtrip_sdk(Host h, dstd::String in, dstd::String gz,
+                            dstd::String back, std::uint64_t* gz_size,
                             std::uint64_t* back_size) {
     auto fio = h.fileio();
     co_await fio.compress(in, gz, gz_size);
     co_await fio.decompress(gz, back, back_size);
 }
 
-Task compress_missing_sdk(Host h, const char* in, const char* out) {
+Task compress_missing_sdk(Host h, dstd::CStringView in, dstd::CStringView out) {
     std::uint64_t size = 0;
     co_await h.fileio().compress(in, out, &size);
 }
 
-Task lines_missing_sdk(Host h, const char* path) {
+Task lines_missing_sdk(Host h, dstd::CStringView path) {
     auto reader = co_await h.fileio().lines(path);
 }
 
-Task helpers_sdk(Host h, const char* path, dstd::String* logical,
+Task helpers_sdk(Host h, dstd::String path, dstd::String* logical,
                  std::int64_t* mtime, std::uint64_t* size,
                  std::uint64_t* hash) {
     auto fio = h.fileio();
@@ -300,7 +302,7 @@ Task helpers_sdk(Host h, const char* path, dstd::String* logical,
     *hash = co_await fio.sampled_hash(given);
 }
 
-Task size_missing_sdk(Host h, const char* path) {
+Task size_missing_sdk(Host h, dstd::CStringView path) {
     (void)co_await h.fileio().size(path);
 }
 
@@ -428,8 +430,8 @@ TEST_CASE("plugin cxx: Writer open/chunk/close writes a non-empty file") {
 }
 
 static dftracer::utils::plugins::Task merge_two(
-    dftracer::utils::plugins::Host h, const char* target, const char* a,
-    const char* b) {
+    dftracer::utils::plugins::Host h, dstd::String target, dstd::String a,
+    dstd::CStringView b) {
     auto merge = h.merge_shards(target, {a, b});
     co_await merge;
 }
@@ -473,8 +475,8 @@ namespace {
 // mkdir, rename and rmdir through the SDK, then a failing unlink read as a
 // status and a Linux-only op, which refuses off Linux.
 dftracer::utils::plugins::Task sdk_dir_ops(
-    dftracer::utils::plugins::Host h, const char* dir, const char* a,
-    const char* b, const char* missing, dftu_status* unlink_status,
+    dftracer::utils::plugins::Host h, dstd::String dir, dstd::String a,
+    dstd::String b, dstd::String missing, dftu_status* unlink_status,
     dftracer::utils::plugins::Statx* sx) {
     dftracer::utils::plugins::Io io = h.io();
     co_await io.mkdir(dir, 0755);
@@ -584,8 +586,8 @@ struct FsSdkResult {
 // write_file, read_file, positioned I/O, listing, find_all and stat_batch
 // through the SDK, and a failing read_file read as a status.
 dftracer::utils::plugins::Task sdk_fs_ops(dftracer::utils::plugins::Host h,
-                                          const char* dir, const char* file,
-                                          const char* missing,
+                                          dstd::String dir, dstd::String file,
+                                          dstd::String missing,
                                           FsSdkResult* out) {
     using plugins::FileStat;
     using plugins::FindOptions;
@@ -945,6 +947,10 @@ TEST_CASE("plugin cxx: Fs list_dir reports the kind of a file and a dir") {
 }
 
 TEST_CASE("plugin cxx: Io openat2 opens through an OpenHow") {
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+    MESSAGE("skipped: Valgrind 3.22 does not handle syscall 437 (openat2)");
+    return;
+#endif
     dftu_utils_test::TestEnvironment env(0);
     const dstd::String path = env.dir() + "/sdk_openat2.bin";
     dstd::fs::write_file(dstd::PathView(path), dstd::String("how")).discard();

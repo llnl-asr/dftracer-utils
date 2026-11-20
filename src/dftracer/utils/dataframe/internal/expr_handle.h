@@ -27,7 +27,7 @@ std::uint64_t expr_fingerprint(const Expr& e);
 
 // `e` with each col(i) replaced by `by_index[i]`; an out-of-range or empty
 // entry keeps the column reference.
-Expr expr_rebind_cols(const Expr& e, const dstd::Vector<Expr>& by_index);
+Expr expr_rebind_cols(const Expr& e, dstd::Span<const Expr> by_index);
 
 // A stable text for the expression tree, equal for equal trees in any process
 // (literals and is_in values written out, no addresses): an identity that may

@@ -77,7 +77,7 @@ def test_error_reaches_the_generic_op_runner():
     # error scalar; it must raise, never return a number.
     s = DataFrame.from_dict({"s": ["a", "b"]})["s"]
     with pytest.raises(TypeError, match="sum.*string"):
-        _ext.op_run("dftu.series.reduce", s._native, 1)
+        _ext.op_run("dftu.series.reduce", s, 1)
 
 
 def test_numeric_reductions_are_unchanged():
@@ -88,4 +88,6 @@ def test_numeric_reductions_are_unchanged():
     assert x.mean() == pytest.approx(8 / 3)
     empty = DataFrame.from_dict({"x": [3, 1, 4]}).filter(col("x") > 100)["x"]
     assert empty.sum() == 0
-    assert empty.mean() == 0.0
+    assert empty.mean() is None
+    assert empty.min() is None
+    assert empty.max() is None

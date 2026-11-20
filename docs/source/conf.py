@@ -141,7 +141,7 @@ if ON_READTHEDOCS:
     install_extension_stub()
     # Mock the heavy optional deps. pandas hard-imports pyarrow (reads
     # pa.__version__), so pandas/numpy must be mocked whenever pyarrow is,
-    # or importing dftracer.utils.dfanalyzer for autodoc fails.
+    # or importing dftracer.utils for autodoc fails.
     autodoc_mock_imports = [
         "numpy",
         "pandas",
@@ -374,7 +374,11 @@ autodoc_default_options = {
     "members": True,
     "member-order": "bysource",
     "undoc-members": True,
-    "exclude-members": "__weakref__",
+    # ``str`` and ``list`` are the accessor properties of Series and Expr. A
+    # documented attribute with those names captures every plain ``str`` or
+    # ``list`` type in a docstring field (Sphinx matches a type by its last
+    # name part), so they are not documented as members.
+    "exclude-members": "__weakref__, str, list",
 }
 
 # Type annotations in both signature and description

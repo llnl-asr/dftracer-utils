@@ -22,10 +22,11 @@ constexpr auto RUN_FOR = std::chrono::seconds(3);
 // A lost wakeup leaves the timer thread parked for good, so a failure would
 // otherwise hang the test instead of reporting.
 template <typename Fn>
-void run_with_deadline(const char* what, Fn fn) {
+void run_with_deadline(dstd::StringView what, Fn fn) {
     auto done = std::async(std::launch::async, std::move(fn));
     if (done.wait_for(DEADLINE) != std::future_status::ready) {
-        std::fprintf(stderr, "%s did not finish within the deadline\n", what);
+        std::fprintf(stderr, "%.*s did not finish within the deadline\n",
+                     static_cast<int>(what.size()), what.data());
         std::_Exit(1);
     }
     done.get();
@@ -38,7 +39,7 @@ TEST_CASE("each timer registered on an idle timer thread fires") {
     int fired_rounds = 0;
     run_with_deadline("timer rounds", [&] {
         coro::TimerService timers;
-        timers.start();
+        REQUIRE(timers.start().has_value());
         std::mutex m;
         std::condition_variable cv;
         const auto until = dstd::steady_now() + RUN_FOR;
@@ -68,7 +69,7 @@ TEST_CASE("stop wakes an idle timer thread") {
         const auto until = dstd::steady_now() + RUN_FOR;
         while (dstd::steady_now() < until) {
             coro::TimerService timers;
-            timers.start();
+            CHECK(timers.start().has_value());
             timers.stop();
         }
     });

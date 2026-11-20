@@ -18,9 +18,9 @@ class TestArrowIpcReadback:
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
             with dftu_utils.Indexer(files=[gz_file], index_dir=env.temp_dir) as ix:
-                ix.ensure_indexed()
+                ix.ensure()
 
-            viewer = dftu_utils.TraceViewer(gz_file, index_path=env.temp_dir)
+            viewer = dftu_utils.TraceViewer(gz_file, index_dir=env.temp_dir)
             batches = [pa.record_batch(c) for c in viewer.stream(batch_size=100)]
             assert batches
             for pa_batch in batches:

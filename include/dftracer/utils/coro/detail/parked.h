@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <atomic>
 #include <coroutine>
@@ -183,7 +184,7 @@ void stop_or_resume(Executor* executor, ParkNode*& park,
 
 /// Ends the process: a wait was cancelled in a frame that cannot stop, such
 /// as one that is not a task. `what` names the wait.
-[[noreturn]] void cancelled_unstoppable(const char* what) noexcept;
+[[noreturn]] void cancelled_unstoppable(dstd::StringView what) noexcept;
 
 /// The registry entry of a coroutine suspended on an awaitable that only
 /// another party can finish. Shutdown wakes the waiter with a cancelled status

@@ -28,6 +28,18 @@ inline constexpr std::uint64_t STATS_FLOOR_BYTES = 8ULL << 20;
 /// in what they mean bumps it so existing evidence rebuilds.
 inline constexpr std::uint32_t EVIDENCE_FORMAT_VERSION = 0;
 
+/// The summaries one path is indexed with, in place of the build's defaults.
+struct PathSummaries {
+    /// The path as the index names its dimension: an args key, a dotted path
+    /// below args or a fixed dimension.
+    dstd::String path;
+    /// The path as the caller wrote it, which names the dimension of a
+    /// path-decoded record, whose dimensions keep any "args." prefix.
+    dstd::String written;
+    /// Any of Zonemap, Bloom and Counts.
+    store::ExtensionMask kinds;
+};
+
 struct ChunkIndexerConfig {
     bool index_name = true;
     bool index_cat = true;
@@ -67,6 +79,18 @@ struct ChunkIndexerConfig {
     /// The pruning extensions to build; dft.stats is built with any of them.
     store::ExtensionMask extensions = store::PRUNING_EXTENSIONS;
 
+    /// Paths that keep only the listed summaries, sorted by path. A path not
+    /// listed keeps every summary of `extensions`.
+    dstd::Vector<PathSummaries> path_summaries;
+
+    /// Whether the dimension `dim` is indexed with the summary `ext`.
+    bool builds(dstd::StringView dim, store::IndexExtension ext) const {
+        if (!extensions.has(ext)) return false;
+        for (const PathSummaries& p : path_summaries)
+            if (p.path == dim || p.written == dim) return p.kinds.has(ext);
+        return true;
+    }
+
     /// Hash of the settings `ext` is built with, recorded in its manifest
     /// entry; a change rebuilds that extension only. The dimensions are
     /// checked separately: asking for fewer than were indexed does not
@@ -78,6 +102,14 @@ struct ChunkIndexerConfig {
             hasher.update(STATS_FLOOR_BYTES);
             hasher.update(stats_share);
             hasher.update(path_budget);
+            for (const PathSummaries& p : path_summaries) {
+                hasher.update(p.path);
+                hasher.update(p.written);
+                for (auto kind : {store::IndexExtension::Zonemap,
+                                  store::IndexExtension::Bloom,
+                                  store::IndexExtension::Counts})
+                    hasher.update(static_cast<std::uint8_t>(p.kinds.has(kind)));
+            }
         };
         switch (ext) {
             case store::IndexExtension::Bloom:
@@ -104,6 +136,7 @@ struct ChunkIndexerConfig {
             case store::IndexExtension::Metadata:
             case store::IndexExtension::Plugin:
             case store::IndexExtension::Agg:
+            case store::IndexExtension::Format:
                 return 0;
         }
         return hasher.hash().value;
@@ -124,6 +157,15 @@ struct ChunkIndexerConfig {
 inline dstd::String extra_dimension_name(dstd::StringView field) {
     if (field.rfind("args.", 0) == 0) field.remove_prefix(5);
     return dstd::String(field);
+}
+
+/// Whether `dim` is one of the fixed dimensions of dftracer events, which are
+/// indexed without being named.
+inline bool is_fixed_dimension(dstd::StringView dim) {
+    for (dstd::StringView fixed : {"name", "cat", "pid", "tid", "pid_tid",
+                                   "hhash", "fhash", "shash", "ts", "dur"})
+        if (dim == fixed) return true;
+    return false;
 }
 
 /// The settings files of `schema` are indexed with: path-decoded records get
@@ -150,6 +192,13 @@ inline ChunkIndexerConfig for_schema(ChunkIndexerConfig config,
                       dim) == config.extra_dimensions.end())
             config.extra_dimensions.push_back(std::move(dim));
     }
+    if (by_path)
+        for (const PathSummaries& p : config.path_summaries)
+            if (!p.kinds.empty() &&
+                std::find(config.extra_dimensions.begin(),
+                          config.extra_dimensions.end(),
+                          p.written) == config.extra_dimensions.end())
+                config.extra_dimensions.push_back(p.written);
     for (const auto& path : schema.never_index)
         std::erase(config.extra_dimensions, path);
     if (schema.path_budget) config.path_budget = *schema.path_budget;
@@ -161,7 +210,7 @@ inline ChunkIndexerConfig for_schema(ChunkIndexerConfig config,
 struct IndexedDimensions {
     dstd::Vector<dstd::String> dimensions;
 
-    bool has_dimension(const dstd::String& dim) const {
+    bool has_dimension(dstd::StringView dim) const {
         return std::find(dimensions.begin(), dimensions.end(), dim) !=
                dimensions.end();
     }
@@ -170,8 +219,7 @@ struct IndexedDimensions {
         const ChunkIndexerConfig& config) const {
         dstd::Vector<dstd::String> missing;
 
-        auto check_dim = [this, &missing](const dstd::String& name,
-                                          bool enabled) {
+        auto check_dim = [this, &missing](dstd::StringView name, bool enabled) {
             if (enabled && !has_dimension(name)) {
                 missing.emplace_back(name);
             }
@@ -212,12 +260,12 @@ struct ChunkIndexerInput {
     ChunkIndexerConfig config;
     std::size_t batch_size = 4 * 1024 * 1024;
 
-    ChunkIndexerInput& with_file_path(const dstd::String& path) {
+    ChunkIndexerInput& with_file_path(dstd::StringView path) {
         file_path = path;
         return *this;
     }
 
-    ChunkIndexerInput& with_index_path(const dstd::String& path) {
+    ChunkIndexerInput& with_index_path(dstd::StringView path) {
         index_path = path;
         return *this;
     }

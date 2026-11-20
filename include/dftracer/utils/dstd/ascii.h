@@ -24,7 +24,7 @@ constexpr bool is_ascii_xdigit(char c) noexcept {
     const char folded = static_cast<char>(c | 0x20);
     return is_ascii_digit(c) || (folded >= 'a' && folded <= 'f');
 }
-/// The C whitespace set: space, \t, \n, \v, \f, \r.
+/// The C whitespace set: space, `\t`, `\n`, `\v`, `\f`, `\r`.
 constexpr bool is_ascii_space(char c) noexcept {
     return c == ' ' || (c >= '\t' && c <= '\r');
 }

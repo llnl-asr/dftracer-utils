@@ -74,7 +74,7 @@ const dftracer::utils::trace::index::plan::GroupResolver* ensure_resolver(
 // kinds.
 dstd::String resolve_group_value(
     const dftracer::utils::trace::index::plan::GroupResolver& r,
-    const GroupKey& gk, const dstd::String& key);
+    const GroupKey& gk, dstd::StringView key);
 
 // Apply `gk`'s value transform to an already-resolved group value. Coarsens
 // the grain, so both the scan and the tier must call it or the same query
@@ -88,14 +88,14 @@ dstd::String agg_col_name(const AggSpec& spec);
 // Column name for one per-arg reduction of the dyn (auto_numeric_metrics) path:
 // "<op>_<arg>" (Pct uses the spec's out_name prefix). The legacy bare-mean
 // column keeps the bare arg name and does not go through here.
-dstd::String dyn_col_name(const AggSpec& spec, const dstd::String& key);
+dstd::String dyn_col_name(const AggSpec& spec, dstd::StringView key);
 
 // Drop every column whose name is not in `select`, preserving result order. A
 // no-op when `select` is empty or names a column that is not present. Apply
 // only at the final collect() boundary, never to an intermediate that will be
 // merged further.
 void project_columns(dftracer::utils::dataframe::DataFrame& batch,
-                     const dstd::Vector<dstd::String>& select);
+                     dstd::Span<const dstd::String> select);
 
 // The plan's sort_by/topk/offset+limit/select, applied in that order. Apply
 // once at the final result boundary, after all merges.

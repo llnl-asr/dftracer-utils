@@ -16,11 +16,15 @@ namespace {
 constexpr int FRAME_LIMIT = 64;
 }  // namespace
 
-void fatal(const char* what, const char* detail) noexcept {
-    if (detail != nullptr && detail[0] != '\0') {
-        std::fprintf(stderr, "dftracer-utils fatal: %s: %s\n", what, detail);
+void fatal(StringView what, StringView detail) noexcept {
+    const int what_size = static_cast<int>(what.size());
+    if (!detail.empty()) {
+        std::fprintf(stderr, "dftracer-utils fatal: %.*s: %.*s\n", what_size,
+                     what.data(), static_cast<int>(detail.size()),
+                     detail.data());
     } else {
-        std::fprintf(stderr, "dftracer-utils fatal: %s\n", what);
+        std::fprintf(stderr, "dftracer-utils fatal: %.*s\n", what_size,
+                     what.data());
     }
     std::fflush(stderr);
 #ifdef DFTRACER_UTILS_DSTD_HAS_BACKTRACE

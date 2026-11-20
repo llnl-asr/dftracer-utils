@@ -81,10 +81,10 @@ dstd::Result<void> for_each_head_line(const dstd::File& file,
     dstd::String text;
     std::size_t consumed = 0;
     bool done = false;
-    auto feed = [&](const char* data, std::size_t n) {
+    auto feed = [&](dstd::StringView data) {
         // The text held from before has no newline.
         const std::size_t from = text.size();
-        text.append(data, n);
+        text.append(data);
         std::size_t pos = 0;
         for (;;) {
             const auto nl = text.find('\n', std::max(pos, from));
@@ -102,7 +102,7 @@ dstd::Result<void> for_each_head_line(const dstd::File& file,
     };
     if (!gz) {
         for (ssize_t got; !done && (got = read_chunk(CHUNK)) > 0;)
-            feed(comp.data(), static_cast<std::size_t>(got));
+            feed(dstd::StringView(comp.data(), static_cast<std::size_t>(got)));
     } else {
         zng_stream zs{};
         // Concatenated members decode as one stream (inflateReset at each
@@ -123,7 +123,7 @@ dstd::Result<void> for_each_head_line(const dstd::File& file,
             zs.avail_out = static_cast<std::uint32_t>(out.size());
             const int rc = zng_inflate(&zs, Z_NO_FLUSH);
             const std::size_t got = out.size() - zs.avail_out;
-            feed(out.data(), got);
+            feed(dstd::StringView(out.data(), got));
             if (rc == Z_STREAM_END) {
                 if ((eof && zs.avail_in == 0) || zng_inflateReset(&zs) != Z_OK)
                     break;
@@ -175,15 +175,13 @@ class Detector {
 
     // Whether more lines are wanted.
     bool add(dstd::StringView line) {
-        const char* start = nullptr;
-        std::size_t length = 0;
-        if (!json::trim_and_validate_with_comma(line.data(), line.size(), start,
-                                                length))
-            return true;
+        dstd::StringView trimmed;
+        if (!json::trim_and_validate_with_comma(line, trimmed)) return true;
         simdjson::dom::element root;
-        if (parser_.parse(start, length).get(root) != simdjson::SUCCESS &&
-            json::parse_refused(parser_, dstd::StringView(start, length))
-                    .get(root) != simdjson::SUCCESS)
+        if (parser_.parse(trimmed.data(), trimmed.size()).get(root) !=
+                simdjson::SUCCESS &&
+            json::parse_refused(parser_, trimmed).get(root) !=
+                simdjson::SUCCESS)
             return true;
         if (!root.is_object()) return true;
         ++out_.objects;
@@ -251,7 +249,7 @@ class Detector {
                 [&](const FieldSpec& f) { return record.at(f.path).exists(); });
         return std::all_of(
             s.require.begin(), s.require.end(),
-            [&](const dstd::String& path) { return record.at(path).exists(); });
+            [&](dstd::StringView path) { return record.at(path).exists(); });
     }
 
     // More required paths, then a user schema over a built-in, then the
@@ -390,9 +388,9 @@ void derive(RecordSchema& s) {
     const dstd::String phase = s.roles.phase;
     s.roles = Roles{};
     s.roles.phase = phase;
-    auto add = [](dstd::Vector<dstd::String>& to, const dstd::String& path) {
+    auto add = [](dstd::Vector<dstd::String>& to, dstd::StringView path) {
         if (std::find(to.begin(), to.end(), path) == to.end())
-            to.push_back(path);
+            to.emplace_back(path);
     };
     for (const auto& f : s.fields) {
         if (!f.optional) add(s.require, f.path);
@@ -471,7 +469,7 @@ dstd::Vector<RecordSchema> builtins() {
     {
         using namespace duql;
         const Col meta = c("ph").is_in(dstd::Vector<Col>{"M", 4});
-        const auto dict = [&](const char* tag) {
+        const auto dict = [&](dstd::StringView tag) {
             return Pipe().where(meta && c("name") == tag);
         };
         dft.source = built_merge(
@@ -541,7 +539,7 @@ struct Entry {
     dstd::String source;
 };
 
-dstd::Unexpected<dstd::Error> spec_error(const dstd::String& source,
+dstd::Unexpected<dstd::Error> spec_error(dstd::StringView source,
                                          dstd::StringView what) {
     return common::make_error<"record schema spec {}: {}">(
         common::ErrorCode::InvalidArgument, source, what);
@@ -574,7 +572,7 @@ class Registry {
     }
 
     dstd::Result<const RecordSchema*> add(const SchemaSpec& spec,
-                                          const dstd::String& source);
+                                          dstd::String source);
 
     // Whether `path` was loaded before; marks it loaded.
     bool first_load(dstd::StringView path) {
@@ -633,7 +631,7 @@ dstd::StringView role_name(Role role) {
 }
 
 dstd::Result<const RecordSchema*> Registry::add(const SchemaSpec& spec,
-                                                const dstd::String& source) {
+                                                dstd::String source) {
     if (spec.id.empty()) return spec_error(source, "missing id");
     std::unique_lock lock(mu_);
     if (const Entry* e = entry_locked(spec.id); e && e->source == "built-in")
@@ -760,7 +758,8 @@ dstd::Result<const RecordSchema*> Registry::add(const SchemaSpec& spec,
             source, dstd::fmt<"schema {} is already registered from {} with "
                               "another definition">(s.id, e->source));
     }
-    entries_.push_back({dstd::make_unique<RecordSchema>(std::move(s)), source});
+    entries_.push_back(
+        {dstd::make_unique<RecordSchema>(std::move(s)), std::move(source)});
     return entries_.back().schema.get();
 }
 
@@ -771,10 +770,10 @@ bool spec_file(dstd::PathView p) {
 
 dstd::Result<const RecordSchema*> register_into(Registry& reg,
                                                 dstd::StringView text,
-                                                const dstd::String& source) {
+                                                dstd::String source) {
     auto spec = parse_schema_spec(text, source);
     if (!spec) return spec.error();
-    return reg.add(*spec, source);
+    return reg.add(*spec, std::move(source));
 }
 
 dstd::Result<void> load_files(Registry& reg, const dstd::Path& p) {
@@ -886,10 +885,9 @@ dstd::Result<const RecordSchema*> get_schema(dstd::StringView id) {
     if (!reg) return reg.error();
     if (const RecordSchema* s = (*reg)->find(id)) return s;
     dstd::String ids;
-    for (const RecordSchema* s : (*reg)->all()) {
-        if (!ids.empty()) ids += ", ";
-        ids += s->id;
-    }
+    dstd::fmt_append_join<", ">(
+        ids, (*reg)->all(),
+        [](dstd::String& o, const RecordSchema* s) { o += s->id; });
     return common::make_error<
         "unknown record schema {} (registered: {}); user schemas load from "
         "$DFTRACER_UTILS_SCHEMA_PATH and <index_dir>/schemas/">(
@@ -925,12 +923,10 @@ dstd::Result<dstd::String> schemas_json() {
         json::append_json_escaped(out, s);
         out += '"';
     };
-    auto list = [&](const dstd::Vector<dstd::String>& xs) {
+    auto list = [&](dstd::Span<const dstd::String> xs) {
         out += '[';
-        for (std::size_t i = 0; i < xs.size(); ++i) {
-            if (i) out += ',';
-            quoted(xs[i]);
-        }
+        dstd::fmt_append_join<",">(
+            out, xs, [&](dstd::String&, dstd::StringView x) { quoted(x); });
         out += ']';
     };
     bool first = true;
@@ -1094,14 +1090,14 @@ dstd::String to_json(const SchemaDetection& d) {
     json::append_json_escaped(out, d.chosen ? d.chosen->id : "");
     out += "\",\"objects\":" + dstd::to_string(d.objects) +
            ",\"records\":" + dstd::to_string(d.records) + ",\"scores\":[";
-    for (std::size_t i = 0; i < d.scores.size(); ++i) {
-        const auto& s = d.scores[i];
-        if (i) out += ',';
-        out += "{\"id\":\"";
-        json::append_json_escaped(out, s.schema->id);
-        out += "\",\"required\":" + dstd::to_string(s.schema->require.size()) +
-               ",\"share\":" + dstd::to_string(s.share) + '}';
-    }
+    dstd::fmt_append_join<",">(
+        out, d.scores, [](dstd::String& o, const auto& s) {
+            o += "{\"id\":\"";
+            json::append_json_escaped(o, s.schema->id);
+            o +=
+                "\",\"required\":" + dstd::to_string(s.schema->require.size()) +
+                ",\"share\":" + dstd::to_string(s.share) + '}';
+        });
     out += "]}";
     return dstd::String(out);
 }

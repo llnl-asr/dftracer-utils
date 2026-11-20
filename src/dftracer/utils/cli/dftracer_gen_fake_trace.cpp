@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -56,9 +57,9 @@ struct QuerySpec {
     dstd::Map<dstd::String, dstd::Vector<dstd::String>> predicates;
 };
 
-static coro::CoroTask<int> run_verify(
-    const dstd::Vector<dstd::String>& file_paths,
-    const dstd::Vector<QuerySpec>& queries, std::size_t ckpt_size) {
+static coro::CoroTask<int> run_verify(dstd::Vector<dstd::String> file_paths,
+                                      dstd::Vector<QuerySpec> queries,
+                                      std::size_t ckpt_size) {
     // Extra dimensions: arbitrary dot-paths into args
     dstd::Vector<dstd::String> extra_dims = {"ret", "count", "offset", "epoch",
                                              "step"};
@@ -507,7 +508,7 @@ struct RankTrace {
     std::uint64_t ts = 1000000000ULL;  // 1 second in us
 
     RankTrace(const GenOptions& options, const TraceNames& trace_names,
-              int rank_index, const dstd::String& path)
+              int rank_index, dstd::StringView path)
         : opts(options),
           names(trace_names),
           rank(rank_index),
@@ -525,7 +526,7 @@ struct RankTrace {
     }
 
     // Fills the common fields and assigns the next id.
-    EventArgs make_event(const dstd::String& name, const dstd::String& cat,
+    EventArgs make_event(dstd::StringView name, dstd::StringView cat,
                          std::uint64_t event_tid, std::uint64_t event_ts,
                          std::uint64_t dur, int level) {
         EventArgs a;
@@ -877,8 +878,8 @@ coro::CoroTask<dstd::Result<void>> generate_rank(const GenOptions* opts,
 
 // Prints the results after generation.
 void print_summary(const GenOptions& opts, const TraceNames& names,
-                   const dstd::Vector<dstd::String>& generated_files,
-                   const dstd::Vector<std::size_t>& rank_event_counts) {
+                   dstd::Span<const dstd::String> generated_files,
+                   dstd::Span<const std::size_t> rank_event_counts) {
     std::size_t total_events = 0;
     for (int rank = 0; rank < opts.rank_count; ++rank) {
         std::printf("  rank %d: %zu events -> %s\n", rank,

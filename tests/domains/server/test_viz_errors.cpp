@@ -28,19 +28,19 @@ using namespace dftracer::utils::domains::server;
 namespace {
 
 struct Served {
-    explicit Served(const dstd::String& name) : dir(name) {}
+    explicit Served(dstd::StringView name) : dir(dstd::String(name)) {}
     dftu_utils_test::ScopedTestDir dir;
     dstd::UniquePtr<TraceIndex> index;
     Router router;
 };
 
-dstd::UniquePtr<Served> serve(const dstd::String& name) {
+dstd::UniquePtr<Served> serve(dstd::StringView name) {
     auto s = dstd::make_unique<Served>(name);
     dstd::String content = "[\n";
     for (int i = 0; i < 6; ++i)
         content += R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
                    dstd::to_string(1000 + i * 10) +
-                   R"(,"dur":100,"ph":"X","args":{"ret":4096}})" + "\n";
+                   R"(,"dur":100,"ph":1,"args":{"ret":4096}})" + "\n";
     content += "]\n";
     fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
@@ -64,8 +64,8 @@ dstd::UniquePtr<Served> serve(const dstd::String& name) {
     return s;
 }
 
-HttpResponse get(Served& s, const dstd::String& target,
-                 const char* method = "GET") {
+HttpResponse get(Served& s, dstd::StringView target,
+                 dstd::String method = "GET") {
     HttpRequest req;
     req.method = method;
     req.path = target;
@@ -81,7 +81,7 @@ HttpResponse get(Served& s, const dstd::String& target,
 }
 
 // `text` as a query-string value: everything but an unreserved byte escaped.
-dstd::String encode(const dstd::String& text) {
+dstd::String encode(dstd::StringView text) {
     static const char kHex[] = "0123456789ABCDEF";
     dstd::String out;
     for (const char c : text) {

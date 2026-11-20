@@ -15,11 +15,6 @@ using dftracer::utils::arrow::Batch;
 /// Returns a new reference, or NULL on error.
 PyObject *wrap_arrow_result(Batch result);
 
-/// Wrap a Python list of ArrowBatchCapsule objects in an ArrowTable.
-/// Steals a reference to batch_list on success.
-/// Returns a new reference, or NULL on error.
-PyObject *wrap_arrow_table(PyObject *batch_list);
-
 /// Sets NotImplementedError and returns false when @p requested_schema, the
 /// argument of an __arrow_c_stream__ call, is given and not None.
 bool no_requested_schema(PyObject *requested_schema);

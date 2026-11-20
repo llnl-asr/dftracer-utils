@@ -139,6 +139,25 @@ struct Schema {
     dstd::Vector<Field> fields;
 };
 
+class RunCounters;
+
+/// What a source plans for one scan before it opens a cursor (Source::plan):
+/// how completely it will apply each filter, what the scan costs and how many
+/// rows it gives, and a token for its own use that scan() reads back.
+struct ScanPlan {
+    /// One vote per @ref ScanRequest filter. The scan's votes are these, so the
+    /// engine keeps above the scan every filter not voted Exact.
+    dstd::Vector<Pushed> votes;
+    /// The relative price of the scan, one unit about one row read and decoded;
+    /// comparable only between plans of one source. Negative means unknown.
+    double cost = -1.0;
+    /// The rows the scan gives after the filters it voted Exact; negative means
+    /// unknown.
+    std::int64_t est_rows = -1;
+    /// Opaque to the engine: what the plan gave, passed back to scan().
+    std::uint64_t token = 0;
+};
+
 /// A pushdown request the optimizer hands a Source at scan time.
 struct ScanRequest {
     /// Columns the plan needs, in the order the scan must return them. Empty
@@ -153,6 +172,13 @@ struct ScanRequest {
     /// The resolved @ref LazyFrame budget (bytes); a streaming source may use
     /// it to bound its own in-flight buffering. Most sources ignore it.
     std::uint64_t memory_budget = 0;
+    /// The counters of the EXPLAIN ANALYZE run this scan belongs to, or null.
+    /// A source that runs plugin code keeps it for as long as its cursors live
+    /// and adds the plugins' counters to it; a plain run has none.
+    dstd::SharedPtr<RunCounters> counters;
+    /// What Source::plan gave for this request, or none for a source without a
+    /// plan. A source that planned scans as planned: its votes are the scan's.
+    dstd::Optional<ScanPlan> plan;
 };
 
 /// What Source::scan gives: a fresh async Cursor plus, per @ref ScanRequest
@@ -163,6 +189,21 @@ struct ScanResult {
 };
 
 class Source;
+
+/// One line a plugin adds to an explain: what it would do, as a key and a
+/// value (`pushed filters` and `0 of 1`).
+struct ExplainLine {
+    dstd::String key;
+    dstd::String value;
+};
+
+/// What a source says about the scan it would run, for LazyFrame::explain:
+/// who it is (`provider 'a.b'`) and its lines. A source that has nothing to say
+/// leaves both empty and explain prints nothing for it.
+struct SourceExplain {
+    dstd::String label;
+    dstd::Vector<ExplainLine> lines;
+};
 
 /// How a source took an op offered by a planning hook (Source::apply_*).
 enum class ApplyStatus {
@@ -187,13 +228,15 @@ struct NamedExpr {
 /// One aggregate of an @ref AggregateSpec. `input` and `by` are positional
 /// against the offering source's schema(). `input` is unset for count; `by` is
 /// set only for the ops that read a second column (agg_uses_by_col). `param` is
-/// the quantile or k where the op takes one.
+/// the quantile or k where the op takes one, and `interp` how a Quantile picks
+/// its result between two ranks.
 struct AggregateExpr {
     Agg op = Agg::Count;
     Expr input;
     Expr by;
     double param = 0.0;
     dstd::String out;
+    Interpolation interp = Interpolation::Linear;
 };
 
 /// A group-by offered to Source::apply_aggregation. The output is one column
@@ -205,6 +248,8 @@ struct AggregateSpec {
 };
 
 /// A lexicographic ordering: `by[i]` sorts descending when `descending[i]`.
+/// Nulls go last for every key: a sort that puts them first is not offered to a
+/// source.
 struct SortSpec {
     dstd::Vector<dstd::String> by;
     dstd::Vector<bool> descending;
@@ -247,17 +292,35 @@ class Source {
     /// (rows produced only by streaming). collect() runs a resident source
     /// whole-column, matching the eager path instead of paying the morsel tax.
     virtual const DataFrame* as_frame() const { return nullptr; }
+    /// The row index names of the rows this source produces; empty for none.
+    /// Unlike as_frame() it never runs a scan.
+    virtual dstd::Span<const dstd::SharedString> index_names() const {
+        return {};
+    }
     /// Whether scan() may return morsels whose name_ids carry columns that
     /// schema() does not declare. A plan over such a source keeps them through
     /// every op that keeps rows and returns them, by name, after the declared
     /// columns; it refuses an op that has no rule for them.
     virtual bool undeclared_columns() const { return false; }
+    /// What scan(`req`) would do, without scanning: `req` is the request
+    /// LazyFrame::explain builds for the plan. Called outside a scan, from any
+    /// thread, and may read the source's own state but opens no cursor. The
+    /// default says nothing.
+    virtual SourceExplain explain(const ScanRequest&) const { return {}; }
+    /// What scan(`req`) will do, asked once before the scan opens a cursor: the
+    /// engine then sets ScanRequest::plan to the answer and scans with it. An
+    /// error ends the query. The default plans nothing (none), and the votes
+    /// come from scan().
+    virtual dstd::Result<dstd::Optional<ScanPlan>> plan(
+        const ScanRequest&) const {
+        return dstd::Optional<ScanPlan>{};
+    }
 
     virtual dstd::Optional<SourceApplication> apply_filter(const Expr&) const {
         return dstd::nullopt;
     }
     virtual dstd::Optional<SourceApplication> apply_projection(
-        const dstd::Vector<NamedExpr>&) const {
+        dstd::Span<const NamedExpr>) const {
         return dstd::nullopt;
     }
     virtual dstd::Optional<SourceApplication> apply_aggregation(
@@ -269,7 +332,7 @@ class Source {
     /// schema. A source that accepts it must produce the first-occurrence
     /// order itself; the planner removes the UniqueOp.
     virtual dstd::Optional<SourceApplication> apply_distinct(
-        const dstd::Vector<dstd::String>&) const {
+        dstd::Span<const dstd::String>) const {
         return dstd::nullopt;
     }
     virtual dstd::Optional<SourceApplication> apply_sort(
@@ -347,6 +410,7 @@ class InMemorySource : public Source {
     Schema schema() const override;
     dstd::Result<ScanResult> scan(const ScanRequest& req) const override;
     const DataFrame* as_frame() const override { return frame_.get(); }
+    dstd::Span<const dstd::SharedString> index_names() const override;
 
    private:
     dstd::SharedPtr<const DataFrame> frame_;
@@ -365,20 +429,32 @@ class LazyOp;
 class LazyGroupBy;
 namespace detail {
 struct PlanAccess;
-}
+struct IndexDecl;
+}  // namespace detail
 
 class LazyFrame {
    public:
     static LazyFrame scan(dstd::SharedPtr<const Source> source);
 
-    /// A plan over the file at `path`, opened by the registered file-format
-    /// factory with the highest probe score for it (a plugin's
-    /// dftu_file_format_vt). A file no format claims is a NotFound error kept
-    /// as @ref status(), and so is a tie between two formats (an
-    /// InvalidArgument one, naming both), as is the error the winning
-    /// format's open reported. The plan holds the open file, so a later
+    /// A plan over the file at `path`, opened by the reader with the highest
+    /// probe score for it: a registered file format (a plugin's
+    /// dftu_file_format_vt) or the built-in trace reader, which scores 50 for a
+    /// gzip file and for text whose first lines are JSON objects. A non-empty
+    /// `format` names the reader and nothing is probed; an unknown name is an
+    /// InvalidArgument error that lists the known ones. A file no reader claims
+    /// is a NotFound error kept as @ref status(), and so is a tie between two
+    /// readers (an InvalidArgument one, naming both), as is the error the
+    /// winning reader's open reported. The plan holds the open file, so a later
     /// unregistration does not affect it.
-    static LazyFrame scan_file(dstd::StringView path);
+    ///
+    /// A format that splits the file in chunks and gave it an index (built by
+    /// @ref trace::index::Indexer) skips the chunks the index proves hold no
+    /// row a filter keeps. The index is the one in `index_dir`, or the one
+    /// beside the file when `index_dir` is empty. A file with no index, or one
+    /// that changed since it was indexed, is read whole.
+    static LazyFrame scan_file(dstd::StringView path,
+                               dstd::StringView index_dir = {},
+                               dstd::StringView format = {});
 
     LazyFrame select(dstd::Vector<dstd::String> names) const;
     LazyFrame filter(Expr predicate) const;
@@ -457,7 +533,7 @@ class LazyFrame {
     /// An InvalidArgument error for an `agg` that does not broadcast, and a
     /// NotFound one for a key the schema lacks.
     dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
-        Agg agg, const dstd::Vector<dstd::String>& keys = {}) const;
+        Agg agg, dstd::Span<const dstd::String> keys = {}) const;
     /// DataFrame::reduce as a plan step: the streaming one-group group_by
     /// with `agg` broadcast over the eligible columns. The grouped form is
     /// group_by(keys).reduce(agg).
@@ -474,17 +550,22 @@ class LazyFrame {
     /// Group by N expression keys; each desugars like the single-key overload.
     LazyFrame group_by(dstd::Vector<Expr> keys,
                        dstd::Vector<AggExprSpec> aggs) const;
-    /// Sort by `name`. External merge sort: spills sorted runs past the memory
-    /// budget and k-way merges them, so peak memory stays bounded.
-    LazyFrame sort_by(dstd::String name, bool descending = false) const;
-    /// Stable lexicographic sort by several key columns (nulls last), as
-    /// DataFrame::sort_by_multi. Not streaming: needs every row to compare
-    /// across the whole frame.
+    /// Sort by `name`, nulls last (or first when `nulls_last` is false).
+    /// External merge sort: spills sorted runs past the memory budget and
+    /// k-way merges them, so peak memory stays bounded.
+    LazyFrame sort_by(dstd::String name, bool descending = false,
+                      bool nulls_last = true) const;
+    /// Stable lexicographic sort by several key columns (nulls last, or first
+    /// when `nulls_last` is false), as DataFrame::sort_by_multi. Not
+    /// streaming: needs every row to compare across the whole frame.
     LazyFrame sort_by_multi(dstd::Vector<dstd::String> by,
-                            bool descending = false) const;
-    /// Per-column direction form: `descending[i]` applies to `by[i]`.
+                            bool descending = false,
+                            bool nulls_last = true) const;
+    /// Per-column form: `descending[i]` and `nulls_last[i]` apply to `by[i]`; a
+    /// single flag broadcasts, and an empty `nulls_last` is nulls last.
     LazyFrame sort_by_multi(dstd::Vector<dstd::String> by,
-                            dstd::Vector<bool> descending) const;
+                            dstd::Vector<bool> descending,
+                            dstd::Vector<bool> nulls_last = {}) const;
     /// Distinct rows, first occurrence, in original order, keyed on every
     /// column or on `subset` (empty = all). Streams input and output; holds
     /// only the distinct key set. A NotFound error (kept as @ref status()) for
@@ -651,14 +732,40 @@ class LazyFrame {
     /// determine statically is TypeId::Unknown, never a guess.
     Schema output_schema() const;
 
-    /// Whether the query can return columns beyond @ref output_schema: its
-    /// source, or the source of a joined or concatenated plan, has columns
-    /// that its schema does not declare.
+    /// The columns that form the row index of this plan's result, in order;
+    /// empty for none. The index of the source frame (a plan over
+    /// DataFrame::lazy()) or the one set by @ref with_index, run through the
+    /// index rule of each op (frame_op_index_rules.def), so collect() gives
+    /// the index the same eager ops give.
+    dstd::Vector<dstd::String> index_names() const;
+
+    /// This plan with the row index `names`; an empty vector drops it. A
+    /// NotFound error for a name that is no column of the plan (checked when
+    /// the plan declares all its columns), an InvalidArgument error for a
+    /// repeated name or a column of a type with no hash and equality (List,
+    /// Struct).
+    dstd::Result<LazyFrame> with_index(dstd::Vector<dstd::String> names) const;
+
+    /// Whether the query can return columns beyond @ref
+    /// LazyFrame::output_schema "output_schema": its source, or the source of a
+    /// joined or concatenated plan, has columns that its schema does not
+    /// declare.
     bool has_undeclared_columns() const;
 
     /// The optimized plan as text (source then one op per line), for
     /// introspection and tests.
     dstd::String explain() const;
+
+    /// Runs the plan and returns what @ref explain returns, with the rows each
+    /// stage handed on and the time spent inside it and its inputs, the filters
+    /// the source really took (`exact`, `inexact` or `no`) and the named
+    /// counters the plugins added to during the run (dftu_ctx_vt::counter).
+    /// The plan runs to its end and its rows are dropped, so it reads what a
+    /// collect() reads. Each call counts for itself, so analyses at once do
+    /// not mix. A failed plan is the error. `batch_size` is the scan chunk
+    /// size, as for collect().
+    coro::CoroTask<dstd::Result<dstd::String>> explain_analyze(
+        std::int64_t batch_size = 0) const;
 
     /// Pull-based chunk generator: the streaming terminal. Each yielded
     /// @ref DataFrame is standalone, carrying its own schema. One-shot: re-run
@@ -717,14 +824,18 @@ class LazyFrame {
     LazyFrame(dstd::SharedPtr<const Source> source,
               dstd::Vector<dstd::SharedPtr<const LazyOp>> ops,
               std::uint64_t memory_budget = 0,
-              dstd::SharedPtr<const dstd::Error> error = nullptr)
+              dstd::SharedPtr<const dstd::Error> error = nullptr,
+              dstd::SharedPtr<const detail::IndexDecl> index = nullptr)
         : source_(std::move(source)),
           ops_(std::move(ops)),
           memory_budget_(memory_budget),
-          error_(std::move(error)) {}
-    // Clone with a new op list, preserving the source, budget and error.
+          error_(std::move(error)),
+          index_(std::move(index)) {}
+    // Clone with a new op list, preserving the source, budget, error and the
+    // declared index.
     LazyFrame with_ops(dstd::Vector<dstd::SharedPtr<const LazyOp>> ops) const {
-        return LazyFrame(source_, std::move(ops), memory_budget_, error_);
+        return LazyFrame(source_, std::move(ops), memory_budget_, error_,
+                         index_);
     }
     // The ops over a resident frame, whole-column: an op with an eager form
     // runs it, any other runs its own cursor over the frame as one morsel.
@@ -738,6 +849,12 @@ class LazyFrame {
     dstd::Vector<dstd::SharedPtr<const LazyOp>> ops_;
     std::uint64_t memory_budget_ = 0;
     dstd::SharedPtr<const dstd::Error> error_;
+    // The EXPLAIN ANALYZE run this plan is a partner of (a join's or concat's
+    // other side), or null; set only by the plan that holds it.
+    dstd::SharedPtr<RunCounters> run_counters_;
+    // The index set by with_index and the op count it applies after; null
+    // when the plan only carries its source's index.
+    dstd::SharedPtr<const detail::IndexDecl> index_;
 };
 
 /// The two-step lazy group-by: a plan and its key columns, with the
@@ -1002,7 +1119,7 @@ struct LoweredGroupAggs {
     dstd::Vector<AggSpec> specs;
     dstd::Vector<dstd::String> value_names;
 };
-LoweredGroupAggs lower_group_aggs(const dstd::Vector<GroupAgg>& aggs);
+LoweredGroupAggs lower_group_aggs(dstd::Span<const GroupAgg> aggs);
 
 /// Accumulate one already-built chunk `frame` into `state`: resolve `keys` and
 /// `value_names` (from lower_group_aggs) by name against `frame`, feeding every
@@ -1011,9 +1128,8 @@ LoweredGroupAggs lower_group_aggs(const dstd::Vector<GroupAgg>& aggs);
 /// LazyFrame chunk driver (a trace Fold accumulating over a shared scan).
 dstd::Result<void> agg_accumulate_chunk(
     AggState& state, const DataFrame& frame,
-    const dstd::Vector<dstd::String>& keys,
-    const dstd::Vector<dstd::String>& value_names,
-    const dstd::String& dyn_prefix);
+    dstd::Span<const dstd::String> keys,
+    dstd::Span<const dstd::String> value_names, dstd::StringView dyn_prefix);
 
 }  // namespace dftracer::utils::dataframe
 

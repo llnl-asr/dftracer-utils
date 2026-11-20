@@ -9,6 +9,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <task_result.h>
 
 #include <utility>
@@ -17,22 +18,22 @@ namespace dftu_utils_test {
 
 inline dftracer::utils::dataframe::Series eval_ok(
     const dftracer::utils::dataframe::Expr& root,
-    const dftracer::utils::dstd::Vector<
-        const dftracer::utils::dataframe::Series*>& inputs) {
+    dftracer::utils::dstd::Span<const dftracer::utils::dataframe::Series* const>
+        inputs) {
     return ok(dftracer::utils::dataframe::eval(root, inputs));
 }
 
 inline dftracer::utils::dstd::Vector<dftracer::utils::dataframe::Series>
-eval_many_ok(const dftracer::utils::dstd::Vector<
-                 dftracer::utils::dataframe::Expr>& roots,
-             const dftracer::utils::dstd::Vector<
-                 const dftracer::utils::dataframe::Series*>& inputs) {
+eval_many_ok(
+    dftracer::utils::dstd::Span<const dftracer::utils::dataframe::Expr> roots,
+    dftracer::utils::dstd::Span<const dftracer::utils::dataframe::Series* const>
+        inputs) {
     return ok(dftracer::utils::dataframe::eval_many(roots, inputs));
 }
 
 inline dftracer::utils::dataframe::DataType infer_type_ok(
     const dftracer::utils::dataframe::Expr& root,
-    const dftracer::utils::dstd::Vector<dftracer::utils::dataframe::DataType>&
+    dftracer::utils::dstd::Span<const dftracer::utils::dataframe::DataType>
         input_types) {
     return ok(dftracer::utils::dataframe::infer_type(root, input_types));
 }

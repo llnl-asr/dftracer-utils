@@ -48,7 +48,7 @@ class FlowParser {
         bool is_null = false;
     };
 
-    bool fail(std::uint32_t offset, const char* reason);
+    bool fail(std::uint32_t offset, dstd::StringView reason);
     bool skip(bool& crossed);
     bool check_line_start(std::uint32_t at);
     bool is_marker(std::uint32_t at) const;

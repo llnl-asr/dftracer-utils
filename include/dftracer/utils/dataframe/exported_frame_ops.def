@@ -2,6 +2,7 @@
 /* Built-in dataframe frame ops (table -> table) seeded into the op registry
  * under the "dftu.frame." prefix (so they neither clash with the same-named
  * column ops nor need a separate registry). APPEND ONLY.
+ * A later row with the same name supersedes an earlier one for lookup by name.
  *
  *   DFTU_FRAME_OP(name, fn, ret, o0, o1, o2, o3, o4, o5, o6)
  *     name        - registry key suffix; registered as "dftu.frame.<name>".
@@ -107,5 +108,12 @@ DFTU_FRAME_OP(asof, dftu_dataframe_asof, FRAME, FRAME, FRAME, STR, STRLIST, I32,
 /* table + table + point, lo, hi columns + partition keys + outer: the
  * point-in-range join. */
 DFTU_FRAME_OP(interval, dftu_dataframe_interval, FRAME, FRAME, FRAME, STR, STR, STR, STRLIST, I32)
+
+/* Rows that supersede the same-named sort rows above, which stay as they were:
+ * the registry resolves a name to the last row that carries it. The null
+ * placement is a second flag (per key for sort_by_multi_per_col). */
+DFTU_FRAME_OP(sort_by, dftu_dataframe_sort_by_nulls, FRAME, FRAME, STR, I32, I32, NONE, NONE, NONE)
+DFTU_FRAME_OP(sort_by_multi, dftu_dataframe_sort_by_multi_nulls, FRAME, FRAME, STRLIST, I32, I32, NONE, NONE, NONE)
+DFTU_FRAME_OP(sort_by_multi_per_col, dftu_dataframe_sort_by_multi_per_col_nulls, FRAME, FRAME, STRLIST, I32LIST, I32LIST, NONE, NONE, NONE)
 
 #undef DFTU_FRAME_OP

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -16,8 +17,8 @@ bool unrecorded(dstd::StringView path) {
 
 const dstd::StringViewMap<std::uint64_t>* GranuleCounts::get() const {
     if (!values && !compressed.empty())
-        values = trace::index::extensions::ChunkDimensionStats::
-            decompress_value_counts(compressed.data(), compressed.size());
+        values = trace::index::extensions::CountsBuilder::decompress(
+            compressed.data(), compressed.size());
     return values ? &*values : nullptr;
 }
 
@@ -53,7 +54,7 @@ bool FileIndexData::fixed_field(dstd::StringView path) const {
 }
 
 const dstd::Optional<dstd::String>& FileIndexData::evidence_name(
-    const dstd::String& path) {
+    dstd::StringView path) {
     auto it = evidence_names_.find(path);
     if (it != evidence_names_.end()) return it->second;
     dstd::Optional<dstd::String> name;
@@ -75,7 +76,57 @@ const dstd::Optional<dstd::String>& FileIndexData::evidence_name(
     return evidence_names_.emplace(path, std::move(name)).first->second;
 }
 
-const FileIndexData::Zones& FileIndexData::zones(const dstd::String& path) {
+bool FileIndexData::may_hold_strings(dstd::StringView path) {
+    const auto& name = evidence_name(path);
+    if (!name) return true;
+    if (fixed_field(*name))
+        return *name != "pid" && *name != "tid" && *name != "ts" &&
+               *name != "dur" && *name != "te";
+    const dstd::String leaf = by_path ? *name : "args." + *name;
+    for (const auto& [p, stat] : catalog()) {
+        if (dstd::StringView(p) != leaf) continue;
+        constexpr auto STRING_BIT =
+            1U << static_cast<unsigned>(trace::index::store::PathType::String);
+        return (stat.seen & STRING_BIT) != 0 ||
+               stat.type == trace::index::store::PathType::String ||
+               stat.type == trace::index::store::PathType::Mixed;
+    }
+    return true;
+}
+
+dataframe::TypeId FileIndexData::path_type(dstd::StringView path) {
+    using dataframe::TypeId;
+    const auto& name = evidence_name(path);
+    if (!name) return TypeId::Unknown;
+    if (fixed_field(*name)) {
+        if (*name == "pid" || *name == "tid" || *name == "ts" || *name == "dur")
+            return TypeId::Int64;
+        if (*name == "name" || *name == "cat" || *name == "hhash" ||
+            *name == "fhash")
+            return TypeId::String;
+        return TypeId::Unknown;
+    }
+    const dstd::String leaf = by_path ? *name : "args." + *name;
+    for (const auto& [p, stat] : catalog()) {
+        if (dstd::StringView(p) != leaf) continue;
+        switch (stat.type) {
+            case trace::index::store::PathType::Bool:
+            case trace::index::store::PathType::Int:
+                return TypeId::Int64;
+            case trace::index::store::PathType::Uint:
+                return TypeId::Uint64;
+            case trace::index::store::PathType::Double:
+                return TypeId::Float64;
+            case trace::index::store::PathType::String:
+                return TypeId::String;
+            default:
+                return TypeId::Unknown;
+        }
+    }
+    return TypeId::Unknown;
+}
+
+const FileIndexData::Zones& FileIndexData::zones(dstd::StringView path) {
     auto it = zones_.find(path);
     if (it != zones_.end()) return it->second;
     auto& out = zones_[path];
@@ -94,7 +145,7 @@ const FileIndexData::Zones& FileIndexData::zones(const dstd::String& path) {
     return out;
 }
 
-const FileIndexData::Counts& FileIndexData::counts(const dstd::String& path) {
+const FileIndexData::Counts& FileIndexData::counts(dstd::StringView path) {
     auto it = counts_.find(path);
     if (it != counts_.end()) return it->second;
     auto& out = counts_[path];
@@ -117,7 +168,7 @@ const FileIndexData::Counts& FileIndexData::counts(const dstd::String& path) {
     return out;
 }
 
-const FileIndexData::Blooms& FileIndexData::blooms(const dstd::String& path) {
+const FileIndexData::Blooms& FileIndexData::blooms(dstd::StringView path) {
     auto it = blooms_.find(path);
     if (it != blooms_.end()) return it->second;
     auto& out = blooms_[path];
@@ -138,7 +189,7 @@ const FileIndexData::Blooms& FileIndexData::blooms(const dstd::String& path) {
 }
 
 const trace::index::extensions::ScalableBloomFilter* FileIndexData::file_bloom(
-    const dstd::String& path) {
+    dstd::StringView path) {
     auto it = file_blooms_.find(path);
     if (it == file_blooms_.end()) {
         dstd::Optional<trace::index::extensions::ScalableBloomFilter> bloom;
@@ -156,17 +207,29 @@ const trace::index::extensions::ScalableBloomFilter* FileIndexData::file_bloom(
     return it->second ? &*it->second : nullptr;
 }
 
+namespace {
+
+dstd::String posting_key(dstd::StringView path, std::uint64_t value_hash) {
+    dstd::String key;
+    key.reserve(path.size() + 1 + 8);
+    key.append(path);
+    key.push_back('\0');
+    dstd::append_u64_be(key, value_hash);
+    return key;
+}
+
+}  // namespace
+
 const dstd::Set<std::uint64_t>& FileIndexData::posting_chunks(
-    const dstd::String& path, const dstd::String& val) {
-    auto key = path + '\0' + val;
+    dstd::StringView path, std::uint64_t value_hash) {
+    auto key = posting_key(path, value_hash);
     auto it = posting_chunks_.find(key);
     if (it != posting_chunks_.end()) return it->second;
     auto& out = posting_chunks_[key];
     const auto& name = evidence_name(path);
     if (name && current(IndexExtension::Postings)) {
-        auto granules = trace::index::posting_granules(
-            *snapshot, *file, *name,
-            trace::index::extensions::kinds::value_hash(val));
+        auto granules =
+            trace::index::posting_granules(*snapshot, *file, *name, value_hash);
         if (!granules) {
             fail(std::move(granules).error());
             return out;
@@ -176,8 +239,8 @@ const dstd::Set<std::uint64_t>& FileIndexData::posting_chunks(
     return out;
 }
 
-dstd::Optional<bool> FileIndexData::posting_contains(const dstd::String& path,
-                                                     const dstd::String& val) {
+dstd::Optional<bool> FileIndexData::posting_contains(dstd::StringView path,
+                                                     std::uint64_t value_hash) {
     const auto& name = evidence_name(path);
     if (!name || !current(IndexExtension::Postings)) return dstd::nullopt;
     auto has = has_postings_.find(path);
@@ -190,12 +253,11 @@ dstd::Optional<bool> FileIndexData::posting_contains(const dstd::String& path,
         has = has_postings_.emplace(path, *found).first;
     }
     if (!has->second) return dstd::nullopt;
-    auto key = path + '\0' + val;
+    auto key = posting_key(path, value_hash);
     auto it = posting_membership_.find(key);
     if (it != posting_membership_.end()) return it->second;
-    const auto present = trace::index::has_posting(
-        *snapshot, *file, *name,
-        trace::index::extensions::kinds::value_hash(val));
+    const auto present =
+        trace::index::has_posting(*snapshot, *file, *name, value_hash);
     if (!present.has_value()) {
         fail(present.error());
         return dstd::nullopt;

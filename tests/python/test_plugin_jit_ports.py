@@ -32,7 +32,7 @@ def _write_trace(path: str, n: int, pids) -> None:
             pid = pids[i % len(pids)]
             f.write(
                 f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":1,'
-                f'"ts":{1000 + i},"dur":{10 + i},"ph":"X","args":{{}}}}\n'
+                f'"ts":{1000 + i},"dur":{10 + i},"ph":1,"args":{{}}}}\n'
             )
 
 

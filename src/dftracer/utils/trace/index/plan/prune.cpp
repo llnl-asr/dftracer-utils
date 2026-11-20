@@ -25,7 +25,7 @@ namespace {
 // [begin, end) when `half_open`; chunks without bounds, or with corrupt ones,
 // are kept.
 dstd::Vector<std::uint64_t> filter_by_time(
-    const dstd::Vector<std::uint64_t>& chunks,
+    dstd::Span<const std::uint64_t> chunks,
     const dstd::HashMap<std::uint64_t,
                         dstd::Pair<std::uint64_t, std::uint64_t>>& bounds,
     double begin, double end, bool half_open) {
@@ -66,7 +66,7 @@ class Reads {
     dstd::Optional<trace::index::Snapshot> owned_;
 };
 
-dstd::Unexpected<dstd::Error> read_failed(const dstd::String& file_path,
+dstd::Unexpected<dstd::Error> read_failed(dstd::StringView file_path,
                                           const dstd::Error& error) {
     return common::make_error<"prune_file: index read failed for {}: {}">(
         common::ErrorCode::Indexer, file_path, error.message());
@@ -222,7 +222,7 @@ coro::CoroTask<dstd::Result<PruneResult>> prune_chunks(
 // range reader returns it from the chunk where it starts, so that one is read
 // too. A line number reader keeps its own rows, since each row has one owner.
 void add_line_starts(dstd::Vector<std::uint64_t>& candidates,
-                     const dstd::Vector<gzip::ChunkSpan>& spans) {
+                     dstd::Span<const gzip::ChunkSpan> spans) {
     const std::size_t count = candidates.size();
     for (std::size_t i = 0; i < count; ++i) {
         std::uint64_t chunk = candidates[i];

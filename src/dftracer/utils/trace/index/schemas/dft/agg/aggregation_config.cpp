@@ -30,4 +30,15 @@ std::uint64_t AggregationConfig::params_hash() const {
     return h.finish();
 }
 
+bool AggregationConfig::covers(const AggregationConfig& want) const {
+    const std::uint64_t own = params_hash();
+    if (own == want.params_hash()) return true;
+    if (!compute_percentiles || want.compute_percentiles) return false;
+    AggregationConfig widened = want;
+    widened.compute_percentiles = true;
+    widened.sketch_accuracy = sketch_accuracy;
+    widened.percentiles = percentiles;
+    return widened.params_hash() == own;
+}
+
 }  // namespace dftracer::utils::trace::index::schemas::dft::agg

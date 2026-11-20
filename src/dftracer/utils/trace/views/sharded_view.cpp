@@ -66,7 +66,7 @@ coro::CoroTask<dstd::Result<dstd::Vector<dstd::String>>> collect_partials(
 
 dstd::Result<
     dstd::Optional<dftracer::utils::trace::index::store::IndexShardManifest>>
-manifest_at(const dstd::String& root) {
+manifest_at(dstd::StringView root) {
     return dftracer::utils::trace::index::store::read_shard_manifest(root);
 }
 
@@ -77,7 +77,7 @@ ShardedView ShardedView::from_shard_dirs(
     return ShardedView(std::move(shard_dirs));
 }
 
-dstd::Result<ShardedView> ShardedView::from_manifest(const dstd::String& root) {
+dstd::Result<ShardedView> ShardedView::from_manifest(dstd::StringView root) {
     auto read = manifest_at(root);
     if (!read) return read.error();
     const auto& manifest = *read;
@@ -109,7 +109,7 @@ dstd::Result<ShardedView> ShardedView::from_manifest(const dstd::String& root) {
 }
 
 dstd::Result<dstd::Vector<ViewFile>> ShardedView::shard_view_files(
-    const dstd::String& shard_dir) const {
+    dstd::StringView shard_dir) const {
     // A shard's Members scopes store each file's full canonical path, so it
     // locates the trace directly and the index may live apart from it.
     auto snapshot =
@@ -165,8 +165,8 @@ coro::CoroTask<dstd::Result<ExportStats>> ShardedView::aggregate_counters(
     co_return configure(View::from_files({})).merge_counter_partials(pv, sink);
 }
 
-dstd::Result<void> write_shard_set(
-    const dstd::String& root, const dstd::Vector<dstd::String>& shard_dirs) {
+dstd::Result<void> write_shard_set(dstd::StringView root,
+                                   dstd::Span<const dstd::String> shard_dirs) {
     dftracer::utils::trace::index::store::IndexShardManifest manifest;
     manifest.format_version =
         static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
@@ -191,7 +191,7 @@ dstd::Result<void> write_shard_set(
                                                                       manifest);
 }
 
-dstd::Result<std::size_t> consolidate_shard_set(const dstd::String& root) {
+dstd::Result<std::size_t> consolidate_shard_set(dstd::StringView root) {
     auto read = manifest_at(root);
     if (!read) return read.error();
     const auto& manifest = *read;
@@ -337,8 +337,8 @@ dstd::Result<void> copy_agg_data(
 
 }  // namespace
 
-dstd::Result<std::size_t> merge_shard_set(const dstd::String& root,
-                                          const dstd::String& out_root) {
+dstd::Result<std::size_t> merge_shard_set(dstd::StringView root,
+                                          dstd::StringView out_root) {
     auto read = manifest_at(root);
     if (!read) return read.error();
     const auto& manifest = *read;

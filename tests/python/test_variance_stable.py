@@ -84,8 +84,8 @@ def test_skew_and_kurt_with_an_offset():
     v = normal(1e9, 1.0, N, 3)
     ref = two_pass(v)
     f = frame(v)
-    assert near(f["x"].skew(), ref["skew"])
-    assert near(f["x"].kurt(), ref["kurt"])
+    assert near(f["x"].skew(bias=True), ref["skew"])
+    assert near(f["x"].kurtosis(), ref["kurt"])
     assert near(group_value(f, "skew"), ref["skew"])
     assert near(group_value(f, "kurt"), ref["kurt"])
 
@@ -96,7 +96,7 @@ def test_accuracy_holds_across_the_parallel_chunk_boundary(n):
     ref = two_pass(v)
     f = frame(v)
     assert rel(f["x"].std(), ref["std"]) < TOL
-    assert near(f["x"].skew(), ref["skew"])
+    assert near(f["x"].skew(bias=True), ref["skew"])
 
 
 def test_constant_columns_have_zero_std():
@@ -168,7 +168,7 @@ def test_ewm_std_is_shift_invariant():
 
 
 def test_merged_partitions_equal_one_pass():
-    from dftracer.utils.dask_frame import DaskFrame
+    from dftracer.utils.dask.frame import DaskFrame
 
     v = normal(1e9, 1.0, N, 4)
     ref = two_pass(v)
@@ -191,7 +191,7 @@ def write_trace(path, durs):
             f.write(
                 json.dumps(
                     {
-                        "ph": "X",
+                        "ph": 1,
                         "name": "read",
                         "cat": "POSIX",
                         "pid": 1,
@@ -217,10 +217,10 @@ def test_tier_and_scan_give_the_same_std(tmp_path):
     with du.Indexer(
         files=[path], index_dir=agg, aggregation_config=AggregationConfig(time_interval_ms=100000)
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     def run(scan):
-        tv = TraceViewer([path], index_path=agg)
+        tv = TraceViewer([path], index_dir=agg)
         # The tier cannot evaluate a filter on ts, so this one makes the view
         # scan every record.
         if scan:

@@ -57,16 +57,19 @@ dataframe::Series as_type(const dataframe::Series& s,
 }
 
 dataframe::Series empty(const dataframe::DataType& type) {
-    if (type.id == TypeId::List)
+    if (type.id == TypeId::List) {
+        const std::int32_t zero_offset = 0;
         return dataframe::Series::list(
-            {0}, empty(type.fields.empty() ? dataframe::scalar(TypeId::String)
-                                           : type.fields.front().type));
+            dstd::Span<const std::int32_t>(&zero_offset, 1),
+            empty(type.fields.empty() ? dataframe::scalar(TypeId::String)
+                                      : type.fields.front().type));
+    }
     return dataframe::Series::nulls(
         type.id == TypeId::Unknown ? TypeId::String : type.id, 0);
 }
 
 dstd::Result<dataframe::Series> joined(
-    const dstd::Vector<dataframe::Series>& parts,
+    dstd::Span<const dataframe::Series> parts,
     const dataframe::DataType& type) {
     if (parts.empty()) return empty(type);
     if (parts.size() == 1) return parts.front().share();
@@ -83,7 +86,7 @@ dstd::Result<dataframe::Series> joined(
     return std::move(all->columns.front());
 }
 
-dstd::Vector<std::uint8_t> validity(const dstd::Vector<bool>& valid) {
+dstd::Vector<std::uint8_t> validity(dstd::Span<const std::uint8_t> valid) {
     dstd::Vector<std::uint8_t> bits((valid.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < valid.size(); ++i)
         if (valid[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
@@ -91,7 +94,7 @@ dstd::Vector<std::uint8_t> validity(const dstd::Vector<bool>& valid) {
 }
 
 dftu_op_arg plugin_arg(const dftu_op_desc& op,
-                       const dstd::Vector<double>& params) {
+                       dstd::Span<const double> params) {
     dftu_op_arg arg{};
     for (std::uint32_t i = 1; i < DFTU_OP_MAX_ARGS; ++i) {
         const dftu_op_tok tok = DFTU_OP_SIG_ARG(op.sig, i);
@@ -200,7 +203,8 @@ GroupFold::GroupFold(dstd::Vector<dataframe::DataType> key_types,
         const dstd::String name = dstd::fmt<"__duql_fold_{}">(a);
         dstd::String spec_name(name.data(), name.size());
         specs.push_back({aggs_[a].engine, aggs_[a].in, std::move(spec_name),
-                         aggs_[a].param, -1, aggs_[a].fn, aggs_[a].args});
+                         aggs_[a].param, -1, dataframe::Interpolation::Linear,
+                         aggs_[a].fn, aggs_[a].args});
     }
     if (!specs.empty()) engine_ = dataframe::agg_new(std::move(specs));
 }
@@ -296,7 +300,9 @@ dstd::Result<void> GroupFold::add(dataframe::DataFrame batch) {
         dstd::Vector<const dataframe::Series*> values;
         for (const auto& c : batch.columns) values.push_back(&c);
         dataframe::agg_set_row_base(*engine_, rows_);
-        if (auto ok = dataframe::agg_accumulate(*engine_, {&g}, values); !ok)
+        const dataframe::Series* const g_ptr = &g;
+        const dstd::Span<const dataframe::Series* const> key_ptr(&g_ptr, 1);
+        if (auto ok = dataframe::agg_accumulate(*engine_, key_ptr, values); !ok)
             return ok.error();
     }
     for (std::size_t a = 0; a < aggs_.size(); ++a) {
@@ -390,7 +396,7 @@ dstd::Result<void> GroupFold::add(dataframe::DataFrame batch) {
 
 void GroupFold::arg(std::size_t a, const dataframe::Series& in,
                     const dataframe::Series& by,
-                    const dstd::Vector<std::int64_t>& gid) {
+                    dstd::Span<const std::int64_t> gid) {
     auto& state = args_[a];
     state.resize(static_cast<std::size_t>(group_count_));
     const auto b = normal(by);
@@ -423,7 +429,7 @@ void GroupFold::arg(std::size_t a, const dataframe::Series& in,
 }
 
 void GroupFold::sketches(std::size_t a, const dataframe::Series& in,
-                         const dstd::Vector<std::int64_t>& gid) {
+                         dstd::Span<const std::int64_t> gid) {
     auto& state = sketches_[a];
     state.resize(static_cast<std::size_t>(group_count_));
     const std::int64_t n = in.length();
@@ -532,7 +538,7 @@ dstd::Result<dataframe::DataFrame> GroupFold::finish(
                 const dftu_op_arg arg = plugin_arg(*op, f.params);
                 auto& members = members_[a];
                 members.resize(count);
-                dstd::Vector<bool> valid(count, false);
+                dstd::Vector<std::uint8_t> valid(count, 0);
                 dstd::Vector<double> d(count, 0);
                 dstd::Vector<std::int64_t> i(count, 0);
                 const bool real = f.type.id == TypeId::Float64;
@@ -573,7 +579,7 @@ dstd::Result<dataframe::DataFrame> GroupFold::finish(
                     out.columns.push_back(dataframe::Series::flat_f64(
                         d.data(), groups, bits.data()));
                 } else if (f.type.id == TypeId::Bool) {
-                    dstd::Vector<bool> truth(count);
+                    dstd::Vector<std::uint8_t> truth(count);
                     for (std::size_t g = 0; g < count; ++g)
                         truth[g] = i[g] != 0;
                     const auto packed = validity(truth);
@@ -600,7 +606,7 @@ dstd::Result<dataframe::DataFrame> GroupFold::finish(
             case FoldOp::MergeQuantile: {
                 auto& state = sketches_[a];
                 state.resize(count);
-                dstd::Vector<bool> valid(count, false);
+                dstd::Vector<std::uint8_t> valid(count, 0);
                 if (f.op == FoldOp::MergeQuantile) {
                     dstd::Vector<double> v(count, 0);
                     for (std::size_t g = 0; g < count; ++g) {

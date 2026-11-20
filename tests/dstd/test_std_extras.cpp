@@ -229,18 +229,17 @@ TEST_CASE("to_chars writes integers and the shortest float that reads back") {
 TEST_CASE("from_chars stops at the first byte that is not part of a number") {
     const dstd::StringView text = "42.5xyz";
     double d = 0;
-    auto r = dstd::from_chars(text.data(), text.data() + text.size(), d);
+    auto r = dstd::from_chars(text, d);
     REQUIRE(r.ec == std::errc{});
     CHECK(d == 42.5);
     CHECK(r.ptr == text.data() + 4);
     int i = 0;
-    r = dstd::from_chars(text.data(), text.data() + text.size(), i);
+    r = dstd::from_chars(text, i);
     REQUIRE(r.ec == std::errc{});
     CHECK(i == 42);
     float f = 0;
     const dstd::StringView huge = "1e300";
-    CHECK(dstd::from_chars(huge.data(), huge.data() + huge.size(), f).ec ==
-          std::errc::result_out_of_range);
+    CHECK(dstd::from_chars(huge, f).ec == std::errc::result_out_of_range);
     CHECK(dstd::from_chars<float>("0.25") == 0.25f);
     CHECK_FALSE(dstd::from_chars<float>("1e300").has_value());
 }

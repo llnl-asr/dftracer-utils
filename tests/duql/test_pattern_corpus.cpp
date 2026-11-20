@@ -92,12 +92,12 @@ std::regex old_regex(const Leaf& l) {
 }
 
 // ASCII strings built from the pattern's own characters, so matches occur.
-dstd::Vector<dstd::String> strings_for(const dstd::String& pattern,
+dstd::Vector<dstd::String> strings_for(dstd::StringView pattern,
                                        std::mt19937& rng) {
     dstd::String pool = "abcXYZ_-./019 ";
     for (char c : pattern)
         if (c >= 0x20 && c < 0x7F) pool += c;
-    dstd::Vector<dstd::String> out = {"", pattern};
+    dstd::Vector<dstd::String> out = {"", dstd::String(pattern)};
     dstd::String plain;
     for (char c : pattern)
         if (c != '%' && c != '_' && c != '\\' && c != '^' && c != '$')
@@ -218,7 +218,7 @@ const dstd::Vector<dstd::String> WIDE = {
     "\xC3\xA9",     "\xC3\x89",         "\xCE\xB1",         "\xCE\x91",
     "\xE4\xB8\xAD", "\xF0\x9F\x98\x80", "\xC3\xA9\xCE\xB1", "\xC4\xB0"};
 
-dstd::Vector<dstd::String> wide_strings(const dstd::String& pattern,
+dstd::Vector<dstd::String> wide_strings(dstd::StringView pattern,
                                         std::mt19937& rng) {
     dstd::Vector<dstd::String> out = {"caf\xC3\xA9",
                                       "CAF\xC3\x89",
@@ -285,7 +285,7 @@ TEST_CASE("Vectorscan and PCRE2 agree on every golden regex") {
     std::mt19937 rng(31);
     dstd::Set<dstd::Pair<int, dstd::String>> seen;
     std::size_t compared = 0;
-    auto agree = [&](const duql::CompiledPattern& p, const dstd::String& s) {
+    auto agree = [&](const duql::CompiledPattern& p, dstd::StringView s) {
         CAPTURE(s);
         CHECK(duql::detail::match_regex(p, s) ==
               duql::detail::match_regex_pcre2(p, s));
@@ -295,7 +295,8 @@ TEST_CASE("Vectorscan and PCRE2 agree on every golden regex") {
               duql::detail::HS_MIN_VALUE + 1}) {
             if (s.size() >= len) continue;
             const dstd::String pad(len - s.size(), 'x');
-            for (const dstd::String& v : {s + pad, pad + s}) {
+            for (const dstd::String& v :
+                 {dstd::String(s) + pad, pad + dstd::String(s)}) {
                 CAPTURE(v.size());
                 CHECK(duql::detail::match_regex(p, v) ==
                       duql::detail::match_regex_pcre2(p, v));
@@ -389,13 +390,13 @@ TEST_CASE("Vectorscan and PCRE2 agree on non-ASCII and invalid UTF-8") {
     dstd::Set<dstd::String> seen;
     std::size_t compared = 0;
     std::size_t invalid = 0;
-    auto agree = [&](const duql::CompiledPattern& p, const dstd::String& s) {
+    auto agree = [&](const duql::CompiledPattern& p, dstd::StringView s) {
         CAPTURE(s);
         CHECK(duql::detail::match_regex(p, s) ==
               duql::detail::match_regex_pcre2(p, s));
         ++compared;
     };
-    auto run = [&](const dstd::String& pat, bool icase) {
+    auto run = [&](dstd::StringView pat, bool icase) {
         for (const bool whole : {false, true}) {
             auto p = duql::compile_regex(pat, icase, whole);
             if (!p) continue;
@@ -477,7 +478,7 @@ TEST_CASE("Vectorscan and PCRE2 agree on non-ASCII and invalid UTF-8") {
 namespace {
 
 // Reference decoder: returns the length of the first scalar value at s, or 0.
-std::size_t ref_scalar_size(const dstd::String& s, std::size_t i) {
+std::size_t ref_scalar_size(dstd::StringView s, std::size_t i) {
     const auto b = [&](std::size_t k) {
         return static_cast<unsigned char>(s[i + k]);
     };
@@ -509,7 +510,7 @@ std::size_t ref_scalar_size(const dstd::String& s, std::size_t i) {
     return len;
 }
 
-bool ref_valid(const dstd::String& s) {
+bool ref_valid(dstd::StringView s) {
     for (std::size_t i = 0; i < s.size();) {
         const std::size_t n = ref_scalar_size(s, i);
         if (n == 0) return false;
@@ -518,7 +519,7 @@ bool ref_valid(const dstd::String& s) {
     return true;
 }
 
-void check_utf8(const dstd::String& core) {
+void check_utf8(dstd::StringView core) {
     for (const std::size_t pad : {0u, 5u, 8u}) {
         for (const bool tail : {false, true}) {
             const dstd::String s = dstd::fmt<"{}{}{}">(

@@ -3,10 +3,13 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/c_api.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -148,10 +151,10 @@ TEST_SUITE("op_registry") {
             CHECK(dftu_op_find(name) != nullptr);
         CHECK(dftu_op_find("no_such_op") == nullptr);
 
-        uint32_t n = op_count();
+        std::uint32_t n = op_count();
         REQUIRE(n >= 120);  // ~100 column ops + ~23 frame ops
         bool saw_add = false, saw_frame = false;
-        for (uint32_t i = 0; i < n; ++i) {
+        for (std::uint32_t i = 0; i < n; ++i) {
             auto op = op_at(i);
             REQUIRE(static_cast<bool>(op));
             if (op.name() == "dftu.series.add") saw_add = true;
@@ -230,7 +233,7 @@ TEST_SUITE("op_registry") {
 
         const char* sel[1] = {"a"};
         OpArgs sarg;
-        sarg.strlist(1, sel, 1);
+        sarg.strlist(1, {sel, 1});
         dftu_dataframe* s =
             dftu_op_run_frame(dftu_op_find("dftu.frame.select"), fin, 1, sarg);
         REQUIRE(s != nullptr);
@@ -459,7 +462,7 @@ TEST_SUITE("op_registry") {
         dftu_group_agg aggs[1] = {{"sum", "v", "total"}};
 
         OpArgs gb_arg;
-        gb_arg.strlist(1, keys, 1).agglist(2, aggs);
+        gb_arg.strlist(1, {keys, 1}).agglist(2, aggs);
         dftu_dataframe* via_registry = dftu_op_run_frame(
             dftu_op_find("dftu.frame.group_by"), fin, 1, gb_arg);
         dftu_dataframe* via_direct =
@@ -475,9 +478,10 @@ TEST_SUITE("op_registry") {
         cpp_df.names = dstd::make_shared_strings({"k", "v"});
         cpp_df.columns.emplace_back(k_col);
         cpp_df.columns.emplace_back(v_col);
-        DataFrame via_cpp = dftu_utils_test::ok(
-            cpp_df.group_by(dstd::Vector<dstd::String>{"k"},
-                            {GroupAgg{Agg::Sum, "v", "total"}}));
+        DataFrame via_cpp = dftu_utils_test::ok(cpp_df.group_by(
+            dstd::Vector<dstd::String>{"k"},
+            dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                {GroupAgg{Agg::Sum, "v", "total"}})));
         REQUIRE(static_cast<std::int64_t>(via_cpp.num_rows()) ==
                 dftu_dataframe_num_rows(via_registry));
 
@@ -576,5 +580,159 @@ TEST_SUITE("op_registry") {
         CHECK(DFTU_OP_SIG_ARG(sig, 4) == DFTU_TOK_AGGLIST);
         CHECK(DFTU_OP_SIG_ARG(sig, 5) == DFTU_TOK_I64);
         CHECK(DFTU_OP_SIG_ARG(sig, 6) == DFTU_TOK_I32);
+    }
+}
+
+namespace {
+
+using Cells = dstd::Vector<std::int64_t>;
+
+// The values of an Int64 column, -1 for a null.
+Cells cells_of(const dftu_series* c) {
+    Cells out;
+    for (std::int64_t i = 0; i < dftu_series_length(c); ++i)
+        out.push_back(dftu_series_is_null(c, i) ? -1 : i64_of(c)[i]);
+    return out;
+}
+
+Cells cells_of_column(const dftu_dataframe* df, dstd::CStringView name) {
+    dftu_series* c = dftu_dataframe_column(df, name.c_str());
+    Cells out = cells_of(c);
+    dftu_series_free(c);
+    return out;
+}
+
+dftu_series* nullable_col(const std::int64_t* v, std::int64_t n,
+                          const std::uint8_t* valid) {
+    return dftu_series_new_flat(DFTU_TYPE_INT64, v, n, valid);
+}
+
+dftu_dataframe* one_column_frame(const std::int64_t* v, std::int64_t n,
+                                 const std::uint8_t* valid) {
+    const char* names[] = {"a"};
+    dftu_series* cols[] = {nullable_col(v, n, valid)};
+    return dftu_dataframe_new(names, cols, 1);
+}
+
+}  // namespace
+
+TEST_SUITE("shadowed op rows") {
+    TEST_CASE("an old row that a later row supersedes still runs as it did") {
+        const std::int64_t v[] = {3, 0, 1};
+        const std::uint8_t valid[] = {0b101};
+        const char* by[] = {"a"};
+        const std::int32_t flag0[] = {0};
+        const Cells sorted_up = {1, 3, -1};
+        dstd::Set<dstd::String> checked, shadowed;
+
+        for (std::uint32_t i = 0; i < dftu_op_count(); ++i) {
+            const dftu_op_desc* op = dftu_op_at(i);
+            if (dftu_op_find(op->name) == op) continue;
+            const dstd::String name = op->name;
+            shadowed.insert(name);
+            INFO("op " << name);
+            if (name == "dftu.series.sort" || name == "dftu.series.argsort") {
+                auto fn =
+                    reinterpret_cast<dftu_series* (*)(const dftu_series*,
+                                                      std::int32_t)>(op->fn);
+                dftu_series* in = nullable_col(v, 3, valid);
+                dftu_series* out = fn(in, 0);
+                REQUIRE(out != nullptr);
+                CHECK(
+                    cells_of(out) ==
+                    (name == "dftu.series.sort" ? sorted_up : Cells{2, 0, 1}));
+                dftu_series_free(out);
+                dftu_series_free(in);
+            } else if (name == "dftu.series.unique") {
+                auto fn =
+                    reinterpret_cast<dftu_series* (*)(const dftu_series*)>(
+                        op->fn);
+                dftu_series* in = nullable_col(v, 3, valid);
+                dftu_series* out = fn(in);
+                REQUIRE(out != nullptr);
+                CHECK(cells_of(out) == Cells{1, 3});
+                dftu_series_free(out);
+                dftu_series_free(in);
+            } else if (name == "dftu.series.search_sorted") {
+                auto fn =
+                    reinterpret_cast<dftu_series* (*)(const dftu_series*,
+                                                      const dftu_series*)>(
+                        op->fn);
+                const std::int64_t base[] = {1, 2, 2, 5}, probe[] = {2};
+                dftu_series* in = nullable_col(base, 4, nullptr);
+                dftu_series* q = nullable_col(probe, 1, nullptr);
+                dftu_series* out = fn(in, q);
+                REQUIRE(out != nullptr);
+                CHECK(cells_of(out) == Cells{1});
+                dftu_series_free(out);
+                dftu_series_free(q);
+                dftu_series_free(in);
+            } else if (name == "dftu.frame.sort_by") {
+                auto fn =
+                    reinterpret_cast<dftu_dataframe* (*)(const dftu_dataframe*,
+                                                         const char*,
+                                                         std::int32_t)>(op->fn);
+                dftu_dataframe* df = one_column_frame(v, 3, valid);
+                dftu_dataframe* out = fn(df, "a", 0);
+                REQUIRE(out != nullptr);
+                CHECK(cells_of_column(out, "a") == sorted_up);
+                dftu_dataframe_free(out);
+                dftu_dataframe_free(df);
+            } else if (name == "dftu.frame.sort_by_multi") {
+                auto fn =
+                    reinterpret_cast<dftu_dataframe* (*)(const dftu_dataframe*,
+                                                         const char* const*,
+                                                         std::int32_t,
+                                                         std::int32_t)>(op->fn);
+                dftu_dataframe* df = one_column_frame(v, 3, valid);
+                dftu_dataframe* out = fn(df, by, 1, 0);
+                REQUIRE(out != nullptr);
+                CHECK(cells_of_column(out, "a") == sorted_up);
+                dftu_dataframe_free(out);
+                dftu_dataframe_free(df);
+            } else if (name == "dftu.frame.sort_by_multi_per_col") {
+                auto fn = reinterpret_cast<
+                    dftu_dataframe* (*)(const dftu_dataframe*,
+                                        const char* const*, std::int32_t,
+                                        const std::int32_t*, std::int32_t)>(
+                    op->fn);
+                dftu_dataframe* df = one_column_frame(v, 3, valid);
+                dftu_dataframe* out = fn(df, by, 1, flag0, 1);
+                REQUIRE(out != nullptr);
+                CHECK(cells_of_column(out, "a") == sorted_up);
+                dftu_dataframe_free(out);
+                dftu_dataframe_free(df);
+            } else if (name == "dftu.lazy.sort_by" ||
+                       name == "dftu.lazy.sort_by_multi") {
+                dftu_dataframe* df = one_column_frame(v, 3, valid);
+                dftu_lazyframe* lf = dftu_dataframe_lazy(df);
+                dftu_lazyframe* sorted = nullptr;
+                if (name == "dftu.lazy.sort_by") {
+                    auto fn = reinterpret_cast<
+                        dftu_lazyframe* (*)(const dftu_lazyframe*, const char*,
+                                            std::int32_t)>(op->fn);
+                    sorted = fn(lf, "a", 0);
+                } else {
+                    auto fn = reinterpret_cast<
+                        dftu_lazyframe* (*)(const dftu_lazyframe*,
+                                            const char* const*, std::int32_t,
+                                            std::int32_t)>(op->fn);
+                    sorted = fn(lf, by, 1, 0);
+                }
+                REQUIRE(sorted != nullptr);
+                dftu_dataframe* out = dftu_lazyframe_collect(sorted, 0);
+                REQUIRE(out != nullptr);
+                CHECK(cells_of_column(out, "a") == sorted_up);
+                dftu_dataframe_free(out);
+                dftu_lazyframe_free(sorted);
+                dftu_lazyframe_free(lf);
+                dftu_dataframe_free(df);
+            } else {
+                continue;
+            }
+            checked.insert(name);
+        }
+        CHECK(!shadowed.empty());
+        CHECK(checked == shadowed);
     }
 }

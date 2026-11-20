@@ -72,6 +72,39 @@ chunks; too many on a shared or oversubscribed node hurts more than it helps.
       a ``with`` block does not stop the runtime, which runs until the
       process exits.
 
+Many worker processes on one host
+---------------------------------
+
+A pool of worker processes that each start a default runtime sizes every one
+to the whole host. Give each worker its share with
+:func:`~dftracer.utils.apply_worker_share` as the pool initializer: it sets
+the thread counts and the memory budget of the process to the usable CPUs and
+the budget divided by the worker count.
+
+.. code-block:: python
+
+   from concurrent.futures import ProcessPoolExecutor
+
+   from dftracer.utils import apply_worker_share, get_default_runtime
+
+
+   def threads_of_worker(_: int) -> int:
+       return get_default_runtime().threads
+
+
+   if __name__ == "__main__":
+       workers = 4
+       with ProcessPoolExecutor(
+           max_workers=workers, initializer=apply_worker_share, initargs=(workers,)
+       ) as pool:
+           print(list(pool.map(threads_of_worker, range(workers))))
+
+Each worker reports the usable CPUs divided by 4, at least 1.
+:func:`~dftracer.utils.worker_share` returns the same numbers without applying
+them, with the environment variables a launcher can set for its workers. See
+:doc:`../../environment` for the variables and the CPU and thread limits that
+the default sizes follow.
+
 Data-parallel loops: parallel_for / parallel_reduce
 ---------------------------------------------------------
 

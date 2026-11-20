@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/detail/manager.h>
@@ -38,18 +40,18 @@ constexpr std::size_t RUNNING_WORKERS = WORKERS;
 #endif
 constexpr int EVENTS = 1000;
 
-dstd::String write_trace(const dstd::String& dir, int n, int events = EVENTS) {
+dstd::String write_trace(dstd::CStringView dir, int n, int events = EVENTS) {
     dftu_utils_test::TextOut out;
     out << "[\n";
     for (int i = 0; i < events; ++i) {
         out << R"({"id":)" << i << R"(,"name":"op)" << (i + n) % 7
-            << R"(","cat":"POSIX","pid":1,"tid":1,"ph":"X","ts":)"
+            << R"(","cat":"POSIX","pid":1,"tid":1,"ph":1,"ts":)"
             << 1000 + i * 10 << R"(,"dur":3,"args":{}})" << "\n";
     }
     out << "]\n";
     char name[32];
     std::snprintf(name, sizeof(name), "/t%04d.pfw.gz", n);
-    return dftu_utils_test::write_gz_trace(dir + name, out.str());
+    return dftu_utils_test::write_gz_trace(dstd::String(dir) + name, out.str());
 }
 
 class LineSink : public ExportSink {
@@ -68,8 +70,8 @@ class LineSink : public ExportSink {
     }
 };
 
-dstd::Vector<dstd::String> export_lines(const dstd::Vector<dstd::String>& files,
-                                        const dstd::String& index_dir) {
+dstd::Vector<dstd::String> export_lines(dstd::Span<const dstd::String> files,
+                                        dstd::CStringView index_dir) {
     const auto view =
         View::from_files(bootstrap_test::view_files_of(files, index_dir));
     LineSink sink;

@@ -94,7 +94,7 @@ dstd::Result<void> require_role(const ViewPlan& plan, dstd::StringView op,
                                 TraceRole role) {
     if (auto resolved = resolve_record_schema(plan); !resolved) return resolved;
     const auto& record_schema = plan_record_schema(plan);
-    auto need = [&](const dstd::String& path,
+    auto need = [&](dstd::StringView path,
                     dstd::StringView name) -> dstd::Result<void> {
         if (path.empty())
             return common::make_error<
@@ -223,11 +223,11 @@ dstd::Vector<dstd::String> needed_paths(const ViewPlan& plan) {
     out.erase(std::unique(out.begin(), out.end()), out.end());
     // A computed column is not a record field, unless a computed column reads
     // the field of its name (a key computed as itself).
-    std::erase_if(out, [&](const dstd::String& f) {
+    std::erase_if(out, [&](dstd::StringView f) {
         const auto named = [&](const ComputedColumn& c) { return c.name == f; };
         const auto reads = [&](const ComputedColumn& c) {
             return std::any_of(c.inputs.begin(), c.inputs.end(),
-                               [&](const dstd::String& in) {
+                               [&](dstd::StringView in) {
                                    return select_source_field(in) == f;
                                });
         };
@@ -253,9 +253,9 @@ dstd::Result<void> add_time_conditions(const ViewPlan& plan,
         time_field->type == dftracer::utils::trace::index::FieldType::String)
         return {};
     dstd::Vector<dstd::String> conds;
-    auto bound = [&](const char* op, double v) {
-        conds.push_back(vdef.time_path + " " + op + " " +
-                        dstd::to_string(static_cast<long long>(v)));
+    auto bound = [&](dstd::StringView op, double v) {
+        conds.push_back(dstd::fmt<"{} {} {}">(
+            vdef.time_path, op, dstd::to_string(static_cast<long long>(v))));
     };
     if (plan.timed) bound(">=", 0);
     if (plan.time_range) {
@@ -581,8 +581,8 @@ dstd::Result<dstd::UniquePtr<Fold>> select_catalog_fold(
 coro::CoroTask<dstd::Result<ExportStats>> for_each_scanned_batch(
     const ViewPlan& plan, const ViewDefinition& vdef, std::size_t slot_count,
     std::uint64_t limit,
-    const dstd::Function<void(std::size_t,
-                              const dstd::Vector<dstd::StringView>&)>& on_batch,
+    const dstd::Function<void(std::size_t, dstd::Span<const dstd::StringView>)>&
+        on_batch,
     dstd::Span<Fold* const> folds,
     dftracer::utils::dstd::StringIntern* intern) {
     std::uint64_t skipped = 0;

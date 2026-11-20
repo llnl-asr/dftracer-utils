@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dataframe/internal/file_format_registry.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/function.h>
@@ -30,6 +31,7 @@
 #include <dftracer/utils/trace/index/extensions/catalog_fold.h>
 #include <dftracer/utils/trace/index/plan/prune.h>
 #include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/trace/index/source.h>
 #include <dftracer/utils/trace/index/store/root_layout.h>
 #include <dftracer/utils/trace/index/tables.h>
@@ -140,8 +142,8 @@ dstd::Result<void> check_keys(const detail::ViewPlan& p,
     if (!detail::plan_by_path(p)) return {};
     const auto& schema = detail::plan_record_schema(p);
     const auto& roles = schema.roles;
-    auto role = [](const dstd::String& path, const char* field) {
-        return path.empty() ? dstd::String(field)
+    auto role = [](dstd::StringView path, dstd::StringView field) {
+        return path.empty() ? dstd::String(field.data(), field.size())
                             : dstd::String(path.data(), path.size());
     };
     for (auto& k : keys) {
@@ -258,6 +260,37 @@ ConfirmedFiles& confirmed_files() {
     return files;
 }
 
+// The aggregation settings a root was built with, so a rebuild of one file
+// keeps the tier of every other file of the root. A root with no config record
+// holds no tier, so it takes the standard settings. A record that cannot be
+// read back exactly is an error: clearing the tier would drop the data of the
+// other trace folders that share the root.
+dstd::Result<trace::index::schemas::dft::agg::AggregationConfig>
+stored_aggregation_config(const trace::index::Snapshot& snapshot,
+                          dstd::StringView root) {
+    const auto stored =
+        trace::index::schemas::dft::agg::tier::read_config(snapshot);
+    if (!stored) return stored.error();
+    if (*stored) {
+        auto config =
+            trace::index::schemas::dft::agg::tier::aggregation_config_of(
+                **stored);
+        if (config.params_hash() == (*stored)->params_hash) return config;
+    } else {
+        const auto present =
+            trace::index::schemas::dft::agg::tier::has_config_record(snapshot);
+        if (!present.has_value()) return present.error();
+        if (!*present)
+            return trace::index::schemas::dft::agg::
+                standard_aggregation_config();
+    }
+    return common::make_error<
+        "the aggregation config of the index root {} cannot be read back, so "
+        "a changed trace file cannot be rebuilt without clearing the tier of "
+        "every folder that shares the root; index that root again explicitly">(
+        common::ErrorCode::Aggregation, root);
+}
+
 // Brings every index the files read fresh through the resolver, which clears
 // a changed file's whole record. Only a file whose size, time, checkpoint size
 // or index format changed is rebuilt, with the schema it was indexed with, so
@@ -265,7 +298,7 @@ ConfirmedFiles& confirmed_files() {
 // that does not exist yet holds no evidence, so its first build is left to
 // the first read. Concurrent callers may both rebuild one file; the index
 // writes serialize.
-dstd::Result<void> ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
+dstd::Result<void> ensure_indexes_fresh(dstd::Span<const ViewFile> files) {
     struct Pending {
         dstd::String key;
         dstd::String file;
@@ -280,6 +313,9 @@ dstd::Result<void> ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
         }
     };
     dstd::Map<Group, dstd::Vector<Pending>> groups;
+    dstd::HashMap<dstd::String,
+                  trace::index::schemas::dft::agg::AggregationConfig>
+        aggregation;
     dstd::Vector<dstd::String> confirmed;
     {
         Snapshots snapshots;
@@ -343,6 +379,12 @@ dstd::Result<void> ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
                                   recorded_schema->size());
                 }
             }
+            if (!aggregation.contains(f.index_path)) {
+                auto kept =
+                    stored_aggregation_config(*found.snapshot, f.index_path);
+                if (!kept) return kept.error();
+                aggregation.emplace(f.index_path, std::move(*kept));
+            }
             groups[{f.index_path, f.checkpoint_size, std::move(schema)}]
                 .push_back({std::move(key), f.file_path});
         }
@@ -354,6 +396,7 @@ dstd::Result<void> ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
         in.checkpoint_size = group.checkpoint_size;
         in.schema = group.schema;
         in.require_checkpoints = true;
+        in.aggregation_config = aggregation.at(group.root);
         for (const auto& p : pending)
             in.files.emplace_back(dstd::StringView(p.file));
         auto built = default_runtime().block_on(coro::named(
@@ -375,10 +418,34 @@ dstd::Result<void> ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
 
 }  // namespace
 
+namespace {
+
+/// The error of the first file that the built-in reader does not read: another
+/// format claims it or `format` names one.
+dstd::Result<void> check_readers(dstd::Span<const ViewFile> files) {
+    for (const ViewFile& f : files) {
+        auto reader = dataframe::claim_trace_reader(f.file_path, f.format);
+        if (!reader) return reader.error();
+        if (!reader->is_builtin())
+            return common::make_error<
+                "{} is read by the format '{}'; a View reads trace files "
+                "only, so open it with scan_file">(
+                common::ErrorCode::InvalidArgument, f.file_path, reader->name);
+    }
+    return {};
+}
+
+}  // namespace
+
 ScanPlan from_files(dstd::Vector<ViewFile> files) {
     for (auto& f : files)
         if (f.index_path.empty())
             f.index_path = internal::determine_index_path(f.file_path, "");
+    if (auto checked = check_readers(
+            dstd::Span<const ViewFile>(files.data(), files.size()));
+        !checked)
+        return failed_plan(dstd::make_shared<detail::ViewPlan>(),
+                           checked.error());
     auto fresh = ensure_indexes_fresh(files);
     auto plan = dstd::make_shared<detail::ViewPlan>();
     plan->files = std::move(files);
@@ -393,7 +460,8 @@ ScanPlan from_file(dstd::String file_path, dstd::String index_path) {
 }
 
 coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
-                                        dstd::String index_path) {
+                                        dstd::String index_dir,
+                                        dstd::String format) {
     runtime::fs::FindOptions options;
     options.patterns =
         runtime::fs::names_of(common::constants::indexer::INPUT_FILE_PATTERNS);
@@ -415,8 +483,10 @@ coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
     for (auto& e : *found) {
         dstd::String fp(e.path.str());
         const dstd::String index =
-            internal::determine_index_path(fp, index_path);
-        files.push_back(ViewFile{fp, dstd::String(index.data(), index.size())});
+            internal::determine_index_path(fp, index_dir);
+        ViewFile vf{fp, dstd::String(index.data(), index.size())};
+        vf.format = format;
+        files.push_back(std::move(vf));
     }
     std::sort(files.begin(), files.end(),
               [](const ViewFile& a, const ViewFile& b) {
@@ -1190,7 +1260,7 @@ ScanPlan timed(const ScanPlan& plan) {
     return next;
 }
 
-ScanPlan record_schema(const ScanPlan& plan, const dstd::String& id) {
+ScanPlan record_schema(const ScanPlan& plan, dstd::StringView id) {
     const auto found = dftracer::utils::trace::index::get_schema(id);
     if (!found) return failed_plan(plan, found.error());
     const auto& p = **found;
@@ -1232,7 +1302,7 @@ ScanPlan views_root(const ScanPlan& plan, dstd::String dir) {
 
 coro::CoroTask<dstd::Result<ExportStats>> for_each_batch(
     ScanPlan plan,
-    dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
+    dstd::Function<void(std::size_t, dstd::Span<const dstd::StringView>)>
         on_batch,
     std::size_t slot_count, std::uint64_t limit) {
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
@@ -1393,7 +1463,7 @@ coro::CoroTask<dstd::Result<dstd::String>> flamegraph_partial(
 }
 
 dataframe::DataFrame merge_flamegraph_partials(
-    const dstd::Vector<dstd::StringView>& partials) {
+    dstd::Span<const dstd::StringView> partials) {
     return detail::merge_flamegraph_partials(partials);
 }
 
@@ -1422,7 +1492,7 @@ dstd::Result<dstd::String> materialize_dir(const ScanPlan& plan) {
 }
 
 dstd::Result<void> register_materialized(const ScanPlan& plan,
-                                         const dstd::String& dir) {
+                                         dstd::StringView dir) {
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
         return resolved.error();
     dftracer::utils::trace::index::cache::register_view(dir, *plan);
@@ -1439,12 +1509,12 @@ dstd::Result<dstd::Vector<dstd::String>> mv_source(const ScanPlan& plan) {
     return out;
 }
 
-coro::CoroTask<dstd::Result<TypedResult>> collect_typed(
+coro::CoroTask<dstd::Result<IndexRecords>> collect_index_records(
     ScanPlan plan, int shard_begin, int shard_end, const ProgressFn* progress) {
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
         co_return resolved.error();
-    co_return co_await detail::run_collect_typed(*plan, shard_begin, shard_end,
-                                                 progress);
+    co_return co_await detail::run_collect_index_records(*plan, shard_begin,
+                                                         shard_end, progress);
 }
 
 coro::CoroTask<dstd::Result<ExportStats>> export_counters(ScanPlan plan,
@@ -1455,7 +1525,7 @@ coro::CoroTask<dstd::Result<ExportStats>> export_counters(ScanPlan plan,
 }
 
 coro::CoroTask<dstd::Result<void>> materialize_partials(
-    ScanPlan plan, const dstd::Vector<dstd::StringView>& partials) {
+    ScanPlan plan, dstd::Vector<dstd::StringView> partials) {
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
         co_return resolved.error();
     co_return co_await detail::run_materialize_partials(*plan, partials);
@@ -1475,14 +1545,14 @@ coro::CoroTask<dstd::Result<dstd::String>> aggregate_partial(ScanPlan plan) {
 }
 
 dstd::Result<dataframe::DataFrame> merge_partials_to_table(
-    const ScanPlan& plan, const dstd::Vector<dstd::StringView>& partials) {
+    const ScanPlan& plan, dstd::Span<const dstd::StringView> partials) {
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
         return resolved.error();
     return detail::merge_partials_to_table(*plan, partials);
 }
 
 dstd::Result<ExportStats> merge_counter_partials(
-    const ScanPlan& plan, const dstd::Vector<dstd::StringView>& partials,
+    const ScanPlan& plan, dstd::Span<const dstd::StringView> partials,
     ExportSink& sink) {
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
         return resolved.error();

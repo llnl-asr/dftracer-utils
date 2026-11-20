@@ -33,13 +33,6 @@ namespace dftracer::utils::trace::index::extensions {
 namespace {
 
 using BV = trace::index::schemas::dft::BloomCore;
-constexpr std::uint32_t NO_ID = dftracer::utils::dstd::StringIntern::NO_ID;
-
-dstd::StringView resolve_or_empty(
-    const dftracer::utils::dstd::StringIntern& intern, std::uint32_t id) {
-    return id == NO_ID ? dstd::StringView{} : intern.resolve(id);
-}
-
 // What a stored evidence record costs besides its path and payload.
 constexpr std::uint64_t RECORD_BYTES = 32;
 
@@ -52,36 +45,23 @@ std::uint64_t bloom_bytes(std::size_t values, double false_positive_rate) {
 
 namespace {
 
-dstd::String capture_path(const dstd::String& dim) { return "args." + dim; }
+dstd::String capture_path(dstd::StringView dim) {
+    return dstd::fmt<"args.{}">(dim);
+}
 
 }  // namespace
 
 BloomFold::BloomFold(
     dftracer::utils::dstd::StringIntern& intern,
     trace::index::schemas::dft::BloomCore::ChunkIndexerConfig config)
-    : intern_(&intern), config_(std::move(config)) {
+    : intern_(&intern),
+      config_(std::move(config)),
+      feeder_(intern, config_, !config_.auto_prefix.empty()) {
     if (!config_.validate())
         dstd::fatal("BloomFold: the config was not validated");
-    extra_keys_.reserve(config_.extra_dimensions.size());
-    for (const dstd::String& dim : config_.extra_dimensions)
-        extra_keys_.push_back(intern_->get_or_insert(
-            captures_nested() && trace::views::detail::is_nested_path(dim)
-                ? capture_path(dim)
-                : dim));
-    auto_skip_.insert(extra_keys_.begin(), extra_keys_.end());
-    for (const dstd::String& dim : config_.extra_dimensions)
-        auto_skip_.insert(intern_->get_or_insert(dim));
-    auto_skip_.insert(intern_->get_or_insert("cmd_hash"));
-    auto_skip_.insert(intern_->get_or_insert("exec_hash"));
-    // An args key named like a fixed dimension would be written under the
-    // fixed dimension's path and replace its data.
-    if (config_.fixed_dimensions)
-        for (dstd::StringView dim : BV::fixed_dimension_names())
-            auto_skip_.insert(intern_->get_or_insert(dim));
-    dur_key_ = intern_->get_or_insert("dur");
 }
 
-BloomFold::Catalog BloomFold::file_catalog(const dstd::String& file) {
+BloomFold::Catalog BloomFold::file_catalog(dstd::StringView file) {
     auto it = files_.find(file);
     if (it == files_.end()) return {};
     flush_shapes(it->second);
@@ -143,45 +123,18 @@ BloomFold::Catalog BloomFold::catalog(const FileState& fs) const {
     return out;
 }
 
-void BloomFold::observe_auto(AutoChunk& chunk,
-                             const trace::views::detail::FoldEvent& e) {
-    for (const auto& [k, v] : e.args) {
-        if (auto_skip_.count(k)) continue;
-        AutoField& f = chunk[k];
-        if (const auto* i = std::get_if<std::int64_t>(&v)) {
-            BV::observe_value(f.stats, f.bounds, *i);
-        } else if (const auto* u = std::get_if<std::uint64_t>(&v)) {
-            BV::observe_value(f.stats, f.bounds, *u);
-        } else if (const auto* d = std::get_if<double>(&v)) {
-            BV::observe_value(f.stats, f.bounds, *d);
-        } else {
-            const std::uint32_t id = std::get<std::uint32_t>(v);
-            f.bounds.valid = false;
-            BV::observe_value(f.stats, intern_->resolve(id));
-            if (!f.overflow) {
-                f.values.insert(id);
-                if (f.values.size() > config_.auto_max_distinct) {
-                    f.overflow = true;
-                    f.values.clear();
-                }
-            }
-        }
-    }
-}
-
 void BloomFold::summarize(PathEvidence& ev, const AutoField& f) const {
-    const auto& st = f.stats;
-    const bool string = st.value_type == "string";
+    const auto& zone = f.stats.zone.bounds();
+    const bool string = zone.type() == BoundType::String;
     if (ev.present_chunks == 0) {
-        ev.min = st.min_value;
-        ev.max = st.max_value;
-    } else if (st.min_value != ev.min || st.max_value != ev.max) {
+        ev.bounds = zone;
+    } else if (!zone.same_bounds(ev.bounds)) {
         ev.same_bounds = false;
     }
     ++ev.present_chunks;
-    if (!st.min_value.empty() || !st.max_value.empty()) {
+    if (zone.has_bounds()) {
         ++ev.zone_chunks;
-        ev.payload_bytes += st.min_value.size() + st.max_value.size();
+        ev.payload_bytes += zone.bounds_bytes();
     }
     if (string && !f.overflow) {
         ++ev.bloom_chunks;
@@ -250,7 +203,7 @@ BloomFold::AutoKeys BloomFold::select_auto_keys(
 }
 
 BloomFold::ChunkState BloomFold::assemble_chunk(
-    FileState& fs, std::uint64_t cp, const dstd::Vector<dstd::String>& dims,
+    FileState& fs, std::uint64_t cp, dstd::Span<const dstd::String> dims,
     const AutoKeys& keys) {
     ChunkState out;
     if (auto base = fs.chunks.find(cp); base != fs.chunks.end()) {
@@ -265,7 +218,7 @@ BloomFold::ChunkState BloomFold::assemble_chunk(
     out.extra_bloom_skip.resize(dims.size(), 0);
     for (std::size_t e = named; e < dims.size(); ++e) {
         out.extra_dim_stats[e].dimension = dims[e];
-        out.extra_dim_stats[e].value_type.clear();
+        out.extra_dim_stats[e].counts.set_cap(config_.value_counts_cap);
     }
     auto ac = fs.auto_chunks.find(cp);
     if (ac == fs.auto_chunks.end()) return out;
@@ -278,11 +231,10 @@ BloomFold::ChunkState BloomFold::assemble_chunk(
             ds = std::move(f.stats);
             ds.dimension = key.name;
             if (key.absence_only) {
-                ds.value_type.clear();
-                ds.min_value.clear();
-                ds.max_value.clear();
+                ds.zone = ZonemapBuilder();
                 out.extra_bloom_skip[e] = 1;
-            } else if (ds.value_type == "string" && !f.overflow) {
+            } else if (ds.zone.bounds().type() == BoundType::String &&
+                       !f.overflow) {
                 auto& values = out.extra_values[e];
                 values.reserve(f.values.size());
                 for (std::uint32_t id : f.values)
@@ -379,9 +331,10 @@ dstd::Result<void> BloomFold::write_file(trace::index::FileBuild& build,
                              trace::index::store::IndexExtension::Bloom,
                              trace::index::store::IndexExtension::Counts})
                 trace::index::erase_path(build, ext, intern_->resolve(k));
-    for (std::uint64_t cp = sp.next; cp < end; ++cp)
-        BV::write_chunk(build, cp, assemble_chunk(fs, cp, dims, keys), dims,
-                        config_, *sp.acc);
+    for (std::uint64_t cp = sp.next; cp < end; ++cp) {
+        ChunkState chunk = assemble_chunk(fs, cp, dims, keys);
+        BV::write_chunk(build, cp, chunk, dims, config_, *sp.acc);
+    }
     // A run wrote the records of every auto key it met; one the selection kept
     // only as absence entries still owes the chunks that lacked it.
     for (const auto& spilled : sp.keys) {
@@ -424,14 +377,14 @@ std::uint64_t BloomFold::resident_bytes(const FileState& fs,
     constexpr std::uint64_t SKETCH = 1024;
     std::uint64_t n = 0;
     auto dim = [&](const auto& ds) {
-        n += sizeof(ds) + ds.min_value.capacity() + ds.max_value.capacity();
-        if (ds.value_counts) n += ds.value_counts->size() * ENTRY * 2;
+        n += sizeof(ds) + ds.zone.bounds().bounds_bytes();
+        n += ds.counts.distinct_count() * ENTRY * 2;
     };
     if (auto it = fs.chunks.find(cp); it != fs.chunks.end()) {
         const ChunkState& c = it->second;
         n += sizeof(ChunkState);
-        for (const auto& b : c.fixed_blooms) n += 2 * b.size_bytes();
-        for (const auto& b : c.extra_blooms) n += 2 * b.size_bytes();
+        for (const auto& b : c.fixed_blooms) n += 2 * b.filter().size_bytes();
+        for (const auto& b : c.extra_blooms) n += 2 * b.filter().size_bytes();
         for (const auto& ds : c.fixed_dim_stats) dim(ds);
         for (const auto& ds : c.extra_dim_stats) dim(ds);
         const auto& st = c.statistics;
@@ -447,7 +400,8 @@ std::uint64_t BloomFold::resident_bytes(const FileState& fs,
         for (const auto& [k, f] : it->second) {
             n += sizeof(AutoField) + ENTRY + f.values.size() * 8;
             dim(f.stats);
-            if (!f.overflow && f.stats.value_type == "string")
+            if (!f.overflow &&
+                f.stats.zone.bounds().type() == BoundType::String)
                 n += 2 *
                      bloom_bytes(f.values.size(), config_.false_positive_rate);
         }
@@ -577,88 +531,7 @@ BloomFold::Lane BloomFold::open(const trace::views::detail::FoldBatch& batch) {
 
 void BloomFold::observe(const Lane& lane,
                         const trace::views::detail::FoldBatch& batch) {
-    ChunkState& chunk = *lane.chunk_;
-    AutoChunk& auto_chunk = *lane.auto_chunk_;
-    // A parse never suspends, so no two observes share a thread's cache.
-    thread_local BV::EventCache cache;
-    cache.clear();
-
-    for (const auto& e : batch.events) {
-        if (e.phase == trace::RecordPhase::Metadata) {
-            BV::observe_metadata(chunk, resolve_or_empty(*intern_, e.name_id));
-            for (const char* p : {"name", "ph", "pid", "tid", "ts"})
-                BV::observe_metadata_path(chunk, p);
-            if (e.has_dur) BV::observe_metadata_path(chunk, "dur");
-            if (e.cat_id != NO_ID) BV::observe_metadata_path(chunk, "cat");
-            // A hash arg is parsed into its own field, off e.args.
-            if (e.fhash_id != NO_ID) BV::observe_metadata_path(chunk, "fhash");
-            if (e.hhash_id != NO_ID) BV::observe_metadata_path(chunk, "hhash");
-            for (const auto& [k, v] : e.args)
-                BV::observe_metadata_path(
-                    chunk, "args." + dstd::String(intern_->resolve(k)));
-            continue;
-        }
-
-        const dstd::StringView name = resolve_or_empty(*intern_, e.name_id);
-        const dstd::StringView cat = resolve_or_empty(*intern_, e.cat_id);
-        const dstd::StringView hhash = resolve_or_empty(*intern_, e.hhash_id);
-        const dstd::StringView fhash = resolve_or_empty(*intern_, e.fhash_id);
-
-        dstd::StringView shash;
-        for (const auto& [k, v] : e.args) {
-            const auto* id = std::get_if<std::uint32_t>(&v);
-            if (!id) continue;
-            const auto key = intern_->resolve(k);
-            if (key == "cmd_hash") {
-                shash = intern_->resolve(*id);
-                break;
-            }
-            if (key == "exec_hash" && shash.empty())
-                shash = intern_->resolve(*id);
-        }
-
-        if (config_.fixed_dimensions) {
-            BV::observe_data(chunk, cache, e.name_id, e.cat_id, name, cat,
-                             e.pid, e.tid, e.ts, e.dur, e.has_dur, hhash, fhash,
-                             shash);
-            // A record without a top-level dur (an aggregated one) matches
-            // `dur` on args.dur, so the dur zone covers it too.
-            if (!e.has_dur)
-                for (const auto& [k, v] : e.args) {
-                    if (k != dur_key_) continue;
-                    auto& ds = chunk.fixed_dim_stats[BV::FdDur];
-                    // Durations are not negative, so the uint range holds.
-                    if (const auto* i = std::get_if<std::int64_t>(&v);
-                        i && *i >= 0)
-                        ds.observe_range_only(static_cast<std::uint64_t>(*i));
-                    if (const auto* d = std::get_if<double>(&v); d && *d >= 0) {
-                        ds.observe_range_only(
-                            static_cast<std::uint64_t>(std::floor(*d)));
-                        ds.observe_range_only(
-                            static_cast<std::uint64_t>(std::ceil(*d)));
-                    }
-                    break;
-                }
-        } else
-            ++chunk.statistics.total_events;
-
-        for (std::size_t x = 0; x < extra_keys_.size(); ++x) {
-            for (const auto& [k, v] : e.args) {
-                if (k != extra_keys_[x]) continue;
-                if (const auto* i = std::get_if<std::int64_t>(&v))
-                    BV::observe_extra(chunk, x, *i);
-                else if (const auto* u = std::get_if<std::uint64_t>(&v))
-                    BV::observe_extra(chunk, x, *u);
-                else if (const auto* d = std::get_if<double>(&v))
-                    BV::observe_extra(chunk, x, *d);
-                else
-                    BV::observe_extra(
-                        chunk, x, intern_->resolve(std::get<std::uint32_t>(v)));
-                break;
-            }
-        }
-        observe_auto(auto_chunk, e);
-    }
+    feeder_.feed(*lane.chunk_, *lane.auto_chunk_, batch);
 }
 
 void BloomFold::drop_unit(const trace::views::detail::ScanUnit& unit) {
@@ -688,7 +561,6 @@ dstd::Result<void> BloomFold::merge(trace::views::detail::Fold& slice) {
             for (auto& [k, of] : oac) {
                 AutoField& f = ac[k];
                 BV::merge_dimension_stats(f.stats, of.stats);
-                f.bounds.valid = false;
                 if (f.overflow || of.overflow) {
                     f.overflow = true;
                     f.values.clear();

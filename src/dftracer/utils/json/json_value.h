@@ -52,13 +52,6 @@ class JsonValue {
     bool is_array() const { return valid_ && elem_.is_array(); }
     bool exists() const { return valid_; }
 
-    JsonValue operator[](const char* key) const {
-        if (!valid_ || !elem_.is_object()) return JsonValue();
-        auto result = elem_[key];
-        if (result.error()) return JsonValue();
-        return JsonValue(result.value_unsafe());
-    }
-
     JsonValue operator[](dstd::StringView key) const {
         if (!valid_ || !elem_.is_object()) return JsonValue();
         auto result = elem_[key];
@@ -77,7 +70,6 @@ class JsonValue {
         return JsonValue(result.value_unsafe());
     }
 
-    JsonValue at(const char* path) const;
     JsonValue at(dstd::StringView path) const;
 
     template <typename T>
@@ -93,9 +85,6 @@ class JsonValue {
         } else if constexpr (std::is_same_v<T, dstd::StringView>) {
             auto r = elem_.get_string();
             return r.error() ? default_val : r.value_unsafe();
-        } else if constexpr (std::is_same_v<T, const char*>) {
-            auto r = elem_.get_c_str();
-            return r.error() ? default_val : r.value_unsafe();
         } else if constexpr (std::is_same_v<T, std::uint64_t>) {
             auto r = elem_.get_uint64();
             if (!r.error()) return r.value_unsafe();
@@ -109,7 +98,8 @@ class JsonValue {
             auto ru = elem_.get_uint64();
             if (!ru.error() &&
                 ru.value_unsafe() <=
-                    static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+                    static_cast<std::uint64_t>(
+                        std::numeric_limits<std::int64_t>::max()))
                 return static_cast<std::int64_t>(ru.value_unsafe());
             return default_val;
         } else if constexpr (std::is_same_v<T, double>) {
@@ -147,10 +137,6 @@ class JsonValue {
                        : dstd::Optional<T>(dstd::String(r.value_unsafe()));
         } else if constexpr (std::is_same_v<T, dstd::StringView>) {
             auto r = elem_.get_string();
-            return r.error() ? dstd::nullopt
-                             : dstd::Optional<T>(r.value_unsafe());
-        } else if constexpr (std::is_same_v<T, const char*>) {
-            auto r = elem_.get_c_str();
             return r.error() ? dstd::nullopt
                              : dstd::Optional<T>(r.value_unsafe());
         } else if constexpr (std::is_same_v<T, std::uint64_t>) {

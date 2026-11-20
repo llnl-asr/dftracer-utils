@@ -30,19 +30,47 @@ Series Series::rename(const dstd::SharedString& name) const {
     return Series{out};
 }
 
-Series Series::derived(dftu_series* result) const {
-    if (result != nullptr && handle_ != nullptr) result->name = handle_->name;
-    return Series{result};
+template <class Op>
+Series Series::paired(const Series& other, Op op) const {
+    if (!has_index() && !other.has_index())
+        return derived(op(handle_, other.handle_), other);
+    dstd::Result<AlignedSeries> aligned = align_labels(*this, other);
+    if (!aligned) return Series{};
+    return aligned->left.derived(
+        op(aligned->left.handle_, aligned->right.handle_), aligned->right);
 }
 
-Series Series::derived(dftu_series* result, const Series& other) const {
-    if (result == nullptr) return Series{};
-    if (handle_ != nullptr && other.handle_ != nullptr &&
-        name() == other.name())
-        result->name = handle_->name;
-    else
-        result->name = {};
-    return Series{result};
+Series Series::structs_from(dstd::Span<const char* const> names,
+                            dstd::Vector<Series> columns) {
+    dstd::Vector<dftu_series*> handles;
+    handles.reserve(columns.size());
+    for (Series& c : columns) handles.push_back(c.release());
+    return Series{dftu_series_new_struct(
+        handles.data(), const_cast<const char**>(names.data()),
+        static_cast<std::int32_t>(handles.size()))};
+}
+
+Series Series::structs(dstd::Span<const dstd::String> names,
+                       dstd::Vector<Series> columns) {
+    dstd::Vector<const char*> cnames;
+    cnames.reserve(names.size());
+    for (const dstd::String& s : names) cnames.push_back(s.c_str());
+    return structs_from(cnames, std::move(columns));
+}
+
+Series Series::structs(dstd::Span<const dstd::SharedString> names,
+                       dstd::Vector<Series> columns) {
+    dstd::Vector<const char*> cnames;
+    cnames.reserve(names.size());
+    for (const dstd::SharedString& s : names) cnames.push_back(s.c_str());
+    return structs_from(cnames, std::move(columns));
+}
+
+Series Series::structs(std::initializer_list<const char*> names,
+                       dstd::Vector<Series> columns) {
+    return structs_from(
+        dstd::Span<const char* const>(names.begin(), names.size()),
+        std::move(columns));
 }
 
 DataType Series::data_type() const {
@@ -59,7 +87,7 @@ DataType Series::data_type() const {
     for (std::int64_t i = 0; i < n; ++i) {
         Series c = child(i);
         const char* name =
-            dftu_series_field_name(handle_, static_cast<int32_t>(i));
+            dftu_series_field_name(handle_, static_cast<std::int32_t>(i));
         bool default_named =
             dt.id == TypeId::List || dt.id == TypeId::LargeList ||
             dt.id == TypeId::FixedSizeList || dt.id == TypeId::Map;
@@ -70,16 +98,24 @@ DataType Series::data_type() const {
 }
 
 Series Series::add(const Series& o) const {
-    return derived(dftu_series_add(handle_, o.handle_), o);
+    return paired(o, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_add(a, b);
+    });
 }
 Series Series::sub(const Series& o) const {
-    return derived(dftu_series_sub(handle_, o.handle_), o);
+    return paired(o, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_sub(a, b);
+    });
 }
 Series Series::mul(const Series& o) const {
-    return derived(dftu_series_mul(handle_, o.handle_), o);
+    return paired(o, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_mul(a, b);
+    });
 }
 Series Series::div(const Series& o) const {
-    return derived(dftu_series_div(handle_, o.handle_), o);
+    return paired(o, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_div(a, b);
+    });
 }
 
 dstd::Result<Scalar> Series::sum() const {
@@ -88,17 +124,25 @@ dstd::Result<Scalar> Series::sum() const {
     if (!r) return r.error();
     return Scalar{*r};
 }
-dstd::Result<Scalar> Series::min() const {
+// The refusal of a type comes first; a column with no valid row then has no
+// extreme to give.
+static dstd::Result<Scalar> extreme(const Series& s, dftu_series* handle,
+                                    dftu_reduce_op op) {
     const dstd::Result<dftu_scalar> r =
-        reduction_result(dftu_series_reduce(handle_, DFTU_REDUCE_MIN));
+        reduction_result(dftu_series_reduce(handle, op));
     if (!r) return r.error();
+    if (s.count() == 0) {
+        dftu_scalar none{};
+        none.kind = DFTU_SCALAR_TAG_NULL;
+        return Scalar{none};
+    }
     return Scalar{*r};
 }
+dstd::Result<Scalar> Series::min() const {
+    return extreme(*this, handle_, DFTU_REDUCE_MIN);
+}
 dstd::Result<Scalar> Series::max() const {
-    const dstd::Result<dftu_scalar> r =
-        reduction_result(dftu_series_reduce(handle_, DFTU_REDUCE_MAX));
-    if (!r) return r.error();
-    return Scalar{*r};
+    return extreme(*this, handle_, DFTU_REDUCE_MAX);
 }
 Scalar Series::product() const { return dftu_series_product(handle_); }
 Scalar Series::mode() const { return dftu_series_mode(handle_); }
@@ -114,7 +158,7 @@ dstd::Result<double> Series::mean() const {
     if (!total_sum) return total_sum.error();
     const double total = scalar_as_double(*total_sum);
     const std::int64_t n = count();
-    return n == 0 ? 0.0 : total / static_cast<double>(n);
+    return n == 0 ? std::nan("") : total / static_cast<double>(n);
 }
 double Series::variance(bool sample) const {
     return dftu_series_variance(handle_, sample ? 1 : 0);
@@ -124,8 +168,18 @@ double Series::stddev(bool sample) const {
 }
 double Series::skewness() const { return dftu_series_skewness(handle_); }
 double Series::kurtosis() const { return dftu_series_kurtosis(handle_); }
+double Series::skewness_unbiased() const {
+    return dftu_series_skewness_unbiased(handle_);
+}
+double Series::kurtosis_unbiased() const {
+    return dftu_series_kurtosis_unbiased(handle_);
+}
 double Series::quantile(double q) const {
     return dftu_series_quantile(handle_, q);
+}
+double Series::quantile(double q, Interpolation interp) const {
+    return dftu_series_quantile_interp(handle_, q,
+                                       static_cast<dftu_interpolation>(interp));
 }
 double Series::median() const { return dftu_series_quantile(handle_, 0.5); }
 std::int64_t Series::nunique() const { return dftu_series_nunique(handle_); }
@@ -164,8 +218,9 @@ Series Series::cut(const Series& breaks, std::int32_t flags) const {
 Series Series::qcut(std::int32_t q) const {
     return derived(dftu_series_qcut(handle_, q));
 }
-Series Series::search_sorted(const Series& values) const {
-    return Series{dftu_series_search_sorted(handle_, values.handle_)};
+Series Series::search_sorted(const Series& values, bool right) const {
+    return Series{
+        dftu_series_search_sorted_side(handle_, values.handle_, right ? 1 : 0)};
 }
 Series Series::interpolate() const {
     return derived(dftu_series_interpolate(handle_));
@@ -209,7 +264,46 @@ Series Series::pct_change() const {
 Series Series::sqrt() const { return derived(dftu_series_sqrt(handle_)); }
 Series Series::exp() const { return derived(dftu_series_exp(handle_)); }
 Series Series::log() const { return derived(dftu_series_log(handle_)); }
-Series Series::unique() const { return derived(dftu_series_unique(handle_)); }
+Series Series::log1p() const { return derived(dftu_series_log1p(handle_)); }
+Series Series::expm1() const { return derived(dftu_series_expm1(handle_)); }
+Series Series::sin() const { return derived(dftu_series_sin(handle_)); }
+Series Series::cos() const { return derived(dftu_series_cos(handle_)); }
+Series Series::tan() const { return derived(dftu_series_tan(handle_)); }
+Series Series::cot() const { return derived(dftu_series_cot(handle_)); }
+Series Series::arcsin() const { return derived(dftu_series_arcsin(handle_)); }
+Series Series::arccos() const { return derived(dftu_series_arccos(handle_)); }
+Series Series::arctan() const { return derived(dftu_series_arctan(handle_)); }
+Series Series::sinh() const { return derived(dftu_series_sinh(handle_)); }
+Series Series::cosh() const { return derived(dftu_series_cosh(handle_)); }
+Series Series::tanh() const { return derived(dftu_series_tanh(handle_)); }
+Series Series::arcsinh() const { return derived(dftu_series_arcsinh(handle_)); }
+Series Series::arccosh() const { return derived(dftu_series_arccosh(handle_)); }
+Series Series::arctanh() const { return derived(dftu_series_arctanh(handle_)); }
+Series Series::cbrt() const { return derived(dftu_series_cbrt(handle_)); }
+Series Series::log10() const { return derived(dftu_series_log10(handle_)); }
+Series Series::erf() const { return derived(dftu_series_erf(handle_)); }
+Series Series::erfc() const { return derived(dftu_series_erfc(handle_)); }
+Series Series::bitwise_count_ones() const {
+    return derived(dftu_series_bitwise_count_ones(handle_));
+}
+Series Series::bitwise_count_zeros() const {
+    return derived(dftu_series_bitwise_count_zeros(handle_));
+}
+Series Series::bitwise_leading_ones() const {
+    return derived(dftu_series_bitwise_leading_ones(handle_));
+}
+Series Series::bitwise_leading_zeros() const {
+    return derived(dftu_series_bitwise_leading_zeros(handle_));
+}
+Series Series::bitwise_trailing_ones() const {
+    return derived(dftu_series_bitwise_trailing_ones(handle_));
+}
+Series Series::bitwise_trailing_zeros() const {
+    return derived(dftu_series_bitwise_trailing_zeros(handle_));
+}
+Scalar Series::bitwise_and() const { return dftu_series_bitwise_and(handle_); }
+Scalar Series::bitwise_or() const { return dftu_series_bitwise_or(handle_); }
+Scalar Series::bitwise_xor() const { return dftu_series_bitwise_xor(handle_); }
 Series Series::dictionary_encode() const {
     return derived(dftu_series_dictionary_encode(handle_));
 }
@@ -229,58 +323,42 @@ Series Series::is_infinite() const {
 Series Series::is_unique() const {
     return derived(dftu_series_is_unique(handle_));
 }
+Series Series::duplicated(std::int32_t keep) const {
+    return derived(dftu_series_duplicated(handle_, keep));
+}
 Series Series::is_duplicated() const {
     return derived(dftu_series_is_duplicated(handle_));
 }
 bool Series::is_sorted(bool descending) const {
     return dftu_series_is_sorted(handle_, descending ? 1 : 0) != 0;
 }
-Series Series::drop_nulls() const {
-    return derived(dftu_series_drop_nulls(handle_));
-}
 Series Series::is_in(const Series& values) const {
     return derived(dftu_series_is_in(handle_, values.handle_));
 }
-Series Series::sort(bool descending) const {
-    return derived(dftu_series_sort(handle_, descending ? 1 : 0));
-}
-Series Series::head(std::int64_t n) const {
-    return derived(dftu_series_head(handle_, n));
-}
-Series Series::tail(std::int64_t n) const {
-    return derived(dftu_series_tail(handle_, n));
-}
-Series Series::reverse() const { return derived(dftu_series_reverse(handle_)); }
 Series Series::shift(std::int64_t n) const {
     return derived(dftu_series_shift(handle_, n));
 }
-Series Series::top_k(std::int64_t k) const {
-    return derived(dftu_series_top_k(handle_, k));
-}
-Series Series::bottom_k(std::int64_t k) const {
-    return derived(dftu_series_bottom_k(handle_, k));
-}
-Series Series::sample(std::int64_t n, std::uint64_t seed) const {
-    return derived(dftu_series_sample(handle_, n, seed));
-}
-Series Series::argsort(bool descending) const {
-    return derived(dftu_series_argsort(handle_, descending ? 1 : 0));
-}
-Series Series::take(const dstd::Vector<std::int64_t>& indices) const {
-    return take(dstd::Span<const std::int64_t>(indices));
-}
-Series Series::take(dstd::Span<const std::int64_t> indices) const {
-    return derived(dftu_series_take(handle_, indices.data(),
-                                    static_cast<std::int64_t>(indices.size())));
+Series Series::argsort(bool descending, bool nulls_last) const {
+    return derived(dftu_series_argsort_nulls(handle_, descending ? 1 : 0,
+                                             nulls_last ? 1 : 0));
 }
 Series Series::materialize() const {
     return derived(dftu_series_materialize(handle_));
 }
 Series Series::where(const Series& mask, const Series& other) const {
-    return derived(dftu_series_where(mask.handle_, handle_, other.handle_));
-}
-Series Series::filter(const Series& mask) const {
-    return derived(dftu_series_filter(handle_, mask.handle_));
+    if ((has_index() && other.has_index() && !same_labels(*this, other)) ||
+        (mask.has_index() && has_index() && !same_labels(*this, mask)) ||
+        (mask.has_index() && other.has_index() && !same_labels(other, mask)))
+        return Series{};
+    Series out =
+        derived(dftu_series_where(mask.handle_, handle_, other.handle_));
+    if (out.valid() && !out.has_index()) {
+        if (other.has_index())
+            out = out.with_index_of(other);
+        else if (mask.has_index())
+            out = out.with_index_of(mask);
+    }
+    return out;
 }
 
 Series Series::str_eq(dstd::StringView rhs) const {
@@ -423,7 +501,12 @@ Series Series::str_center(std::int64_t width, char fill) const {
     return derived(dftu_series_str_center(handle_, width, fill));
 }
 Series Series::str_cat(const Series& other) const {
-    return derived(dftu_series_str_cat(handle_, other.handle_));
+    if (has_index() && other.has_index() && !same_labels(*this, other))
+        return Series{};
+    Series out = derived(dftu_series_str_cat(handle_, other.handle_));
+    if (out.valid() && !out.has_index() && other.has_index())
+        out = out.with_index_of(other);
+    return out;
 }
 Series Series::str_findall(dstd::StringView pattern) const {
     return derived(
@@ -453,28 +536,49 @@ Series Series::dt_format(dstd::StringView fmt, TimeUnit unit) const {
     return derived(dftu_series_dt_format(handle_, fmt.data(), sv_size(fmt),
                                          static_cast<std::int32_t>(unit)));
 }
+Series Series::dt_as_unit(TimeUnit unit, std::int32_t mode) const {
+    return derived(
+        dftu_series_dt_as_unit(handle_, static_cast<std::int32_t>(unit), mode));
+}
+Series Series::dt_date() const { return derived(dftu_series_dt_date(handle_)); }
+Series Series::dt_time() const { return derived(dftu_series_dt_time(handle_)); }
 Series Series::with_timezone(dstd::StringView tz) const {
     return derived(dftu_series_with_timezone(
         handle_, tz.data(), static_cast<std::int32_t>(tz.size())));
 }
+Series Series::tz_localize(dstd::StringView tz, std::int32_t ambiguous,
+                           std::int32_t nonexistent, std::int64_t shift) const {
+    return derived(dftu_series_tz_localize(handle_, tz.data(),
+                                           static_cast<std::int32_t>(tz.size()),
+                                           ambiguous, nonexistent, shift));
+}
 Series Series::floordiv(const Series& other) const {
-    return derived(dftu_series_floordiv(handle_, other.handle_), other);
+    return paired(other, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_floordiv(a, b);
+    });
 }
 Series Series::mod(const Series& other) const {
-    return derived(dftu_series_mod(handle_, other.handle_), other);
+    return paired(other, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_mod(a, b);
+    });
 }
 Series Series::pow(const Series& other) const {
-    return derived(dftu_series_pow(handle_, other.handle_), other);
+    return paired(other, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_pow(a, b);
+    });
 }
 Series Series::ffill() const { return derived(dftu_series_ffill(handle_)); }
 Series Series::bfill() const { return derived(dftu_series_bfill(handle_)); }
 
 Series Series::logical_and(const Series& o) const {
-    return derived(dftu_series_logical(handle_, o.handle_, DFTU_LOGICAL_AND),
-                   o);
+    return paired(o, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_logical(a, b, DFTU_LOGICAL_AND);
+    });
 }
 Series Series::logical_or(const Series& o) const {
-    return derived(dftu_series_logical(handle_, o.handle_, DFTU_LOGICAL_OR), o);
+    return paired(o, [](const dftu_series* a, const dftu_series* b) {
+        return dftu_series_logical(a, b, DFTU_LOGICAL_OR);
+    });
 }
 Series Series::logical_not() const {
     return derived(dftu_series_logical_not(handle_));

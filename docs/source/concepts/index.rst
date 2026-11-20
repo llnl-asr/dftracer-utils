@@ -15,6 +15,7 @@ the :doc:`Reference <../reference/index>` documents.
    compose
    dataframe-model
    python-typing
+   jit-design
    simd
    fused-scan
    indexing-and-pushdown

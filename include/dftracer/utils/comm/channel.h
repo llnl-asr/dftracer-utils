@@ -133,7 +133,7 @@ dstd::Optional<dstd::Error> check_declarations(ChannelState& channel,
 /// message that a mismatch would not send.
 void watch_declarations(const dstd::SharedPtr<ChannelState>& channel,
                         const dstd::SharedPtr<PendingOp>& call,
-                        const dstd::Vector<PeerWait>& waiting);
+                        dstd::Span<const PeerWait> waiting);
 
 /**
  * @brief One channel call: the stream it waits on and the handle its provider

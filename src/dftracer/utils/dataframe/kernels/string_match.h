@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/common/cpu_features.h>
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
 
@@ -20,14 +21,10 @@ namespace dftracer::utils::dataframe::kernels {
 struct StringMatch {
     dftu_series* (*pattern)(const dftu_series* v,
                             const duql::CompiledPattern& p);
-    dftu_series* (*eq)(const dftu_series* v, const char* rhs,
-                       std::int32_t rhs_size);
-    dftu_series* (*contains)(const dftu_series* v, const char* needle,
-                             std::int32_t needle_size);
-    dftu_series* (*starts_with)(const dftu_series* v, const char* prefix,
-                                std::int32_t prefix_size);
-    dftu_series* (*ends_with)(const dftu_series* v, const char* suffix,
-                              std::int32_t suffix_size);
+    dftu_series* (*eq)(const dftu_series* v, dstd::StringView rhs);
+    dftu_series* (*contains)(const dftu_series* v, dstd::StringView needle);
+    dftu_series* (*starts_with)(const dftu_series* v, dstd::StringView prefix);
+    dftu_series* (*ends_with)(const dftu_series* v, dstd::StringView suffix);
 };
 
 // The kernels of each build: the same code, the second one assembled with

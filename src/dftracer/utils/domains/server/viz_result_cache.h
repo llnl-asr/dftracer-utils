@@ -30,7 +30,7 @@ class VizResultCache {
 
     /// The body of `key`, or nothing. A key missing from memory and from the
     /// store is counted as a compute.
-    dstd::Optional<dstd::String> get(const dstd::String& key);
+    dstd::Optional<dstd::String> get(dstd::StringView key);
 
     /// The bodies of `keys`, in order: memory first, then one store read for
     /// the keys that missed. A request that finds nothing stored is counted as
@@ -41,7 +41,7 @@ class VizResultCache {
     /// Keeps `body` for `key` in memory at once, then hands it to the folder's
     /// store write. The request does not wait for the store; a store failure
     /// is logged and leaves the memory copy in place.
-    void put(const dstd::String& key, dstd::String body);
+    void put(dstd::String key, dstd::String body);
 
    private:
     struct Entry {
@@ -49,7 +49,7 @@ class VizResultCache {
         dstd::List<dstd::String>::iterator pos;
     };
 
-    void put_memory(const dstd::String& key, dstd::String body);
+    void put_memory(dstd::String key, dstd::String body);
     void evict();  // front = MRU, back = LRU
 
     TraceIndex* index_;

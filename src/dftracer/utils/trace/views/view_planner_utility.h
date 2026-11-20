@@ -37,8 +37,8 @@ struct ViewPlannerInput {
     const trace::index::Snapshot* snapshot = nullptr;
 
     ViewPlannerInput& with_view(const ViewDefinition& v);
-    ViewPlannerInput& with_file_path(const dstd::String& path);
-    ViewPlannerInput& with_index_path(const dstd::String& path);
+    ViewPlannerInput& with_file_path(dstd::StringView path);
+    ViewPlannerInput& with_index_path(dstd::StringView path);
     ViewPlannerInput& with_uncompressed_size(std::size_t s);
     ViewPlannerInput& with_checkpoint_count(std::size_t n);
     ViewPlannerInput& with_time_range(double begin, double end);

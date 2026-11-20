@@ -67,7 +67,7 @@ namespace {
 // The index record of `file` when the index holds it unchanged since the stat
 // the caller read, or a prefix of it. Only a file that grew is opened again.
 dstd::Optional<internal::IndexedFile> fresh_index_record(
-    const dstd::String& index_path, const dstd::String& file,
+    dstd::StringView index_path, dstd::StringView file,
     const dftracer::utils::common::InputFileStat& st, bool& is_prefix) {
     auto snapshot = trace::index::plan::open_snapshot(index_path);
     if (!snapshot) {
@@ -247,14 +247,11 @@ coro::CoroTask<dstd::Result<void>> read_metadata(
                 if (!line_opt) break;
                 if (!*line_opt) co_return line_opt->error();
                 const auto& line = **line_opt;
-                const char* trimmed;
-                std::size_t trimmed_size;
-                if (json::trim_and_validate(line.content.data(),
-                                            line.content.length(), trimmed,
-                                            trimmed_size) &&
-                    trimmed_size > 8) {
+                dstd::StringView trimmed;
+                if (json::trim_and_validate(line.content, trimmed) &&
+                    trimmed.size() > 8) {
                     hasher.reset();
-                    hasher.update(dstd::StringView(trimmed, trimmed_size));
+                    hasher.update(trimmed);
                     content_hash += hasher.hash().value;
                     actual_valid_events++;
                 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dataframe/internal/tz.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dataframe/udaf_adapter.h>
@@ -15,6 +16,49 @@ constexpr std::int32_t code(E e) {
     return static_cast<std::int32_t>(e);
 }
 
+constexpr AggOp last_agg_row() {
+    AggOp last = AggOp::Sum;
+#define DFTU_AGG_OP(id, code, name) last = AggOp::id;
+#include <dftracer/utils/dataframe/agg_ops.def>
+#undef DFTU_AGG_OP
+    return last;
+}
+static_assert(AGG_OP_LAST == last_agg_row());
+static_assert(code(AggOp::SkewUnbiased) == DFTU_AGG_SKEW_UNBIASED);
+static_assert(code(AggOp::KurtUnbiased) == DFTU_AGG_KURT_UNBIASED);
+static_assert(code(Agg::SkewUnbiased) == DFTU_AGG_SKEW_UNBIASED);
+static_assert(code(Agg::KurtUnbiased) == DFTU_AGG_KURT_UNBIASED);
+static_assert(code(AggOp::Quantile) == DFTU_AGG_QUANTILE);
+static_assert(code(Agg::Quantile) == DFTU_AGG_QUANTILE);
+static_assert(code(AggOp::ArgMaxPos) == DFTU_AGG_ARGMAX_POS);
+static_assert(code(AggOp::ArgMinPos) == DFTU_AGG_ARGMIN_POS);
+static_assert(code(Agg::ArgMaxPos) == DFTU_AGG_ARGMAX_POS);
+static_assert(code(Agg::ArgMinPos) == DFTU_AGG_ARGMIN_POS);
+static_assert(code(AggOp::BitwiseAnd) == DFTU_AGG_BITWISE_AND);
+static_assert(code(AggOp::BitwiseOr) == DFTU_AGG_BITWISE_OR);
+static_assert(code(AggOp::BitwiseXor) == DFTU_AGG_BITWISE_XOR);
+static_assert(code(Agg::BitwiseAnd) == DFTU_AGG_BITWISE_AND);
+static_assert(code(Agg::BitwiseOr) == DFTU_AGG_BITWISE_OR);
+static_assert(code(Agg::BitwiseXor) == DFTU_AGG_BITWISE_XOR);
+static_assert(code(tz::Ambiguous::Raise) == DFTU_TZ_AMBIGUOUS_RAISE);
+static_assert(code(tz::Ambiguous::Earliest) == DFTU_TZ_AMBIGUOUS_EARLIEST);
+static_assert(code(tz::Ambiguous::Latest) == DFTU_TZ_AMBIGUOUS_LATEST);
+static_assert(code(tz::Ambiguous::Nat) == DFTU_TZ_AMBIGUOUS_NAT);
+static_assert(code(tz::Ambiguous::Infer) == DFTU_TZ_AMBIGUOUS_INFER);
+static_assert(code(tz::Nonexistent::Raise) == DFTU_TZ_NONEXISTENT_RAISE);
+static_assert(code(tz::Nonexistent::ShiftForward) ==
+              DFTU_TZ_NONEXISTENT_SHIFT_FORWARD);
+static_assert(code(tz::Nonexistent::ShiftBackward) ==
+              DFTU_TZ_NONEXISTENT_SHIFT_BACKWARD);
+static_assert(code(tz::Nonexistent::Nat) == DFTU_TZ_NONEXISTENT_NAT);
+static_assert(code(tz::Nonexistent::Shift) == DFTU_TZ_NONEXISTENT_SHIFT);
+static_assert(code(tz::Failure::None) == DFTU_TZ_ERROR_NONE);
+static_assert(code(tz::Failure::UnknownZone) == DFTU_TZ_ERROR_UNKNOWN_ZONE);
+static_assert(code(tz::Failure::InvalidZone) == DFTU_TZ_ERROR_INVALID_ZONE);
+static_assert(code(tz::Failure::Ambiguous) == DFTU_TZ_ERROR_AMBIGUOUS);
+static_assert(code(tz::Failure::Nonexistent) == DFTU_TZ_ERROR_NONEXISTENT);
+static_assert(code(tz::Failure::OutOfRange) == DFTU_TZ_ERROR_OUT_OF_RANGE);
+static_assert(code(tz::Failure::Other) == DFTU_TZ_ERROR_OTHER);
 static_assert(code(Encoding::View) == 4);
 static_assert(code(Encoding::Chunked) == 5);
 
@@ -37,6 +81,7 @@ static_assert(code(ScalarKind::U64) == DFTU_SCALAR_TAG_U64);
 static_assert(code(ScalarKind::F64) == DFTU_SCALAR_TAG_F64);
 static_assert(code(ScalarKind::Str) == DFTU_SCALAR_TAG_STR);
 static_assert(code(ScalarKind::Err) == DFTU_SCALAR_TAG_ERR);
+static_assert(code(ScalarKind::Null) == DFTU_SCALAR_TAG_NULL);
 
 static_assert(-(code(dstd::Condition::Unknown) + 1) == DFTU_E_UNKNOWN);
 static_assert(-(code(dstd::Condition::Internal) + 1) == DFTU_E_INTERNAL);
@@ -113,6 +158,12 @@ static_assert(code(RankMethod::Min) == DFTU_RANK_MIN);
 static_assert(code(RankMethod::Dense) == DFTU_RANK_DENSE);
 static_assert(code(RankMethod::Ordinal) == DFTU_RANK_ORDINAL);
 static_assert(code(RankMethod::Max) == DFTU_RANK_MAX);
+
+static_assert(code(Interpolation::Linear) == DFTU_INTERP_LINEAR);
+static_assert(code(Interpolation::Nearest) == DFTU_INTERP_NEAREST);
+static_assert(code(Interpolation::Lower) == DFTU_INTERP_LOWER);
+static_assert(code(Interpolation::Higher) == DFTU_INTERP_HIGHER);
+static_assert(code(Interpolation::Midpoint) == DFTU_INTERP_MIDPOINT);
 
 static_assert(code(RollingOp::Sum) == DFTU_ROLLING_SUM);
 static_assert(code(RollingOp::Mean) == DFTU_ROLLING_MEAN);
@@ -193,6 +244,7 @@ static_assert(code(ScalarTag::U64) == DFTU_SCALAR_TAG_U64);
 static_assert(code(ScalarTag::F64) == DFTU_SCALAR_TAG_F64);
 static_assert(code(ScalarTag::Str) == DFTU_SCALAR_TAG_STR);
 static_assert(code(ScalarTag::Err) == DFTU_SCALAR_TAG_ERR);
+static_assert(code(ScalarTag::Null) == DFTU_SCALAR_TAG_NULL);
 
 // Every TypeId mirrors a dftu_dtype, in lockstep, so a plugin can name any
 // type a Series can hold through the C ABI.

@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/comm/codec.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstring>
 
 namespace dftracer::utils::comm {
 
 std::size_t StringCodec::serialized_size(
-    const dstd::String& value) const noexcept {
+    dstd::StringView value) const noexcept {
     return value.size();
 }
 
 dstd::Result<std::size_t> StringCodec::serialize(
-    const dstd::String& value, dstd::Span<std::byte> out) const {
+    dstd::StringView value, dstd::Span<std::byte> out) const {
     if (out.size() != value.size()) {
         return dstd::Unexpected(
             dstd::Error::from_format<"{} bytes do not hold {} bytes">(

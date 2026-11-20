@@ -70,11 +70,13 @@ void dftu_utils_test::remember_test_path(const dstd::Path& path) {
 }
 
 extern "C" {
-size_t mb_to_b(double mb) { return static_cast<std::size_t>(mb * 1024 * 1024); }
+std::size_t mb_to_b(double mb) {
+    return static_cast<std::size_t>(mb * 1024 * 1024);
+}
 }  // extern "C"
 
 namespace dftu_utils_test {
-bool build_index(const dstd::String& gz, const dstd::String& index_dir,
+bool build_index(dstd::StringView gz, dstd::StringView index_dir,
                  std::size_t checkpoint_size) {
     bool ok = false;
     Runtime rt(4);
@@ -83,7 +85,7 @@ bool build_index(const dstd::String& gz, const dstd::String& index_dir,
             -> dftracer::utils::coro::CoroTask<void> {
             auto config = dstd::make_shared<
                 dftracer::utils::trace::index::build::IndexBuildBatchConfig>();
-            config->file_paths = {dstd::String(dstd::StringView(gz))};
+            config->file_paths = {dstd::String(gz)};
             config->index_dir = index_dir;
             if (checkpoint_size > 0) config->checkpoint_size = checkpoint_size;
             auto r = co_await dftracer::utils::trace::index::build::
@@ -97,19 +99,18 @@ bool build_index(const dstd::String& gz, const dstd::String& index_dir,
     return ok;
 }
 
-dstd::String write_gz_trace(const dstd::String& path,
-                            const dstd::String& content) {
+dstd::String write_gz_trace(dstd::CStringView path, dstd::StringView content) {
     gzFile f = gzopen(path.c_str(), "wb");
     if (f == nullptr) return "";
     if (!content.empty()) {
         gzwrite(f, content.data(), static_cast<unsigned>(content.size()));
     }
     gzclose(f);
-    return path;
+    return dstd::String(path);
 }
 
-dstd::String write_stored_gz_trace(const dstd::String& path,
-                                   const dstd::String& content) {
+dstd::String write_stored_gz_trace(dstd::StringView path,
+                                   dstd::StringView content) {
     constexpr std::size_t STORED_MAX = 65535;
     dstd::String out = {'\x1f', '\x8b', '\x08', '\x00', '\x00',
                         '\x00', '\x00', '\x00', '\x00', '\xff'};
@@ -128,7 +129,7 @@ dstd::String write_stored_gz_trace(const dstd::String& path,
         out += static_cast<char>(last ? 1 : 0);
         put16(n);
         put16(~n & 0xFFFF);
-        out.append(content, at, n);
+        out.append(content.substr(at, n));
         at += n;
     } while (at < content.size());
     put32(dftracer::utils::fileio::compress::gzip_crc32(0, content.data(),
@@ -137,11 +138,11 @@ dstd::String write_stored_gz_trace(const dstd::String& path,
     dftu_utils_test::FileOut file(path);
     if (!file.write(out.data(), static_cast<std::streamsize>(out.size())))
         return "";
-    return path;
+    return dstd::String(path);
 }
 
-bool compress_file_to_gzip(const dstd::String& input_file,
-                           const dstd::String& output_file) {
+bool compress_file_to_gzip(dstd::StringView input_file,
+                           dstd::CStringView output_file) {
     auto input = dstd::fs::read_file(input_file);
     if (!input.has_value()) {
         return false;
@@ -167,8 +168,8 @@ bool compress_file_to_gzip(const dstd::String& input_file,
     return true;
 }
 
-bool compress_file_to_gzip_multimember(const dstd::String& input_file,
-                                       const dstd::String& output_file,
+bool compress_file_to_gzip_multimember(dstd::StringView input_file,
+                                       dstd::StringView output_file,
                                        std::size_t member_bytes) {
     if (member_bytes == 0) member_bytes = 4 * 1024 * 1024;
 
@@ -271,7 +272,7 @@ dstd::String TestEnvironment::create_test_gzip_file_impl() {
     return "";
 }
 
-dstd::String TestEnvironment::get_index_path(const dstd::String& gz_file) {
+dstd::String TestEnvironment::get_index_path(dstd::CStringView gz_file) {
     return dstd::String(
         dftracer::utils::trace::internal::determine_index_path(gz_file, ""));
 }
@@ -294,8 +295,8 @@ dstd::String TestEnvironment::create_dft_test_file(int event_count) {
 
     ofs << "[\n";
     for (int i = 1; i <= event_count; ++i) {
-        uint64_t timestamp_us =
-            1000000000ULL + static_cast<uint64_t>(i * 100000);
+        std::uint64_t timestamp_us =
+            1000000000ULL + static_cast<std::uint64_t>(i * 100000);
         int size = 1024 * i;
         const char* op_name = io_names[i % name_count];
         const char* op_cat = io_cats[i % name_count];
@@ -303,7 +304,7 @@ dstd::String TestEnvironment::create_dft_test_file(int event_count) {
         ofs << R"({"id":)" << i << R"(,"pid":)" << (1000 + i) << R"(,"tid":)"
             << (2000 + i) << R"(,"name":")" << op_name << R"(")"
             << R"(,"cat":")" << op_cat << R"(")"
-            << R"(,"ph":"X")"
+            << R"(,"ph":1)"
             << R"(,"ts":)" << timestamp_us << R"(,"dur":)" << (100 + i * 10)
             << R"(,"args":{"ret":)" << size << R"(,"hhash":"abc123"})"
             << R"(})" << "\n";
@@ -330,17 +331,17 @@ dstd::String TestEnvironment::create_dft_multirun_gzip_file(
             base + static_cast<std::uint64_t>(r) * (run_us + gap_us);
         const std::uint64_t end = start + run_us;
         auto emit = [&](const char* name, const char* cat, std::uint64_t ts,
-                        const dstd::String& extra) {
+                        dstd::StringView extra) {
             ofs << R"({"id":1,"pid":)" << pid << R"(,"tid":)" << (pid * 10)
                 << R"(,"name":")" << name << R"(","cat":")" << cat
-                << R"(","ph":"X","ts":)" << ts << R"(,"dur":1,"args":{)"
-                << extra << R"(}})" << "\n";
+                << R"(","ph":1,"ts":)" << ts << R"(,"dur":1,"args":{)" << extra
+                << R"(}})" << "\n";
         };
         emit("start", "dftracer", start,
              R"("hhash":"abc123","exec_hash":"app","cmd_hash":"cmd","ppid":1)");
         for (int i = 0; i < 3; ++i)
             ofs << R"({"id":1,"pid":)" << pid << R"(,"tid":)" << (pid * 10)
-                << R"(,"name":"read","cat":"POSIX","ph":"X","ts":)"
+                << R"(,"name":"read","cat":"POSIX","ph":1,"ts":)"
                 << (start + static_cast<std::uint64_t>(i) * (run_us / 4))
                 << R"(,"dur":100,"args":{"hhash":"abc123","ret":1024}})"
                 << "\n";
@@ -378,7 +379,7 @@ dstd::String TestEnvironment::create_dft_test_gzip_file(int event_count) {
     return gz_file;
 }
 
-void set_test_library_path(const dstd::String& binary) {
+void set_test_library_path(dstd::StringView binary) {
     auto resolved = dstd::fs::absolute(dstd::PathView(binary));
     if (!resolved) {
         ::setenv("LD_LIBRARY_PATH", "", 1);
@@ -389,8 +390,8 @@ void set_test_library_path(const dstd::String& binary) {
     ::setenv("LD_LIBRARY_PATH", libs.c_str(), 1);
 }
 
-dstd::String run_process_capture(const dstd::String& binary,
-                                 const dstd::Vector<dstd::String>& args,
+dstd::String run_process_capture(dstd::CStringView binary,
+                                 dstd::Span<const dstd::String> args,
                                  bool capture_stderr, int* exit_code) {
     if (exit_code) *exit_code = -1;
     int fds[2];
@@ -432,7 +433,7 @@ dstd::String run_process_capture(const dstd::String& binary,
     return out;
 }
 
-dstd::String gz_first_line(const dstd::String& gz_path) {
+dstd::String gz_first_line(dstd::CStringView gz_path) {
     gzFile f = ::gzopen(gz_path.c_str(), "rb");
     if (!f) return "";
     dstd::String line;

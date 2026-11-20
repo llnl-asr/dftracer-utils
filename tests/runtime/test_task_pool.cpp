@@ -18,6 +18,7 @@
 #include <exception>
 #include <mutex>
 #include <set>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -146,7 +147,7 @@ CoroTask<void> parent_with_children(Blocks* direct, Blocks* spawned, Hops* hops,
     co_await op;
 }
 
-memory::PoolHandle open_pool(const char* name) {
+memory::PoolHandle open_pool(dstd::StringView name) {
     memory::PoolHandle pool = memory::detail::Manager::get().root().child(name);
     REQUIRE(pool);
     return pool;

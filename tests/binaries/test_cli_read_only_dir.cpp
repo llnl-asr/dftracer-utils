@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <sys/stat.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -17,7 +19,7 @@ namespace {
 // test environment can remove it.
 class ReadOnlyDir {
    public:
-    explicit ReadOnlyDir(const dstd::String& path) : path_(path) {
+    explicit ReadOnlyDir(dstd::StringView path) : path_(path) {
         ::chmod(path_.c_str(), 0500);
     }
     ~ReadOnlyDir() { ::chmod(path_.c_str(), 0700); }
@@ -29,13 +31,14 @@ class ReadOnlyDir {
 };
 
 // A tool whose index cannot be written reports "Error: ..." and exits 1.
-void check_fails_on_read_only_dir(const char* env_name, const char* tool) {
+void check_fails_on_read_only_dir(dstd::String env_name, dstd::String tool) {
     if (::geteuid() == 0) {
         MESSAGE(
             "running as root, a read-only directory is writable, skipping.");
         return;
     }
-    const auto binary = dftu_utils_test::find_binary_by_name(env_name, tool);
+    const auto binary =
+        dftu_utils_test::find_binary_by_name(env_name.c_str(), tool);
     if (binary.empty()) {
         MESSAGE(tool << " binary not found, skipping.");
         return;
@@ -51,8 +54,8 @@ void check_fails_on_read_only_dir(const char* env_name, const char* tool) {
     ReadOnlyDir read_only(env.dir());
     dftu_utils_test::set_test_library_path(binary);
     int rc = 0;
-    const auto output =
-        dftu_utils_test::run_process_capture(binary, {env.dir()}, true, &rc);
+    const auto output = dftu_utils_test::run_process_capture(
+        binary, dftu_utils_test::span_of<dstd::String>({env.dir()}), true, &rc);
     CHECK(rc == 1);
     CHECK(output.find("Error:") != dstd::String::npos);
 }

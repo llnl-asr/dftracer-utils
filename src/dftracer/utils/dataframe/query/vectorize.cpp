@@ -110,14 +110,14 @@ TypeId type_of(K k) {
     }
 }
 
-dstd::Unexpected<dstd::Error> unsupported(const dstd::String& message) {
+dstd::Unexpected<dstd::Error> unsupported(dstd::StringView message) {
     return dstd::Unexpected<dstd::Error>(
         dstd::Error{duql::DuqlErrc::Unsupported, dstd::StringView(message)});
 }
 
 class Vectorizer {
    public:
-    Vectorizer(const dstd::Vector<VectorColumn>& columns, bool args_fallback)
+    Vectorizer(dstd::Span<const VectorColumn> columns, bool args_fallback)
         : columns_(columns), args_fallback_(args_fallback) {}
 
     bool failed() const { return !error_.empty(); }
@@ -129,7 +129,7 @@ class Vectorizer {
     }
 
    private:
-    const dstd::Vector<VectorColumn>& columns_;
+    dstd::Span<const VectorColumn> columns_;
     bool args_fallback_;
 
     // The first unsupported form; the walk goes on with a null value, and
@@ -342,7 +342,7 @@ class Vectorizer {
     }
 
     // One kind for the operands of a value-choosing form, or a compile error.
-    K common(const dstd::Vector<V>& vs, dstd::StringView what) const {
+    K common(dstd::Span<const V> vs, dstd::StringView what) const {
         K out = K::Nul;
         for (const V& v : vs) {
             if (v.k == K::Nul) continue;
@@ -422,8 +422,8 @@ class Vectorizer {
         Expr any_compared;
         for (const V& x : items) {
             const Expr eq = compare(CmpOp::Eq, v, x).e;
-            const Expr hit =
-                dataframe::expr_coalesce({eq, dataframe::expr_lit_bool(false)});
+            const Expr eq_or_false[] = {eq, dataframe::expr_lit_bool(false)};
+            const Expr hit = dataframe::expr_coalesce(eq_or_false);
             const Expr known = dataframe::expr_is_null(eq, false);
             any_equal = any_equal.valid() ? dataframe::expr_logical(
                                                 LogicalOp::Or, any_equal, hit)
@@ -536,8 +536,9 @@ class Vectorizer {
         for (const auto& item : l.items) {
             const V x = (*this)(*item);
             if (x.k == K::Nul || !comparable(p.k, x.k)) continue;
-            const Expr hit = dataframe::expr_coalesce(
-                {compare(CmpOp::Eq, p, x).e, dataframe::expr_lit_bool(false)});
+            const Expr eq_or_false[] = {compare(CmpOp::Eq, p, x).e,
+                                        dataframe::expr_lit_bool(false)};
+            const Expr hit = dataframe::expr_coalesce(eq_or_false);
             any = any.valid() ? dataframe::expr_logical(LogicalOp::Or, any, hit)
                               : hit;
         }
@@ -600,12 +601,13 @@ class Vectorizer {
     // `cond` as a Bool that is false where it is unknown.
     static Expr yes(const V& cond) {
         if (cond.k != K::Bool) return dataframe::expr_lit_bool(false);
-        return dataframe::expr_coalesce(
-            {cond.e, dataframe::expr_lit_bool(false)});
+        const Expr cond_or_false[] = {cond.e, dataframe::expr_lit_bool(false)};
+        return dataframe::expr_coalesce(cond_or_false);
     }
 
     V choose(const V& cond, const V& a, const V& b) {
-        const K k = common({a, b}, "if()");
+        const V ab[] = {a, b};
+        const K k = common(ab, "if()");
         if (k == K::Nul) return null();
         return {dataframe::expr_select(yes(cond), as(a, k), as(b, k)), k};
     }
@@ -959,9 +961,9 @@ class Vectorizer {
 
 }  // namespace
 
-dstd::Result<dataframe::Expr> vectorize(
-    const duql::Term& t, const dstd::Vector<VectorColumn>& columns,
-    bool args_fallback) {
+dstd::Result<dataframe::Expr> vectorize(const duql::Term& t,
+                                        dstd::Span<const VectorColumn> columns,
+                                        bool args_fallback) {
     Vectorizer vz(columns, args_fallback);
     V v = vz.whole(t);
     if (vz.failed()) return unsupported(vz.error());
@@ -969,8 +971,7 @@ dstd::Result<dataframe::Expr> vectorize(
     return std::move(v.e);
 }
 
-bool is_null_term(const duql::Term& t,
-                  const dstd::Vector<VectorColumn>& columns,
+bool is_null_term(const duql::Term& t, dstd::Span<const VectorColumn> columns,
                   bool args_fallback) {
     Vectorizer vz(columns, args_fallback);
     const V v = vz.whole(t);
@@ -981,9 +982,8 @@ namespace {
 
 // The key columns of `l` for `rows` rows: each key term evaluated, FLAT.
 dstd::Result<dstd::Vector<dataframe::Series>> key_columns(
-    const duql::TLookup& l,
-    const dstd::Vector<const dataframe::Series*>& inputs,
-    const dstd::Vector<VectorColumn>& columns, std::int64_t rows,
+    const duql::TLookup& l, dstd::Span<const dataframe::Series* const> inputs,
+    dstd::Span<const VectorColumn> columns, std::int64_t rows,
     bool args_fallback) {
     dstd::Vector<dataframe::Series> out;
     for (const auto& k : l.keys) {
@@ -1012,9 +1012,8 @@ dstd::Result<const duql::LookupTable*> bound(const duql::TLookup& l) {
 }  // namespace
 
 dstd::Result<dataframe::Series> lookup(
-    const duql::TLookup& l,
-    const dstd::Vector<const dataframe::Series*>& inputs,
-    const dstd::Vector<VectorColumn>& columns, bool args_fallback) {
+    const duql::TLookup& l, dstd::Span<const dataframe::Series* const> inputs,
+    dstd::Span<const VectorColumn> columns, bool args_fallback) {
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
     if (auto table = bound(l); !table) return table.error();
     const dstd::Result<dstd::Vector<dataframe::Series>> keys =
@@ -1026,8 +1025,8 @@ dstd::Result<dataframe::Series> lookup(
 }
 
 dstd::Result<dataframe::Series> quantify(
-    const duql::TQuant& q, const dstd::Vector<const dataframe::Series*>& inputs,
-    const dstd::Vector<VectorColumn>& columns, bool args_fallback) {
+    const duql::TQuant& q, dstd::Span<const dataframe::Series* const> inputs,
+    dstd::Span<const VectorColumn> columns, bool args_fallback) {
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
     const dataframe::Series unknown =
         dataframe::Series::nulls(TypeId::Bool, rows);
@@ -1161,7 +1160,7 @@ dstd::Result<dataframe::Series> quantify(
 }
 
 dstd::Result<dataframe::Expr> vectorize_condition(
-    const duql::Term& t, const dstd::Vector<VectorColumn>& columns,
+    const duql::Term& t, dstd::Span<const VectorColumn> columns,
     bool args_fallback) {
     Vectorizer vz(columns, args_fallback);
     V v = vz(t);
@@ -1200,9 +1199,9 @@ dstd::Optional<ListParts> list_parts(const dataframe::Series& s) {
 
 // A LIST column of `rows[offsets[r], offsets[r + 1])` of `values`, null
 // where `valid` is false.
-dataframe::Series make_list(const dstd::Vector<std::int64_t>& offsets,
+dataframe::Series make_list(dstd::Span<const std::int64_t> offsets,
                             dataframe::Series values,
-                            const dstd::Vector<bool>& valid) {
+                            dstd::Span<const std::uint8_t> valid) {
     dstd::Vector<std::int32_t> off(offsets.begin(), offsets.end());
     dataframe::Series out = dataframe::Series::list(off, std::move(values));
     if (std::all_of(valid.begin(), valid.end(), [](bool v) { return v; }))
@@ -1228,7 +1227,7 @@ std::int64_t clamp_at(std::int64_t i, std::int64_t size) {
     return std::min(i, size);
 }
 
-dataframe::Series slice_column(const dstd::Vector<dataframe::Series>& args) {
+dataframe::Series slice_column(dstd::Span<const dataframe::Series> args) {
     auto p = list_parts(args[0]);
     const std::int64_t n = args[0].length();
     const dataframe::Series from = args[1].cast(TypeId::Int64).materialize();
@@ -1237,7 +1236,7 @@ dataframe::Series slice_column(const dstd::Vector<dataframe::Series>& args) {
                         : dataframe::Series::nulls(TypeId::Int64, n);
     dstd::Vector<std::int64_t> offsets{0};
     dstd::Vector<std::int64_t> take;
-    dstd::Vector<bool> valid(static_cast<std::size_t>(n), false);
+    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>(n), 0);
     for (std::int64_t r = 0; r < n; ++r) {
         const auto b = int_at(from, r);
         const auto e = int_at(to, r);
@@ -1262,7 +1261,7 @@ dataframe::Series flatten_column(const dataframe::Series& arg) {
     if (!inner) return p->list.share();
     dstd::Vector<std::int64_t> offsets{0};
     dstd::Vector<std::int64_t> take;
-    dstd::Vector<bool> valid(static_cast<std::size_t>(n), false);
+    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>(n), 0);
     for (std::int64_t r = 0; r < n; ++r) {
         if (!p->list.is_null(r)) {
             valid[static_cast<std::size_t>(r)] = true;
@@ -1284,8 +1283,8 @@ dataframe::Series flatten_column(const dataframe::Series& arg) {
 
 // The object's fields as (key, column), in the byte order of the keys.
 dstd::Vector<dstd::Pair<dstd::String, dataframe::Series>> object_fields(
-    const dstd::Vector<dataframe::Series>& args,
-    const dstd::Vector<dstd::String>& keys) {
+    dstd::Span<const dataframe::Series> args,
+    dstd::Span<const dstd::String> keys) {
     dstd::Vector<dstd::Pair<dstd::String, dataframe::Series>> out;
     if (args.size() == 1 && args[0].type() == TypeId::Struct) {
         const dataframe::Series st = flat_of(args[0]);
@@ -1305,21 +1304,21 @@ dstd::Vector<dstd::Pair<dstd::String, dataframe::Series>> object_fields(
 // element type call_type admitted, which concat always joins, so a failure
 // here is a broken contract.
 dataframe::Series joined_values(
-    const dstd::Vector<const dataframe::DataFrame*>& ptrs) {
+    dstd::Span<const dataframe::DataFrame* const> ptrs) {
     dstd::Result<dataframe::DataFrame> all = dataframe::concat(ptrs);
     if (!all) dstd::fatal("vectorize: the parts of a list do not join");
     return std::move(all->columns.front());
 }
 
-dataframe::Series members_column(const dstd::Vector<dataframe::Series>& args,
-                                 const dstd::Vector<dstd::String>& keys,
+dataframe::Series members_column(dstd::Span<const dataframe::Series> args,
+                                 dstd::Span<const dstd::String> keys,
                                  bool names, const dataframe::DataType& type) {
     const std::int64_t n = args.empty() ? 0 : args[0].length();
     const auto fields = object_fields(args, keys);
     const bool whole = args.size() == 1 && args[0].type() == TypeId::Struct;
     dstd::Vector<std::int64_t> offsets{0};
     dstd::Vector<std::int64_t> take;
-    dstd::Vector<bool> valid(static_cast<std::size_t>(n), false);
+    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>(n), 0);
     for (std::int64_t r = 0; r < n; ++r) {
         const std::size_t before = take.size();
         if (!whole || !args[0].is_null(r))
@@ -1383,7 +1382,7 @@ dataframe::Series split_column(const dataframe::Series& arg,
     const std::int64_t n = s.length();
     dstd::Vector<std::int64_t> offsets{0};
     dstd::Vector<dstd::StringView> parts;
-    dstd::Vector<bool> valid(static_cast<std::size_t>(n), false);
+    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>(n), 0);
     for (std::int64_t r = 0; r < n; ++r) {
         if (!s.is_null(r) && !sep.is_null(r) && !sep.string_at(r).empty()) {
             const dstd::StringView text = s.string_at(r);
@@ -1452,7 +1451,7 @@ class Cells {
 };
 
 // The element at each row's index, 0-based and from the end when negative.
-dataframe::Series index_column(const dstd::Vector<dataframe::Series>& args) {
+dataframe::Series index_column(dstd::Span<const dataframe::Series> args) {
     auto p = list_parts(args[0]);
     const std::int64_t n = args[0].length();
     const Cells at(args[1]);
@@ -1513,7 +1512,7 @@ dataframe::Series sort_column(const dataframe::Series& arg) {
     dstd::Vector<std::int64_t> offsets{0};
     dstd::Vector<std::int64_t> take;
     dstd::Vector<std::int64_t> present;
-    dstd::Vector<bool> valid(static_cast<std::size_t>(n), false);
+    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>(n), 0);
     for (std::int64_t r = 0; r < n; ++r) {
         if (!p->list.is_null(r)) {
             const std::int64_t lo = p->off[static_cast<std::size_t>(r)];
@@ -1556,7 +1555,7 @@ dataframe::Series unique_column(const dataframe::Series& arg) {
     };
     dstd::Vector<std::int64_t> offsets{0};
     dstd::Vector<std::int64_t> take;
-    dstd::Vector<bool> valid(static_cast<std::size_t>(n), false);
+    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>(n), 0);
     for (std::int64_t r = 0; r < n; ++r) {
         if (!p->list.is_null(r)) {
             valid[static_cast<std::size_t>(r)] = true;
@@ -1619,14 +1618,14 @@ dataframe::Series join_column(const dataframe::Series& arg,
 }
 
 // One list per row of the items' values at that row.
-dataframe::Series list_column(const dstd::Vector<dataframe::Series>& items,
+dataframe::Series list_column(dstd::Span<const dataframe::Series> items,
                               std::int64_t n, const dataframe::DataType& type) {
     const TypeId elem = type.fields.front().type.id;
     const auto m = static_cast<std::int64_t>(items.size());
     dstd::Vector<std::int64_t> offsets(static_cast<std::size_t>(n) + 1, 0);
     for (std::int64_t r = 0; r <= n; ++r)
         offsets[static_cast<std::size_t>(r)] = r * m;
-    const dstd::Vector<bool> valid(static_cast<std::size_t>(n), true);
+    const dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>(n), 1);
     if (items.empty())
         return make_list(offsets, dataframe::Series::nulls(elem, 0), valid);
     dstd::Vector<dataframe::DataFrame> frames(items.size());
@@ -1670,7 +1669,7 @@ namespace {
 
 // call_type() with the error in `error` (set only when it returns nullopt).
 dstd::Optional<dataframe::DataType> call_type_of(
-    const duql::Term& t, const dstd::Vector<dataframe::DataType>& args,
+    const duql::Term& t, dstd::Span<const dataframe::DataType> args,
     dstd::String& error) {
     auto integer = [](const dataframe::DataType& d) {
         return kind_of(d.id) == K::Int || kind_of(d.id) == K::Uint;
@@ -1723,7 +1722,7 @@ dstd::Optional<dataframe::DataType> call_type_of(
             if (args.empty()) return dstd::nullopt;
             return dataframe::list_of(dataframe::scalar(TypeId::String));
         case duql::Fn::Values: {
-            dstd::Vector<dataframe::DataType> fields = args;
+            dstd::Vector<dataframe::DataType> fields(args.begin(), args.end());
             if (args.size() == 1 && args[0].id == TypeId::Struct) {
                 fields.clear();
                 for (const auto& f : args[0].fields) fields.push_back(f.type);
@@ -1782,7 +1781,7 @@ dstd::Optional<dataframe::DataType> call_type_of(
 }  // namespace
 
 dstd::Result<dstd::Optional<dataframe::DataType>> call_type(
-    const duql::Term& t, const dstd::Vector<dataframe::DataType>& args) {
+    const duql::Term& t, dstd::Span<const dataframe::DataType> args) {
     dstd::String error;
     dstd::Optional<dataframe::DataType> type = call_type_of(t, args, error);
     if (!type && !error.empty())
@@ -1791,8 +1790,8 @@ dstd::Result<dstd::Optional<dataframe::DataType>> call_type(
 }
 
 dataframe::Series call_column(const duql::Term& t,
-                              const dstd::Vector<dataframe::Series>& args,
-                              const dstd::Vector<dstd::String>& keys,
+                              dstd::Span<const dataframe::Series> args,
+                              dstd::Span<const dstd::String> keys,
                               const dataframe::DataType& type,
                               std::int64_t rows) {
     if (std::holds_alternative<duql::TIndex>(t.node)) return index_column(args);

@@ -30,7 +30,8 @@ using Wide = ::dftracer::utils::dstd::int128_t;
 
 /// The message of a step that overflowed its type: `func` names the window
 /// function and `type` the integer type it overflowed.
-inline dstd::String overflow_message(const char* func, const char* type) {
+inline dstd::String overflow_message(dstd::StringView func,
+                                     dstd::StringView type) {
     return dstd::fmt<"window: {} overflows {}">(func, type);
 }
 
@@ -69,11 +70,60 @@ struct SumF64 {
     void add(double v) { acc += v; }
 };
 
-/// RUNNING_PROD.
+/// RUNNING_PROD of a float column.
 struct Prod {
     double acc = 1.0;
     void mul(double v) { acc *= v; }
 };
+/// RUNNING_PROD of an integer column: the product is exact while it fits the
+/// type, and is converted to a float once; past the type's range it goes on as
+/// a float, as @ref Prod does, in place of wrapping to a wrong integer.
+struct ProdI64 {
+    union {
+        std::int64_t acc = 1;
+        double wide;
+    };
+    bool overflowed = false;
+    void mul(std::int64_t v) {
+        if (!overflowed) {
+            const dstd::int128_t p = static_cast<dstd::int128_t>(acc) * v;
+            if (p >= INT64_MIN && p <= INT64_MAX) {
+                acc = static_cast<std::int64_t>(p);
+                return;
+            }
+            overflowed = true;
+            wide = static_cast<double>(acc);
+        }
+        wide *= static_cast<double>(v);
+    }
+    double value() const {
+        return overflowed ? wide : static_cast<double>(acc);
+    }
+};
+struct ProdU64 {
+    union {
+        std::uint64_t acc = 1;
+        double wide;
+    };
+    bool overflowed = false;
+    void mul(std::uint64_t v) {
+        if (!overflowed) {
+            const dstd::uint128_t p = static_cast<dstd::uint128_t>(acc) * v;
+            if (p <= UINT64_MAX) {
+                acc = static_cast<std::uint64_t>(p);
+                return;
+            }
+            overflowed = true;
+            wide = static_cast<double>(acc);
+        }
+        wide *= static_cast<double>(v);
+    }
+    double value() const {
+        return overflowed ? wide : static_cast<double>(acc);
+    }
+};
+static_assert(sizeof(ProdI64) <= 16 && sizeof(ProdU64) <= 16,
+              "a product state must fit the transform's 16 byte step");
 
 /// RUNNING_MIN and RUNNING_MAX: the extreme value so far. The first of equal
 /// values wins; a float is ordered by compare_doubles (NaN greatest). The value

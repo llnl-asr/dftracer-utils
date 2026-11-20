@@ -7,9 +7,13 @@ import argparse
 import importlib
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
 
-from . import _plugin_build, jit
+from . import _build, jit
+from .jit.package import build, is_jit_plugin, provided_names
+
+__all__ = [
+    "main",
+]
 
 
 def _ident(name: str) -> str:
@@ -152,7 +156,7 @@ def _resolve_plugin_spec(spec: str) -> type:
     cls = getattr(module, attr, None)
     if cls is None:
         raise ValueError(f"dftracer_plugin: module '{module_name}' has no attribute '{attr}'")
-    if not jit.is_jit_plugin(cls):
+    if not is_jit_plugin(cls):
         raise ValueError(f"dftracer_plugin: '{spec}' is not a @jit.plugin class")
     return cls
 
@@ -164,14 +168,14 @@ def _mangle(name: str) -> str:
 def _render_header(cls: type) -> str:
     """A C header of ``#define`` name constants for every name ``cls``
     provides, guarded under the mangled class identity."""
-    provided = jit.provided_names(cls)
+    provided = provided_names(cls)
     stem = next(iter(provided.values()))
     attr = next(iter(provided.keys()))
     stem = stem[: -(len(attr) + 1)]
     guard = _mangle(stem) + "_H"
-    macros: Dict[str, str] = {}
+    macros: dict[str, str] = {}
     lines = []
-    for attr, qid in sorted(provided.items(), key=lambda kv: kv[1]):
+    for _attr, qid in sorted(provided.items(), key=lambda kv: kv[1]):
         macro = _mangle(qid)
         if macro in macros and macros[macro] != qid:
             raise ValueError(
@@ -197,8 +201,8 @@ def _cmd_build_source(args: argparse.Namespace, src_arg: str) -> int:
         return 1
     out = args.output or str(src.with_suffix(".so"))
     try:
-        so = _plugin_build.build_shared(str(src), out=out)
-    except _plugin_build.PluginBuildError as exc:
+        so = _build.compile_file(src, out=out)
+    except _build.BuildError as exc:
         print(str(exc), file=sys.stderr)
         return 1
     print(so)
@@ -213,7 +217,7 @@ def _cmd_build_spec(args: argparse.Namespace, spec: str) -> int:
         return 1
     out = args.output or f"{cls.__name__.lower()}.so"
     try:
-        so = jit.build(cls, out=out)
+        so = build(cls, out=out)
     except jit.JitError as exc:
         print(f"dftracer_plugin: {exc}", file=sys.stderr)
         return 1
@@ -259,11 +263,11 @@ def _cmd_ops(args: argparse.Namespace) -> int:
 
 
 def _cmd_cflags(args: argparse.Namespace) -> int:
-    print(" ".join(_plugin_build.cflags()))
+    print(" ".join(_build.cflags()))
     return 0
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="dftracer_plugin", description="Scaffold and build native DFTracer plugins."
     )

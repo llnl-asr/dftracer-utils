@@ -11,6 +11,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
+#include <valgrind_quirks.h>
 
 #include <cstdint>
 #include <stdexcept>
@@ -21,7 +23,8 @@ using namespace dftracer::utils::dataframe;
 namespace {
 
 Series names() {
-    return Series::strings({"read", "pread64", "Write", "fsync", "readv"});
+    return Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+        {"read", "pread64", "Write", "fsync", "readv"}));
 }
 
 dstd::Vector<bool> bools(const Series& mask) {
@@ -55,7 +58,9 @@ void check_inferred(const Expr& e, const Series& in) {
     dstd::Vector<const Series*> ins{&in};
     Series out = dftu_utils_test::eval_ok(e, ins);
     REQUIRE(out.valid());
-    DataType dt = dftu_utils_test::infer_type_ok(e, {in.data_type()});
+    DataType dt = dftu_utils_test::infer_type_ok(
+        e, dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+               {in.data_type()}));
     CHECK(dt.id == out.type());
 }
 
@@ -110,7 +115,8 @@ TEST_SUITE("expr string ops") {
     }
 
     TEST_CASE("maps, length, find, replace, slice") {
-        Series s = Series::strings({"  Read ", "pread64", "x"});
+        Series s = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"  Read ", "pread64", "x"}));
         dstd::Vector<const Series*> in{&s};
         using S = dstd::Vector<dstd::String>;
         using I = dstd::Vector<std::int64_t>;
@@ -136,7 +142,8 @@ TEST_SUITE("expr string ops") {
         CHECK(strs(dftu_utils_test::eval_ok(
                   expr_str_replace(expr_col(0), "ea", "EA", false), in)) ==
               S{"  REAd ", "prEAd64", "x"});
-        Series rr = Series::strings({"aXaXa"});
+        Series rr = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"aXaXa"}));
         dstd::Vector<const Series*> rin{&rr};
         CHECK(strs(dftu_utils_test::eval_ok(
                   expr_str_replace(expr_col(0), "a", "b", false), rin)) ==
@@ -146,7 +153,8 @@ TEST_SUITE("expr string ops") {
               S{"bXbXb"});
         CHECK(strs(dftu_utils_test::eval_ok(expr_str_slice(expr_col(0), 2, 3),
                                             in)) == S{"Rea", "ead", ""});
-        Series utf = Series::strings({"héllo"});
+        Series utf = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"héllo"}));
         dstd::Vector<const Series*> uin{&utf};
         CHECK(i64s(dftu_utils_test::eval_ok(expr_str_size(expr_col(0), false),
                                             uin)) == I{6});
@@ -163,7 +171,10 @@ TEST_SUITE("expr string ops") {
     TEST_CASE("is_in over strings and ints, and its negation") {
         Series s = names();
         dstd::Vector<const Series*> in{&s};
-        Expr e = expr_is_in(expr_col(0), Series::strings({"read", "fsync"}));
+        Expr e = expr_is_in(
+            expr_col(0),
+            Series::strings(
+                dftu_utils_test::span_of<dstd::StringView>({"read", "fsync"})));
         CHECK(bools(dftu_utils_test::eval_ok(e, in)) ==
               dstd::Vector<bool>{true, false, false, true, false});
         CHECK(bools(dftu_utils_test::eval_ok(expr_not(e), in)) ==
@@ -204,16 +215,21 @@ TEST_SUITE("expr string ops") {
         CHECK(dftu_utils_test::is_invalid(dftracer::utils::dataframe::eval(
             expr_str_map(StrMapOp::Upper, expr_col(0)), in)));
         CHECK(dftu_utils_test::is_invalid(dftracer::utils::dataframe::eval(
-            expr_is_in(expr_col(0), Series::strings({"a"})), in)));
+            expr_is_in(expr_col(0),
+                       Series::strings(
+                           dftu_utils_test::span_of<dstd::StringView>({"a"}))),
+            in)));
         Series s = names();
         dstd::Vector<const Series*> sin{&s};
         dstd::Vector<std::int64_t> set{1};
         CHECK(dftu_utils_test::is_invalid(dftracer::utils::dataframe::eval(
             expr_is_in(expr_col(0), Series::flat_i64(set.data(), 1)), sin)));
-        CHECK(dftu_utils_test::infer_type_ok(
-                  expr_str_size(expr_col(0), false),
-                  {dftracer::utils::dataframe::scalar(TypeId::Unknown)})
-                  .id == TypeId::Unknown);
+        CHECK(
+            dftu_utils_test::infer_type_ok(
+                expr_str_size(expr_col(0), false),
+                dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+                    {dftracer::utils::dataframe::scalar(TypeId::Unknown)}))
+                .id == TypeId::Unknown);
     }
 
     TEST_CASE("planner accessors and column remap keep the pattern and set") {
@@ -225,14 +241,20 @@ TEST_SUITE("expr string ops") {
         CHECK(col == 3);
         CHECK(op == StrPredOp::Like);
         CHECK(pattern == "a%");
-        Expr moved = expr_remap_cols(p, {0, 0, 0, 1});
+        Expr moved = expr_remap_cols(
+            p, dftu_utils_test::span_of<std::int32_t>({0, 0, 0, 1}));
         REQUIRE(expr_as_col_str_pred(moved, &col, &op, &pattern));
         CHECK(col == 1);
         CHECK(pattern == "a%");
 
-        Expr e = expr_is_in(expr_col(0), Series::strings({"a", "b"}));
+        Expr e = expr_is_in(
+            expr_col(0),
+            Series::strings(
+                dftu_utils_test::span_of<dstd::StringView>({"a", "b"})));
         Series values;
-        REQUIRE(expr_as_col_is_in(expr_remap_cols(e, {2}), &col, &values));
+        REQUIRE(expr_as_col_is_in(
+            expr_remap_cols(e, dftu_utils_test::span_of<std::int32_t>({2})),
+            &col, &values));
         CHECK(col == 2);
         CHECK(values.length() == 2);
         CHECK_FALSE(expr_as_col_str_pred(e, &col, &op, &pattern));
@@ -292,7 +314,8 @@ TEST_SUITE("expr string ops") {
         // strings
         Series s = names();
         dstd::Vector<const Series*> sin{&s};
-        Series alt = Series::strings({"a", "b", "c", "d", "e"});
+        Series alt = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"a", "b", "c", "d", "e"}));
         dstd::Vector<const Series*> sin2{&s, &alt};
         Series ws = dftu_utils_test::eval_ok(
             expr_select(expr_str_pred(StrPredOp::StartsWith, expr_col(0), "re"),
@@ -319,8 +342,10 @@ TEST_SUITE("expr string ops") {
     }
 
     TEST_CASE("column argument builders, C++ and C ABI") {
-        Series s = Series::strings({"read", "pread64", "Write"});
-        Series n = Series::strings({"re", "64", "x"});
+        Series s = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"read", "pread64", "Write"}));
+        Series n = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"re", "64", "x"}));
         dstd::Vector<std::int64_t> iv{1, 2, 3};
         Series ints = Series::flat(TypeId::Int64, iv.data(), 3);
         dstd::Vector<double> dv{1.25, 2.5, 3.75};
@@ -389,7 +414,8 @@ TEST_SUITE("expr string ops") {
         REQUIRE(rnd);
         Series r{dftu_expr_eval(rnd, in4, 2)};
         REQUIRE(r.type() == TypeId::Float64);
-        CHECK(r.data<double>()[0] == 1.3);
+        if (!dftu_utils_test::VALGRIND_ROUNDS_TIES_TO_EVEN)
+            CHECK(r.data<double>()[0] == 1.3);
         CHECK(r.data<double>()[1] == 2.5);
         CHECK(r.data<double>()[2] == 3.75);
         CHECK(dftu_expr_round_col(c0, nullptr) == nullptr);
@@ -407,7 +433,8 @@ TEST_SUITE("expr string ops") {
         dftu_expr* find = dftu_expr_str_find(c, "d", 1);
         dftu_expr* rep = dftu_expr_str_replace(c, "r", 1, "R", 1, 1);
         dftu_expr* sl = dftu_expr_str_slice(c, 0, 2);
-        Series set = Series::strings({"readv"});
+        Series set = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"readv"}));
         dftu_expr* isin = dftu_expr_is_in(c, set.handle());
         REQUIRE(pred);
         REQUIRE(up);
@@ -442,8 +469,9 @@ TEST_SUITE("expr string ops") {
     }
 
     TEST_CASE("is_null and is_not_null read the validity of the slot") {
-        Series s =
-            Series::strings({"a-b", "no", "c-d"}).str_extract("(\\w)-(\\w)", 1);
+        Series s = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                                       {"a-b", "no", "c-d"}))
+                       .str_extract("(\\w)-(\\w)", 1);
         REQUIRE(s.null_count() == 1);
         dstd::Vector<const Series*> in{&s};
         CHECK(bools(dftu_utils_test::eval_ok(expr_is_null(expr_col(0), true),

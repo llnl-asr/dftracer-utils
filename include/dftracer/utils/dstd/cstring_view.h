@@ -31,12 +31,11 @@ class CStringView {
         assert(s.len < N);
     }
 
-    /// For a caller that already knows p[n] is '\0'.
-    static constexpr CStringView unchecked(const char* p,
-                                           std::size_t n) noexcept {
+    /// For a caller that already knows text.data()[text.size()] is '\0'.
+    static constexpr CStringView unchecked(StringView text) noexcept {
         CStringView v;
-        v.data_ = p;
-        v.size_ = n;
+        v.data_ = text.data();
+        v.size_ = text.size();
         return v;
     }
 

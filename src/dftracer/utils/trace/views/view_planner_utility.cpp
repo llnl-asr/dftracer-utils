@@ -22,12 +22,12 @@ ViewPlannerInput& ViewPlannerInput::with_view(const ViewDefinition& v) {
     return *this;
 }
 
-ViewPlannerInput& ViewPlannerInput::with_file_path(const dstd::String& path) {
+ViewPlannerInput& ViewPlannerInput::with_file_path(dstd::StringView path) {
     file_path = path;
     return *this;
 }
 
-ViewPlannerInput& ViewPlannerInput::with_index_path(const dstd::String& path) {
+ViewPlannerInput& ViewPlannerInput::with_index_path(dstd::StringView path) {
     index_path = path;
     return *this;
 }

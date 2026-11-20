@@ -54,22 +54,13 @@ Arithmetic (``+ - * /``, with scalar broadcast), comparisons (``> >= < <=
 on :class:`~dftracer.utils.Expr`; combine expressions the way you would combine
 Python numbers. Numeric primitives (``ilog2``, ``bit_width``, ``popcount``,
 ``clz``, ``ctz``, ``mix64``) are available as zero-argument methods on any
-integer-column expression, e.g. ``F.hhash.mix64()``. ``ColumnExpr`` is a
-back-compat alias of ``Expr``.
+integer-column expression, e.g. ``F.hhash.mix64()``.
 
 Evaluating
 -----------
 
-.. autofunction:: dftracer.utils.columnar
-
-.. autoclass:: dftracer.utils.columnar.Columnar
-   :members: apply, columns
-
-``columnar(expr)`` is optional - call ``.apply(source)`` directly on a
-``ColumnExpr``, or use the frame-first spelling
-:meth:`DataFrame.apply <dftracer.utils.DataFrame.apply>`. Wrapping with
-``columnar()`` first is useful when you want to inspect ``.columns`` (the
-input column names an expression reads) before evaluating.
+Call ``.apply(source)`` directly on an ``Expr``, or use the frame-first
+spelling :meth:`DataFrame.apply <dftracer.utils.DataFrame.apply>`.
 
 ``source`` for ``.apply()`` is a native ``DataFrame`` (e.g. from
 ``view.collect()``), a ``{name: Series}`` mapping, or a ``pyarrow.Table``
@@ -88,7 +79,7 @@ Row filtering
 
 .. autofunction:: dftracer.utils.where
 
-``where`` accepts either a ``ColumnExpr`` predicate (evaluated on the engine
+``where`` accepts either an ``Expr`` predicate (evaluated on the engine
 to a boolean mask) or a duql string (see :doc:`duql`), and keeps the
 matching rows of a native ``DataFrame`` or a ``pyarrow.Table``.
 
@@ -103,9 +94,12 @@ Group-by aggregation
 An :class:`Agg` is an aggregate over a column expression - ``F.dur.mean()``,
 ``(F.a + F.b).sum()``, or the bare row count from ``count()``. The reducer
 methods (``sum min max mean var std skew kurt``) are added to every
-``ColumnExpr``; rename the output column with ``.alias(name)``.
+``Expr``; rename the output column with ``.alias(name)``.
 
 .. autoclass:: dftracer.utils.GroupBy
+   :members: agg
+
+.. autoclass:: dftracer.utils.groupby.SeriesGroupBy
    :members: agg
 
 A ``GroupBy`` is obtained from a native ``DataFrame``'s ``group_by(key)`` and

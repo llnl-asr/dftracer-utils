@@ -51,7 +51,7 @@ const char* BAD_NAMES[] = {"name"};
 /* ---- broken_frame.bad_column: one frame, then end of stream ---- */
 
 dftu_status bad_schema(dftu_ctx*, void*, const char* const** out_names,
-                       int32_t* out_count) {
+                       std::int32_t* out_count) {
     *out_names = BAD_NAMES;
     *out_count = 1;
     return DFTU_OK;
@@ -80,7 +80,7 @@ const ::dftu_cursor_vt BAD_CURSOR_VT = {.struct_size = sizeof(dftu_cursor_vt),
                                         .destroy = bad_cursor_destroy};
 
 dftu_status bad_scan(dftu_ctx*, void*, const dftu_plugin_host*,
-                     const ::dftu_scan_request*, int32_t*,
+                     const ::dftu_scan_request*, std::int32_t*,
                      void** out_cursor_self, const ::dftu_cursor_vt** out_vt) {
     *out_cursor_self = new BadCursor();
     *out_vt = &BAD_CURSOR_VT;
@@ -108,14 +108,14 @@ const ::dftu_source_vt BAD_SOURCE_VT = {.struct_size = sizeof(dftu_source_vt),
     return col;
 }
 
-dftu_status bad_bind(dftu_ctx*, void*, const dftu_type_info*, uint32_t,
+dftu_status bad_bind(dftu_ctx*, void*, const dftu_type_info*, std::uint32_t,
                      const dftu_scalar* const*, dftu_type_info* out, void**) {
     out->struct_size = sizeof(dftu_type_info);
     out->id = DFTU_TYPE_INT64;
     return DFTU_OK;
 }
 
-dftu_status bad_exec(dftu_ctx*, void*, const dftu_series* const*, uint32_t,
+dftu_status bad_exec(dftu_ctx*, void*, const dftu_series* const*, std::uint32_t,
                      std::uint64_t rows, ::dftu_series** out) {
     *out = broken_value_column(rows);
     return *out == nullptr ? DFTU_E_INVALID : DFTU_OK;
@@ -161,7 +161,7 @@ const ::dftu_cursor_vt GOOD_CURSOR_VT = {.struct_size = sizeof(dftu_cursor_vt),
                                          .destroy = good_cursor_destroy};
 
 dftu_status good_scan(dftu_ctx*, void*, const dftu_plugin_host*,
-                      const ::dftu_scan_request*, int32_t*,
+                      const ::dftu_scan_request*, std::int32_t*,
                       void** out_cursor_self, const ::dftu_cursor_vt** out_vt) {
     *out_cursor_self = new GoodCursor();
     *out_vt = &GOOD_CURSOR_VT;
@@ -232,8 +232,8 @@ const ::dftu_node_vt BAD_NODE_VT = {.struct_size = sizeof(dftu_node_vt),
 
 /* ---- broken_frame.bad_format: the broken frame behind a file cursor ---- */
 
-int32_t format_probe(void*, const std::uint8_t* head, std::uint64_t n,
-                     const char*) {
+std::int32_t format_probe(void*, const std::uint8_t* head, std::uint64_t n,
+                          const char*) {
     static const char MAGIC[] = "BFRAME";
     if (n < sizeof(MAGIC) - 1) return 0;
     return std::memcmp(head, MAGIC, sizeof(MAGIC) - 1) == 0 ? 100 : 0;
@@ -256,7 +256,7 @@ dftu_status format_chunks(dftu_ctx*, void*, std::uint64_t* count) {
 
 dftu_status format_scan(dftu_ctx*, void*, std::uint64_t,
                         const ::dftu_plugin_host*, const ::dftu_scan_request*,
-                        int32_t*, void** out_cursor_self,
+                        std::int32_t*, void** out_cursor_self,
                         const ::dftu_cursor_vt** out_vt) {
     *out_cursor_self = new BadCursor();
     *out_vt = &BAD_CURSOR_VT;
@@ -281,7 +281,7 @@ struct BadAgg {
     std::int64_t total;
 };
 
-dftu_status udaf_bind(dftu_ctx*, void*, const dftu_type_info*, uint32_t,
+dftu_status udaf_bind(dftu_ctx*, void*, const dftu_type_info*, std::uint32_t,
                       const dftu_scalar* const*, dftu_type_info* out, void**) {
     out->struct_size = sizeof(dftu_type_info);
     out->id = DFTU_TYPE_INT64;
@@ -294,7 +294,7 @@ void udaf_init(void*, void* const* states, std::uint64_t n) {
 }
 
 dftu_status udaf_update(dftu_ctx*, void*, void* const* states,
-                        const ::dftu_series* const* args, uint32_t,
+                        const ::dftu_series* const* args, std::uint32_t,
                         std::uint64_t rows) {
     const auto* in =
         static_cast<const std::int64_t*>(::dftu_series_data(args[0]));

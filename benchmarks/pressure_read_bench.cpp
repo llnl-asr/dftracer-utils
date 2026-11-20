@@ -16,6 +16,7 @@
 //   nonzero)
 
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -46,7 +47,7 @@ struct Row {
 volatile std::uint64_t sink = 0;
 
 template <class Fn>
-bool measure(const dftracer::utils::dstd::String& name, std::size_t reads,
+bool measure(dftracer::utils::dstd::StringView name, std::size_t reads,
              Fn read_once, dftracer::utils::dstd::Vector<Row>& rows) {
     dftracer::utils::dstd::Vector<double> runs;
     bool nonzero = true;
@@ -63,8 +64,11 @@ bool measure(const dftracer::utils::dstd::String& name, std::size_t reads,
             static_cast<double>(reads));
     }
     std::sort(runs.begin(), runs.end());
-    rows.push_back({name, runs[runs.size() / 2]});
-    if (!nonzero) std::printf("%s returned zero  FAIL\n", name.c_str());
+    rows.push_back(
+        {dftracer::utils::dstd::String(name), runs[runs.size() / 2]});
+    if (!nonzero)
+        std::printf("%.*s returned zero  FAIL\n", static_cast<int>(name.size()),
+                    name.data());
     return nonzero;
 }
 
@@ -95,7 +99,7 @@ struct Buffer {
 
 class KeptFd {
    public:
-    explicit KeptFd(const dftracer::utils::dstd::String& path)
+    explicit KeptFd(dftracer::utils::dstd::CStringView path)
         : fd_(::open(path.c_str(), O_RDONLY | O_CLOEXEC)) {}
     ~KeptFd() {
         if (fd_ >= 0) ::close(fd_);
@@ -116,7 +120,7 @@ class KeptFd {
     int fd_;
 };
 
-bool read_once_file(const dftracer::utils::dstd::String& path, Buffer& b) {
+bool read_once_file(dftracer::utils::dstd::CStringView path, Buffer& b) {
     const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) return false;
     const ssize_t n = ::read(fd, b.data, BUFFER_BYTES - 1);
@@ -156,8 +160,8 @@ std::uint64_t parse_status(const Buffer& b) {
     while (pos < text.size()) {
         std::size_t eol = text.find('\n', pos);
         if (eol == dftracer::utils::dstd::StringView::npos) eol = text.size();
-        if (const auto v =
-                dftu::memory_probe::detail::kib_field(b.data + pos, "RssAnon:"))
+        if (const auto v = dftu::memory_probe::detail::kib_field(
+                text.substr(pos, eol - pos), "RssAnon:"))
             return v;
         pos = eol + 1;
     }
@@ -184,8 +188,8 @@ dftracer::utils::dstd::String cgroup_dir() {
 }
 
 template <class Parse>
-bool measure_file(const dftracer::utils::dstd::String& label,
-                  const dftracer::utils::dstd::String& path, std::size_t reads,
+bool measure_file(dftracer::utils::dstd::StringView label,
+                  dftracer::utils::dstd::CStringView path, std::size_t reads,
                   Parse parse, dftracer::utils::dstd::Vector<Row>& rows) {
     bool ok = true;
     Buffer b;
@@ -194,7 +198,8 @@ bool measure_file(const dftracer::utils::dstd::String& label,
         [&] { return read_once_file(path, b) ? parse(b) : 0; }, rows);
     const KeptFd fd(path);
     if (!fd.ok()) {
-        std::printf("%s: cannot open  FAIL\n", label.c_str());
+        std::printf("%.*s: cannot open  FAIL\n", static_cast<int>(label.size()),
+                    label.data());
         return false;
     }
     ok &= measure(

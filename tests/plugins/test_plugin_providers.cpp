@@ -45,8 +45,8 @@ struct FixtureAccessors {
     void* handle = dlopen(PROVIDER_FIXTURE_PLUGIN_PATH, RTLD_NOW | RTLD_LOCAL);
 
     template <class Fn>
-    Fn sym(const char* name) const {
-        return reinterpret_cast<Fn>(dlsym(handle, name));
+    Fn sym(dstd::CStringView name) const {
+        return reinterpret_cast<Fn>(dlsym(handle, name.c_str()));
     }
 
     ~FixtureAccessors() {
@@ -55,8 +55,8 @@ struct FixtureAccessors {
 };
 
 dstd::Vector<std::int64_t> read_i64_column(const dftu_dataframe* df,
-                                           const char* name) {
-    dftu_series* col = dftu_dataframe_column(df, name);
+                                           dstd::CStringView name) {
+    dftu_series* col = dftu_dataframe_column(df, name.c_str());
     REQUIRE(col);
     REQUIRE(dftu_series_type(col) == DFTU_TYPE_INT64);
     dftu_series* flat = dftu_series_materialize(col);

@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <array>
@@ -35,17 +36,17 @@ struct FittedDistribution {
 /// (e.g. non-positive data for lognormal, sample size < 2, Newton
 /// non-convergence).
 FittedDistribution fit_single_distribution(DistributionKind kind,
-                                           const dstd::Vector<double>& data);
+                                           dstd::Span<const double> data);
 
 /// Fits all five distributions and returns them ordered by ascending ks_stat.
 /// Invalid fits are kept at the back of the result.
 dstd::Vector<FittedDistribution> fit_all_single_distributions(
-    const dstd::Vector<double>& data);
+    dstd::Span<const double> data);
 
 /// Picks the lowest-KS valid fit. Returns nullopt if none of the fits
 /// succeeded.
 dstd::Optional<FittedDistribution> best_fit_by_ks(
-    const dstd::Vector<FittedDistribution>& fits);
+    dstd::Span<const FittedDistribution> fits);
 
 /// Distribution PDF / CDF / inverse-CDF. Behavior is undefined when
 /// `fit.valid == false`. An argument outside the domain (a NaN `x`, a `p`

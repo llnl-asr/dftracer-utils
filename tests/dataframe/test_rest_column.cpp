@@ -33,7 +33,7 @@ using Names = dstd::Vector<dstd::String>;
 using Cells = dstd::Vector<dstd::Optional<std::int64_t>>;
 constexpr std::int64_t NUL = -999;
 
-Series ints(const dstd::Vector<std::int64_t>& v) {
+Series ints(dstd::Vector<std::int64_t> v) {
     dstd::Vector<std::int64_t> data(v);
     dstd::Vector<std::uint8_t> valid((v.size() + 7) / 8, 0);
     bool nulls = false;
@@ -217,8 +217,7 @@ dstd::String cell(const Series& c, std::int64_t i) {
                         : dataframe::cell_to_string(c, i);
 }
 
-dstd::Vector<dstd::String> column(const DataFrame& f,
-                                  const dstd::String& name) {
+dstd::Vector<dstd::String> column(const DataFrame& f, dstd::StringView name) {
     const auto it = std::find(f.names.begin(), f.names.end(), name);
     REQUIRE(it != f.names.end());
     const Series& c = f.columns[static_cast<std::size_t>(it - f.names.begin())];
@@ -260,8 +259,9 @@ class PassNode final : public NodeImpl {
     }
 
     dstd::Result<dstd::UniquePtr<Cursor>> open(
-        dstd::UniquePtr<Cursor> input, const dstd::Vector<dstd::String>&,
-        const OpArgs&, std::uint64_t) const override {
+        dstd::UniquePtr<Cursor> input, dstd::Span<const dstd::String>,
+        const OpArgs&, std::uint64_t,
+        dstd::SharedPtr<RunCounters>) const override {
         return input;
     }
 };

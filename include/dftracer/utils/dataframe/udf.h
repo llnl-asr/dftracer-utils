@@ -51,7 +51,7 @@ class Udf {
 
     /// The call over `args`. Argument counts and types are checked when the
     /// expression compiles, with the UDF's own message.
-    Expr operator()(const dstd::Vector<Expr>& args) const;
+    Expr operator()(dstd::Span<const Expr> args) const;
 
     template <class... A>
         requires(std::same_as<A, Expr> && ...)

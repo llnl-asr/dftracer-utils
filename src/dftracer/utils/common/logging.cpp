@@ -80,9 +80,9 @@ bool resolve_color(ColorMode mode, std::FILE* sink) {
     return true;
 }
 
-const char* base_name(const char* path) {
-    const char* slash = std::strrchr(path, '/');
-    return slash ? slash + 1 : path;
+dstd::StringView base_name(dstd::StringView path) {
+    const std::size_t slash = path.rfind('/');
+    return slash == dstd::StringView::npos ? path : path.substr(slash + 1);
 }
 
 dstd::StringView make_timestamp(char* out, std::size_t n) {
@@ -101,7 +101,7 @@ dstd::StringView make_timestamp(char* out, std::size_t n) {
 // Per-scope state, heap-allocated so it follows a coroutine across threads.
 struct ScopeFrame : dstd::HeapObject {
     dstd::String label;
-    const char* file;
+    dstd::StringView file;
     int line;
     std::int64_t start_ns;
 };
@@ -172,15 +172,15 @@ const char* level_name(Level level) {
 
 namespace detail {
 
-void emit(Level lvl, const char* file, int line, dstd::StringView msg) {
+void emit(Level lvl, dstd::StringView file, int line, dstd::StringView msg) {
     char ts[64];
     const dstd::StringView stamp = make_timestamp(ts, sizeof(ts));
 
     const LevelStyle style = level_style(lvl);
     const bool color = g_use_color.load(std::memory_order_relaxed);
 
-    // No source location for coroutine traces (file == nullptr).
-    const bool loc = g_show_location && file != nullptr;
+    // No source location for coroutine traces (an empty file).
+    const bool loc = g_show_location && !file.empty();
     // The last byte is kept for the newline.
     char out[LINE_CAP];
     dstd::FmtResult r;
@@ -209,7 +209,7 @@ void emit(Level lvl, const char* file, int line, dstd::StringView msg) {
     if (lvl == Level::Error) std::fflush(g_sink);  // survive a crash
 }
 
-void* scope_open(const char* file, int line, dstd::StringView label) {
+void* scope_open(dstd::StringView file, int line, dstd::StringView label) {
     write<"-> {}">(Level::Trace, file, line, label);
     return new ScopeFrame{{},
                           dstd::String(label),
@@ -241,7 +241,7 @@ const dstd::String& ct_name(const void* fn) {
 
 }  // namespace
 
-void* coro_trace_enter(const void* handle, const char* file, int line) {
+void* coro_trace_enter(const void* handle, dstd::StringView file, int line) {
     if (!enabled(Level::Trace) || handle == nullptr) return nullptr;
     // The resume-function pointer sits at frame offset 0 (coroutine ABI).
     const void* resume_fn = *reinterpret_cast<const void* const*>(handle);

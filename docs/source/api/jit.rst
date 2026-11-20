@@ -13,6 +13,12 @@ compiled to a native plugin against the stable plugin ABI. This module exposes
 the decorator, the typed-map declaration, the field types, and the aggregate
 value constructors.
 
+A plugin's runtime configuration is a ``config: Cfg`` annotation on the class,
+where ``Cfg`` is a dataclass of int, float, bool and str fields (or ``Optional``
+of one); see :ref:`the guide <jit-config>`. A compile error is a
+:class:`~dftracer.utils.jit.JitError` whose message is
+``<file>:<line>:<col>: <reason>`` followed by the source line.
+
 .. automodule:: dftracer.utils.jit
    :members:
    :undoc-members:

@@ -23,6 +23,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -91,7 +92,7 @@ struct CsvColumn {
     dstd::Vector<dstd::String> cells;  ///< one per row of the file
 };
 
-TypeId type_of(const dstd::Vector<dstd::String>& cells) {
+TypeId type_of(dstd::Span<const dstd::String> cells) {
     if (cells.empty()) return TypeId::String;
     bool integral = true;
     bool numeric = true;

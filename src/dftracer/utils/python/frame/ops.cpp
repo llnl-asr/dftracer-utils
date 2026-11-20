@@ -6,7 +6,9 @@
 
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dataframe/internal/op_failure.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/scalar_helpers.h>
 #include <dftracer/utils/python/frame/ops.h>
 #include <dftracer/utils/python/frame/series.h>
@@ -16,10 +18,10 @@ namespace dftracer::utils::python::frame {
 namespace {
 
 PyObject* op_list(PyObject*, PyObject*) {
-    uint32_t n = dftu_op_count();
+    std::uint32_t n = dftu_op_count();
     PyObject* out = PyList_New(n);
     if (!out) return nullptr;
-    for (uint32_t i = 0; i < n; ++i) {
+    for (std::uint32_t i = 0; i < n; ++i) {
         const dftu_op_desc* op = dftu_op_at(i);
         PyObject* name = PyUnicode_FromString(op ? op->name : "");
         if (!name) {
@@ -93,7 +95,7 @@ PyObject* op_run(PyObject*, PyObject* args) {
     // positional argument: a column into `in`, every other operand into the
     // matching args[i] slot.
     const dftu_series* in[2] = {nullptr, nullptr};
-    uint32_t n_series = 0;
+    std::uint32_t n_series = 0;
     dftu_op_arg arg{};
     Py_ssize_t next = 1;
     for (int i = 0; i < DFTU_OP_MAX_ARGS; ++i) {
@@ -138,7 +140,7 @@ PyObject* op_run(PyObject*, PyObject* args) {
             case DFTU_TOK_I32:
             case DFTU_TOK_RANK:
             case DFTU_TOK_ROLLING:
-                slot.i32 = static_cast<int32_t>(PyLong_AsLong(a));
+                slot.i32 = static_cast<std::int32_t>(PyLong_AsLong(a));
                 if (slot.i32 == -1 && PyErr_Occurred()) return nullptr;
                 break;
             case DFTU_TOK_STR: {
@@ -146,7 +148,7 @@ PyObject* op_run(PyObject*, PyObject* args) {
                 const char* p = PyUnicode_AsUTF8AndSize(a, &len);
                 if (!p) return nullptr;
                 slot.str.ptr = p;
-                slot.str.len = static_cast<int32_t>(len);
+                slot.str.len = static_cast<std::int32_t>(len);
                 break;
             }
             case DFTU_TOK_I64: {
@@ -202,7 +204,10 @@ PyObject* op_run(PyObject*, PyObject* args) {
     if (dftu_op_kind_of(op->sig) == DFTU_OP_KIND_SERIES) {
         dftu_series* out = dftu_op_run(op, in, n_series, &arg);
         if (!out) {
-            PyErr_Format(PyExc_RuntimeError, "op '%s' failed", name);
+            const char* why =
+                dataframe::op_failure_reason(dstd::StringView(name));
+            PyErr_Format(core::g_dft_value_error, "op '%s' failed%s%s", name,
+                         why ? ": " : "", why ? why : "");
             return nullptr;
         }
         return wrap_vec_column(dataframe::Series{out});
@@ -210,7 +215,7 @@ PyObject* op_run(PyObject*, PyObject* args) {
     int ok = 0;
     dftu_scalar r = dftu_op_run_aggregate(op, in[0], &arg, &ok);
     if (!ok) {
-        PyErr_Format(PyExc_RuntimeError, "op '%s' failed", name);
+        PyErr_Format(core::g_dft_value_error, "op '%s' failed", name);
         return nullptr;
     }
     return scalar_to_py(r);

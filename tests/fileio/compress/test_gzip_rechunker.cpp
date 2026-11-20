@@ -32,20 +32,20 @@ dstd::String make_lines(std::size_t n) {
     return s;
 }
 
-dstd::String write_single_member_gz(const dstd::String& path,
-                                    const dstd::String& payload) {
+dstd::String write_single_member_gz(dstd::StringView path,
+                                    dstd::StringView payload) {
     fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(payload.data(), payload.size());
     REQUIRE(member.has_value());
     dstd::String ofs;
     ofs.append(reinterpret_cast<const char*>(member->data()), member->size());
     dstd::fs::write_file(dstd::PathView(path), ofs).discard();
-    return path;
+    return dstd::String(path);
 }
 
 // Decode every member; returns (concatenated bytes, per-member last byte).
 dstd::Pair<dstd::String, dstd::Vector<char>> decode_members(
-    const dstd::String& path) {
+    dstd::StringView path) {
     auto fd_file = dstd::File::open(path, {});
     REQUIRE(fd_file);
     const int fd = fd_file->native_handle();
@@ -70,12 +70,12 @@ dstd::Pair<dstd::String, dstd::Vector<char>> decode_members(
     return {out, last_bytes};
 }
 
-dstd::Pair<dstd::String, int> decode_all(const dstd::String& path) {
+dstd::Pair<dstd::String, int> decode_all(dstd::StringView path) {
     auto [bytes, lasts] = decode_members(path);
     return {bytes, static_cast<int>(lasts.size())};
 }
 
-bool needs_rechunk(const dstd::String& path, std::size_t cap) {
+bool needs_rechunk(dstd::StringView path, std::size_t cap) {
     auto fd_file = dstd::File::open(path, {});
     REQUIRE(fd_file);
     const int fd = fd_file->native_handle();

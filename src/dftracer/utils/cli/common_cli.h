@@ -17,6 +17,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/stop_token.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dataframe/internal/file_format_registry.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
@@ -32,6 +33,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/plugins/host/global_plugins.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/watchdog.h>
@@ -138,7 +140,13 @@ class ArgParse {
         (schemas_.push_back(&args), ...);
     }
 
+    /// Whether the tool picks a reader, so that cli_main loads the plugins of
+    /// DFTRACER_UTILS_PLUGINS after the parse.
+    bool loads_plugins() const { return loads_plugins_; }
+
    protected:
+    void load_plugins_after_parse() { loads_plugins_ = true; }
+
     virtual void register_args() {}
     virtual dstd::Result<void> post_parse() { return {}; }
     virtual bool validate() { return true; }
@@ -156,6 +164,7 @@ class ArgParse {
     ArgParser& parser_;
     dstd::Vector<CliSchema*> schemas_;
     dstd::StringView log_level_;
+    bool loads_plugins_ = false;
 };
 
 // Register schemas/args then parse argv. Returns the exit code when the run
@@ -172,7 +181,7 @@ dstd::Optional<int> setup_and_parse(Cli& cli, int argc, char** argv) {
 // erasure; it receives the parsed CliT and returns the process exit code, or a
 // dstd::Result<int> whose error is logged and exits with 1.
 template <class CliT, class RunFn>
-int cli_main(int argc, char** argv, const char* name, const char* description,
+int cli_main(int argc, char** argv, dstd::String name, dstd::String description,
              RunFn&& run) {
     // Run the shutdown hooks at cli_main scope, while the runtime the store
     // writers wait on still runs.
@@ -186,9 +195,20 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
     }
     // Before the parse, so the input paths it checks are stat'ed once.
     dftracer::utils::common::InputStatScope input_stats;
-    ArgParser program(name, DFTRACER_UTILS_PACKAGE_VERSION, description);
+    ArgParser program(std::move(name), DFTRACER_UTILS_PACKAGE_VERSION,
+                      std::move(description));
     CliT cli(program);
     if (auto code = setup_and_parse(cli, argc, argv)) return *code;
+    // After the parse, so help and version never depend on a plugin, and only
+    // for a tool that picks a reader.
+    if (cli.loads_plugins()) {
+        if (auto loaded =
+                dftracer::utils::plugins::host::ensure_global_plugins();
+            !loaded) {
+            DFTRACER_UTILS_LOG_ERROR("Error: {}", loaded.error().format());
+            return 1;
+        }
+    }
     auto outcome = run(cli);
     if constexpr (std::is_same_v<decltype(outcome), int>) {
         return outcome;
@@ -268,6 +288,39 @@ struct InputArgs : CliSchema {
    private:
     bool folder_error_ = false;
     dstd::StringView missing_;
+};
+
+/// --format, shared by the tools that read trace files: forces the reader of
+/// every input file by name, instead of the probe that picks one by content.
+/// The name is checked when the arguments are parsed.
+struct ReaderArgs : CliSchema {
+    dstd::StringView format;
+    dstd::StringView help =
+        "Reader of every input file, by name, instead of the one picked by "
+        "content: jsonl (the built-in trace reader) or a file format a "
+        "plugin registered";
+
+    void register_on(ArgParser& p) override {
+        p.group("Input");
+        p.option(format, {"--format"}, help);
+    }
+
+    bool validate() override {
+        if (format.empty()) return true;
+        // A plugin's formats are known names, so they load first.
+        if (auto loaded =
+                dftracer::utils::plugins::host::ensure_global_plugins();
+            !loaded) {
+            DFTRACER_UTILS_LOG_ERROR("--format: {}", loaded.error().c_str());
+            return false;
+        }
+        auto named = dftracer::utils::dataframe::claim_reader({}, format);
+        if (!named) {
+            DFTRACER_UTILS_LOG_ERROR("--format: {}", named.error().c_str());
+            return false;
+        }
+        return true;
+    }
 };
 
 /// --memory-budget, shared by every tool that bounds its memory. 0 means auto,
@@ -467,7 +520,8 @@ struct WatchdogArgs : CliSchema {
 // coro::Scope& and returns a coro::CoroTask. The result holds the error of a
 // task that ended with one.
 template <class Body>
-auto run_on_pool(const char* name, const RuntimeArgs& runtime, Body&& body) {
+auto run_on_pool(dstd::StringView name, const RuntimeArgs& runtime,
+                 Body&& body) {
     RuntimeSettings settings;
     runtime.apply(settings);
     return configure_default_runtime(settings).block_on(
@@ -477,7 +531,7 @@ auto run_on_pool(const char* name, const RuntimeArgs& runtime, Body&& body) {
 // As above, with a watchdog that stops the task and gives a
 // dstd::Condition::Timeout error when a timeout passes.
 template <class Body>
-auto run_on_pool(const char* name, const RuntimeArgs& runtime,
+auto run_on_pool(dstd::StringView name, const RuntimeArgs& runtime,
                  const WatchdogArgs& watchdog, Body&& body) {
     RuntimeSettings settings;
     runtime.apply(settings);
@@ -628,8 +682,8 @@ scan_directory_trace_files(coro::Scope& ctx, dstd::StringView directory,
 template <class OnMissing>
 coro::CoroTask<dstd::Result<dstd::Vector<dstd::String>>>
 collect_input_trace_files(coro::Scope& ctx,
-                          const dstd::Vector<dstd::StringView>& inputs,
-                          bool recursive, OnMissing&& on_missing) {
+                          dstd::Vector<dstd::StringView> inputs, bool recursive,
+                          OnMissing&& on_missing) {
     dstd::Vector<dstd::String> out;
     for (const auto in : inputs) {
         if (dftracer::utils::common::input_is_directory(
@@ -653,7 +707,7 @@ collect_input_trace_files(coro::Scope& ctx,
 
 inline coro::CoroTask<dstd::Result<dstd::Vector<dstd::String>>>
 collect_input_trace_files(coro::Scope& ctx,
-                          const dstd::Vector<dstd::StringView>& inputs,
+                          dstd::Vector<dstd::StringView> inputs,
                           bool recursive) {
     co_return co_await collect_input_trace_files(ctx, inputs, recursive,
                                                  [](dstd::StringView) {});
@@ -715,9 +769,9 @@ inline coro::CoroTask<dstd::Result<int>> ensure_indexes_fresh_task(
 
 inline dstd::Result<dstd::Vector<runtime::fs::FoundFile>>
 ensure_indexes_fresh_blocking(
-    const char* name, const RuntimeArgs& runtime, dstd::StringView directory,
-    dstd::Vector<dstd::StringView> files, dstd::StringView index_dir,
-    bool force_rebuild = false,
+    dstd::StringView name, const RuntimeArgs& runtime,
+    dstd::StringView directory, dstd::Vector<dstd::StringView> files,
+    dstd::StringView index_dir, bool force_rebuild = false,
     dftracer::utils::trace::index::schemas::dft::agg::AggregationConfig
         aggregation = dftracer::utils::trace::index::schemas::dft::agg::
             standard_aggregation_config(),

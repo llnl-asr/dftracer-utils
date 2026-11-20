@@ -75,6 +75,7 @@ inline T scalar_value(dftu_scalar s) {
         // pointer: falling through to value.d would reinterpret it as a double.
         case DFTU_SCALAR_TAG_STR:
         case DFTU_SCALAR_TAG_ERR:
+        case DFTU_SCALAR_TAG_NULL:
             return T{};
         default:
             return static_cast<T>(s.value.d);
@@ -119,15 +120,16 @@ struct Scalar {
 };
 
 /// The domain an operand carries, one value per scalar tag: a signed integer,
-/// an unsigned integer, a float, borrowed text or an error. The tag of a value
-/// does not name its column type; read a literal with @ref ScalarView::as and
-/// cast it to the type the argument has.
+/// an unsigned integer, a float, borrowed text, an error or no value. The tag
+/// of a value does not name its column type; read a literal with @ref
+/// ScalarView::as and cast it to the type the argument has.
 enum class ScalarKind : std::int32_t {
     I64 = DFTU_SCALAR_TAG_I64,
     U64 = DFTU_SCALAR_TAG_U64,
     F64 = DFTU_SCALAR_TAG_F64,
     Str = DFTU_SCALAR_TAG_STR,
     Err = DFTU_SCALAR_TAG_ERR,
+    Null = DFTU_SCALAR_TAG_NULL,
 };
 
 /// A borrowed view of an operand the caller owns, such as a constant argument a

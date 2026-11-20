@@ -166,7 +166,7 @@ void add_rest_fields(dstd::String& sig,
     add(dyn_sketch ? "1" : "0");
     // On-disk rollup format tag: a persisted rollup of another layout lands
     // under a different signature and is recomputed, never misread.
-    add("accumfmt2");
+    add("accumfmt3");
     for (const auto& s : plan.select) add(s);
 }
 
@@ -253,6 +253,10 @@ dstd::Result<dataframe::AggStatePtr> read_rollup(const CacheStore& db,
         });
     if (!scanned) return scanned.error();
     if (failed) return *failed;
+    if (merged)
+        if (dstd::Result<void> checked = dataframe::agg_check(*merged);
+            !checked)
+            return checked.error();
     return merged;
 }
 

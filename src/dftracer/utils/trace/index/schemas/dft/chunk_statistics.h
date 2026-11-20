@@ -129,11 +129,11 @@ struct ChunkStatistics {
         const dstd::StringViewMap<dataframe::DDSketch>& sketches);
 
     static dstd::StringViewMap<dstd::String> parse_string_map_json(
-        const dstd::String& json);
+        dstd::StringView json);
     static dstd::StringViewMap<double> parse_double_map_json(
-        const dstd::String& json);
+        dstd::StringView json);
     static dstd::StringViewMap<dataframe::Log2Histogram>
-    parse_histogram_map_json(const dstd::String& json);
+    parse_histogram_map_json(dstd::StringView json);
     static dstd::StringViewMap<dataframe::DDSketch>
     deserialize_name_duration_sketches(const std::uint8_t* data,
                                        std::size_t len);

@@ -3,10 +3,10 @@
 
 
 class TestUtilityImports:
-    def test_import_query_field(self):
-        from dftracer.utils.columnar import Expr, Field
+    def test_import_query_col(self):
+        from dftracer.utils import Expr, col
 
-        cat = Field("cat")
+        cat = col("cat")
         q = cat == "POSIX"
         assert isinstance(q, Expr)
         assert 'cat == "POSIX"' in str(q)

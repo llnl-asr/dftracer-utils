@@ -3,11 +3,13 @@
 #ifndef DFTRACER_UTILS_JSON_JSON_DOC_GUARD_H
 #define DFTRACER_UTILS_JSON_JSON_DOC_GUARD_H
 
+#include <dftracer/utils/dstd/hash/value_hash.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/dstd/to_chars.h>
 #include <simdjson.h>
 
 #include <cstddef>
+#include <cstdint>
 
 namespace dftracer::utils::json {
 
@@ -19,8 +21,8 @@ struct JsonDocGuard {
 
     JsonDocGuard() = default;
 
-    bool parse(const char* data, std::size_t len) {
-        auto result = parser.parse(data, len);
+    bool parse(dstd::StringView text) {
+        auto result = parser.parse(text.data(), text.size());
         valid = !result.error();
         return valid;
     }
@@ -30,45 +32,39 @@ struct JsonDocGuard {
     explicit operator bool() const { return valid; }
 };
 
-/// Convert an On-Demand value to string for bloom filter insertion.
-/// Handles strings, integers, floats, bools.
-inline dstd::String ondemand_value_to_string(simdjson::ondemand::value& val) {
+/// The canonical value hash (@ref dstd::hash::value_hash_int64 and its
+/// siblings) of an On-Demand string, number or bool for bloom filter
+/// insertion; nullopt for an empty string, a null, an array or an object.
+inline dstd::Optional<std::uint64_t> ondemand_value_hash(
+    simdjson::ondemand::value& val) {
     auto type_result = val.type();
-    if (type_result.error()) return {};
+    if (type_result.error()) return dstd::nullopt;
 
     switch (type_result.value_unsafe()) {
         case simdjson::ondemand::json_type::string: {
             auto s = val.get_string();
-            return s.error() ? dstd::String{} : dstd::String(s.value_unsafe());
+            if (s.error() || s.value_unsafe().empty()) return dstd::nullopt;
+            return dstd::hash::value_hash_string(s.value_unsafe());
         }
         case simdjson::ondemand::json_type::number: {
-            char buf[32];
             auto u = val.get_uint64();
-            if (!u.error()) {
-                char* end = dstd::to_chars_u64(buf, buf + sizeof(buf),
-                                               u.value_unsafe());
-                if (end) return dstd::String(buf, end);
-            }
+            if (!u.error())
+                return dstd::hash::value_hash_uint64(u.value_unsafe());
             auto i = val.get_int64();
-            if (!i.error()) {
-                char* end = dstd::to_chars_i64(buf, buf + sizeof(buf),
-                                               i.value_unsafe());
-                if (end) return dstd::String(buf, end);
-            }
+            if (!i.error())
+                return dstd::hash::value_hash_int64(i.value_unsafe());
             auto d = val.get_double();
-            if (!d.error()) {
-                return dstd::fixed_text(d.value_unsafe());
-            }
-            return {};
+            if (!d.error())
+                return dstd::hash::value_hash_double(d.value_unsafe());
+            return dstd::nullopt;
         }
         case simdjson::ondemand::json_type::boolean: {
             auto b = val.get_bool();
-            return b.error()
-                       ? dstd::String{}
-                       : dstd::String(b.value_unsafe() ? "true" : "false");
+            if (b.error()) return dstd::nullopt;
+            return dstd::hash::value_hash_bool(b.value_unsafe());
         }
         default:
-            return {};
+            return dstd::nullopt;
     }
 }
 

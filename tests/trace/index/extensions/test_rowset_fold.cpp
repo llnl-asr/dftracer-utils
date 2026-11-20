@@ -44,7 +44,7 @@ dstd::String padded(dstd::String s) {
     return s;
 }
 
-dstd::Vector<FoldEvent> fold_events_of(const dstd::Vector<dstd::String>& lines,
+dstd::Vector<FoldEvent> fold_events_of(dstd::Span<const dstd::String> lines,
                                        dstd::StringIntern& intern) {
     dstd::Vector<FoldEvent> out;
     simdjson::dom::parser parser;
@@ -65,14 +65,13 @@ dstd::Vector<dstd::String> trace_lines() {
         R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"node0","value":"hh1"}})",
         R"({"name":"SH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"s","value":"sh1"}})",
         R"({"name":"PR","cat":"dftracer","pid":7,"tid":1,"ph":"M","args":{"name":"rank","value":"3"}})",
-        R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":2,"args":{"fhash":"fh1"}})",
+        R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":2,"args":{"fhash":"fh1"}})",
         R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"name":"/data/b.bin","value":"fh2"}})",
-        R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":5,"dur":2,"args":{"fhash":"fh2"}})",
+        R"({"ph":1,"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":5,"dur":2,"args":{"fhash":"fh2"}})",
     };
 }
 
-dstd::String write_trace(TestEnvironment& env,
-                         const dstd::Vector<dstd::String>& lines,
+dstd::String write_trace(TestEnvironment& env, dstd::Vector<dstd::String> lines,
                          bool build = true) {
     const dstd::String pfw = env.dir() + "/rows.pfw";
     {

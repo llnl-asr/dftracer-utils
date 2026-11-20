@@ -36,7 +36,7 @@ static CoroTask<void> throw_void_async() {
 }
 
 template <typename R>
-void check_failed(const R& result, const char* message) {
+void check_failed(const R& result, dstd::StringView message) {
     REQUIRE_FALSE(result.has_value());
     CHECK(dstd::String(result.error().message()) == message);
 }

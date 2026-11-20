@@ -129,9 +129,8 @@ ConfigTree::Node ConfigTree::infer_leaf(dstd::StringView raw) {
     Node n;
     if (!raw.empty()) {
         std::int64_t iv = 0;
-        const char* first = raw.data();
         const char* last = raw.data() + raw.size();
-        const auto r = dstd::from_chars(first, last, iv);
+        const auto r = dstd::from_chars(raw, iv);
         if (r.ec == std::errc() && r.ptr == last) {
             n.kind = DFTU_VAL_I64;
             n.i64 = iv;

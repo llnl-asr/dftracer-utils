@@ -221,9 +221,15 @@ static dftu_status src_scan(dftu_ctx* ctx, void* self,
 
 static void src_destroy(void* self) { (void)self; }
 
-static const dftu_source_vt SRC_VT = {
-    sizeof(dftu_source_vt), src_schema, src_scan, src_destroy,
-    src_schema_types,       NULL};
+static const dftu_source_vt SRC_VT = {sizeof(dftu_source_vt),
+                                      src_schema,
+                                      src_scan,
+                                      src_destroy,
+                                      src_schema_types,
+                                      NULL,
+                                      NULL,
+                                      NULL,
+                                      NULL};
 
 /* ---- Node: "reference_plugin.node", doubles column "n", passes "amount"
  * through unchanged.
@@ -367,7 +373,7 @@ static dftu_status node_open(dftu_ctx* ctx, void* self,
 static void node_destroy(void* self) { (void)self; }
 
 static const dftu_node_vt NODE_VT = {sizeof(dftu_node_vt), node_output_schema,
-                                     node_open, node_destroy};
+                                     node_open, node_destroy, NULL};
 
 /* ---- A registered op: "reference_plugin.count_rows" (series -> i64). */
 

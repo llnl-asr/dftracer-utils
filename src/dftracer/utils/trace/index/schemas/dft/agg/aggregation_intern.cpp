@@ -13,11 +13,16 @@
 namespace dftracer::utils::trace::index::schemas::dft::agg {
 
 namespace {
+struct Entry {
+    dstd::WeakPtr<AggInternTable> table;
+    std::uint64_t generation = 0;
+};
+
 struct Registry {
     std::mutex mutex;
-    dstd::Optional<dstd::StringViewMap<dstd::WeakPtr<AggInternTable>>> slot;
+    dstd::Optional<dstd::StringViewMap<Entry>> slot;
 
-    dstd::StringViewMap<dstd::WeakPtr<AggInternTable>>& tables() {
+    dstd::StringViewMap<Entry>& tables() {
         if (!slot) slot.emplace();
         return *slot;
     }
@@ -51,19 +56,22 @@ AggInternPtr new_table() {
 }
 }  // namespace
 
-AggInternPtr intern_for_index(dstd::StringView index_path) {
-    if (index_path.empty()) return make_intern_table();
+AggInternPtr intern_for_index(dstd::StringView index_path,
+                              std::uint64_t generation) {
+    if (index_path.empty() || generation == 0) return make_intern_table();
 
     auto& r = registry();
     std::lock_guard lock(r.mutex);
     auto& tables = r.tables();
     auto it = tables.find(index_path);
     if (it != tables.end()) {
-        if (auto existing = it->second.lock()) return existing;
+        if (it->second.generation == generation) {
+            if (auto existing = it->second.table.lock()) return existing;
+        }
         tables.erase(it);
     }
     auto table = new_table();
-    tables.emplace(dstd::String(index_path), table);
+    tables.emplace(dstd::String(index_path), Entry{table, generation});
     return table;
 }
 

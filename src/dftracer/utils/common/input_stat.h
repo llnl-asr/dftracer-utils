@@ -38,8 +38,8 @@ inline std::int64_t stat_mtime_ns(const struct stat& st) {
 }
 
 /// One stat of `path`. Returns false when the path cannot be stat'ed.
-inline bool stat_path(const char* path, InputFileStat& out) {
-    const auto st = dstd::fs::stat(dstd::PathView(path));
+inline bool stat_path(dstd::StringView path, InputFileStat& out) {
+    const auto st = dstd::fs::stat(path);
     if (!st) return false;
     out.size = st->size;
     out.mtime_ns = static_cast<std::int64_t>(st->mtime_ns);

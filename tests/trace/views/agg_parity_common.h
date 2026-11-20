@@ -8,9 +8,11 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -128,7 +130,7 @@ inline dftracer::utils::dataframe::DataFrame engine_collect(
 inline void frames_equal(
     const dftracer::utils::dataframe::DataFrame& a,
     const dftracer::utils::dataframe::DataFrame& b,
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& keys) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys) {
     REQUIRE(a.names.size() == b.names.size());
     for (std::size_t i = 0; i < a.names.size(); ++i) {
         CHECK(a.names[i] == b.names[i]);
@@ -169,8 +171,9 @@ inline void frames_equal(
 
 // The agg-engine parity trace, written once per directory.
 inline dftracer::utils::dstd::String write_agg_engine_trace(
-    const dftracer::utils::dstd::String& dir) {
-    const dftracer::utils::dstd::String pfw = dir + "/agg_engine.pfw";
+    dftracer::utils::dstd::CStringView dir) {
+    const dftracer::utils::dstd::String pfw =
+        dftracer::utils::dstd::String(dir) + "/agg_engine.pfw";
     const dftracer::utils::dstd::String gz = pfw + ".gz";
     if (dftracer::utils::dstd::fs::exists(gz).value()) return gz;
     {
@@ -181,7 +184,7 @@ inline dftracer::utils::dstd::String write_agg_engine_trace(
         const int tids[] = {10, 20};
         int ts = 1000;
         for (int i = 0; i < 90; ++i) {
-            ofs << R"({"ph":"X","name":")" << names[i % 3] << R"(","cat":")"
+            ofs << R"({"ph":1,"name":")" << names[i % 3] << R"(","cat":")"
                 << cats[i % 2] << R"(","pid":)" << pids[i % 3] << R"(,"tid":)"
                 << tids[i % 2] << R"(,"ts":)" << ts << R"(,"dur":)"
                 << (5 + (i % 17)) << R"(,"args":{}})" << "\n";
@@ -219,11 +222,11 @@ inline dftracer::utils::dataframe::DataFrame collect_groupmap_plan(
 
 inline void check_match(const dftracer::utils::dataframe::DataFrame& a0,
                         const dftracer::utils::dataframe::DataFrame& b0,
-                        const dftracer::utils::dstd::String& key) {
-    dftracer::utils::dataframe::DataFrame a =
-        dftu_utils_test::ok(a0.sort_by(key, false));
-    dftracer::utils::dataframe::DataFrame b =
-        dftu_utils_test::ok(b0.sort_by(key, false));
+                        dftracer::utils::dstd::StringView key) {
+    dftracer::utils::dataframe::DataFrame a = dftu_utils_test::ok(
+        a0.sort_by(dftracer::utils::dstd::String(key), false));
+    dftracer::utils::dataframe::DataFrame b = dftu_utils_test::ok(
+        b0.sort_by(dftracer::utils::dstd::String(key), false));
     REQUIRE(a.names.size() == b.names.size());
     for (std::size_t i = 0; i < a.names.size(); ++i) {
         CHECK(a.names[i] == b.names[i]);
@@ -248,7 +251,7 @@ inline void check_match(const dftracer::utils::dataframe::DataFrame& a0,
 inline void check_match_multi(
     const dftracer::utils::dataframe::DataFrame& a0,
     const dftracer::utils::dataframe::DataFrame& b0,
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& keys) {
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> keys) {
     REQUIRE(a0.names.size() == b0.names.size());
     for (std::size_t i = 0; i < a0.names.size(); ++i) {
         CHECK(a0.names[i] == b0.names[i]);
@@ -290,10 +293,10 @@ inline void check_match_multi(
         }
 }
 
-inline void run_both_file(const dftracer::utils::dstd::String& file,
-                          const dftracer::utils::dstd::String& file_idx,
+inline void run_both_file(dftracer::utils::dstd::CStringView file,
+                          dftracer::utils::dstd::StringView file_idx,
                           const dftracer::utils::trace::views::GroupKey& gk,
-                          const dftracer::utils::dstd::String& key_col,
+                          dftracer::utils::dstd::StringView key_col,
                           std::uint64_t mem_budget) {
     auto build = [&] {
         dftracer::utils::trace::views::detail::scan::ScanPlan v =
@@ -329,10 +332,8 @@ inline void run_both_file(const dftracer::utils::dstd::String& file,
 inline void run_both_multi(
     dftracer::utils::dstd::Vector<dftracer::utils::trace::views::ViewFile>
         files,
-    const dftracer::utils::dstd::Vector<
-        dftracer::utils::trace::views::GroupKey>& gks,
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>&
-        key_cols,
+    dftracer::utils::dstd::Vector<dftracer::utils::trace::views::GroupKey> gks,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> key_cols,
     std::uint64_t mem_budget) {
     auto build = [&] {
         dftracer::utils::trace::views::detail::scan::ScanPlan v =
@@ -367,8 +368,10 @@ inline dftu_utils_test::TestEnvironment& parity_env() {
 }
 
 // One index root per trace set, so each set is one first touch.
-inline dftracer::utils::dstd::String parity_sub(const char* name) {
-    const dftracer::utils::dstd::String d = parity_env().dir() + "/" + name;
+inline dftracer::utils::dstd::String parity_sub(
+    dftracer::utils::dstd::StringView name) {
+    const dftracer::utils::dstd::String d =
+        parity_env().dir() + "/" + dftracer::utils::dstd::String(name);
     REQUIRE(dftracer::utils::dstd::fs::create_directories(d).has_value());
     return d;
 }

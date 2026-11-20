@@ -38,10 +38,10 @@ using Batch = dstd::Expected<dstd::Vector<Found>, dstd::Error>;
 using BatchChannel = coro::Channel<Batch>;
 using BatchProducer = decltype(std::declval<BatchChannel&>().producer());
 
-bool any_match(const dstd::Vector<dstd::String>& patterns,
+bool any_match(dstd::Span<const dstd::String> patterns,
                dstd::StringView name) noexcept {
     return std::any_of(patterns.begin(), patterns.end(),
-                       [name](const dstd::String& pattern) {
+                       [name](dstd::StringView pattern) {
                            return dstd::fs::match_name(pattern, name);
                        });
 }
@@ -459,7 +459,7 @@ coro::CoroTask<dstd::Expected<bool, dstd::Error>> exists_owned(
 coro::CoroTask<dstd::Expected<bool, dstd::Error>> create_directory_owned(
     dstd::StringView prefix) {
     const dstd::internal::PathCString name(prefix);
-    runtime::io::IoAwaitable make = runtime::io::mkdir(name.c_str(), 0777);
+    runtime::io::IoAwaitable make = runtime::io::mkdir(name.view(), 0777);
     const ssize_t made = co_await make;
     if (made == 0) co_return true;
     if (made != -EEXIST) {
@@ -520,8 +520,8 @@ coro::CoroTask<dstd::Expected<bool, dstd::Error>> remove_owned(
     }
     const dstd::internal::PathCString name(bytes);
     runtime::io::IoAwaitable removal = found->kind == FileKind::Directory
-                                           ? runtime::io::rmdir(name.c_str())
-                                           : runtime::io::unlink(name.c_str());
+                                           ? runtime::io::rmdir(name.view())
+                                           : runtime::io::unlink(name.view());
     const ssize_t removed = co_await removal;
     if (removed == 0) co_return true;
     if (removed == -ENOENT || removed == -ENOTDIR) co_return false;

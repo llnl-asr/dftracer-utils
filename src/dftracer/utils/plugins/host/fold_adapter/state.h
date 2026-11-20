@@ -73,7 +73,7 @@ class StateAccum {
     dstd::Result<void> drain_runs();
     const dstd::Path& dir_path();
     dstd::Error error_of(const plugins::AbiContext& ctx, dftu_status status,
-                         const char* callback) const;
+                         dstd::StringView callback) const;
 
     const RegisteredState* reg_;
     dstd::String plugin_;

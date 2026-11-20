@@ -46,9 +46,9 @@ inline const Shape SHAPES[] = {
      "ph=1 pid=0 tid=0 ts=1 dur=- cat=- name=- fh=- hh=- args{} top{} sp{}"},
     {"dup_pid_tid", R"j({"ph":1,"pid":1,"pid":2,"tid":3,"tid":4})j",
      "ph=1 pid=2 tid=4 ts=0 dur=- cat=- name=- fh=- hh=- args{} top{} sp{}"},
-    {"dup_ph", R"j({"ph":1,"ph":2})j",
+    {"dup_ph", R"j({"ph":"X","ph":"C"})j",
      "ph=2 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- args{} top{} sp{}"},
-    {"dup_ph_letter", R"j({"ph":"X","ph":"C"})j",
+    {"dup_ph_letter", R"j({"ph":1,"ph":2})j",
      "ph=2 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- args{} top{} sp{}"},
     {"dup_ph_bad_later", R"j({"ph":1,"ph":"zz"})j",
      "ph=0 pid=0 tid=0 ts=0 dur=- cat=- name=- fh=- hh=- args{} top{} sp{}"},
@@ -423,7 +423,7 @@ inline const Shape SHAPES[] = {
      "\xD1\x84\xD0\xB0\xD0\xB9\xD0\xBB"
      ".h5\" \"size\"=i4096} top{} sp{}"},
     {"dftracer_line",
-     R"j({"id":0,"name":"read","cat":"POSIX","pid":1234,"tid":5678,"ts":1000,"dur":20,"ph":"X","args":{"hhash":"abc","fhash":"def","fname":"/data/a.h5","size":4096,"ret":4096,"level":3}})j",
+     R"j({"id":0,"name":"read","cat":"POSIX","pid":1234,"tid":5678,"ts":1000,"dur":20,"ph":1,"args":{"hhash":"abc","fhash":"def","fname":"/data/a.h5","size":4096,"ret":4096,"level":3}})j",
      "ph=1 pid=1234 tid=5678 ts=1000 dur=20 cat=\"POSIX\" name=\"read\" "
      "fh=\"def\" hh=\"abc\" args{\"fname\"=s\"/data/a.h5\" \"size\"=i4096 "
      "\"ret\"=i4096 \"level\"=i3} top{} sp{}"},
@@ -460,7 +460,8 @@ inline String describe(const FoldEvent& ev, const StringIntern& intern) {
         ev.has_dur ? dftracer::utils::dstd::fmt<"{}">(ev.dur) : String("-"),
         text(ev.cat_id), text(ev.name_id), text(ev.fhash_id),
         text(ev.hhash_id));
-    const auto list = [&](const char* label, const auto& args) {
+    const auto list = [&](dftracer::utils::dstd::StringView label,
+                          const auto& args) {
         dftracer::utils::dstd::fmt_append<" {}{">(out, label);
         bool first = true;
         for (const auto& [key, value] : args) {
@@ -590,7 +591,8 @@ index:
 
 /// One way to call a path reader.
 struct PathOptions {
-    explicit PathOptions(const char* label) : name(label) {}
+    explicit PathOptions(dftracer::utils::dstd::CStringView label)
+        : name(label.c_str()) {}
 
     const char* name;
     bool capture_schema = true;
@@ -719,7 +721,7 @@ inline const char* const CAPTURE_LINES[] = {
     R"j({"ph":1,"id":[],"type":{},"args":{"hosts":["h0","h1"],"k":{"q":2}},"hosts":[]})j",
     R"j({"ph":1,"args":[{"size":1},{"size":2}],"x":{"y":1}})j",
     R"j({"ph":1,"a":{"b":[{"c":1}]},"a.b":{"c":2},"a.b.c":3,"l":[[1,2],[3]],"hosts":"h","ts":5,"dur":6})j",
-    R"j({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":2,"ts":3,"dur":4,"type":9,"id":8,"args":{"fhash":"f","hhash":"h","size":7,"io":{"len":[4,5]}}})j",
+    R"j({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":2,"ts":3,"dur":4,"type":9,"id":8,"args":{"fhash":"f","hhash":"h","size":7,"io":{"len":[4,5]}}})j",
     R"j({"name":"no_ph","type":1,"args":{"size":1}})j",
     R"j({"ph":1,"x":1e5,"args":{"big":123456789012345678901234567890,"u":18446744073709551615,"s":"a\"b","d":2.5,"t":true}})j",
     R"j({"ph":1,"args":{"a":{"b":1},"size":2,"io":{"off":6}},"a":{"c":3},"size":9,"io":{"len":[1]}})j",
@@ -786,13 +788,13 @@ inline bool read_dom_path(
 /// The DOM reader on `line`, as read_dom, with `names` captured.
 inline bool read_dom_captures(
     StringView line, FoldEvent& ev, StringIntern& intern, bool needs_args,
-    const dftracer::utils::dstd::Vector<String>& names) {
+    const dftracer::utils::dstd::Vector<String>* names) {
     static thread_local dftracer::utils::json::RecordParser parser;
     const simdjson::padded_string padded(line.data(), line.size());
     simdjson::dom::element root;
     if (parser.parse(padded).get(root)) return false;
     dftracer::utils::trace::views::detail::extract_fold_event_into(
-        ev, root, intern, needs_args, &names);
+        ev, root, intern, needs_args, names);
     return true;
 }
 

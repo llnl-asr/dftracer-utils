@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -53,31 +54,31 @@ dftu_status start_task(::dftu_ctx* ctx, ::dftu_task** out, Make&& make) {
     return DFTU_OK;
 }
 
-dstd::String op_message(const char* op, const dstd::Error& error) {
-    return dstd::fmt<"{}: {}">(dstd::StringView(op), error.message());
+dstd::String op_message(dstd::StringView op, const dstd::Error& error) {
+    return dstd::fmt<"{}: {}">(op, error.message());
 }
 
-dftu_status fail_error(::dftu_ctx* ctx, const char* op,
+dftu_status fail_error(::dftu_ctx* ctx, dstd::StringView op,
                        const dstd::Error& error) {
     return host_fail(ctx, common::to_status(error.condition()),
                      op_message(op, error));
 }
 
-void fail_task(plugins::AbiTask* task, const char* op,
+void fail_task(plugins::AbiTask* task, dstd::StringView op,
                const dstd::Error& error) {
     task->fail(common::to_status(error.condition()), op_message(op, error));
 }
 
-dftu_status invalid(::dftu_ctx* ctx, const char* op, const char* what) {
-    return host_fail(
-        ctx, DFTU_E_INVALID,
-        dstd::fmt<"{}: {}">(dstd::StringView(op), dstd::StringView(what)));
+dftu_status invalid(::dftu_ctx* ctx, dstd::StringView op,
+                    dstd::StringView what) {
+    return host_fail(ctx, DFTU_E_INVALID, dstd::fmt<"{}: {}">(op, what));
 }
 
 coro::CoroTask<void> merge_shards_body(plugins::AbiTask* task,
                                        dstd::String target,
                                        dstd::Vector<dstd::String> shards) {
-    const int rc = co_await fileio::parallel::merge_shards(target, shards);
+    const int rc =
+        co_await fileio::parallel::merge_shards(target, std::move(shards));
     if (rc != 0) {
         task->fail(DFTU_E_IO,
                    dstd::fmt<"merge_shards: could not merge into '{}'">(
@@ -134,7 +135,7 @@ dftu_status host_writer_create(::dftu_ctx* ctx, void* h, const char* path,
 
 // Runs one writer call; a nonzero result fails the task.
 template <class Call>
-coro::CoroTask<void> writer_body(plugins::AbiTask* task, const char* op,
+coro::CoroTask<void> writer_body(plugins::AbiTask* task, dstd::String op,
                                  WriterHandle* writer, Call call) {
     const int rc = co_await call(writer);
     if (rc != 0) {
@@ -146,7 +147,7 @@ coro::CoroTask<void> writer_body(plugins::AbiTask* task, const char* op,
 
 template <class Call>
 dftu_status writer_start(::dftu_ctx* ctx, void* h, ::dftu_writer* w,
-                         ::dftu_task** out, const char* op, Call call) {
+                         ::dftu_task** out, dstd::String op, Call call) {
     WriterHandle* writer = fold_of(h).find_handle<WriterHandle>(w);
     if (writer == nullptr) return invalid(ctx, op, "the writer is not valid");
     return start_task(ctx, out, [=](plugins::AbiTask* task) {
@@ -215,8 +216,8 @@ struct GzHandle : PluginHandle {
     bool is_open = false;
 };
 
-dstd::Result<bool> has_gzip_magic(const char* path) {
-    auto file = dstd::File::open(dstd::PathView(path), {});
+dstd::Result<bool> has_gzip_magic(dstd::PathView path) {
+    auto file = dstd::File::open(path, {});
     if (!file) return file.error();
     std::uint8_t magic[2] = {0, 0};
     auto read = file->read_at(0, dstd::Span<std::uint8_t>(magic, 2));
@@ -231,7 +232,7 @@ dftu_status host_lines_open(::dftu_ctx* ctx, void* h, const char* path,
         return invalid(ctx, "lines_open", "path and out must be set");
     if (end_line != 0 && end_line < start_line)
         return invalid(ctx, "lines_open", "end_line is before start_line");
-    const dstd::Result<bool> gzip = has_gzip_magic(path);
+    const dstd::Result<bool> gzip = has_gzip_magic(dstd::StringView(path));
     if (!gzip.has_value()) return fail_error(ctx, "lines_open", gzip.error());
     const auto start = static_cast<std::size_t>(start_line);
     const auto end = static_cast<std::size_t>(end_line);
@@ -518,13 +519,12 @@ void free_owned_text(void*, void* ud) {
 }
 
 // The file helpers share one rule: a path that cannot be stat'ed is not found.
-dftu_status stat_for(::dftu_ctx* ctx, const char* op, const char* path,
-                     common::InputFileStat* st) {
-    if (path == nullptr) return invalid(ctx, op, "path is NULL");
-    if (!common::stat_input(dstd::CStringView(path), *st)) {
-        return host_fail(ctx, DFTU_E_NOT_FOUND,
-                         dstd::fmt<"{}: cannot stat '{}'">(
-                             dstd::StringView(op), dstd::StringView(path)));
+dftu_status stat_for(::dftu_ctx* ctx, dstd::StringView op,
+                     dstd::CStringView path, common::InputFileStat* st) {
+    if (!common::stat_input(path, *st)) {
+        return host_fail(
+            ctx, DFTU_E_NOT_FOUND,
+            dstd::fmt<"{}: cannot stat '{}'">(op, dstd::StringView(path)));
     }
     return DFTU_OK;
 }
@@ -533,6 +533,7 @@ dftu_status host_logical_path(::dftu_ctx* ctx, void*, const char* path,
                               dftu_bytes* out) {
     if (out == nullptr) return invalid(ctx, "logical_path", "out is NULL");
     common::InputFileStat st;
+    if (path == nullptr) return invalid(ctx, "logical_path", "path is NULL");
     const dftu_status found = stat_for(ctx, "logical_path", path, &st);
     if (found < 0) return found;
     auto owned = dstd::make_unique<OwnedText>();
@@ -547,6 +548,7 @@ dftu_status host_mtime(::dftu_ctx* ctx, void*, const char* path,
                        std::int64_t* out_seconds) {
     if (out_seconds == nullptr) return invalid(ctx, "mtime", "out is NULL");
     common::InputFileStat st;
+    if (path == nullptr) return invalid(ctx, "mtime", "path is NULL");
     const dftu_status found = stat_for(ctx, "mtime", path, &st);
     if (found < 0) return found;
     *out_seconds = static_cast<std::int64_t>(
@@ -558,6 +560,7 @@ dftu_status host_size(::dftu_ctx* ctx, void*, const char* path,
                       std::uint64_t* out) {
     if (out == nullptr) return invalid(ctx, "size", "out is NULL");
     common::InputFileStat st;
+    if (path == nullptr) return invalid(ctx, "size", "path is NULL");
     const dftu_status found = stat_for(ctx, "size", path, &st);
     if (found < 0) return found;
     *out = fileio::file_size_bytes(dstd::CStringView(path));
@@ -568,6 +571,7 @@ dftu_status host_sampled_hash(::dftu_ctx* ctx, void*, const char* path,
                               std::uint64_t* out) {
     if (out == nullptr) return invalid(ctx, "sampled_hash", "out is NULL");
     common::InputFileStat st;
+    if (path == nullptr) return invalid(ctx, "sampled_hash", "path is NULL");
     const dftu_status found = stat_for(ctx, "sampled_hash", path, &st);
     if (found < 0) return found;
     *out = fileio::calculate_file_hash(dstd::CStringView(path));

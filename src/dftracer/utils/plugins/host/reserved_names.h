@@ -52,23 +52,8 @@ constexpr bool refuse_plugin_op_name(dstd::StringView name) noexcept {
     return is_host_namespace(name) || !is_plugin_qualified(name);
 }
 
-/// Null-tolerant overloads for the C ABI, where a name may be absent.
-constexpr bool is_host_namespace(const char* name) noexcept {
-    return name != nullptr && is_host_namespace(dstd::StringView{name});
-}
-constexpr bool refuse_plugin_op_name(const char* name) noexcept {
-    return name == nullptr || refuse_plugin_op_name(dstd::StringView{name});
-}
-constexpr bool name_in_plugin_namespace(const char* name,
-                                        const char* plugin) noexcept {
-    return name != nullptr && plugin != nullptr &&
-           name_in_plugin_namespace(dstd::StringView{name},
-                                    dstd::StringView{plugin});
-}
-
 static_assert(is_host_namespace("dftu.hash.fnv1a"));
 static_assert(!is_host_namespace("com.example.dftu.stats"));
-static_assert(!is_host_namespace(static_cast<const char*>(nullptr)));
 static_assert(refuse_plugin_op_name("add"));
 static_assert(refuse_plugin_op_name("dftu.hash.fnv1a"));
 static_assert(!refuse_plugin_op_name("com.example.myop"));
@@ -81,10 +66,6 @@ static_assert(!name_in_plugin_namespace("toy.", "toy"));
 static_assert(!name_in_plugin_namespace("other.rows", "toy"));
 static_assert(!name_in_plugin_namespace("dftu.rows", "toy"));
 static_assert(!name_in_plugin_namespace("", "toy"));
-static_assert(!name_in_plugin_namespace(static_cast<const char*>(nullptr),
-                                        "toy"));
-static_assert(!name_in_plugin_namespace("toy",
-                                        static_cast<const char*>(nullptr)));
 
 }  // namespace dftracer::utils::plugins::host
 

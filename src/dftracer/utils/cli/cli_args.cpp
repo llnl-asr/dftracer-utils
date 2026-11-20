@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/to_chars.h>
 
 #include <algorithm>
@@ -17,7 +18,7 @@ using dstd::String;
 using dstd::StringView;
 using dstd::Vector;
 
-String join_names(const Vector<StringView>& names, StringView separator) {
+String join_names(dstd::Span<const StringView> names, StringView separator) {
     String out;
     for (std::size_t i = 0; i < names.size(); ++i) {
         if (i != 0) out += separator;
@@ -33,7 +34,7 @@ String quoted(StringView text) {
     return out;
 }
 
-StringView longest_flag(const Vector<StringView>& names) {
+StringView longest_flag(dstd::Span<const StringView> names) {
     for (const auto& name : names) {
         if (name.size() > 2 && name[0] == '-' && name[1] == '-') return name;
     }
@@ -148,10 +149,8 @@ ArgSpec& ArgParser::option(StringView& target, Names names, StringView help) {
 ArgSpec& ArgParser::option(Vector<StringView>& target, Names names,
                            StringView help) {
     String repr = "{";
-    for (std::size_t i = 0; i < target.size(); ++i) {
-        if (i != 0) repr += ", ";
-        repr += quoted(target[i]);
-    }
+    dstd::fmt_append_join<", ">(
+        repr, target, [](String& o, StringView t) { o += quoted(t); });
     repr += "}";
     ArgSpec& spec = add_value(names, help, std::move(repr), true);
     spec.kind_ = ArgSpec::Kind::Many;
@@ -358,7 +357,7 @@ String ArgParser::help() const {
     return out;
 }
 
-ParseOutcome ArgParser::parse(const Vector<StringView>& args) {
+ParseOutcome ArgParser::parse(dstd::Span<const StringView> args) {
     auto fail = [](String message) {
         ParseOutcome outcome;
         outcome.exit_code = 1;

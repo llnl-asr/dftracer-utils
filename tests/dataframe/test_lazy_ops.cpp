@@ -8,11 +8,13 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
+#include <initializer_list>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
@@ -35,11 +37,11 @@ dftu_scalar i64_scalar(std::int64_t v) {
 }
 
 // A two-column frame: "k" keys, "v" values.
-dftu_dataframe* make_frame(const dstd::Vector<std::int64_t>& k,
-                           const dstd::Vector<std::int64_t>& v) {
+dftu_dataframe* make_frame(std::initializer_list<std::int64_t> k,
+                           std::initializer_list<std::int64_t> v) {
     dftu_series* cols[2] = {
-        i64_col(k.data(), static_cast<std::int64_t>(k.size())),
-        i64_col(v.data(), static_cast<std::int64_t>(v.size()))};
+        i64_col(k.begin(), static_cast<std::int64_t>(k.size())),
+        i64_col(v.begin(), static_cast<std::int64_t>(v.size()))};
     const char* names[2] = {"k", "v"};
     return dftu_dataframe_new(names, cols, 2);
 }
@@ -74,8 +76,8 @@ void check_same(dftu_dataframe* a, dftu_dataframe* b) {
     }
 }
 
-void check_kind_and_arity(const char* name, std::uint32_t expect_arity) {
-    const dftu_op_desc* op = dftu_op_find(name);
+void check_kind_and_arity(dstd::CStringView name, std::uint32_t expect_arity) {
+    const dftu_op_desc* op = dftu_op_find(name.c_str());
     REQUIRE(op != nullptr);
     CHECK(dftu_op_kind_of(op->sig) == DFTU_OP_KIND_LAZY);
     CHECK(dftu_op_arity(op->sig) == expect_arity);
@@ -83,9 +85,9 @@ void check_kind_and_arity(const char* name, std::uint32_t expect_arity) {
 
 // Runs `name` through the registry against `lf1` and directly via `direct`
 // against `lf2`, collects both, and checks they agree.
-dftu_dataframe* run_registry(const char* name, const dftu_lazyframe* lf,
+dftu_dataframe* run_registry(dstd::CStringView name, const dftu_lazyframe* lf,
                              const dftu_op_arg* a) {
-    const dftu_op_desc* op = dftu_op_find(name);
+    const dftu_op_desc* op = dftu_op_find(name.c_str());
     REQUIRE(op != nullptr);
     const dftu_lazyframe* in[1] = {lf};
     dftu_lazyframe* out = dftu_op_run_lazy(op, in, 1, a);
@@ -443,7 +445,7 @@ TEST_SUITE("lazy_ops") {
             dftu_lazyframe* lf2 = dftu_dataframe_lazy(df);
             const char* names[1] = {"v"};
             OpArgs a;
-            a.strlist(1, names, 1);
+            a.strlist(1, {names, 1});
             dftu_dataframe* via_registry =
                 run_registry("dftu.lazy.select", lf1, a);
             dftu_lazyframe* direct = dftu_lazyframe_select(lf2, names, 1);
@@ -463,7 +465,7 @@ TEST_SUITE("lazy_ops") {
             dftu_lazyframe* lf2 = dftu_dataframe_lazy(df);
             const char* names[2] = {"key", "val"};
             OpArgs a;
-            a.strlist(1, names, 2);
+            a.strlist(1, {names, 2});
             dftu_dataframe* via_registry =
                 run_registry("dftu.lazy.rename", lf1, a);
             dftu_lazyframe* direct = dftu_lazyframe_rename(lf2, names, 2);
@@ -494,8 +496,8 @@ TEST_SUITE("lazy_ops") {
             dftu_lazyframe* lf1 = dftu_dataframe_lazy(df);
             dftu_lazyframe* lf2 = dftu_dataframe_lazy(df);
             OpArgs a;
-            a.strlist(1, id_vars, 1);
-            a.strlist(2, value_vars, 1);
+            a.strlist(1, {id_vars, 1});
+            a.strlist(2, {value_vars, 1});
             dftu_dataframe* via_registry = run_registry(name, lf1, a);
             dftu_lazyframe* direct =
                 dstd::String(name) == "dftu.lazy.unpivot"
@@ -524,7 +526,7 @@ TEST_SUITE("lazy_ops") {
         dftu_lazyframe* lf1 = dftu_dataframe_lazy(df);
         dftu_lazyframe* lf2 = dftu_dataframe_lazy(df);
         OpArgs a;
-        a.strlist(1, keys, 1);
+        a.strlist(1, {keys, 1});
         a.agglist(2, {aggs, 1});
         dftu_dataframe* grouped_registry =
             run_registry("dftu.lazy.group_by", lf1, a);
@@ -567,7 +569,7 @@ TEST_SUITE("lazy_ops") {
         dftu_lazyframe* lf1 = dftu_dataframe_lazy(df);
         dftu_lazyframe* lf2 = dftu_dataframe_lazy(df);
         OpArgs a;
-        a.str(1, "k").i32(2, 0);
+        a.str(1, "k").i32(2, 0).i32(3, 1);
         dftu_dataframe* via_registry =
             run_registry("dftu.lazy.sort_by", lf1, a);
         dftu_lazyframe* direct = dftu_lazyframe_sort_by(lf2, "k", 0);
@@ -674,7 +676,7 @@ TEST_SUITE("lazy_ops") {
         dftu_lazyframe* lf2 = dftu_dataframe_lazy(df);
         const char* by[2] = {"k", "v"};
         OpArgs a;
-        a.strlist(1, by, 2).i32(2, 0);
+        a.strlist(1, {by, 2}).i32(2, 0).i32(3, 1);
         dftu_dataframe* via_registry =
             run_registry("dftu.lazy.sort_by_multi", lf1, a);
         dftu_lazyframe* direct = dftu_lazyframe_sort_by_multi(lf2, by, 2, 0);

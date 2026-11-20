@@ -124,7 +124,7 @@ dstd::String text_of(const RowSetFold::Value& v) {
         v);
 }
 
-dstd::Vector<std::uint8_t> validity(const dstd::Vector<RowSetFold::Value>& c) {
+dstd::Vector<std::uint8_t> validity(dstd::Span<const RowSetFold::Value> c) {
     dstd::Vector<std::uint8_t> bits((c.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < c.size(); ++i)
         if (!std::holds_alternative<dstd::Monostate>(c[i]))
@@ -134,7 +134,7 @@ dstd::Vector<std::uint8_t> validity(const dstd::Vector<RowSetFold::Value>& c) {
 
 // One column: the type all its values share; integers and doubles together
 // as doubles; any other mix as text.
-dataframe::Series series_of(const dstd::Vector<RowSetFold::Value>& c) {
+dataframe::Series series_of(dstd::Span<const RowSetFold::Value> c) {
     const auto n = static_cast<std::int64_t>(c.size());
     std::size_t kind = 0;
     bool mixed = false;

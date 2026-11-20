@@ -41,7 +41,7 @@ bool kernel_at_least(int major, int minor) {
 // the one that has the flag; on a newer one it fails, and so does a ring that
 // opens without the flags.
 bool open_ring(Ring& ring, const RingOptions& options, int major, int minor,
-               const char* what) {
+               dstd::StringView what) {
     Ring base;
     if (!base.init(RING_ENTRIES)) {
         MESSAGE("skipped: no io_uring");

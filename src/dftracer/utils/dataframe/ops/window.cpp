@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
+#include <dftracer/utils/dataframe/internal/frame_index.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/kernels/running.h>
 #include <dftracer/utils/dataframe/ops/ops_common.h>
@@ -67,17 +68,18 @@ struct Column {
 };
 
 Series pass_through(const Series& column,
-                    const dstd::Vector<std::int64_t>& source) {
+                    dstd::Span<const std::int64_t> source) {
     return column.take(source);
 }
 
-dstd::Result<void> numeric(const ColumnReader& v, const char* what) {
+dstd::Result<void> numeric(const ColumnReader& v, dstd::StringView what) {
     if (v.is_bytes())
         return invalid_argument<"window: {} over a non-numeric column">(what);
     return {};
 }
 
-dstd::Result<ColumnReader> view_of(const Series& column, const char* what) {
+dstd::Result<ColumnReader> view_of(const Series& column,
+                                   dstd::StringView what) {
     if (!ColumnReader::supports(column.type()))
         return invalid_argument<"window: {} over an unsupported column type">(
             what);
@@ -97,7 +99,7 @@ dstd::Result<const Series*> value_column(const DataFrame& df,
 dstd::Result<const Series*> named_column(const DataFrame& df,
                                          const dstd::String* name,
                                          const WindowColumn& w,
-                                         const char* role) {
+                                         dstd::StringView role) {
     if (!name)
         return invalid_argument<"window: '{}' needs a {} column">(w.out, role);
     const dstd::Result<std::size_t> at = ops::column_named(df, *name, "window");
@@ -106,8 +108,8 @@ dstd::Result<const Series*> named_column(const DataFrame& df,
 }
 
 // The error a running or frame sum reports when `step` overflowed `type`.
-dstd::Unexpected<dstd::Error> overflow_error(const char* func,
-                                             const char* type) {
+dstd::Unexpected<dstd::Error> overflow_error(dstd::StringView func,
+                                             dstd::StringView type) {
     return common::make_error(common::ErrorCode::InvalidArgument,
                               steps::overflow_message(func, type));
 }
@@ -300,11 +302,27 @@ dstd::Result<Series> running(const Layout& lay, const Series& column,
                 return ok.error();
             Column<double> out(lay.n);
             for (const auto& [p, q] : lay.parts) {
-                steps::Prod prod;
-                for (std::int64_t r = p; r < q; ++r) {
-                    const std::int64_t g = lay.row(r);
-                    if (!v.is_null(g)) prod.mul(v.get_double(g));
-                    out.set(r, prod.acc);
+                if (v.kind() == Kind::Float) {
+                    steps::Prod prod;
+                    for (std::int64_t r = p; r < q; ++r) {
+                        const std::int64_t g = lay.row(r);
+                        if (!v.is_null(g)) prod.mul(v.get_double(g));
+                        out.set(r, prod.acc);
+                    }
+                } else if (v.kind() == Kind::Unsigned) {
+                    steps::ProdU64 prod;
+                    for (std::int64_t r = p; r < q; ++r) {
+                        const std::int64_t g = lay.row(r);
+                        if (!v.is_null(g)) prod.mul(v.get_uint(g));
+                        out.set(r, prod.value());
+                    }
+                } else {
+                    steps::ProdI64 prod;
+                    for (std::int64_t r = p; r < q; ++r) {
+                        const std::int64_t g = lay.row(r);
+                        if (!v.is_null(g)) prod.mul(v.get_int(g));
+                        out.set(r, prod.value());
+                    }
                 }
             }
             return out.series(TypeId::Float64);
@@ -1141,8 +1159,8 @@ dstd::Vector<std::int64_t> present_prefix(const UdafWindow& u) {
     return prefix;
 }
 
-std::int64_t present_in(const dstd::Vector<std::int64_t>& prefix,
-                        std::int64_t lo, std::int64_t hi) {
+std::int64_t present_in(dstd::Span<const std::int64_t> prefix, std::int64_t lo,
+                        std::int64_t hi) {
     return hi < lo ? 0
                    : prefix[static_cast<std::size_t>(hi + 1)] -
                          prefix[static_cast<std::size_t>(lo)];
@@ -1654,10 +1672,10 @@ WindowColumn window_column(const dftu_window_spec& s) {
     return c;
 }
 
-dstd::Result<DataFrame> window(const DataFrame& df,
-                               const dstd::Vector<dstd::String>& partition_by,
-                               const dstd::Vector<dstd::String>& order_by,
-                               const dstd::Vector<WindowColumn>& specs) {
+static dstd::Result<DataFrame> window_raw(
+    const DataFrame& df, dstd::Span<const dstd::String> partition_by,
+    dstd::Span<const dstd::String> order_by,
+    dstd::Span<const WindowColumn> specs) {
     dstd::Result<dstd::Vector<ColumnReader>> part_views =
         ops::views_of(df, partition_by, "window");
     if (!part_views) return part_views.error();
@@ -1791,34 +1809,27 @@ dstd::Result<DataFrame> window(const DataFrame& df,
 }
 
 dstd::Result<DataFrame> window_checked(
-    const DataFrame& df, const char* const* partition_by, std::int32_t n_part,
-    const char* const* order_by, std::int32_t n_order,
-    const dftu_window_spec* specs, std::int32_t n_specs) {
+    const DataFrame& df, dstd::Span<const char* const> partition_by,
+    dstd::Span<const char* const> order_by,
+    dstd::Span<const dftu_window_spec> specs) {
     const auto names =
-        [](const char* const* items, std::int32_t n,
-           const char* what) -> dstd::Result<dstd::Vector<dstd::String>> {
-        if (n < 0 || (n > 0 && !items))
-            return invalid_argument<"window: bad {} list">(what);
+        [](dstd::Span<const char* const> items,
+           dstd::StringView what) -> dstd::Result<dstd::Vector<dstd::String>> {
         dstd::Vector<dstd::String> out;
-        for (std::int32_t i = 0; i < n; ++i) {
-            if (!items[i])
-                return invalid_argument<"window: NULL {} name">(what);
-            out.emplace_back(items[i]);
+        for (const char* item : items) {
+            if (!item) return invalid_argument<"window: NULL {} name">(what);
+            out.emplace_back(item);
         }
         return out;
     };
     dstd::Result<dstd::Vector<dstd::String>> parts =
-        names(partition_by, n_part, "partition");
+        names(partition_by, "partition");
     if (!parts) return parts.error();
-    dstd::Result<dstd::Vector<dstd::String>> order =
-        names(order_by, n_order, "order");
+    dstd::Result<dstd::Vector<dstd::String>> order = names(order_by, "order");
     if (!order) return order.error();
-    if (n_specs < 0 || (n_specs > 0 && !specs))
-        return invalid_argument<"window: bad spec list">();
     dstd::Vector<WindowColumn> cols;
-    cols.reserve(static_cast<std::size_t>(n_specs));
-    for (std::int32_t i = 0; i < n_specs; ++i) {
-        const dftu_window_spec& s = specs[i];
+    cols.reserve(specs.size());
+    for (const dftu_window_spec& s : specs) {
         if (s.func < DFTU_WINDOW_ROW_NUMBER ||
             s.func > DFTU_WINDOW_FRAME_UDAF || !s.out)
             return invalid_argument<"window: bad function or output name">();
@@ -1839,4 +1850,12 @@ dstd::Result<DataFrame> window_checked(
     return window(df, *parts, *order, cols);
 }
 
+dstd::Result<DataFrame> window(const DataFrame& df,
+                               dstd::Span<const dstd::String> partition_by,
+                               dstd::Span<const dstd::String> order_by,
+                               dstd::Span<const WindowColumn> specs) {
+    dstd::Result<DataFrame> out = window_raw(df, partition_by, order_by, specs);
+    if (out) index_keep<"window">(df, *out);
+    return out;
+}
 }  // namespace dftracer::utils::dataframe

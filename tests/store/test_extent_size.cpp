@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/filesystem_info.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -28,10 +29,10 @@ constexpr std::uint32_t SIXTY_FOUR_MIB = 64U << 20;
 constexpr std::uint32_t ONE_TWENTY_EIGHT_KIB = 128U << 10;
 
 struct ExtentBytesOverride {
-    explicit ExtentBytesOverride(const char* value) {
+    explicit ExtentBytesOverride(dstd::CStringView value) {
         ::setenv(
             dftracer::utils::common::constants::store::STORE_EXTENT_BYTES_ENV,
-            value, 1);
+            value.c_str(), 1);
     }
     ExtentBytesOverride(const ExtentBytesOverride&) = delete;
     ExtentBytesOverride& operator=(const ExtentBytesOverride&) = delete;

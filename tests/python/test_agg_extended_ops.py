@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""The extended aggregate ops (argmin, bit_or, distinct, the ordered-list and
+"""The extended aggregate ops (argmin, distinct, the ordered-list and
 sketch ops, and the two-variable co-moments) through the columnar group-by
 surface."""
 
@@ -8,8 +8,8 @@ import pytest
 
 pa = pytest.importorskip("pyarrow")
 
+from dftracer.utils import F  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
-from dftracer.utils.columnar import F  # noqa: E402
 from dftracer.utils.dataframe import _dataframe_from_arrow  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
@@ -83,12 +83,6 @@ def test_argmin_breaks_a_by_tie_on_the_first_row_seen():
     row = _argmin_row(_tied_by_frame([1, 1, 1]))
     assert row["min_name"] == "b"
     assert row["min_alt"] == "B"
-
-
-def test_bit_or():
-    df = _sample()
-    got = _rows(df.group_by("cat").agg(F.bits.bit_or().alias("v")), "v")
-    assert got == {"g0": 1 | 4 | 16 | 64, "g1": 2 | 8 | 32 | 128}
 
 
 def test_prod():

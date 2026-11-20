@@ -17,7 +17,7 @@ namespace dftracer::utils::trace::index::schemas::dft::agg {
 namespace {
 constexpr std::uint32_t MAX_CACHED_BUILD_ID = 1u << 20;
 
-dstd::StringView bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
+dstd::StringView bytes_of(dstd::Span<const std::uint8_t> bytes) {
     return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
 }
 }  // namespace

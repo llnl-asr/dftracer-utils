@@ -12,11 +12,13 @@
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -85,14 +87,14 @@ dftu_str host_intern(void* h, const char* s, std::uint32_t len) {
 void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     const auto* pf = static_cast<const PluginFold*>(h);
     detail::log_plugin_line(
-        pf ? dstd::StringView(pf->plugin_name()) : dstd::StringView(), level, s,
-        n);
+        pf ? dstd::StringView(pf->plugin_name()) : dstd::StringView(), level,
+        s ? dstd::StringView(s, n) : dstd::StringView());
 }
 
 // A negative result is -errno from the I/O layer; it fails the task as
 // DFTU_E_IO (DFTU_E_NOT_FOUND for ENOENT, DFTU_E_INVALID for EINVAL and EBADF,
 // DFTU_E_UNSUPPORTED for ENOSYS, EOPNOTSUPP and ENOTSUP).
-bool io_ok(plugins::AbiTask* task, const char* op, std::int64_t result) {
+bool io_ok(plugins::AbiTask* task, dstd::StringView op, std::int64_t result) {
     if (result >= 0) return true;
     const int err = static_cast<int>(-result);
     dftu_status status = DFTU_E_IO;
@@ -108,15 +110,15 @@ bool io_ok(plugins::AbiTask* task, const char* op, std::int64_t result) {
         status = DFTU_E_UNSUPPORTED;
     }
     const dstd::String text = dstd::fmt<"{}: {} (errno {})">(
-        dstd::StringView(op), dstd::StringView(std::strerror(err)), err);
+        op, dstd::StringView(std::strerror(err)), err);
     task->fail(status, text);
     return false;
 }
 
 // Runs one I/O call and stores its non-negative result in `slot`, if any.
 template <class Slot, class Make>
-coro::CoroTask<void> io_body(plugins::AbiTask* task, const char* op, Slot* slot,
-                             Make make) {
+coro::CoroTask<void> io_body(plugins::AbiTask* task, dstd::String op,
+                             Slot* slot, Make make) {
     const std::int64_t result = static_cast<std::int64_t>(co_await make());
     if (io_ok(task, op, result) && slot != nullptr)
         *slot = static_cast<Slot>(result);
@@ -132,7 +134,7 @@ dftu_status start_task(::dftu_ctx* ctx, ::dftu_task** out, Make&& make) {
 
 // The caller's result slot must outlive the task.
 template <class Slot, class Make>
-dftu_status io_start(::dftu_ctx* ctx, ::dftu_task** out, const char* op,
+dftu_status io_start(::dftu_ctx* ctx, ::dftu_task** out, dstd::String op,
                      Slot* slot, Make make) {
     return start_task(ctx, out, [=](plugins::AbiTask* task) {
         return io_body<Slot>(task, op, slot, make);
@@ -148,8 +150,7 @@ dftu_status io_open(::dftu_ctx* ctx, void*, const char* path,
     // the call.
     const dstd::String copy(path);
     return io_start(ctx, out, "open", out_fd, [=] {
-        return runtime::io::open(copy.c_str(), flags,
-                                 static_cast<mode_t>(mode));
+        return runtime::io::open(copy, flags, static_cast<mode_t>(mode));
     });
 }
 
@@ -301,7 +302,7 @@ dftu_status io_unlink(::dftu_ctx* ctx, void*, const char* path,
         return host_fail(ctx, DFTU_E_INVALID, "unlink: path is NULL");
     const dstd::String copy(path);
     return io_start(ctx, out, "unlink", static_cast<std::int64_t*>(nullptr),
-                    [=] { return runtime::io::unlink(copy.c_str()); });
+                    [=] { return runtime::io::unlink(copy); });
 }
 
 dftu_status io_rmdir(::dftu_ctx* ctx, void*, const char* path,
@@ -310,7 +311,7 @@ dftu_status io_rmdir(::dftu_ctx* ctx, void*, const char* path,
         return host_fail(ctx, DFTU_E_INVALID, "rmdir: path is NULL");
     const dstd::String copy(path);
     return io_start(ctx, out, "rmdir", static_cast<std::int64_t*>(nullptr),
-                    [=] { return runtime::io::rmdir(copy.c_str()); });
+                    [=] { return runtime::io::rmdir(copy); });
 }
 
 dftu_status io_rename(::dftu_ctx* ctx, void*, const char* from, const char* to,
@@ -319,10 +320,8 @@ dftu_status io_rename(::dftu_ctx* ctx, void*, const char* from, const char* to,
         return host_fail(ctx, DFTU_E_INVALID, "rename: a path is NULL");
     const dstd::String from_copy(from);
     const dstd::String to_copy(to);
-    return io_start(
-        ctx, out, "rename", static_cast<std::int64_t*>(nullptr), [=] {
-            return runtime::io::rename(from_copy.c_str(), to_copy.c_str());
-        });
+    return io_start(ctx, out, "rename", static_cast<std::int64_t*>(nullptr),
+                    [=] { return runtime::io::rename(from_copy, to_copy); });
 }
 
 dftu_status io_mkdir(::dftu_ctx* ctx, void*, const char* path,
@@ -331,9 +330,8 @@ dftu_status io_mkdir(::dftu_ctx* ctx, void*, const char* path,
         return host_fail(ctx, DFTU_E_INVALID, "mkdir: path is NULL");
     const dstd::String copy(path);
     return io_start(
-        ctx, out, "mkdir", static_cast<std::int64_t*>(nullptr), [=] {
-            return runtime::io::mkdir(copy.c_str(), static_cast<mode_t>(mode));
-        });
+        ctx, out, "mkdir", static_cast<std::int64_t*>(nullptr),
+        [=] { return runtime::io::mkdir(copy, static_cast<mode_t>(mode)); });
 }
 
 dftu_status io_fadvise(::dftu_ctx* ctx, void*, std::int32_t fd,
@@ -350,11 +348,11 @@ dftu_status io_linkat(::dftu_ctx* ctx, void*, std::int32_t from_dirfd,
         return host_fail(ctx, DFTU_E_INVALID, "linkat: a path is NULL");
     const dstd::String from_copy(from);
     const dstd::String to_copy(to);
-    return io_start(
-        ctx, out, "linkat", static_cast<std::int64_t*>(nullptr), [=] {
-            return runtime::io::linkat(from_dirfd, from_copy.c_str(), to_dirfd,
-                                       to_copy.c_str(), flags);
-        });
+    return io_start(ctx, out, "linkat", static_cast<std::int64_t*>(nullptr),
+                    [=] {
+                        return runtime::io::linkat(from_dirfd, from_copy,
+                                                   to_dirfd, to_copy, flags);
+                    });
 }
 
 dftu_status io_symlinkat(::dftu_ctx* ctx, void*, const char* target,
@@ -364,11 +362,9 @@ dftu_status io_symlinkat(::dftu_ctx* ctx, void*, const char* target,
         return host_fail(ctx, DFTU_E_INVALID, "symlinkat: a path is NULL");
     const dstd::String target_copy(target);
     const dstd::String link_copy(link);
-    return io_start(ctx, out, "symlinkat", static_cast<std::int64_t*>(nullptr),
-                    [=] {
-                        return runtime::io::symlinkat(target_copy.c_str(),
-                                                      dirfd, link_copy.c_str());
-                    });
+    return io_start(
+        ctx, out, "symlinkat", static_cast<std::int64_t*>(nullptr),
+        [=] { return runtime::io::symlinkat(target_copy, dirfd, link_copy); });
 }
 
 dftu_status io_socket(::dftu_ctx* ctx, void*, std::int32_t domain,
@@ -381,12 +377,12 @@ dftu_status io_socket(::dftu_ctx* ctx, void*, std::int32_t domain,
 
 // The address is copied into the task: the plugin's buffer need not outlive
 // the call.
-bool copy_sockaddr(::dftu_ctx* ctx, const char* op, const struct sockaddr* addr,
-                   socklen_t addrlen, struct sockaddr_storage* out) {
+bool copy_sockaddr(::dftu_ctx* ctx, dstd::StringView op,
+                   const struct sockaddr* addr, socklen_t addrlen,
+                   struct sockaddr_storage* out) {
     if (addr == nullptr || addrlen > sizeof(*out)) {
         host_fail(ctx, DFTU_E_INVALID,
-                  dstd::fmt<"{}: the socket address is NULL or too long">(
-                      dstd::StringView(op)));
+                  dstd::fmt<"{}: the socket address is NULL or too long">(op));
         return false;
     }
     std::memset(out, 0, sizeof(*out));
@@ -466,7 +462,7 @@ coro::CoroTask<void> statx_body(plugins::AbiTask* task, std::int32_t dirfd,
                                 std::uint32_t mask, dftu_statx* out) {
     runtime::io::Statx st{};
     const ssize_t rc =
-        co_await runtime::io::statx(dirfd, path.c_str(), flags, mask, &st);
+        co_await runtime::io::statx(dirfd, path, flags, mask, &st);
     if (!io_ok(task, "statx", rc) || out == nullptr) co_return;
     out->attributes = st.attributes;
     out->ino = st.ino;
@@ -546,7 +542,7 @@ coro::CoroTask<void> openat2_body(plugins::AbiTask* task, std::int32_t dirfd,
                                   std::int32_t* out_fd) {
     const runtime::io::OpenHow open_how{how.flags, how.mode, how.resolve};
     const std::int64_t result = static_cast<std::int64_t>(
-        co_await runtime::io::openat2(dirfd, path.c_str(), open_how));
+        co_await runtime::io::openat2(dirfd, path, open_how));
     if (io_ok(task, "openat2", result) && out_fd != nullptr)
         *out_fd = static_cast<std::int32_t>(result);
 }
@@ -567,7 +563,7 @@ enum class XattrKind { Get, Set, FGet, FSet };
 
 // The name and the arguments live in the frame until the await ends.
 coro::CoroTask<void> xattr_body(plugins::AbiTask* task, XattrKind kind,
-                                const char* op, dstd::String path,
+                                dstd::String op, dstd::String path,
                                 std::int32_t fd, dstd::String name, void* value,
                                 std::uint64_t size, std::int32_t flags,
                                 std::int64_t* out_n) {
@@ -577,11 +573,11 @@ coro::CoroTask<void> xattr_body(plugins::AbiTask* task, XattrKind kind,
     switch (kind) {
         case XattrKind::Get:
             result = static_cast<std::int64_t>(
-                co_await runtime::io::getxattr(path.c_str(), args));
+                co_await runtime::io::getxattr(path, args));
             break;
         case XattrKind::Set:
             result = static_cast<std::int64_t>(
-                co_await runtime::io::setxattr(path.c_str(), args));
+                co_await runtime::io::setxattr(path, args));
             break;
         case XattrKind::FGet:
             result = static_cast<std::int64_t>(
@@ -595,17 +591,17 @@ coro::CoroTask<void> xattr_body(plugins::AbiTask* task, XattrKind kind,
     if (io_ok(task, op, result) && out_n != nullptr) *out_n = result;
 }
 
-dftu_status xattr_start(::dftu_ctx* ctx, XattrKind kind, const char* op,
-                        const char* path, std::int32_t fd, const char* name,
-                        void* value, std::uint64_t size, std::int32_t flags,
-                        std::int64_t* out_n, ::dftu_task** out) {
-    const bool by_path = kind == XattrKind::Get || kind == XattrKind::Set;
-    if (name == nullptr || (by_path && path == nullptr)) {
-        return host_fail(
-            ctx, DFTU_E_INVALID,
-            dstd::fmt<"{}: the path or name is NULL">(dstd::StringView(op)));
-    }
-    const dstd::String path_copy(by_path ? path : "");
+dftu_status xattr_null(::dftu_ctx* ctx, dstd::StringView op) {
+    return host_fail(ctx, DFTU_E_INVALID,
+                     dstd::fmt<"{}: the path or name is NULL">(op));
+}
+
+dftu_status xattr_start(::dftu_ctx* ctx, XattrKind kind, dstd::String op,
+                        dstd::StringView path, std::int32_t fd,
+                        dstd::StringView name, void* value, std::uint64_t size,
+                        std::int32_t flags, std::int64_t* out_n,
+                        ::dftu_task** out) {
+    const dstd::String path_copy(path);
     const dstd::String name_copy(name);
     return start_task(ctx, out, [=](plugins::AbiTask* task) {
         return xattr_body(task, kind, op, path_copy, fd, name_copy, value, size,
@@ -616,6 +612,7 @@ dftu_status xattr_start(::dftu_ctx* ctx, XattrKind kind, const char* op,
 dftu_status io_getxattr(::dftu_ctx* ctx, void*, const char* path,
                         const char* name, void* value, std::uint64_t size,
                         std::int64_t* out_n, ::dftu_task** out) {
+    if (path == nullptr || name == nullptr) return xattr_null(ctx, "getxattr");
     return xattr_start(ctx, XattrKind::Get, "getxattr", path, -1, name, value,
                        size, 0, out_n, out);
 }
@@ -623,6 +620,7 @@ dftu_status io_getxattr(::dftu_ctx* ctx, void*, const char* path,
 dftu_status io_setxattr(::dftu_ctx* ctx, void*, const char* path,
                         const char* name, const void* value, std::uint64_t size,
                         std::int32_t flags, ::dftu_task** out) {
+    if (path == nullptr || name == nullptr) return xattr_null(ctx, "setxattr");
     return xattr_start(ctx, XattrKind::Set, "setxattr", path, -1, name,
                        const_cast<void*>(value), size, flags, nullptr, out);
 }
@@ -630,15 +628,17 @@ dftu_status io_setxattr(::dftu_ctx* ctx, void*, const char* path,
 dftu_status io_fgetxattr(::dftu_ctx* ctx, void*, std::int32_t fd,
                          const char* name, void* value, std::uint64_t size,
                          std::int64_t* out_n, ::dftu_task** out) {
-    return xattr_start(ctx, XattrKind::FGet, "fgetxattr", nullptr, fd, name,
-                       value, size, 0, out_n, out);
+    if (name == nullptr) return xattr_null(ctx, "fgetxattr");
+    return xattr_start(ctx, XattrKind::FGet, "fgetxattr", {}, fd, name, value,
+                       size, 0, out_n, out);
 }
 
 dftu_status io_fsetxattr(::dftu_ctx* ctx, void*, std::int32_t fd,
                          const char* name, const void* value,
                          std::uint64_t size, std::int32_t flags,
                          ::dftu_task** out) {
-    return xattr_start(ctx, XattrKind::FSet, "fsetxattr", nullptr, fd, name,
+    if (name == nullptr) return xattr_null(ctx, "fsetxattr");
+    return xattr_start(ctx, XattrKind::FSet, "fsetxattr", {}, fd, name,
                        const_cast<void*>(value), size, flags, nullptr, out);
 }
 
@@ -661,10 +661,9 @@ dftu_status io_pipe(::dftu_ctx* ctx, void*, std::int32_t fds[2],
 
 #else
 
-dftu_status io_unsupported(::dftu_ctx* ctx, const char* op) {
-    return host_fail(
-        ctx, DFTU_E_UNSUPPORTED,
-        dstd::fmt<"{}: not supported on this platform">(dstd::StringView(op)));
+dftu_status io_unsupported(::dftu_ctx* ctx, dstd::StringView op) {
+    return host_fail(ctx, DFTU_E_UNSUPPORTED,
+                     dstd::fmt<"{}: not supported on this platform">(op));
 }
 
 dftu_status io_statx(::dftu_ctx* ctx, void*, std::int32_t, const char*,
@@ -875,8 +874,8 @@ struct DynCols {
 
 void serialize_row(dstd::String& out, const dftu_dataframe* df,
                    const DynCols& dyn, std::int64_t row, std::uint64_t id) {
-    auto str_col = [&](const char* name, dstd::StringView* out_sv) {
-        dftu_series* c = dftu_dataframe_column(df, name);
+    auto str_col = [&](dstd::CStringView name, dstd::StringView* out_sv) {
+        dftu_series* c = dftu_dataframe_column(df, name.c_str());
         if (!c) return;
         if (dftu_series_type(c) == DFTU_TYPE_STRING) {
             std::int64_t n = 0;
@@ -885,8 +884,8 @@ void serialize_row(dstd::String& out, const dftu_dataframe* df,
         }
         dftu_series_free(c);
     };
-    auto u64_col = [&](const char* name) -> std::uint64_t {
-        dftu_series* c = dftu_dataframe_column(df, name);
+    auto u64_col = [&](dstd::CStringView name) -> std::uint64_t {
+        dftu_series* c = dftu_dataframe_column(df, name.c_str());
         if (!c) return 0;
         std::uint64_t v = 0;
         if (dftu_series_type(c) == DFTU_TYPE_UINT64 &&
@@ -895,8 +894,8 @@ void serialize_row(dstd::String& out, const dftu_dataframe* df,
         dftu_series_free(c);
         return v;
     };
-    auto i64_col = [&](const char* name, bool* present) -> std::int64_t {
-        dftu_series* c = dftu_dataframe_column(df, name);
+    auto i64_col = [&](dstd::CStringView name, bool* present) -> std::int64_t {
+        dftu_series* c = dftu_dataframe_column(df, name.c_str());
         if (!c) return 0;
         std::int64_t v = 0;
         if (dftu_series_type(c) == DFTU_TYPE_INT64 &&
@@ -988,7 +987,7 @@ dftu_status host_trace_open_write(::dftu_ctx* ctx, void* h, const char* path,
         return host_fail(ctx, DFTU_E_INVALID,
                          "trace_open_write: the path and out must be set");
     }
-    *out = static_cast<PluginFold*>(h)->make_trace_writer(path);
+    *out = static_cast<PluginFold*>(h)->make_trace_writer(dstd::String(path));
     return DFTU_OK;
 }
 
@@ -1039,7 +1038,7 @@ dftu_status host_trace_read(::dftu_ctx* ctx, void* h, const char* path,
                 schema.fields.empty() ? nullptr : &schema;
             trace::views::View v = trace::views::View::from_file(p);
             auto scanned = co_await v.for_each_batch(
-                [&](std::size_t, const dstd::Vector<dstd::StringView>& events) {
+                [&](std::size_t, dstd::Span<const dstd::StringView> events) {
                     if (failed != DFTU_OK) return;
                     batch_events.clear();
                     for (dstd::StringView ev : events) {
@@ -1095,7 +1094,8 @@ dftu_status host_query_compile(::dftu_ctx* ctx, void* h, const char* src,
         return host_fail(ctx, DFTU_E_INVALID,
                          "duql_compile: the source and out must be set");
     }
-    auto compiled = static_cast<PluginFold*>(h)->compile_query(src, len);
+    auto compiled =
+        static_cast<PluginFold*>(h)->compile_query(dstd::StringView{src, len});
     if (!compiled) {
         return host_fail(ctx, DFTU_E_PARSE, compiled.error().message());
     }
@@ -1115,74 +1115,57 @@ const dftu_svc_duql g_query = {sizeof(dftu_svc_duql), host_query_compile,
 
 // The tables of the services that need a scan share one instance across all
 // folds (each fn takes h); detail::stateless_service has the rest.
-const void* host_get_service(void*, const char* ext_id) {
-    if (!ext_id) return nullptr;
-    if (std::strcmp(ext_id, DFTU_SVC_TASK) == 0)
-        return detail::task_ext_vtable();
-    if (std::strcmp(ext_id, DFTU_SVC_DUQL) == 0) return &g_query;
-    if (std::strcmp(ext_id, DFTU_SVC_FILEIO) == 0)
-        return detail::fileio_ext_vtable();
-    if (std::strcmp(ext_id, DFTU_SVC_TRACE) == 0) return &g_trace;
-    if (std::strcmp(ext_id, DFTU_SVC_PORTS) == 0)
-        return detail::ports_ext_vtable();
-    if (std::strcmp(ext_id, DFTU_SVC_RESULT) == 0)
-        return detail::result_ext_vtable();
-    if (std::strcmp(ext_id, DFTU_SVC_AGG) == 0) return detail::agg_ext_vtable();
-    if (std::strcmp(ext_id, DFTU_SVC_MEMORY) == 0)
-        return detail::memory_ext_vtable();
-    if (std::strcmp(ext_id, DFTU_SVC_STORE) == 0)
-        return detail::store_ext_vtable();
+const void* host_get_service(void*, const char* ext_id_c) {
+    if (!ext_id_c) return nullptr;
+    const dstd::StringView ext_id{ext_id_c};
+    if (ext_id == DFTU_SVC_TASK) return detail::task_ext_vtable();
+    if (ext_id == DFTU_SVC_DUQL) return &g_query;
+    if (ext_id == DFTU_SVC_FILEIO) return detail::fileio_ext_vtable();
+    if (ext_id == DFTU_SVC_TRACE) return &g_trace;
+    if (ext_id == DFTU_SVC_PORTS) return detail::ports_ext_vtable();
+    if (ext_id == DFTU_SVC_RESULT) return detail::result_ext_vtable();
+    if (ext_id == DFTU_SVC_AGG) return detail::agg_ext_vtable();
+    if (ext_id == DFTU_SVC_MEMORY) return detail::memory_ext_vtable();
+    if (ext_id == DFTU_SVC_STORE) return detail::store_ext_vtable();
     return detail::stateless_service(ext_id);
 }
 
 }  // namespace
 
-const void* detail::stateless_service(const char* ext_id) {
-    if (std::strcmp(ext_id, DFTU_SVC_IO) == 0) return &g_io;
-    if (std::strcmp(ext_id, DFTU_SVC_SKETCH) == 0) return &g_sketch;
-    if (std::strcmp(ext_id, DFTU_SVC_OPS) == 0) return detail::ops_ext_vtable();
-    if (std::strcmp(ext_id, DFTU_SVC_PROVIDERS) == 0)
-        return detail::providers_ext_vtable();
-    if (std::strcmp(ext_id, DFTU_SVC_FILE_FORMATS) == 0)
+const void* detail::stateless_service(dstd::StringView ext_id) {
+    if (ext_id == DFTU_SVC_IO) return &g_io;
+    if (ext_id == DFTU_SVC_SKETCH) return &g_sketch;
+    if (ext_id == DFTU_SVC_OPS) return detail::ops_ext_vtable();
+    if (ext_id == DFTU_SVC_PROVIDERS) return detail::providers_ext_vtable();
+    if (ext_id == DFTU_SVC_FILE_FORMATS)
         return detail::file_formats_ext_vtable();
-    if (std::strcmp(ext_id, DFTU_SVC_NODES) == 0)
-        return detail::nodes_ext_vtable();
-    if (std::strcmp(ext_id, DFTU_SVC_INDEX) == 0)
-        return detail::index_ext_vtable();
-    if (std::strcmp(ext_id, DFTU_SVC_FS) == 0) return detail::fs_ext_vtable();
-    if (std::strcmp(ext_id, DFTU_SVC_JSON) == 0)
-        return detail::json_ext_vtable();
-    if (std::strcmp(ext_id, DFTU_SVC_YAML) == 0)
-        return detail::yaml_ext_vtable();
+    if (ext_id == DFTU_SVC_NODES) return detail::nodes_ext_vtable();
+    if (ext_id == DFTU_SVC_INDEX) return detail::index_ext_vtable();
+    if (ext_id == DFTU_SVC_FS) return detail::fs_ext_vtable();
+    if (ext_id == DFTU_SVC_JSON) return detail::json_ext_vtable();
+    if (ext_id == DFTU_SVC_YAML) return detail::yaml_ext_vtable();
     return nullptr;
 }
 
 void detail::log_plugin_line(dstd::StringView plugin, std::uint8_t level,
-                             const char* s, std::uint32_t n) {
+                             dstd::StringView msg) {
     const dstd::StringView name =
         plugin.empty() ? dstd::StringView("plugin") : plugin;
-    const int len = static_cast<int>(n);
-    const char* msg = s ? s : "";
     switch (level) {
         case DFTU_LOG_ERROR:
-            DFTRACER_UTILS_LOG_ERROR("[plugin:{}] {}", name,
-                                     dstd::StringView(msg, len));
+            DFTRACER_UTILS_LOG_ERROR("[plugin:{}] {}", name, msg);
             break;
         case DFTU_LOG_WARN:
-            DFTRACER_UTILS_LOG_WARN("[plugin:{}] {}", name,
-                                    dstd::StringView(msg, len));
+            DFTRACER_UTILS_LOG_WARN("[plugin:{}] {}", name, msg);
             break;
         case DFTU_LOG_DEBUG:
-            DFTRACER_UTILS_LOG_DEBUG("[plugin:{}] {}", name,
-                                     dstd::StringView(msg, len));
+            DFTRACER_UTILS_LOG_DEBUG("[plugin:{}] {}", name, msg);
             break;
         case DFTU_LOG_TRACE:
-            DFTRACER_UTILS_LOG_TRACE("[plugin:{}] {}", name,
-                                     dstd::StringView(msg, len));
+            DFTRACER_UTILS_LOG_TRACE("[plugin:{}] {}", name, msg);
             break;
         default:
-            DFTRACER_UTILS_LOG_INFO("[plugin:{}] {}", name,
-                                    dstd::StringView(msg, len));
+            DFTRACER_UTILS_LOG_INFO("[plugin:{}] {}", name, msg);
             break;
     }
 }
@@ -1207,10 +1190,9 @@ void PluginFold::release_handle(const void* raw) {
     }
 }
 
-::dftu_trace_writer* PluginFold::make_trace_writer(const char* path) {
-    if (!path) return nullptr;
+::dftu_trace_writer* PluginFold::make_trace_writer(dstd::String path) {
     auto tw = dstd::make_unique<PluginTraceWriter>();
-    tw->path = path;
+    tw->path = std::move(path);
     trace_writers_.push_back(std::move(tw));
     return reinterpret_cast<::dftu_trace_writer*>(trace_writers_.back().get());
 }
@@ -1345,14 +1327,8 @@ PluginFold::~PluginFold() {
     memory_->release_tagged(this);
 }
 
-dstd::Result<::dftu_duql*> PluginFold::compile_query(const char* src,
-                                                     std::uint32_t len) {
-    if (!src) {
-        return common::make_error<
-            "plugin '{}' duql_compile: the source is "
-            "NULL">(common::ErrorCode::InvalidArgument, plugin_label());
-    }
-    auto r = Query::from_string(dstd::StringView{src, len});
+dstd::Result<::dftu_duql*> PluginFold::compile_query(dstd::StringView src) {
+    auto r = Query::from_string(src);
     if (!r)
         return common::make_error(common::ErrorCode::Duql, r.error().message);
     compiled_queries_.push_back(std::move(*r));
@@ -1461,8 +1437,8 @@ dstd::Result<void> PluginFold::step(const FoldBatch& batch) {
         // An empty projection is build_row_frame's "every column", which for
         // a batch with many arg keys is a Series per key.
         df = trace::views::detail::build_row_frame(
-            col_scratch_, *intern_, projection, 1.0,
-            col_scratch_.front().by_path);
+            dstd::Span<const trace::views::detail::FoldEvent>(col_scratch_),
+            *intern_, projection, 1.0, col_scratch_.front().by_path);
     }
     if (df.num_rows() == 0) return {};
 
@@ -1542,7 +1518,7 @@ void PluginFold::poll_reclaim() { memory_watch_.poll(*memory_, this); }
 // rows pass unfiltered rather than being dropped.
 dataframe::DataFrame PluginFold::rewritten_batch(
     const dataframe::DataFrame& frame,
-    const dstd::Vector<dstd::String>& projection) {
+    dstd::Span<const dstd::String> projection) {
     dataframe::DataFrame df;
     if (projection.empty()) {
         df.names = frame.names;
@@ -1615,6 +1591,15 @@ dstd::Result<void> PluginFold::merge(Fold& other) {
 }
 
 coro::CoroTask<dstd::Result<bool>> PluginFold::finalize(const CoverageSet&) {
+    // Every way out, including a failure, ends this plugin's sends, so a
+    // receiver later in the order never waits on a channel it will not fill.
+    struct SendsDone {
+        PortHub* hub;
+        const dstd::String& space;
+        ~SendsDone() {
+            if (hub) hub->sender_finished(space);
+        }
+    } sends_done{port_hub_, port_namespace_};
     if (slice_error_) co_return *slice_error_;
     // Publish before on_finalize so a plugin finalizing later in fold order can
     // read this one's merged accumulators via agg_result().

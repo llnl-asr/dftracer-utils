@@ -52,19 +52,19 @@ void Applier::columns_from_view(bool records) {
 }
 
 dstd::Optional<dataframe::query::VectorColumn> Applier::scan_column(
-    const dstd::String& base) {
+    dstd::StringView base) {
     if (auto i = index(base)) return cols_[*i];
     if (auto i = arg_index(base)) return cols_[*i];
     if (!scan_) return dstd::nullopt;
     dataframe::TypeId t = observed(base);
     if (t == dataframe::TypeId::Unknown && schema_.args_fallback)
-        t = observed("args." + base);
+        t = observed(dstd::fmt<"args.{}">(base));
     if (t == dataframe::TypeId::Unknown) return dstd::nullopt;
-    return dataframe::query::VectorColumn{base, dataframe::scalar(t),
-                                          is_json(base)};
+    return dataframe::query::VectorColumn{dstd::String(base),
+                                          dataframe::scalar(t), is_json(base)};
 }
 
-bool Applier::indexed(const dstd::String& f) {
+bool Applier::indexed(dstd::StringView f) {
     const dstd::String d = dotted(f);
     for (const auto& leaf : tree()) {
         for (const dstd::String& p :
@@ -77,7 +77,7 @@ bool Applier::indexed(const dstd::String& f) {
     return false;
 }
 
-void Applier::leave_scan(const char* stage) {
+void Applier::leave_scan(dstd::StringView stage) {
     if (!scan_) return;
     // A closed pipeline reads only its fields; otherwise every column
     // stays and the fields add what the scan does not give yet.
@@ -120,7 +120,7 @@ void Applier::leave_scan(const char* stage) {
     v_ = ctx_.order(v_);
 }
 
-bool Applier::name_paths(const dstd::Vector<dstd::String>& read) {
+bool Applier::name_paths(dstd::Span<const dstd::String> read) {
     if (!v_.filters_events()) return false;
     dstd::Vector<dataframe::Field> named;
     for (std::size_t i = cols_.size(); i < read.size(); ++i) {
@@ -155,31 +155,32 @@ dstd::Optional<std::size_t> Applier::index(dstd::StringView name) const {
     return dstd::nullopt;
 }
 
-dstd::Optional<std::size_t> Applier::arg_index(const dstd::String& base) const {
+dstd::Optional<std::size_t> Applier::arg_index(dstd::StringView base) const {
     if (!schema_.args_fallback) return dstd::nullopt;
-    return index("args." + base);
+    return index(dstd::fmt<"args.{}">(base));
 }
 
 dataframe::Expr Applier::col(dstd::StringView name) const {
     return dataframe::expr_col(static_cast<std::int32_t>(*index(name)));
 }
 
-bool Applier::has_column_for(const dstd::String& base) const {
-    auto under = [](const dstd::String& a, const dstd::String& b) {
+bool Applier::has_column_for(dstd::StringView base) const {
+    auto under = [](dstd::StringView a, dstd::StringView b) {
         return a.size() > b.size() && a.starts_with(b) &&
                (a[b.size()] == '.' || a[b.size()] == '[');
     };
-    auto reads = [&](const dstd::String& path) {
+    auto reads = [&](dstd::StringView path) {
         for (const auto& c : cols_)
             if (c.name == path || under(path, c.name) || under(c.name, path))
                 return true;
         return false;
     };
-    return reads(base) || (schema_.args_fallback && reads("args." + base));
+    return reads(base) ||
+           (schema_.args_fallback && reads(dstd::fmt<"args.{}">(base)));
 }
 
 dstd::Result<dataframe::Expr> Applier::compile(const duql::TermRef& t,
-                                               const dstd::String& text,
+                                               dstd::StringView text,
                                                bool condition) {
     if (auto h = hidden(t); !h) return h.error();
     // After the scan the columns are fixed, so a name none of them holds
@@ -220,7 +221,7 @@ bool Applier::untyped(const duql::Term& t) const {
 }
 
 dstd::Result<dataframe::Expr> Applier::per_batch(const duql::TermRef& t,
-                                                 const dstd::String& text,
+                                                 dstd::StringView text,
                                                  bool condition) {
     const dstd::String name = "__duql_t_" + dstd::to_string(typed_++);
     dstd::Vector<dataframe::query::VectorColumn> next = cols_;
@@ -331,7 +332,7 @@ Status Applier::hidden(const duql::TermRef& t) {
     return {};
 }
 
-Status Applier::object_fields(const duql::TField& f, const dstd::String& text,
+Status Applier::object_fields(const duql::TField& f, dstd::StringView text,
                               bool values, dstd::Vector<dstd::String>& keys,
                               dstd::Vector<dataframe::Expr>& args,
                               dstd::Vector<dataframe::DataType>& types) {
@@ -427,7 +428,7 @@ UdfConsts udf_consts(const duql::TCall& c) {
 
 dstd::Result<dataframe::DataFrame> run_udf_batch(
     const dataframe::UdfBinding& binding,
-    const dstd::Vector<dataframe::Expr>& args, const dstd::String& name,
+    dstd::Span<const dataframe::Expr> args, dstd::StringView name,
     dataframe::DataFrame f) {
     dstd::Vector<const dataframe::Series*> inputs;
     for (const auto& x : f.columns) inputs.push_back(&x);
@@ -727,7 +728,7 @@ dataframe::DataType Applier::side_type(std::size_t side,
 }
 
 dstd::Result<dstd::Vector<dstd::String>> Applier::key_columns(
-    const duql::TermRef& t, const duql::TLookup& l, const dstd::String& id) {
+    const duql::TermRef& t, const duql::TLookup& l, dstd::StringView id) {
     dstd::Vector<dstd::String> out;
     for (std::size_t k = 0; k < l.keys.size(); ++k) {
         const duql::TermRef key(t, l.keys[k].get());
@@ -742,7 +743,7 @@ dstd::Result<dstd::Vector<dstd::String>> Applier::key_columns(
 
 dstd::Result<dataframe::LazyFrame> Applier::joined_side(
     const duql::TLookup& l, dstd::Vector<dstd::String>& right, bool& memory,
-    const dstd::String& marker) {
+    dstd::StringView marker) {
     const auto& side_cols = ctx_.sides->columns[l.side];
     if (l.kind == duql::LookupKind::In) {
         if (side_cols.size() != l.keys.size())
@@ -851,7 +852,7 @@ Status Applier::join_lookup(const duql::TermRef& t, const duql::Term* term) {
     const dstd::Optional<std::size_t> empty = l->empty;
     map_rows(
         [=](dataframe::DataFrame f) -> dstd::Result<dataframe::DataFrame> {
-            auto at = [&](const dstd::String& n) -> const dataframe::Series* {
+            auto at = [&](dstd::StringView n) -> const dataframe::Series* {
                 for (std::size_t i = 0; i < f.names.size(); ++i)
                     if (dstd::StringView(f.names[i]) == n) return &f.columns[i];
                 return nullptr;
@@ -954,15 +955,15 @@ Status Applier::lookup(const duql::TermRef& t, const duql::Term* term) {
     return {};
 }
 
-Status Applier::with_column(const dstd::String& name, const dataframe::Expr& e,
-                            const dstd::String& text) {
+Status Applier::with_column(dstd::StringView name, const dataframe::Expr& e,
+                            dstd::StringView text) {
     auto type = dataframe::infer_type(e, types());
     if (!type) return type.error();
     v_ = v_.with_column(std_str(name), e);
     if (auto i = index(name))
-        cols_[*i] = {name, std::move(*type), false};
+        cols_[*i] = {dstd::String(name), std::move(*type), false};
     else
-        cols_.push_back({name, std::move(*type), false});
+        cols_.push_back({dstd::String(name), std::move(*type), false});
     lines.push_back(dstd::fmt<"with_column {} = {}">(name, text));
     return {};
 }
@@ -1005,7 +1006,7 @@ dstd::Result<dstd::String> Applier::source(const duql::PipelineItem& it,
     return tmp;
 }
 
-Status Applier::project(const dstd::Vector<duql::PipelineItem>& items) {
+Status Applier::project(dstd::Span<const duql::PipelineItem> items) {
     extras_.clear();
     dstd::Vector<dstd::String> sources;
     dstd::Vector<dstd::String> final_names;
@@ -1066,7 +1067,7 @@ Status Applier::stage(const duql::PipelineDrop& d) {
                                [&](const dataframe::query::VectorColumn& c) {
                                    return std::any_of(
                                        d.names.begin(), d.names.end(),
-                                       [&](const dstd::String& n) {
+                                       [&](dstd::StringView n) {
                                            return dstd::StringView(n) == c.name;
                                        });
                                }),
@@ -1103,7 +1104,7 @@ Status Applier::stage(const duql::PipelineDistinct& d) {
 }
 
 dstd::Result<Applier::SortColumns> Applier::sort_columns(
-    const dstd::Vector<duql::PipelineSortKey>& keys) {
+    dstd::Span<const duql::PipelineSortKey> keys) {
     SortColumns out;
     for (std::size_t k = 0; k < keys.size(); ++k) {
         const auto& key = keys[k];
@@ -1134,7 +1135,7 @@ dstd::Result<Applier::SortColumns> Applier::sort_columns(
     return out;
 }
 
-Status Applier::sort(const dstd::Vector<duql::PipelineSortKey>& keys) {
+Status Applier::sort(dstd::Span<const duql::PipelineSortKey> keys) {
     const dstd::Vector<dstd::String> before = names();
     auto sorted = sort_columns(keys);
     if (!sorted) return sorted.error();

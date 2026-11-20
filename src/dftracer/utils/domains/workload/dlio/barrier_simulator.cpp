@@ -3,6 +3,7 @@
 #include <dftracer/utils/domains/workload/dlio/statistic.h>
 #include <dftracer/utils/domains/workload/dlio/worker_queue.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
@@ -41,7 +42,7 @@ double sweep_union(dstd::Vector<Boundary>& boundaries) {
     return union_time_us / 1e6;
 }
 
-double variance(const dstd::Vector<double>& values) {
+double variance(dstd::Span<const double> values) {
     if (values.empty()) return 0.0;
     double mean = 0.0;
     for (double v : values) mean += v;
@@ -55,11 +56,10 @@ double variance(const dstd::Vector<double>& values) {
     return sq / static_cast<double>(values.size());
 }
 
-double cdf_similarity(const dstd::Vector<double>& a,
-                      const dstd::Vector<double>& b) {
+double cdf_similarity(dstd::Span<const double> a, dstd::Span<const double> b) {
     if (a.empty() || b.empty()) return 0.0;
 
-    dstd::Vector<double> as(a), bs(b);
+    dstd::Vector<double> as(a.begin(), a.end()), bs(b.begin(), b.end());
     std::sort(as.begin(), as.end());
     std::sort(bs.begin(), bs.end());
 

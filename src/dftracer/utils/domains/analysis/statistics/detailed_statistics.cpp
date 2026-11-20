@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/domains/analysis/statistics/detailed_statistics.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
@@ -145,29 +146,25 @@ dstd::String DetailedStatistics::to_json() const {
 
     if (!grouped_duration.empty()) {
         ss += ",\"grouped_duration\":{";
-        bool first = true;
-        for (const auto& [key, dist] : grouped_duration) {
-            if (!first) ss += ',';
-            first = false;
-            ss += '"';
-            trace::internal::append_value(ss, key);
-            ss += "\":";
-            write_distribution_json(ss, dist);
-        }
+        dstd::fmt_append_join<",">(
+            ss, grouped_duration, [](dstd::String& o, const auto& kv) {
+                o += '"';
+                trace::internal::append_value(o, kv.first);
+                o += "\":";
+                write_distribution_json(o, kv.second);
+            });
         ss += '}';
     }
 
     if (!grouped_io.empty()) {
         ss += ",\"grouped_io\":{";
-        bool first = true;
-        for (const auto& [key, io] : grouped_io) {
-            if (!first) ss += ',';
-            first = false;
-            ss += '"';
-            trace::internal::append_value(ss, key);
-            ss += "\":";
-            write_io_metrics_json(ss, io);
-        }
+        dstd::fmt_append_join<",">(
+            ss, grouped_io, [](dstd::String& o, const auto& kv) {
+                o += '"';
+                trace::internal::append_value(o, kv.first);
+                o += "\":";
+                write_io_metrics_json(o, kv.second);
+            });
         ss += '}';
     }
 

@@ -855,9 +855,13 @@ fixed-size values: a message whose length is not ``cap`` is taken off the queue
 and dropped, and the status is ``DFTU_PORT_TOO_BIG`` with the length it had. A send under ``DFTU_OVERFLOW_BLOCK`` waits for a credit,
 and ``DFTU_OVERFLOW_DROP_OLDEST`` drops the oldest message to make room.
 ``channel_try_send`` never waits. ``channel_close`` ends the sends; a receive
-still drains the queue and then gives ``DFTU_PORT_CLOSED``. The host closes
-every channel when the scan ends, for a scan that ``Plugins::run`` drives and
-for one that ``Plugins::attach`` joins to a session.
+still drains the queue and then gives ``DFTU_PORT_CLOSED``. The host closes a
+channel when every plugin that opened it with ``DFTU_CHANNEL_F_SENDS`` has
+finished its ``on_finalize`` (its pending task included, or a failure of it) or
+has none, so a plugin need not call ``channel_close``. A channel that no plugin
+opened with ``DFTU_CHANNEL_F_SENDS`` closes when the scan ends, as does every
+channel left open, for a scan that ``Plugins::run`` drives and for one that
+``Plugins::attach`` joins to a session.
 
 *Call contract.* Every call except ``port_key``, ``publish`` and ``consume``
 takes a ``dftu_ctx*`` and returns a status. A negative status sets its message
@@ -1999,18 +2003,63 @@ process fails the load. ``dftu_index_extension`` holds:
    * - ``step``
      - The next record lines of the current chunk, borrowed for the call. A
        negative status stores nothing for the chunk or the file, and the host
-       logs it once with the message set on the ctx.
+       logs it once with the message set on the ctx. May be NULL when the
+       extension takes columns.
+   * - ``columns`` / ``step_column``
+     - The paths whose typed columns the extension takes, as a NULL-ended array
+       (``{"*", NULL}`` for every path), and the call that receives each one.
+       See `Typed columns`_ below. At least one of ``step`` and ``step_column``
+       is required, and the host refuses to register an extension that has
+       neither.
    * - ``finish_granule`` / ``finish_file``
      - Append the chunk's or the file's payload through ``dftu_index_out``;
        the host owns the bytes. No bytes stores nothing, and a negative status
        stores nothing and is logged.
    * - ``compile`` / ``release``
      - Prepare a ``dftu_index_leaf`` (path, ``any``, operator, literal as a
-       ``dftu_value``), or return NULL when the extension has no evidence for
-       it.
+       ``dftu_value``, and ``type``, the dtype of the column the leaf targets
+       or ``DFTU_TYPE_UNKNOWN``), or return NULL when the extension has no
+       evidence for it.
    * - ``may_match`` / ``file_may_match``
      - 0 only when the payload proves that no record satisfies the leaf.
        ``file_may_match`` may be NULL.
+
+Typed columns
+~~~~~~~~~~~~~
+
+An extension that lists ``columns`` gets a typed column per path and per chunk
+in place of record lines, so it does no JSON parsing of its own and sees values
+the way the host does. The host reads the column from the parse the index build
+already did, and calls ``step_column(ctx, builder, name, name_len, column)``
+once per requested path and chunk, before ``finish_granule``. A path is the
+name a filter uses: ``name``, ``cat``, ``pid``, ``tid``, ``ts``, ``dur``,
+``fhash``, ``hhash`` or ``args.<key>``.
+
+- ``column`` has one row per record of the chunk, null where the record has no
+  value for the path. It is ``DFTU_TYPE_INT64``, ``DFTU_TYPE_UINT64``,
+  ``DFTU_TYPE_FLOAT64`` or ``DFTU_TYPE_STRING``, and borrowed: it is valid
+  until the call returns, so copy what you keep and never free it.
+- A path with no value in the chunk is not called. A path whose values have no
+  single type in the chunk (an integer and a float, or a number and a string)
+  is not called either, and the host stores nothing for that chunk and for the
+  file, so that chunk is never pruned.
+- ``step`` and ``columns`` may both be set. The host then calls each, and a
+  failure of either stores nothing for the chunk.
+
+The host also gives the plugin its own value hash, so a bloom filter or a
+posting list the plugin builds agrees with the one the host probes:
+
+.. code-block:: c
+
+   uint64_t h = index->hash_value(leaf->value);     /* a literal */
+   index->hash_series(column, hashes, n);           /* a whole column */
+
+Every integer hashes as an int64, a whole double equals the integer (``42.0``
+equals ``42``), every NaN is one value, ``-0.0`` equals ``0`` and a string
+never equals a number. Store ``index->hash_version`` with the bytes and have
+``may_match`` return nonzero for bytes of another version.
+``tests/plugins/index_columns_plugin.c`` is a complete extension of this kind:
+a min and max and a bloom filter over typed columns.
 
 Missing, stale or failed data, a chunk without a payload, and an extension
 that is not registered all prune nothing, so an index built with a plugin
@@ -2023,15 +2072,20 @@ Python ``dftracer.utils.plugins.Plugins``, or
 ``dftracer_index --plugin path``. ``Indexer::manifest`` and ``explain`` list
 the extension by name, and ``rebuild_extension`` and ``drop_extension``
 accept it. ``tests/plugins/index_minmax_plugin.c`` is a complete
-extension: per chunk min and max of one number.
+extension over record lines: per chunk min and max of one number.
 
 15. File formats (DFTU_SVC_FILE_FORMATS)
 ----------------------------------------
 
 A file format teaches the engine to read a file kind it does not know. The
-engine asks every registered format for a score, picks the highest, and scans
-the file through it: ``LazyFrame::scan_file(path)`` from C++,
-``dftu_lazyframe_scan_file(path, &lf)`` from C. The planning, the columns and
+engine asks every reader for a score, picks the highest, and scans the file
+through it. The built-in trace reader is one of the readers, named ``jsonl``:
+it scores 50 for a gzip file (by its magic bytes) and for a text file whose
+first lines are JSON objects, and 10 for an empty one, so a format that scores
+above 50 wins such a file and a format at exactly 50 ties with it. The probe
+reads only the first 4 KiB of the file. The same probe picks the reader for
+``Indexer``, ``TraceViewer`` and ``scan_file``: ``LazyFrame::scan_file(path)`` from C++,
+``dftu_lazyframe_scan_file(path, NULL, 0, &lf)`` from C. The planning, the columns and
 the result are the ones ``LazyFrame::scan`` gives, so every op works on the
 file without knowing its format.
 
@@ -2039,9 +2093,10 @@ A ``dftu_file_format_vt`` (``plugins/abi/file_formats.h``) is:
 
 - ``probe(self, head, n, path)`` returns 0 to 100. The head is the first 4 KiB
   of the file, read once for the whole choice. The highest score above 0 wins,
-  and two formats at the same top score are an error that names both, so a
-  format must not claim a file another one claims just as well. Nothing above
-  0 is ``NotFound``, "no format claims <path>". ``extensions`` is a hint only.
+  and two readers at the same top score, the built-in one included, are an
+  error that names both, so a format must not claim a file another one claims
+  just as well. Nothing above 0 is ``NotFound``, "no format claims <path>".
+  ``extensions`` is a hint only.
 - ``open(ctx, self, path, &file)`` opens the file, ``schema(ctx, file,
   &out)`` fills a ``dftu_schema`` with its names and types, and
   ``chunks(ctx, file, &n)`` says how many pieces of the file can be scanned
@@ -2057,9 +2112,14 @@ A ``dftu_file_format_vt`` (``plugins/abi/file_formats.h``) is:
   anything short of exact. Every chunk of one scan must report the same
   votes, so a filter counts as pushed only when all chunks took it, and a
   chunk that disagrees fails the scan.
+- ``chunk_token(ctx, file, chunk, &token)`` is optional (NULL for none), the
+  last field of the vtable, so a plugin built before it loads and runs
+  unchanged. It names chunk ``chunk`` by what is in the file, such as the byte
+  offset of the chunk or the number of its row group, and is described under
+  "Indexing a file format" below.
 - ``close(file)`` and ``destroy(self)``, each called once.
 
-The engine walks chunks 0 to n-1 in order, one cursor at a time. The file
+The engine walks the chunks of a scan in order, one cursor at a time. The file
 stays open while any plan or cursor made from it lives, and the plugin's
 library stays loaded for as long as they do, so a plan keeps working after
 the plugin set is dropped; after that a new ``scan_file`` no longer finds the
@@ -2110,6 +2170,209 @@ cell is a whole number, double when every cell is a number, string otherwise),
 splits the rows into chunks of 1024 so the chunks scan in parallel, keeps
 exactly the projected columns, and votes on no filter. Its golden test is
 ``examples/plugins/tests/csv_reader/basic.test``.
+
+**Indexing a file format.** ``Indexer::open`` takes the path of a file that a
+registered format claims (the same probe ``scan_file`` uses; name the file, since
+a directory contributes only the trace files it holds) and builds the index the
+trace files get: the zonemap, bloom, counts and postings of ``IndexerOptions::
+extensions``, and every registered plugin index extension that takes columns.
+The format is the reader, and one chunk of the format is one granule: the
+host scans the chunk, collects it as one frame, and the summaries of each
+column of the frame become granule ``chunk``. The index is written under
+``index_dir`` as for any trace. ``Indexer::status`` and ``build`` treat these
+files like the others. A directory given to ``Indexer::open`` contributes only
+the files that match the trace patterns (``.pfw``, ``.pfw.gz`` and the like), so
+a format's files are never found by listing a folder: pass each of them by its
+path.
+
+``chunk_token`` makes the granules mean something later. A token is a 64-bit
+value that identifies one chunk of one file by its bytes. It is the same for the
+same bytes, and it increases from one chunk to the next, which a host checks
+when it opens the file. The host stores the tokens next to the summaries. A
+format that leaves ``chunk_token`` NULL has chunks the index cannot name, so
+the whole file is one granule: the index can rule out the file, never one of
+its chunks.
+
+The index records, per file, the format name, the settings of the summaries,
+and the size and mtime of the file. A file is indexed again, and only that
+file, when its size or mtime changed, when another format or the built-in trace
+reader claims it, when the format is registered under another name, when the
+plugin that registers it declares another version, when the
+extensions or the bloom settings changed, or when a plugin index extension is
+registered that the file's index lacks. The index of another file, or of a
+file under another folder that shares the ``index_dir``, is not read or removed.
+
+``LazyFrame::scan_file(path, index_dir)`` (``index_dir`` empty looks beside the
+file, as the tools do) uses the index. The same argument is
+``dftu_lazyframe_scan_file(path, index_dir, index_dir_len, &lf)`` from C (NULL
+and 0 for the default; the string is borrowed and copied) and
+``dftracer.utils.scan_file(path, index_dir="")`` from Python. The comparisons ``column <, <=, >, >=,
+== literal``, joined by AND, of the filters of the scan are asked of the
+summaries of each chunk, and the chunks that none of them can hold a row for
+are never scanned: ``scan`` is not called for them. No other filter shape
+prunes. Nothing is skipped without evidence. A file with no index, one that
+changed since it was indexed, one another reader indexed, and one whose
+``chunk_token`` values are not the stored ones is read in full, and the filters
+are always applied again to the rows, so a scan gives the same rows with or
+without the index. As the first chunk to scan is no longer chunk 0, its votes are
+the votes of the scan. ``tests/plugins/chunked_format_plugin.c`` is a complete
+format with tokens, and the same format without them. A C++ format gives its
+chunks tokens by naming its file class and giving it a method:
+``using File = MyFile;`` in the ``FileFormat`` class and
+``dstd::Result<std::uint64_t> MyFile::chunk_token(std::uint64_t chunk)``;
+``PluginBuilder::file_format<F>`` then sets the ``chunk_token`` entry, and
+leaves it NULL for a class without both. ``tests/plugins/
+sdk_chunked_format_plugin.cpp`` is an example.
+
+**Explain and counters.** A plugin source, file format and node can say what it
+plans, and add to named counters while a plan runs. Both are optional and need
+no registration beyond the vtable.
+
+``dftu_source_vt::explain(ctx, self, req, out)``,
+``dftu_file_format_vt::explain(ctx, file, req, out)`` and
+``dftu_node_vt::explain(ctx, self, args, out)`` are the last field of each
+vtable, so a plugin built before them loads unchanged. A source and a format get
+the ``dftu_scan_request`` that ``LazyFrame::explain`` builds for the plan (the
+same projection, filters and limit a scan gets), and a node gets its
+``dftu_op_arg``; both are borrowed for the call and nothing is opened or read.
+The plugin calls ``out->add(out->self, key, key_len, value, value_len)`` once per
+line; the host copies both strings, so they need not outlive the call. A hook
+states what the plugin would do (the filters it accepts, the chunks it reads, an
+option that shapes the scan). A NULL hook adds nothing, and a hook that fails
+adds nothing and logs its message. A format also gets a ``chunks=K of N read``
+line from the host, the chunks its index keeps.
+
+.. code-block:: text
+
+   scan [id, v]
+     provider 'explain_plugin.src': filters_offered=1; filters_accepted=1; columns=2
+   filter
+   op explain_plugin.pass
+     node 'explain_plugin.pass': mode=pass
+
+``dftu_counter(ctx, "morsels", 1)`` (or ``dftu_counter_n`` with a length) adds to
+the counter ``name`` of the source, format or node whose callback makes the call;
+``dftu_ctx_vt::counter`` is the last field of the ctx vtable, and the inline
+helper checks that the host has it, so a plugin calls it without a check. Call it
+from ``scan`` and ``next``, once per morsel or chunk and not per row. Outside
+``LazyFrame::explain_analyze`` the call does nothing (a null check). An analysis
+makes counters of its own and hands them to the scans and nodes it opens, and
+each cursor keeps a reference, so the counters live as long as anything adds to
+them. Two analyses at once on two threads each count only their own run, and a
+plain run of the same plugin beside an analysis adds to nothing. The other side
+of a join, a cross join or a concat counts too, and so do its own direct
+partners; a partner plan that a partner collects in batches is read without the
+analysis, so its plugins add nothing, and the stage lines show only the main
+chain. Call the helper only inside the callback: the ``ctx`` is valid for that call only, and the SDK's
+``plugins::counter`` does nothing on a thread that is in no callback.
+
+``LazyFrame::explain_analyze()`` (Python ``explain(analyze=True)``,
+``dftu_lazyframe_explain_analyze``, and ``explain analyze`` in duql) runs the plan
+to its end, drops the rows and appends what it measured:
+
+.. code-block:: text
+
+   analyze:
+     pushed filter 0: inexact
+     scan: rows out 6, time (incl. inputs) 0.1 ms
+     filter: rows in 6, rows out 4, time (incl. inputs) 0.2 ms
+     op explain_plugin.pass: rows in 4, rows out 4, time (incl. inputs) 0.2 ms
+     counter explain_plugin.pass.frames: 2
+     counter explain_plugin.src.morsels: 2
+     counter explain_plugin.src.rows: 6
+
+``pushed filter`` is what the source voted for each filter it was offered
+(``exact``, ``inexact`` or ``no``), the same votes the scan acts on. A stage's
+time (incl. inputs) includes the stages below it, since each pulls from the one before. A
+counter line is ``<registered name>.<counter>``.
+
+A C++ plugin adds the hooks to its class: ``dstd::Result<void> explain(const
+ScanView&, const ExplainOut&) const`` on a source, the same (not const) on the
+file class of a format (``using File = MyFile;``, as for ``chunk_token``), and
+``dstd::Result<void> explain(const OpArgs&, const ExplainOut&) const`` on a node;
+``PluginBuilder`` sets the vtable entry for a class that has the method.
+``plugins::counter("rows", n)`` adds to a counter from inside any SDK callback.
+``tests/plugins/explain_plugin.c`` is a C plugin with the hooks and counters,
+and ``tests/plugins/sdk_explain_plugin.cpp`` a C++ one.
+
+**Plan and plan_duql.** A source and a file format can plan a scan before it
+opens a cursor. ``dftu_source_vt::plan(ctx, self, req, out)`` and
+``dftu_file_format_vt::plan(ctx, file, req, out)`` come after ``explain`` at the
+end of each vtable, so a plugin built before them loads unchanged, and a plugin
+without ``plan`` behaves as before: its votes come from ``scan``. The host calls
+``plan`` once per scan, before ``scan``, with the same ``dftu_scan_request`` a
+scan gets, and also once for an explain. The plugin fills ``out``, a
+``dftu_plan_result``:
+
+- ``votes`` has one entry per filter, pre-filled ``DFTU_PUSHED_NO``. A value
+  outside ``DFTU_PUSHED_NO``, ``DFTU_PUSHED_INEXACT`` and ``DFTU_PUSHED_EXACT``
+  reads as ``DFTU_PUSHED_NO``.
+- ``cost`` is the relative price of the scan, one unit about one row read and
+  decoded. It is comparable only between plans of one plugin, and a negative or
+  NaN value means unknown (the pre-filled value is -1).
+- ``est_rows`` is the number of rows the scan gives after the filters it voted
+  ``DFTU_PUSHED_EXACT``; a negative value means unknown (pre-filled -1).
+- ``token`` is a ``uint64`` that the host stores and hands back unchanged in
+  ``dftu_scan_request::plan`` (the same ``dftu_plan_result``, borrowed for the
+  call; NULL when the plugin has no plan hook). It carries the work of planning
+  to ``scan``. The host never frees it, and ``scan`` may not run at all (an
+  explain plans without scanning), so a token names state that needs no release.
+
+The votes of a plan are the votes of the scan: the host decides before it scans
+which filters stay above the scan, and it ignores what ``scan`` writes to
+``out_pushed``. A scan therefore applies exactly the filters its plan voted
+``DFTU_PUSHED_EXACT``. For a file format the plan holds for every chunk of the
+scan, so the host does not compare the votes of the chunks, and each ``scan``
+call gets the plan in its request. A failing plan fails the query with the
+status and the message of the plugin; an explain, which has no error to return,
+prints the message in place of the plan. The ctx of a plan call is valid for the
+call only, and ``dftu_counter`` works inside it.
+
+``explain`` prints the plan after the lines of the plugin's own ``explain``
+hook, so a plugin that has neither hook prints nothing and one that has ``plan``
+prints a line for its source:
+
+.. code-block:: text
+
+   scan [id, v]
+     provider 'plan_plugin.src': plan_votes=exact; plan_cost=10; plan_est_rows=4
+   filter
+
+The host calls ``plan`` before the ``explain`` hook, so that hook gets the
+plan in ``req->plan`` (NULL when the plugin has no plan hook or the plan failed). The host does not use ``cost`` and ``est_rows`` to choose
+anything: no part of the planner chooses between sources or join sides by size
+today (the right side of a join is always the build side), so the two numbers
+are for explain and for the plugin's own tooling.
+
+``dftu_source_vt::plan_duql`` and ``dftu_file_format_vt::plan_duql`` are for a
+plugin that reads duql. The host says the filters it can in duql and calls
+``plan_duql(ctx, self, req, q, out)`` in place of ``plan``. ``q`` is a
+``dftu_plan_duql``: ``text`` is the conjunction of those filters as one duql
+condition (joined by ``and``, a compound filter in parentheses, a column named
+by its schema name and quoted with backticks when it is not a plain word),
+``text_len`` its length, and ``filter_index[i]`` for ``i < n_filters`` the index
+in ``req->filters`` of the i-th conjunct. ``req`` still carries every filter, so
+a filter the host could not say stays visible and the votes in ``out`` are
+indexed by ``req``. The duql the host says is a column against a number or a
+string (``> >= < <= == !=``), ``in`` a list of integers, floats or strings,
+``is null`` and ``is not null``, ``contains``, ``starts_with``, ``ends_with``
+and ``like`` on a string column, and ``and``, ``or`` and ``not`` over those. A
+filter outside that set (a regular expression, arithmetic, a column against a
+column, a NaN, an unsigned number above ``int64``) is not in the text. An
+unsigned literal that fits an ``int64`` reads as the signed one, which means the
+same value. When no filter can be said,
+the host calls ``plan`` if the plugin has it, and otherwise there is no plan.
+Parsing the text is the plugin's work.
+
+A C++ plugin adds the hooks to its class. A source has ``dstd::Result<PlanResult>
+plan(const ScanView&) const`` and ``dstd::Result<PlanResult> plan_duql(const
+ScanView&, dstd::StringView text, dstd::Span<const std::int32_t> filter_index)
+const``; the file class of a format (``using File = MyFile;``) has the same,
+not const. ``PlanResult`` holds ``votes`` (a ``dstd::Vector<Pushed>``), ``cost``,
+``est_rows`` and ``token``, and ``ScanView::plan`` is the answer in ``scan``.
+``PluginBuilder`` sets the vtable entries for a class that has the methods.
+``tests/plugins/plan_plugin.c`` is a C plugin with ``plan`` and ``plan_duql``,
+and ``tests/plugins/sdk_plan_plugin.cpp`` a C++ one with a source and a format.
 
 **Sinks.** ``DFTU_SVC_FILE_FORMATS`` also takes a ``dftu_sink_vt``
 (``register_sink``, ``PluginBuilder::sink<S>``): an output format whose ``bind``
@@ -2374,5 +2637,37 @@ the file:
    frame = dft.scan_file("rows.toy").collect()
 
 The plan is lazy; ``collect()`` raises ``DFTUtilsNotFoundError``
-(``no format claims <path>``) for a file no registered format claims, and
-``DFTUtilsValueError`` when two formats tie for it.
+(``no format claims <path>``) for a file no reader claims, and
+``DFTUtilsValueError`` when two readers tie for it. ``scan_file(path,
+format="name")`` skips the probe and reads with the reader of that name:
+``"jsonl"`` or a registered format; an unknown name raises
+``DFTUtilsValueError`` and lists the known ones. ``Indexer(..., format=)`` and
+``TraceViewer(..., format=)`` take the same argument, and the tools
+``dftracer_index``, ``dftracer_view`` and ``dftracer_run`` take ``--format``. A
+``TraceViewer`` reads trace files only: a file a plugin format claims makes it
+fail with an error that points to ``scan_file``.
+
+.. _plugins-global:
+
+**Plugins for the whole process.** ``DFTRACER_UTILS_PLUGINS`` is a list of
+plugin paths separated by ``:``. The tools, the Python extension and the server
+load them once, at the first call that reads a trace, and keep them until the
+process ends. A path that does not load is an error that names the path, an
+empty item is skipped and a path named twice loads once.
+
+From Python, ``dft.load_plugin(path)`` loads one plugin and returns a handle
+that works as a context manager:
+
+.. code-block:: python
+
+   import dftracer.utils as dft
+
+   with dft.load_plugin("./csv_reader.so"):
+       frame = dft.scan_file("data.csv").collect()
+   # the format is gone here
+
+A path that is already loaded, by another handle or by the environment, loads
+nothing again, and a plugin goes when its last handle closes. ``close()`` raises
+``DFTUtilsValueError`` and keeps the plugin while a plan made by ``scan_file``
+through one of its formats is alive: drop the plan first. A plugin named by
+``DFTRACER_UTILS_PLUGINS`` stays loaded after its handle closes.

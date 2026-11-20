@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>  // dftu_series
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_i64/u64/f64
+#include <dftracer/utils/dataframe/internal/float_key.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/sketch.h>  // DDSketch, sketch_bucket_keys
 #include <dftracer/utils/dstd/base64.h>
@@ -34,6 +35,73 @@ namespace dftracer::utils::dataframe {
 // overload runs (keeping integers exact) and the finalized Sum/Min/Max column
 // type. Derived once from the column type, never per row, so a group with no
 // present rows still lands in the same output column as its populated peers.
+// The column types ArgMaxPos/ArgMinPos order: the fixed-width numbers, bools
+// and temporal types, each read exactly in its own domain.
+namespace {
+bool bw_supported(TypeId t) {
+    switch (t) {
+        case TypeId::Bool:
+        case TypeId::Int8:
+        case TypeId::Int16:
+        case TypeId::Int32:
+        case TypeId::Int64:
+        case TypeId::Uint8:
+        case TypeId::Uint16:
+        case TypeId::Uint32:
+        case TypeId::Uint64:
+            return true;
+        default:
+            return false;
+    }
+}
+
+dstd::Error bw_refusal(AggOp op) {
+    switch (op) {
+        case AggOp::BitwiseAnd:
+            return common::make_error<
+                       "bitwise_and: the column must be an integer or a bool">(
+                       common::ErrorCode::InvalidArgument)
+                .error();
+        case AggOp::BitwiseOr:
+            return common::make_error<
+                       "bitwise_or: the column must be an integer or a bool">(
+                       common::ErrorCode::InvalidArgument)
+                .error();
+        default:
+            return common::make_error<
+                       "bitwise_xor: the column must be an integer or a bool">(
+                       common::ErrorCode::InvalidArgument)
+                .error();
+    }
+}
+
+bool apos_supported(TypeId t) {
+    switch (t) {
+        case TypeId::Bool:
+        case TypeId::Int8:
+        case TypeId::Int16:
+        case TypeId::Int32:
+        case TypeId::Int64:
+        case TypeId::Uint8:
+        case TypeId::Uint16:
+        case TypeId::Uint32:
+        case TypeId::Uint64:
+        case TypeId::Float16:
+        case TypeId::Float32:
+        case TypeId::Float64:
+        case TypeId::Date32:
+        case TypeId::Date64:
+        case TypeId::Time32:
+        case TypeId::Time64:
+        case TypeId::Timestamp:
+        case TypeId::Duration:
+            return true;
+        default:
+            return false;
+    }
+}
+}  // namespace
+
 FieldStatDomain col_domain(TypeId t) {
     switch (t) {
         case TypeId::Uint8:
@@ -287,8 +355,8 @@ AggStatePtr agg_new(dstd::Vector<AggSpec> specs, dstd::Vector<AggDynSpec> dyn) {
 }
 
 dstd::Result<void> agg_accumulate(AggState& st,
-                                  const dstd::Vector<const Series*>& keys,
-                                  const dstd::Vector<const Series*>& values,
+                                  dstd::Span<const Series* const> keys,
+                                  dstd::Span<const Series* const> values,
                                   std::int64_t begin, std::int64_t end) {
     return agg_accumulate(st, keys, values, dstd::Vector<AggDynInput>{}, begin,
                           end);
@@ -309,6 +377,11 @@ struct Plain8 {
         std::uint64_t v;
         std::memcpy(&v, data + static_cast<std::size_t>(i) * 8, 8);
         return v;
+    }
+    // The cell as a group key: a float's -0.0 and NaNs are one value each.
+    std::uint64_t key_bits(std::int64_t i) const {
+        const std::uint64_t v = bits(i);
+        return domain == FieldStatDomain::F64 ? canonical_f64_bits(v) : v;
     }
 };
 
@@ -417,12 +490,13 @@ bool plain_key(const Series& c, PlainKey& out) {
 
 // Whether the plain loop can run this state over these columns, and the
 // column views it reads if so.
-bool plain_shape(const AggState& st, const dstd::Vector<const Series*>& keys,
-                 const dstd::Vector<const Series*>& values,
+bool plain_shape(const AggState& st, dstd::Span<const Series* const> keys,
+                 dstd::Span<const Series* const> values,
                  dstd::Vector<PlainKey>& k, dstd::Vector<Plain8>& v) {
-    if (st.has_fl || st.has_arg || st.has_bitor || st.has_prod || st.has_msk ||
-        st.has_kmv || st.has_lst || st.has_ss || st.has_co || st.has_set ||
-        st.has_occ || st.has_dyn || st.has_udaf)
+    if (st.has_fl || st.has_arg || st.has_apos || st.has_bw || st.has_bitor ||
+        st.has_prod || st.has_qv || st.has_msk || st.has_kmv || st.has_lst ||
+        st.has_ss || st.has_co || st.has_set || st.has_occ || st.has_dyn ||
+        st.has_udaf)
         return false;
     k.resize(keys.size());
     for (std::size_t j = 0; j < keys.size(); ++j)
@@ -440,18 +514,30 @@ bool plain_shape(const AggState& st, const dstd::Vector<const Series*>& keys,
 // word, a string of up to 16 bytes its length and two words.
 constexpr std::uint64_t FAST_TAG = 0xFFFFFFFF00000000ULL;
 
-std::size_t key_word_count(const dstd::Vector<PlainKey>& k) {
+std::size_t key_word_count(dstd::Span<const PlainKey> k) {
     std::size_t w = 0;
     for (const PlainKey& kk : k) w += kk.is_str ? 3 : 1;
     return w;
 }
 
+// Whether a key column is a float, so its cells need canonical bits.
+bool any_float_key(dstd::Span<const PlainKey> k) {
+    for (const PlainKey& kk : k)
+        if (!kk.is_str && kk.fixed.domain == FieldStatDomain::F64) return true;
+    return false;
+}
+
+// A cell's bits as a key: a float cell goes through canonical_f64_bits.
+std::uint64_t canonical_key(const Plain8& c, std::uint64_t b) {
+    return c.domain == FieldStatDomain::F64 ? canonical_f64_bits(b) : b;
+}
+
 // Row i's key words; false for a string longer than 16 bytes.
-bool key_words(const dstd::Vector<PlainKey>& k, std::int64_t i,
+bool key_words(dstd::Span<const PlainKey> k, bool any_float, std::int64_t i,
                std::uint64_t* w) {
     for (const PlainKey& kk : k) {
         if (!kk.is_str) {
-            *w++ = kk.fixed.bits(i);
+            *w++ = any_float ? kk.fixed.key_bits(i) : kk.fixed.bits(i);
             continue;
         }
         if (kk.by_ref()) {
@@ -558,7 +644,7 @@ void fast_add(AggState& st, std::uint64_t h, const std::uint64_t* w) {
 
 // Whether the word table takes this state over these keys (string keys,
 // no nulls, every group so far seen through it), opening it on first use.
-bool fast_open(AggState& st, const dstd::Vector<PlainKey>& k,
+bool fast_open(AggState& st, dstd::Span<const PlainKey> k,
                bool any_keys = false) {
     if (st.fast_refused) return false;
     bool fast = any_keys;
@@ -718,7 +804,7 @@ __attribute__((noinline, cold)) void add_carry(AggState& st, std::size_t slot,
 }
 
 // find_or_add_group over a row's key words.
-std::int64_t slow_group_words(AggState& st, const dstd::Vector<PlainKey>& k,
+std::int64_t slow_group_words(AggState& st, dstd::Span<const PlainKey> k,
                               const std::uint64_t* w) {
     std::size_t at[64];
     for (std::size_t j = 0, p = 0; j < k.size(); ++j) {
@@ -756,8 +842,8 @@ bool light_cells(const AggState& st) {
     return true;
 }
 
-bool accumulate_plain(AggState& st, const dstd::Vector<const Series*>& keys,
-                      const dstd::Vector<const Series*>& values,
+bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
+                      dstd::Span<const Series* const> values,
                       std::int64_t begin, std::int64_t end) {
     dstd::Vector<PlainKey> k;
     dstd::Vector<Plain8> v;
@@ -823,6 +909,7 @@ bool accumulate_plain(AggState& st, const dstd::Vector<const Series*>& keys,
     const std::size_t nk = k.size();
     bool all_fixed = nk >= 1 && nk <= 3;
     for (const PlainKey& kk : k) all_fixed &= !kk.is_str;
+    const bool any_float = any_float_key(k);
     if (all_fixed && !st.direct_refused && end > begin) {
         std::uint64_t lo[3], hi[3];
         bool any = false;
@@ -833,11 +920,21 @@ bool accumulate_plain(AggState& st, const dstd::Vector<const Series*>& keys,
         // One key, no nulls, is the common shape and gets a plain loop.
         if (nk == 1 && !k[0].fixed.validity) {
             const std::uint8_t* d = k[0].fixed.data;
-            for (std::int64_t i = begin; i < end; ++i) {
-                std::uint64_t b;
-                std::memcpy(&b, d + static_cast<std::size_t>(i) * 8, 8);
-                lo[0] = std::min(lo[0], b);
-                hi[0] = std::max(hi[0], b);
+            if (k[0].fixed.domain == FieldStatDomain::F64) {
+                for (std::int64_t i = begin; i < end; ++i) {
+                    std::uint64_t b;
+                    std::memcpy(&b, d + static_cast<std::size_t>(i) * 8, 8);
+                    b = canonical_f64_bits(b);
+                    lo[0] = std::min(lo[0], b);
+                    hi[0] = std::max(hi[0], b);
+                }
+            } else {
+                for (std::int64_t i = begin; i < end; ++i) {
+                    std::uint64_t b;
+                    std::memcpy(&b, d + static_cast<std::size_t>(i) * 8, 8);
+                    lo[0] = std::min(lo[0], b);
+                    hi[0] = std::max(hi[0], b);
+                }
             }
             any = end > begin;
         } else {
@@ -848,7 +945,7 @@ bool accumulate_plain(AggState& st, const dstd::Vector<const Series*>& keys,
                 if (null) continue;
                 any = true;
                 for (std::size_t j = 0; j < nk; ++j) {
-                    const std::uint64_t b = k[j].fixed.bits(i);
+                    const std::uint64_t b = k[j].fixed.key_bits(i);
                     lo[j] = std::min(lo[j], b);
                     hi[j] = std::max(hi[j], b);
                 }
@@ -951,7 +1048,7 @@ bool accumulate_plain(AggState& st, const dstd::Vector<const Series*>& keys,
     auto slow_group = [&](std::int64_t i) {
         return st.find_or_add_group(
             [&](std::size_t j) {
-                return static_cast<std::int64_t>(k[j].fixed.bits(i));
+                return static_cast<std::int64_t>(k[j].fixed.key_bits(i));
             },
             [&](std::size_t j) -> dstd::StringView { return k[j].str(i); },
             [&](std::size_t j) { return k[j].is_null(i); });
@@ -987,13 +1084,19 @@ bool accumulate_plain(AggState& st, const dstd::Vector<const Series*>& keys,
 
     // The row loop, instantiated once per (moments, nulls-anywhere) so
     // neither test sits inside it.
-    auto run = [&]<bool Moments, bool Nulls, std::size_t NK>() {
+    auto run = [&]<bool Moments, bool Nulls, std::size_t NK, bool Float>() {
         // NK is the key count the packing unrolls over; 0 leaves the cache
-        // off (a string key, or more keys than it covers).
+        // off (a string key, or more keys than it covers). Float says a key
+        // is a float, so an integer key pays no test per row.
         auto packed = [&](std::int64_t i) {
             std::uint64_t at = 0;
-            for (std::size_t j = 0; j < NK; ++j)
-                at += (k[j].fixed.bits(i) - lo_k[j]) * stride[j];
+            for (std::size_t j = 0; j < NK; ++j) {
+                const std::uint64_t b = k[j].fixed.bits(i);
+                if constexpr (Float)
+                    at += (canonical_key(k[j].fixed, b) - lo_k[j]) * stride[j];
+                else
+                    at += (b - lo_k[j]) * stride[j];
+            }
             return at;
         };
         auto key_null = [&](std::int64_t i) {
@@ -1042,7 +1145,7 @@ bool accumulate_plain(AggState& st, const dstd::Vector<const Series*>& keys,
             for (std::int64_t r = 0; r < m; ++r) {
                 std::uint64_t* w =
                     words.data() + static_cast<std::size_t>(r) * W;
-                const bool ok = key_words(k, b0 + r, w);
+                const bool ok = key_words(k, any_float, b0 + r, w);
                 packable[static_cast<std::size_t>(r)] = ok;
                 hashes[static_cast<std::size_t>(r)] = ok ? hash_words(w, W) : 0;
             }
@@ -1135,7 +1238,7 @@ bool accumulate_plain(AggState& st, const dstd::Vector<const Series*>& keys,
                     cg = static_cast<std::int32_t>(slow_group(i));
                     if (fast &&
                         static_cast<std::size_t>(cg) == st.fast_hash.size()) {
-                        if (key_words(k, i, w))
+                        if (key_words(k, any_float, i, w))
                             fast_add(st, hash_words(w, 3), w);
                         else
                             fast_add(st, 0, nullptr);
@@ -1163,16 +1266,25 @@ bool accumulate_plain(AggState& st, const dstd::Vector<const Series*>& keys,
         }
         switch (dk) {
             case 1:
-                run.template operator()<Moments, Nulls, 1>();
+                if (any_float)
+                    run.template operator()<Moments, Nulls, 1, true>();
+                else
+                    run.template operator()<Moments, Nulls, 1, false>();
                 break;
             case 2:
-                run.template operator()<Moments, Nulls, 2>();
+                if (any_float)
+                    run.template operator()<Moments, Nulls, 2, true>();
+                else
+                    run.template operator()<Moments, Nulls, 2, false>();
                 break;
             case 3:
-                run.template operator()<Moments, Nulls, 3>();
+                if (any_float)
+                    run.template operator()<Moments, Nulls, 3, true>();
+                else
+                    run.template operator()<Moments, Nulls, 3, false>();
                 break;
             default:
-                run.template operator()<Moments, Nulls, 0>();
+                run.template operator()<Moments, Nulls, 0, false>();
         }
     };
     if (moments) {
@@ -1192,9 +1304,9 @@ bool accumulate_plain(AggState& st, const dstd::Vector<const Series*>& keys,
 }  // namespace
 
 dstd::Result<void> agg_accumulate(AggState& st,
-                                  const dstd::Vector<const Series*>& keys,
-                                  const dstd::Vector<const Series*>& values,
-                                  const dstd::Vector<AggDynInput>& dyn_in,
+                                  dstd::Span<const Series* const> keys,
+                                  dstd::Span<const Series* const> values,
+                                  dstd::Span<const AggDynInput> dyn_in,
                                   std::int64_t begin, std::int64_t end) {
     if (!st.init_error.empty())
         return common::make_error(common::ErrorCode::InvalidArgument,
@@ -1263,11 +1375,31 @@ dstd::Result<void> agg_accumulate(AggState& st,
             }
         }
         st.field_domain.resize(st.nf);
+        st.field_type.assign(st.nf, TypeId::Unknown);
+        st.field_time_unit.assign(st.nf, TimeUnit::Micro);
+        st.field_timezone.assign(st.nf, dstd::String());
         st.field_is_str.resize(st.nf);
+        for (std::size_t slot = 0; slot < st.n_bw; ++slot) {
+            const TypeId t =
+                values[static_cast<std::size_t>(st.bw_col[slot])]->type();
+            if (bw_supported(t)) {
+                st.bw_type[slot] = t;
+            } else {
+                st.udaf_note(bw_refusal(st.bw_op[slot]));
+            }
+        }
         for (std::size_t fj = 0; fj < st.nf; ++fj) {
             const Series* vc =
                 values[static_cast<std::size_t>(st.field_vc[fj])];
             st.field_domain[fj] = col_domain(vc->type());
+            st.field_type[fj] = vc->type();
+            if (vc->type() == TypeId::Time32 || vc->type() == TypeId::Time64 ||
+                vc->type() == TypeId::Timestamp ||
+                vc->type() == TypeId::Duration) {
+                const DataType dt = vc->data_type();
+                st.field_time_unit[fj] = dt.time_unit();
+                st.field_timezone[fj] = dt.timezone();
+            }
             st.field_is_str[fj] = vc->type() == TypeId::String ? 1 : 0;
         }
         // A String field keeps only its presence count (n) and its
@@ -1339,6 +1471,11 @@ dstd::Result<void> agg_accumulate(AggState& st,
               : !values.empty() ? values[0]->length()
                                 : 0;
     const std::int64_t clen = end - begin;
+    // An aggregate with no key is one group, even over no rows.
+    if (st.nkeys == 0 && st.ngroups() == 0)
+        st.find_or_add_group([](std::size_t) { return std::int64_t{0}; },
+                             [](std::size_t) { return dstd::StringView{}; },
+                             [](std::size_t) { return false; });
     // A List column's elements, fetched once per batch for the set slots.
     dstd::Vector<Series> set_elems;
     dstd::Vector<char> set_slot_typed;
@@ -1472,6 +1609,48 @@ dstd::Result<void> agg_accumulate(AggState& st,
                         repr_of(ri);
             }
         }
+        if (st.has_apos) {
+            const std::size_t pbase = static_cast<std::size_t>(g) * st.n_apos;
+            for (std::size_t slot = 0; slot < st.n_apos; ++slot) {
+                const Series* vc =
+                    values[static_cast<std::size_t>(st.apos_col[slot])];
+                if (vc->is_null(i)) continue;
+                if (!apos_supported(vc->type())) {
+                    st.udaf_note(
+                        common::make_error<
+                            "arg_max/arg_min: the column must be a number, a "
+                            "bool or a temporal type">(
+                            common::ErrorCode::InvalidArgument)
+                            .error());
+                    continue;
+                }
+                const FieldStatDomain d = col_domain(vc->type());
+                const std::uint64_t bits = read_bits(*vc, i, d);
+                const auto dom =
+                    static_cast<std::uint8_t>(static_cast<int>(d) + 1);
+                const std::size_t ps = pbase + slot;
+                if (st.apos_dom[ps] != 0 &&
+                    !(st.apos_dom[ps] == dom &&
+                      apos_better(st.apos_dir[slot], dom, bits,
+                                  st.apos_bits[ps])))
+                    continue;
+                st.apos_dom[ps] = dom;
+                st.apos_bits[ps] = bits;
+                st.apos_rank[ps] = st.counts[static_cast<std::size_t>(g)] - 1;
+            }
+        }
+        if (st.has_bw) {
+            const std::size_t wbase = static_cast<std::size_t>(g) * st.n_bw;
+            for (std::size_t slot = 0; slot < st.n_bw; ++slot) {
+                const Series* vc =
+                    values[static_cast<std::size_t>(st.bw_col[slot])];
+                if (vc->is_null(i)) continue;
+                if (!bw_supported(vc->type())) continue;
+                bw_fold(st.bw_op[slot], st.bw_acc[wbase + slot],
+                        st.bw_seen[wbase + slot],
+                        read_bits(*vc, i, col_domain(vc->type())), 1);
+            }
+        }
         if (st.has_bitor) {
             const std::size_t bbase = static_cast<std::size_t>(g) * st.n_bitor;
             for (std::size_t slot = 0; slot < st.n_bitor; ++slot) {
@@ -1490,6 +1669,16 @@ dstd::Result<void> agg_accumulate(AggState& st,
                 if (vc->is_null(i)) continue;
                 st.prod_acc[pbase + slot] *=
                     read_as_double(*vc, i, col_domain(vc->type()));
+            }
+        }
+        if (st.has_qv) {
+            const std::size_t qbase = static_cast<std::size_t>(g) * st.n_qv;
+            for (std::size_t slot = 0; slot < st.n_qv; ++slot) {
+                const Series* vc =
+                    values[static_cast<std::size_t>(st.qv_val_col[slot])];
+                if (vc->is_null(i)) continue;
+                st.qv[qbase + slot].push_back(
+                    read_as_double(*vc, i, col_domain(vc->type())));
             }
         }
         if (st.has_msk) {
@@ -1689,7 +1878,7 @@ dstd::Result<void> agg_accumulate(AggState& st,
 }
 
 dstd::Result<void> agg_accumulate(AggState& st, const Series& key,
-                                  const dstd::Vector<const Series*>& values,
+                                  dstd::Span<const Series* const> values,
                                   std::int64_t begin, std::int64_t end) {
     const dstd::Vector<const Series*> keys{&key};
     return agg_accumulate(st, keys, values, begin, end);
@@ -1703,10 +1892,67 @@ void agg_merge(AggState& into, const AggState& other) {
     agg_merge(into, other, order);
 }
 
+namespace {
+
+bool is_timed_type(TypeId t) {
+    return t == TypeId::Timestamp || t == TypeId::Time32 ||
+           t == TypeId::Time64 || t == TypeId::Duration;
+}
+
+// Two partials of one aggregate must hold the same temporal value column: its
+// type, unit and zone decide the type of the result. A side that never saw the
+// column (a seeded state) is unknown and matches. Another mismatch (an integer
+// column in one partial, a float in the other) stays a merge into the wider
+// domain, as the schemaless readers rely on.
+dstd::Result<void> check_field_types(const AggState& into,
+                                     const AggState& other) {
+    const std::size_t n =
+        std::min(into.field_type.size(), other.field_type.size());
+    for (std::size_t j = 0; j < n; ++j) {
+        const TypeId a = into.field_type[j];
+        const TypeId b = other.field_type[j];
+        if (a == TypeId::Unknown || b == TypeId::Unknown) continue;
+        if (!is_temporal_type(a) && !is_temporal_type(b)) continue;
+        const bool timed = is_timed_type(a);
+        if (a != b ||
+            (timed && (into.field_time_unit[j] != other.field_time_unit[j])) ||
+            (a == TypeId::Timestamp &&
+             into.field_timezone[j] != other.field_timezone[j]))
+            return common::make_error<
+                "agg_merge: value column {} is {} in one partial and {} "
+                "(or another unit or zone) in the other">(
+                common::ErrorCode::InvalidArgument, j, type_name(a),
+                type_name(b));
+    }
+    return {};
+}
+
+}  // namespace
+
 void agg_merge(AggState& into, const AggState& other,
-               const dstd::Vector<std::int64_t>& order) {
+               dstd::Span<const std::int64_t> order) {
     into.settle_light();
     if (!other.inited) return;
+    if (into.inited) {
+        if (dstd::Result<void> same = check_field_types(into, other); !same) {
+            into.udaf_note(std::move(same.error()));
+            return;
+        }
+        for (std::size_t j = 0;
+             j < std::min(into.field_type.size(), other.field_type.size()); ++j)
+            if (into.field_type[j] == TypeId::Unknown &&
+                other.field_type[j] != TypeId::Unknown) {
+                into.field_type[j] = other.field_type[j];
+                into.field_time_unit[j] = other.field_time_unit[j];
+                into.field_timezone[j] = other.field_timezone[j];
+            }
+    }
+    if (into.inited) {
+        for (std::size_t slot = 0;
+             slot < std::min(into.bw_type.size(), other.bw_type.size()); ++slot)
+            if (into.bw_type[slot] == TypeId::Unknown)
+                into.bw_type[slot] = other.bw_type[slot];
+    }
     if (!into.inited) {
         into.adopt_layout(other);
         into.nkeys = other.nkeys;
@@ -1738,8 +1984,8 @@ void agg_merge(AggState& into, const AggState& other,
     if (into.has_udaf) into.udaf_combine(other, udaf_into, order);
 }
 
-bool agg_pack_shape(AggState& st, const dstd::Vector<const Series*>& keys,
-                    const dstd::Vector<const Series*>& values, AggPacked& out) {
+bool agg_pack_shape(AggState& st, dstd::Span<const Series* const> keys,
+                    dstd::Span<const Series* const> values, AggPacked& out) {
     if (!st.inited && !agg_accumulate(st, keys, values, 0, 0)) return false;
     dstd::Vector<PlainKey> k;
     dstd::Vector<Plain8> v;
@@ -1758,8 +2004,8 @@ bool agg_pack_shape(AggState& st, const dstd::Vector<const Series*>& keys,
            keys[0]->length() < (std::int64_t{1} << 32);
 }
 
-bool agg_pack(const AggState& st, const dstd::Vector<const Series*>& keys,
-              const dstd::Vector<const Series*>& values, std::int64_t begin,
+bool agg_pack(const AggState& st, dstd::Span<const Series* const> keys,
+              dstd::Span<const Series* const> values, std::int64_t begin,
               std::int64_t end, const AggPacked& shape,
               dstd::Vector<AggPages>& out,
               dstd::FunctionRef<void(std::size_t)> full) {
@@ -1772,10 +2018,11 @@ bool agg_pack(const AggState& st, const dstd::Vector<const Series*>& keys,
         if (p.stride == 0) p.open(shape.stride);
     // The row loop with the word count fixed, so the copies are plain
     // stores; a wider key takes the general loop.
+    const bool any_float = any_float_key(k);
     auto run = [&]<std::size_t WK>() {
         std::uint64_t w[WK > 0 ? WK : 64];
         for (std::int64_t i = begin; i < end; ++i) {
-            if (!key_words(k, i, w)) return false;
+            if (!key_words(k, any_float, i, w)) return false;
             const std::uint64_t h = hash_words(w, WK > 0 ? WK : shape.W);
             const auto p = static_cast<std::size_t>(((h >> 32) * parts) >> 32);
             AggPages& dst = out[p];
@@ -1816,9 +2063,8 @@ bool agg_pack(const AggState& st, const dstd::Vector<const Series*>& keys,
     }
 }
 
-void agg_accumulate_packed(AggState& st,
-                           const dstd::Vector<const Series*>& keys,
-                           const dstd::Vector<const Series*>& values,
+void agg_accumulate_packed(AggState& st, dstd::Span<const Series* const> keys,
+                           dstd::Span<const Series* const> values,
                            const AggPacked& shape, const AggPages& rows) {
     if (!st.inited && !agg_accumulate(st, keys, values, 0, 0))
         dstd::fatal("agg_accumulate_packed: the columns were rejected");
@@ -1966,7 +2212,7 @@ AggStatePtr agg_merge_many(dstd::Vector<AggStatePtr>& partials) {
 }
 
 AggStatePtr agg_regroup(const AggState& src_in,
-                        const dstd::Vector<std::int32_t>& keep,
+                        dstd::Span<const std::int32_t> keep,
                         std::int64_t bucket_recut) {
     const AggState& src = settled(src_in);
     AggStatePtr dst(new AggState());

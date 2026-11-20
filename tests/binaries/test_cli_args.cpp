@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/cli/cli_args.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
@@ -25,7 +26,7 @@ struct Options {
     double millis = 0;
 };
 
-cli::ParseOutcome run(Options& o, const dstd::Vector<dstd::StringView>& args,
+cli::ParseOutcome run(Options& o, dstd::Vector<dstd::StringView> args,
                       bool require_input = false) {
     cli::ArgParser p("tool", "1.2.3", "A test tool.");
     auto& in = p.positional(o.inputs, "PATH", "Files or folders");
@@ -197,7 +198,8 @@ TEST_CASE("number defaults print in printf %g form in the help") {
     p.option(small, {"--small"}, "Small");
     p.option(big, {"--big"}, "Big");
     p.option(precise, {"--precise"}, "Precise");
-    auto r = p.parse({"--help"});
+    const dstd::StringView help_args[] = {"--help"};
+    auto r = p.parse(help_args);
     CHECK(r.out.find("0.5") != dstd::String::npos);
     CHECK(r.out.find("1e+20") != dstd::String::npos);
     CHECK(r.out.find("0.123457") != dstd::String::npos);

@@ -21,8 +21,8 @@ namespace lazy_internal {
 // metric both sides carry and that is numeric gets `delta_` and `pct_` columns.
 dstd::Result<LazyFrame> compose_compare_agg(const LazyFrame& base,
                                             const LazyFrame& variant,
-                                            const dstd::Vector<Field>& lhs,
-                                            const dstd::Vector<Field>& rhs,
+                                            dstd::Span<const Field> lhs,
+                                            dstd::Span<const Field> rhs,
                                             std::size_t nk) {
     if (nk > lhs.size() || nk > rhs.size())
         return invalid_argument<
@@ -49,7 +49,7 @@ dstd::Result<LazyFrame> compose_compare_agg(const LazyFrame& base,
                               JoinHow::Outer, "_right")
                         .sort_by_multi(keys, false);
     const Schema joined = out.output_schema();
-    auto index_of = [&](const dstd::String& name) {
+    auto index_of = [&](dstd::StringView name) {
         for (std::size_t i = 0; i < joined.fields.size(); ++i)
             if (joined.fields[i].name == name)
                 return static_cast<std::int32_t>(i);
@@ -171,15 +171,15 @@ class CompareAggCursor : public Cursor {
     // The type of a column is the first one a morsel gives it that is known:
     // a column that is null so far has the type Unknown.
     static void note_types(dstd::Vector<DataType>& types,
-                           const dstd::Vector<Series>& cols) {
+                           dstd::Span<const Series> cols) {
         if (types.empty()) types.resize(cols.size());
         for (std::size_t i = 0; i < cols.size() && i < types.size(); ++i)
             if (types[i].id == TypeId::Unknown) types[i] = cols[i].data_type();
     }
 
     static dstd::Result<dstd::Vector<Field>> fields_of(
-        const dstd::Vector<dstd::String>& names,
-        const dstd::Vector<DataType>& types) {
+        dstd::Span<const dstd::String> names,
+        dstd::Span<const DataType> types) {
         if (!types.empty() && types.size() != names.size())
             return common::make_error<
                 "compare_agg: a plan names {} columns and returns {}">(

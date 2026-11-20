@@ -25,7 +25,7 @@ def _record(i):
     if H[i % 7] is not None:
         args["h"] = H[i % 7]
     return {
-        "ph": "X",
+        "ph": 1,
         "name": "abcd"[i % 4],
         "cat": "POSIX",
         "pid": 1,
@@ -46,7 +46,7 @@ def tv(tmp_path_factory):
         for r in RECORDS:
             f.write(json.dumps(r) + "\n")
     with dftu.Indexer(files=[path]) as indexer:
-        indexer.ensure_indexed()
+        indexer.ensure()
     return dftu.TraceViewer(path)
 
 

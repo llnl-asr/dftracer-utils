@@ -69,8 +69,8 @@ struct ViewScannerInput {
     /// of the decoded events; set only when no fold reads them.
     bool fold_skip_never_indexed = false;
 
-    ViewScannerInput& with_file_path(const dstd::String& path);
-    ViewScannerInput& with_index_path(const dstd::String& path);
+    ViewScannerInput& with_file_path(dstd::StringView path);
+    ViewScannerInput& with_index_path(dstd::StringView path);
     ViewScannerInput& with_checkpoint_size(std::size_t sz);
     ViewScannerInput& with_byte_range(std::size_t start, std::size_t end);
     ViewScannerInput& with_checkpoint_idx(std::uint64_t idx);

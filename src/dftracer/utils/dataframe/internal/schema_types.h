@@ -31,7 +31,7 @@ namespace dftracer::utils::dataframe {
 /// type allows); otherwise nullopt, and the caller treats every column as
 /// Unknown, as for a provider that declared nothing.
 dstd::Optional<Schema> to_schema(const ::dftu_schema& built,
-                                 const dstd::Vector<dstd::String>& names);
+                                 dstd::Span<const dstd::String> names);
 
 }  // namespace dftracer::utils::dataframe
 

@@ -85,6 +85,51 @@ enum {
     DFTU_PUSHED_EXACT = 2,   /**< Fully applied; the host drops it. */
 };
 
+/** What a plan hook answers for one scan, and what the host hands back to
+   scan() when a plan ran. In a plan call the host fills it before the call and
+   the plugin overwrites what it knows: `votes` has one entry per
+   dftu_scan_request::filters, pre-filled DFTU_PUSHED_NO and owned by the host
+   for the call (write one dftu_pushed per filter; a value outside that set
+   reads as DFTU_PUSHED_NO), `cost` is pre-filled -1, `est_rows` -1 and `token`
+   0. `cost` is the relative price of the scan: one unit is about one row read
+   and decoded, so it is comparable only between plans of one plugin; a negative
+   or NaN value means unknown. `est_rows` is the number of rows the scan would
+   produce after the filters it votes DFTU_PUSHED_EXACT (a negative value
+   means unknown). `token` is opaque to the host: it is stored as it is
+   and handed to scan() unchanged in dftu_scan_request::plan, so a plugin keeps
+   the work of planning (the chunks it picked, a parsed query) behind one
+   number. A plugin that keeps state per token owns it: the host never frees a
+   token, and scan() may not run at all (an explain plans without scanning), so
+   a token should name state that needs no release, such as an index into a
+   table the plugin owns for its lifetime or a value the scan can recompute.
+   In scan() `votes` is the host's copy of the answer, valid for the call, and
+   it is the scan's final vote: the host ignores what scan() writes to
+   out_pushed, so a scan applies exactly the filters the plan promised. */
+typedef struct dftu_plan_result {
+    uint32_t struct_size; /**< sizeof(dftu_plan_result) */
+    int32_t* votes;
+    double cost;
+    int64_t est_rows;
+    uint64_t token;
+} dftu_plan_result;
+
+/** The filters of a scan request that duql can say, for a dftu_source_vt::
+   plan_duql or dftu_file_format_vt::plan_duql call: `text` is their
+   conjunction as one duql condition (the filters joined by `and`, a compound
+   filter in parentheses), `text_len` its length without the terminating NUL,
+   and `filter_index[i]` for i < `n_filters` the index in
+   dftu_scan_request::filters of the i-th conjunct. A column is named by its
+   schema name and quoted with backticks when it is not a plain word. Filters
+   the host cannot say in duql are not in the text; they stay in the request, so
+   the plugin can still read them. Everything is borrowed for the call. */
+typedef struct dftu_plan_duql {
+    uint32_t struct_size; /**< sizeof(dftu_plan_duql) */
+    const char* text;
+    uint64_t text_len;
+    const int32_t* filter_index;
+    int32_t n_filters;
+} dftu_plan_duql;
+
 /** A pushdown request passed to dftu_source_vt::scan (mirrors
    @ref dftracer::utils::dataframe::ScanRequest "ScanRequest", lazyframe.h). */
 typedef struct dftu_scan_request {
@@ -101,6 +146,11 @@ typedef struct dftu_scan_request {
     int32_t n_filters;
     int64_t limit;          /**< Slice pushdown hint; -1 means none. */
     uint64_t memory_budget; /**< Bytes; most sources ignore it. */
+    /** The answer of the plan hook of this source for this request, borrowed
+       for the call, or NULL when the source has no plan hook or its plan
+       failed, and in a call to plan or plan_duql itself. An explain call gets
+       the plan the host has just run. See @ref dftu_plan_result. */
+    const dftu_plan_result* plan;
 } dftu_scan_request;
 
 /** Which op a dftu_apply_request offers (mirrors the Source::apply_* hooks,
@@ -297,6 +347,39 @@ typedef struct dftu_source_vt {
        output. */
     dftu_status (*apply)(dftu_ctx* ctx, void* self,
                          const dftu_apply_request* req, dftu_apply_result* out);
+    /** Optional (NULL means nothing to add to an explain). Append to `out` the
+       key and value lines that describe what scan() would do for `req`, the
+       request LazyFrame::explain builds for the plan (the same fields scan()
+       gets, `req` borrowed for the call, no cursor opened and nothing read).
+       Called on any thread, outside a scan, with a `ctx` the host frees when
+       the call returns; on failure the host prints no line for this source
+       and logs the ctx message. */
+    dftu_status (*explain)(dftu_ctx* ctx, void* self,
+                           const dftu_scan_request* req,
+                           const dftu_explain_out* out);
+    /** Optional (NULL means the votes come from scan(), as before). Plan the
+       scan of `req` before any cursor is opened: fill `out` (see @ref
+       dftu_plan_result) with a vote for each filter, a cost, an estimated row
+       count and a token. The host calls it once per scan, before scan(), and
+       also for an explain, on any thread, with a `ctx` the host frees when
+       the call returns; `req` and `out` are borrowed for the call and nothing
+       is read or opened. The host uses the votes it gets to decide which
+       filters the engine keeps above the scan, prints the plan in explain, and
+       passes the answer back in dftu_scan_request::plan. A failing status ends
+       the query with the ctx message; an explain prints the message in place
+       of the plan. */
+    dftu_status (*plan)(dftu_ctx* ctx, void* self, const dftu_scan_request* req,
+                        dftu_plan_result* out);
+    /** Optional (NULL means plan() is used). The same as plan(), for a plugin
+       that reads duql: `q` carries the filters it can say as one duql text
+       (see @ref dftu_plan_duql) and `req` still carries every filter, so the
+       votes in `out` are indexed by `req`. When the host can say no filter in
+       duql it calls plan() instead, and with no plan() there is no plan and
+       the votes come from scan(). When both are set and some filter is
+       expressible, only plan_duql runs. */
+    dftu_status (*plan_duql)(dftu_ctx* ctx, void* self,
+                             const dftu_scan_request* req,
+                             const dftu_plan_duql* q, dftu_plan_result* out);
 } dftu_source_vt;
 
 /** Build-phase registry of named sources. Fetched via

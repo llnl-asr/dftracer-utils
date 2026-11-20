@@ -70,9 +70,9 @@ dftracer::utils::dstd::Result<View> duql_view(const dftu_view* v,
 }
 
 dftracer::utils::dstd::Result<dftracer::utils::duql::Params> duql_params(
-    const char* const* names, const char* const* values, int32_t n) {
+    const char* const* names, const char* const* values, std::int32_t n) {
     dftracer::utils::duql::Params out;
-    for (int32_t i = 0; i < n; ++i) {
+    for (std::int32_t i = 0; i < n; ++i) {
         if (!names || !values || !names[i] || !values[i])
             return dftracer::utils::common::make_error(
                 dftracer::utils::common::ErrorCode::InvalidArgument,
@@ -212,11 +212,12 @@ static_assert(static_cast<int>(AggOp::Active) == DFTU_VIEW_AGG_ACTIVE);
 extern "C" {
 
 dftu_view* dftu_view_from_files(const char* const* paths,
-                                const char* const* index_paths, int32_t n) {
+                                const char* const* index_paths,
+                                std::int32_t n) {
     if (!paths || n < 0) return nullptr;
     dftracer::utils::dstd::Vector<ViewFile> files;
     files.reserve(static_cast<std::size_t>(n));
-    for (int32_t i = 0; i < n; ++i) {
+    for (std::int32_t i = 0; i < n; ++i) {
         if (!paths[i]) return nullptr;
         ViewFile f;
         f.file_path = paths[i];
@@ -226,12 +227,12 @@ dftu_view* dftu_view_from_files(const char* const* paths,
     return wrap(trace::views::detail::scan::from_files(std::move(files)));
 }
 
-dftu_view* dftu_view_from_directory(const char* dir, const char* index_path,
+dftu_view* dftu_view_from_directory(const char* dir, const char* index_dir,
                                     dftu_runtime* rt) {
     if (!dir) return nullptr;
     auto planned = runtime_of(rt)
                        .submit(trace::views::detail::scan::from_directory(
-                           dir, index_path ? index_path : ""))
+                           dir, index_dir ? index_dir : ""))
                        .get();
     if (!planned) return nullptr;
     trace::views::detail::scan::ScanPlan v = std::move(*planned);
@@ -262,11 +263,11 @@ dftu_view* dftu_view_record_schema(const dftu_view* v, const char* id) {
 }
 
 dftu_view* dftu_view_select(const dftu_view* v, const char* const* cols,
-                            int32_t n) {
+                            std::int32_t n) {
     if (!v || n < 0 || (n > 0 && !cols)) return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> c;
     c.reserve(static_cast<std::size_t>(n));
-    for (int32_t i = 0; i < n; ++i) {
+    for (std::int32_t i = 0; i < n; ++i) {
         if (!cols[i]) return nullptr;
         c.emplace_back(cols[i]);
     }
@@ -302,29 +303,29 @@ dftu_view* dftu_view_all(const dftu_view* v) {
     return dftu_view_phase(v, DFTU_VIEW_PHASE_ANY);
 }
 
-dftu_view* dftu_view_limit(const dftu_view* v, uint64_t n) {
+dftu_view* dftu_view_limit(const dftu_view* v, std::uint64_t n) {
     if (!v) return nullptr;
     return wrap(trace::views::detail::scan::limit(v->p, n));
 }
 
-dftu_view* dftu_view_offset(const dftu_view* v, uint64_t n) {
+dftu_view* dftu_view_offset(const dftu_view* v, std::uint64_t n) {
     if (!v) return nullptr;
     return wrap(trace::views::detail::scan::offset(v->p, n));
 }
 
 dftu_view* dftu_view_sort_by(const dftu_view* v, const char* column,
-                             int32_t descending) {
+                             std::int32_t descending) {
     if (!v || !column) return nullptr;
     return wrap(
         trace::views::detail::scan::sort_by(v->p, column, descending != 0));
 }
 
 dftu_view* dftu_view_group_by(const dftu_view* v, const dftu_group_key* keys,
-                              int32_t n) {
+                              std::int32_t n) {
     if (!v || n < 0 || (n > 0 && !keys)) return nullptr;
     dftracer::utils::dstd::Vector<GroupKey> ks;
     ks.reserve(static_cast<std::size_t>(n));
-    for (int32_t i = 0; i < n; ++i) {
+    for (std::int32_t i = 0; i < n; ++i) {
         GroupKey k;
         k.kind = to_kind(keys[i].kind);
         if (keys[i].arg) k.arg = keys[i].arg;
@@ -332,7 +333,7 @@ dftu_view* dftu_view_group_by(const dftu_view* v, const dftu_group_key* keys,
         if (k.transform == GroupKey::Transform::Bucket) {
             if (keys[i].n_transform_args > 0 && !keys[i].transform_args)
                 return nullptr;
-            for (int32_t j = 0; j < keys[i].n_transform_args; ++j) {
+            for (std::int32_t j = 0; j < keys[i].n_transform_args; ++j) {
                 if (!keys[i].transform_args[j]) return nullptr;
                 k.transform_args.emplace_back(keys[i].transform_args[j]);
             }
@@ -343,11 +344,11 @@ dftu_view* dftu_view_group_by(const dftu_view* v, const dftu_group_key* keys,
 }
 
 dftu_view* dftu_view_agg(const dftu_view* v, const dftu_view_agg_spec* specs,
-                         int32_t n) {
+                         std::int32_t n) {
     if (!v || n < 0 || (n > 0 && !specs)) return nullptr;
     dftracer::utils::dstd::Vector<AggSpec> ag;
     ag.reserve(static_cast<std::size_t>(n));
-    for (int32_t i = 0; i < n; ++i) {
+    for (std::int32_t i = 0; i < n; ++i) {
         ag.emplace_back(to_agg_op(specs[i].op),
                         specs[i].field ? specs[i].field : "",
                         specs[i].out ? specs[i].out : "",
@@ -373,7 +374,7 @@ dftu_lazyframe* dftu_view_lazy(const dftu_view* v) {
 
 dftu_lazyframe* dftu_view_duql(const dftu_view* v, const char* text,
                                const char* const* names,
-                               const char* const* values, int32_t n,
+                               const char* const* values, std::int32_t n,
                                char** error) {
     auto view = duql_view(v, text);
     if (!view) {
@@ -395,7 +396,7 @@ dftu_lazyframe* dftu_view_duql(const dftu_view* v, const char* text,
 
 char* dftu_view_explain_duql(const dftu_view* v, const char* text,
                              const char* const* names,
-                             const char* const* values, int32_t n,
+                             const char* const* values, std::int32_t n,
                              char** error) {
     auto view = duql_view(v, text);
     if (!view) {

@@ -17,6 +17,7 @@
 #include <dftracer/utils/dataframe/udf_registry.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/host/plugins.h>
@@ -46,8 +47,9 @@ bool has(dstd::StringView text, dstd::StringView word) {
     return text.find(word) != dstd::StringView::npos;
 }
 
-dstd::Optional<plugins::host::Plugins> load(const char* path) {
-    auto built = plugins::host::Plugins::builder().add(path).build();
+dstd::Optional<plugins::host::Plugins> load(dstd::StringView path) {
+    auto built =
+        plugins::host::Plugins::builder().add(dstd::String(path)).build();
     INFO((built.has_value() ? dstd::String{}
                             : dstd::String(built.error().message())));
     REQUIRE(built.has_value());
@@ -61,10 +63,10 @@ bool library_mapped() {
     return true;
 }
 
-std::int64_t counter(const char* symbol) {
+std::int64_t counter(dstd::CStringView symbol) {
     void* h = dlopen(UDAF_PLUGIN_PATH, RTLD_NOW | RTLD_NOLOAD);
     REQUIRE(h != nullptr);
-    auto* fn = reinterpret_cast<std::int64_t (*)()>(dlsym(h, symbol));
+    auto* fn = reinterpret_cast<std::int64_t (*)()>(dlsym(h, symbol.c_str()));
     REQUIRE(fn != nullptr);
     const std::int64_t value = fn();
     dlclose(h);

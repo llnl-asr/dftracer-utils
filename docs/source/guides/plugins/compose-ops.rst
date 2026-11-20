@@ -127,7 +127,7 @@ In Python: ``@jit.series``, a column op from an expression
 
 For a reusable **column** op there is no compile step at all: ``@jit.series``
 takes a function whose body builds a column expression from its arguments
-(the :mod:`~dftracer.utils.columnar` DSL: arithmetic, comparisons, ``clip``
+(the :mod:`~dftracer.utils.expr` DSL: arithmetic, comparisons, ``clip``
 / ``cast`` / ``fillna``, the prims) and registers it as an engine op under
 ``<module>.<name>``, next to the built-ins:
 

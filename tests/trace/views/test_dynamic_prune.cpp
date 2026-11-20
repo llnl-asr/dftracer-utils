@@ -112,9 +112,9 @@ dstd::String create_grouped_trace(TestEnvironment& env, int per_name = 40) {
     int pid = 1;
     for (const char* name : {"alpha", "beta", "gamma"}) {
         for (int i = 0; i < per_name; ++i) {
-            ofs << R"({"ph":"X","name":")" << name
-                << R"(","cat":"POSIX","pid":)" << pid << R"(,"tid":1,"ts":)"
-                << ts << R"(,"dur":)" << (10 + i) << "}\n";
+            ofs << R"({"ph":1,"name":")" << name << R"(","cat":"POSIX","pid":)"
+                << pid << R"(,"tid":1,"ts":)" << ts << R"(,"dur":)" << (10 + i)
+                << "}\n";
             ts += 100;
         }
         ++pid;

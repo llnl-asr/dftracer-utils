@@ -128,7 +128,7 @@ dstd::Vector<dstd::String> values_for(const duql::detail::QueryNode& leaf) {
 }
 
 // `value` placed at `path` (dotted, object keys only), as a record.
-dstd::String record_at(const dstd::String& path, const dstd::String& value) {
+dstd::String record_at(dstd::StringView path, dstd::StringView value) {
     dstd::String out;
     std::size_t start = 0, depth = 0;
     for (;;) {
@@ -147,7 +147,7 @@ dstd::String record_at(const dstd::String& path, const dstd::String& value) {
 }
 
 // The field map a reader builds for `path` from `record`.
-duql::ValueMap map_of(const dstd::String& path, simdjson::dom::element record) {
+duql::ValueMap map_of(dstd::StringView path, simdjson::dom::element record) {
     duql::ValueMap m;
     json::JsonValue v = json::JsonValue(record).at(path);
     if (!v.exists() && !path.starts_with("args."))

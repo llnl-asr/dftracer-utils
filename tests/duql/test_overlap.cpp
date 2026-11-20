@@ -3,10 +3,12 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/query/overlap.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 #include <mmix_lcg.h>
+#include <span_list.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 
@@ -47,8 +49,8 @@ Table random_table(Rng& rng, int n, int keys, int span, int max_dur) {
     return t;
 }
 
-dataframe::Series column(const dstd::Vector<std::int64_t>& v,
-                         const dstd::Vector<std::uint8_t>& ok) {
+dataframe::Series column(dstd::Span<const std::int64_t> v,
+                         dstd::Span<const std::uint8_t> ok) {
     dstd::Vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
         if (ok[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
@@ -178,7 +180,8 @@ TEST_CASE("overlap refuses a start that is not a number") {
     const std::int64_t one = 1;
     dftracer::utils::dataframe::query::OverlapColumns side;
     side.keys.push_back(dataframe::Series::flat_i64(&one, 1));
-    side.start = dataframe::Series::strings({"a"});
+    side.start = dataframe::Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"a"}));
     side.duration = dataframe::Series::flat_i64(&one, 1);
     dftracer::utils::dataframe::query::OverlapColumns rows;
     rows.keys.push_back(dataframe::Series::flat_i64(&one, 1));

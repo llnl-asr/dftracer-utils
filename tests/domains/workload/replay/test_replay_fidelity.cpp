@@ -17,8 +17,10 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/domains/workload/replay/replay.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -44,7 +46,7 @@ namespace {
 // apart. The events name "read" / cat "POSIX" pass the default filters but
 // dry_run=true skips actual I/O so the consumer's per-event work is
 // dominated by apply_timing sleep.
-void write_evenly_spaced_trace(const dstd::String& path, std::size_t n,
+void write_evenly_spaced_trace(dstd::String path, std::size_t n,
                                std::uint64_t step_us, std::uint32_t pid = 12345,
                                std::uint64_t base_ts = 1'000'000) {
     dftu_utils_test::TextOut f;
@@ -52,7 +54,7 @@ void write_evenly_spaced_trace(const dstd::String& path, std::size_t n,
     for (std::size_t i = 0; i < n; ++i) {
         f << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX","pid":)" << pid
           << R"(,"tid":)" << pid << R"(,"ts":)" << (base_ts + i * step_us)
-          << R"(,"dur":10,"ph":"X","args":{}})";
+          << R"(,"dur":10,"ph":1,"args":{}})";
         if (i + 1 < n) f << ",";
         f << "\n";
     }
@@ -85,7 +87,7 @@ struct FidelityStats {
     std::int64_t expected_trace_span_us = 0;
 };
 
-FidelityStats analyze(const dstd::Vector<DispatchSample>& samples) {
+FidelityStats analyze(dstd::Span<const DispatchSample> samples) {
     REQUIRE(samples.size() >= 2);
 
     const auto& first = samples.front();
@@ -117,8 +119,7 @@ FidelityStats analyze(const dstd::Vector<DispatchSample>& samples) {
     return out;
 }
 
-void run_pipelined(ReplayEngine& engine,
-                   const dstd::Vector<dstd::String>& files,
+void run_pipelined(ReplayEngine& engine, dstd::Vector<dstd::String> files,
                    ReplayResult& result, std::size_t threads) {
     Runtime rt(threads);
     dftu_utils_test::ok(rt.block_on(coro::with_scope([&](coro::Scope& scope) {
@@ -152,7 +153,7 @@ Tolerances tolerances() {
             /*wall_span=*/0.25};
 }
 
-void check_fidelity(const FidelityStats& s, const char* label) {
+void check_fidelity(const FidelityStats& s, dstd::StringView label) {
     const auto t = tolerances();
     INFO("[" << label << " ci=" << is_ci_env() << "] max_lateness="
              << s.max_lateness_us << "us p99=" << s.p99_lateness_us

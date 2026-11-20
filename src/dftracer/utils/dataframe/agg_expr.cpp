@@ -54,8 +54,24 @@ AggExprSpec agg_skew(Expr value, dstd::String out) {
 AggExprSpec agg_kurt(Expr value, dstd::String out) {
     return {AggOp::Kurt, std::move(value), std::move(out)};
 }
+AggExprSpec agg_skew_unbiased(Expr value, dstd::String out) {
+    return {AggOp::SkewUnbiased, std::move(value), std::move(out)};
+}
+AggExprSpec agg_kurt_unbiased(Expr value, dstd::String out) {
+    return {AggOp::KurtUnbiased, std::move(value), std::move(out)};
+}
 AggExprSpec agg_pct(Expr value, double q, dstd::String out) {
     return {AggOp::Pct, std::move(value), std::move(out), q};
+}
+dstd::Result<AggExprSpec> agg_quantile(Expr value, double q,
+                                       Interpolation interp, dstd::String out) {
+    if (!(q >= 0.0 && q <= 1.0))
+        return common::make_error<
+            "agg_quantile: the level must be in [0, 1], not {}">(
+            common::ErrorCode::InvalidArgument, q);
+    AggExprSpec s{AggOp::Quantile, std::move(value), std::move(out), q};
+    s.interp = interp;
+    return s;
 }
 AggExprSpec agg_hist(Expr value, dstd::String out) {
     return {AggOp::Hist, std::move(value), std::move(out)};
@@ -78,9 +94,9 @@ AggExprSpec agg_set_union(Expr value, dstd::String out, bool typed) {
 }
 
 dstd::Result<DataFrame> group_agg_expr(
-    const dstd::Vector<Expr>& keys, const dstd::Vector<AggExprSpec>& specs,
-    const dstd::Vector<const Series*>& inputs,
-    const dstd::Vector<dstd::String>& key_names) {
+    dstd::Span<const Expr> keys, dstd::Span<const AggExprSpec> specs,
+    dstd::Span<const Series* const> inputs,
+    dstd::Span<const dstd::String> key_names) {
     // The value expressions (all numeric) compile into one program so a shared
     // subexpression is computed once (CSE); deduping identical value nodes maps
     // them to one evaluated column, folded into a single shared FieldStat.
@@ -108,6 +124,7 @@ dstd::Result<DataFrame> group_agg_expr(
         cs.op = sp.op;
         cs.out = sp.out;
         cs.param = sp.param;
+        cs.interp = sp.interp;
         cs.fn = sp.fn;
         if (sp.op == AggOp::Count || !sp.value.valid()) {
             cs.value_col = -1;
@@ -213,92 +230,96 @@ dstd::Result<DataFrame> group_agg_expr(
     return group_agg(key_ptrs, values, std::move(col_specs), key_names);
 }
 
-dstd::Result<DataFrame> group_agg_expr(
-    const Expr& key, const dstd::Vector<AggExprSpec>& specs,
-    const dstd::Vector<const Series*>& inputs, const dstd::String& key_name) {
-    return group_agg_expr(dstd::Vector<Expr>{key}, specs, inputs,
-                          dstd::Vector<dstd::String>{key_name});
+dstd::Result<DataFrame> group_agg_expr(const Expr& key,
+                                       dstd::Span<const AggExprSpec> specs,
+                                       dstd::Span<const Series* const> inputs,
+                                       dstd::StringView key_name) {
+    const dstd::String name(key_name);
+    return group_agg_expr(dstd::Span<const Expr>(&key, 1), specs, inputs,
+                          dstd::Span<const dstd::String>(&name, 1));
 }
 
 }  // namespace dftracer::utils::dataframe
 
-namespace {
-dftu_agg_spec make_spec(int32_t op, const dftu_expr* value, const char* out,
-                        double param = 0.0, const dftu_expr* by = nullptr) {
-    return {op, value, out, param, by};
-}
-}  // namespace
-
 dftu_agg_spec dftu_agg_count(const char* out) {
-    return make_spec(DFTU_AGG_COUNT, nullptr, out);
+    return {DFTU_AGG_COUNT, nullptr, out, 0.0, nullptr, 0};
 }
 dftu_agg_spec dftu_agg_count_valid(const dftu_expr* value, const char* out) {
-    return make_spec(DFTU_AGG_COUNT_VALID, value, out);
+    return {DFTU_AGG_COUNT_VALID, value, out, 0.0, nullptr, 0};
 }
 dftu_agg_spec dftu_agg_sum(const dftu_expr* value, const char* out) {
-    return make_spec(DFTU_AGG_SUM, value, out);
+    return {DFTU_AGG_SUM, value, out, 0.0, nullptr, 0};
 }
 dftu_agg_spec dftu_agg_min(const dftu_expr* value, const char* out) {
-    return make_spec(DFTU_AGG_MIN, value, out);
+    return {DFTU_AGG_MIN, value, out, 0.0, nullptr, 0};
 }
 dftu_agg_spec dftu_agg_max(const dftu_expr* value, const char* out) {
-    return make_spec(DFTU_AGG_MAX, value, out);
+    return {DFTU_AGG_MAX, value, out, 0.0, nullptr, 0};
 }
 dftu_agg_spec dftu_agg_mean(const dftu_expr* value, const char* out) {
-    return make_spec(DFTU_AGG_MEAN, value, out);
+    return {DFTU_AGG_MEAN, value, out, 0.0, nullptr, 0};
 }
 dftu_agg_spec dftu_agg_var(const dftu_expr* value, const char* out) {
-    return make_spec(DFTU_AGG_VAR, value, out);
+    return {DFTU_AGG_VAR, value, out, 0.0, nullptr, 0};
 }
 dftu_agg_spec dftu_agg_std(const dftu_expr* value, const char* out) {
-    return make_spec(DFTU_AGG_STD, value, out);
+    return {DFTU_AGG_STD, value, out, 0.0, nullptr, 0};
 }
 dftu_agg_spec dftu_agg_skew(const dftu_expr* value, const char* out) {
-    return make_spec(DFTU_AGG_SKEW, value, out);
+    return {DFTU_AGG_SKEW, value, out, 0.0, nullptr, 0};
 }
 dftu_agg_spec dftu_agg_kurt(const dftu_expr* value, const char* out) {
-    return make_spec(DFTU_AGG_KURT, value, out);
+    return {DFTU_AGG_KURT, value, out, 0.0, nullptr, 0};
+}
+dftu_agg_spec dftu_agg_skew_unbiased(const dftu_expr* value, const char* out) {
+    return {DFTU_AGG_SKEW_UNBIASED, value, out, 0.0, nullptr, 0};
+}
+dftu_agg_spec dftu_agg_kurt_unbiased(const dftu_expr* value, const char* out) {
+    return {DFTU_AGG_KURT_UNBIASED, value, out, 0.0, nullptr, 0};
 }
 dftu_agg_spec dftu_agg_first(const dftu_expr* value, const char* out) {
-    return make_spec(DFTU_AGG_FIRST, value, out);
+    return {DFTU_AGG_FIRST, value, out, 0.0, nullptr, 0};
 }
 dftu_agg_spec dftu_agg_last(const dftu_expr* value, const char* out) {
-    return make_spec(DFTU_AGG_LAST, value, out);
+    return {DFTU_AGG_LAST, value, out, 0.0, nullptr, 0};
 }
 dftu_agg_spec dftu_agg_pct(const dftu_expr* value, double q, const char* out) {
-    return make_spec(DFTU_AGG_PCT, value, out, q);
+    return {DFTU_AGG_PCT, value, out, q, nullptr, 0};
+}
+dftu_agg_spec dftu_agg_quantile(const dftu_expr* value, double q,
+                                std::int32_t interp, const char* out) {
+    return {DFTU_AGG_QUANTILE, value, out, q, nullptr, interp};
 }
 dftu_agg_spec dftu_agg_hist(const dftu_expr* value, const char* out) {
-    return make_spec(DFTU_AGG_HIST, value, out);
+    return {DFTU_AGG_HIST, value, out, 0.0, nullptr, 0};
 }
 dftu_agg_spec dftu_agg_sumsq(const dftu_expr* value, const char* out) {
-    return make_spec(DFTU_AGG_SUMSQ, value, out);
+    return {DFTU_AGG_SUMSQ, value, out, 0.0, nullptr, 0};
 }
 dftu_agg_spec dftu_agg_argmax(const dftu_expr* value, const dftu_expr* by,
                               const char* out) {
-    return make_spec(DFTU_AGG_ARGMAX, value, out, 0.0, by);
+    return {DFTU_AGG_ARGMAX, value, out, 0.0, by, 0};
 }
 dftu_agg_spec dftu_agg_set_union(const dftu_expr* value, const char* out,
-                                 int32_t typed) {
-    return make_spec(DFTU_AGG_SET_UNION, value, out, typed ? 1.0 : 0.0);
+                                 std::int32_t typed) {
+    return {DFTU_AGG_SET_UNION, value, out, typed ? 1.0 : 0.0, nullptr, 0};
 }
 
-int32_t dftu_dataframe_group_agg_expr(const dftu_expr* key,
-                                      const dftu_agg_spec* specs,
-                                      int32_t n_specs,
-                                      const dftu_series* const* inputs,
-                                      int32_t n_inputs, dftu_series** out_key,
-                                      dftu_series** out_values) {
+std::int32_t dftu_dataframe_group_agg_expr(
+    const dftu_expr* key, const dftu_agg_spec* specs, std::int32_t n_specs,
+    const dftu_series* const* inputs, std::int32_t n_inputs,
+    dftu_series** out_key, dftu_series** out_values) {
     if (!key || !specs || n_specs <= 0) return -1;
     dftracer::utils::dstd::Vector<dataframe::AggExprSpec> cxx;
     cxx.reserve(static_cast<std::size_t>(n_specs));
-    for (int32_t i = 0; i < n_specs; ++i) {
+    for (std::int32_t i = 0; i < n_specs; ++i) {
         dataframe::AggExprSpec s;
         s.op = static_cast<dataframe::AggOp>(specs[i].op);
         if (specs[i].value)
             s.value = dataframe::expr_handle_unwrap(specs[i].value);
         s.out = specs[i].out ? specs[i].out : "";
         s.param = specs[i].param;
+        s.interp = static_cast<dataframe::Interpolation>(specs[i].interp);
         if (specs[i].by) s.by = dataframe::expr_handle_unwrap(specs[i].by);
         cxx.push_back(std::move(s));
     }
@@ -306,11 +327,11 @@ int32_t dftu_dataframe_group_agg_expr(const dftu_expr* key,
     dftracer::utils::dstd::Vector<const dataframe::Series*> cols;
     owned.reserve(static_cast<std::size_t>(n_inputs));
     cols.reserve(static_cast<std::size_t>(n_inputs));
-    for (int32_t i = 0; i < n_inputs; ++i) {
+    for (std::int32_t i = 0; i < n_inputs; ++i) {
         owned.emplace_back(const_cast<dftu_series*>(inputs[i]));
         cols.push_back(&owned.back());
     }
-    int32_t written = -1;
+    std::int32_t written = -1;
     if (auto out = dataframe::group_agg_expr(dataframe::expr_handle_unwrap(key),
                                              cxx, cols, "key")) {
         *out_key = out->columns[0].release();

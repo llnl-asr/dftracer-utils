@@ -20,8 +20,12 @@ struct AggInternTable {
 using AggInternPtr = dstd::SharedPtr<AggInternTable>;
 
 /// Shared by every handle onto `index_path` in this process, so a writer and
-/// a reader of one index agree on ids.
-AggInternPtr intern_for_index(dstd::StringView index_path);
+/// a reader of one index agree on ids. `generation` is
+/// @ref dftracer::utils::trace::index::Index::generation of that index: a table
+/// made for an index that was deleted and built again at the same path is
+/// dropped, never served.
+AggInternPtr intern_for_index(dstd::StringView index_path,
+                              std::uint64_t generation);
 
 /// A table bound to no index, for aggregating without persisting.
 AggInternPtr make_intern_table();

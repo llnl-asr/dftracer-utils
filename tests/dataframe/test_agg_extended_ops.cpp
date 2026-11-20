@@ -11,9 +11,11 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 
 using namespace dftracer::utils;
@@ -55,6 +57,13 @@ constexpr std::int32_t VC_BITS = 2;
 constexpr std::int32_t VC_TAG = 3;
 constexpr std::int32_t VC_YV = 4;
 
+AggSpec quantile_spec(std::int32_t value_col, dstd::String out, double q,
+                      Interpolation interp) {
+    AggSpec s{AggOp::Quantile, value_col, std::move(out), q};
+    s.interp = interp;
+    return s;
+}
+
 dstd::Vector<AggSpec> all_specs() {
     return {
         AggSpec{AggOp::ArgMin, VC_NAME, "argmin", 0.0, VC_BY},
@@ -72,6 +81,9 @@ dstd::Vector<AggSpec> all_specs() {
         AggSpec{AggOp::RegrIntercept, VC_YV, "regr_intercept", 0.0, VC_BY},
         AggSpec{AggOp::RegrR2, VC_YV, "regr_r2", 0.0, VC_BY},
         AggSpec{AggOp::Prod, VC_BY, "prod"},
+        quantile_spec(VC_BY, "q_linear", 0.4, Interpolation::Linear),
+        quantile_spec(VC_BY, "q_nearest", 0.4, Interpolation::Nearest),
+        quantile_spec(VC_YV, "q_mid", 0.4, Interpolation::Midpoint),
     };
 }
 
@@ -109,7 +121,7 @@ dstd::String render(const Series& c, std::int64_t i) {
 }
 
 // Row index of key value `key` in a finalized frame keyed on one Int64 column.
-std::int64_t row_of(const DataFrame& d, const dstd::String& key_name,
+std::int64_t row_of(const DataFrame& d, dstd::StringView key_name,
                     std::int64_t key) {
     const Series c = d.column(key_name);
     for (std::int64_t i = 0; i < d.num_rows(); ++i)
@@ -185,6 +197,140 @@ TEST_CASE("extended aggregate ops produce the exact expected values") {
           doctest::Approx(1.0));
     CHECK(r.column("regr_r2").data<double>()[g0] == doctest::Approx(1.0));
     CHECK(r.column("regr_r2").data<double>()[g1] == doctest::Approx(1.0));
+
+    // The by values of group 0 rank 2 4 5 9 and of group 1 rank 1 3 7 8; the
+    // level 0.4 falls at rank position 1.2.
+    CHECK(r.column("q_linear").data<double>()[g0] == doctest::Approx(4.2));
+    CHECK(r.column("q_linear").data<double>()[g1] == doctest::Approx(3.8));
+    CHECK(r.column("q_nearest").data<double>()[g0] == 4.0);
+    CHECK(r.column("q_nearest").data<double>()[g1] == 3.0);
+    // y = 2 * by + 1 ranks 5 9 11 19 and 3 7 15 17: the midpoint of ranks 1, 2.
+    CHECK(r.column("q_mid").data<double>()[g0] == 10.0);
+    CHECK(r.column("q_mid").data<double>()[g1] == 11.0);
+}
+
+TEST_CASE("Quantile skips nulls, ranks NaN last and is null with no value") {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    dstd::Vector<std::int64_t> k{0, 0, 0, 0, 1, 1, 2};
+    dstd::Vector<double> v{3.0, nan, 1.0, 2.0, 9.0, 7.0, 5.0};
+    // Row 6 (group 2) is null: that group has no value.
+    dstd::Vector<std::uint8_t> valid{0x3F};
+    Series sk = Series::flat_i64(k.data(), 7);
+    Series sv = Series::flat_f64(v.data(), 7, valid.data());
+    dstd::Vector<AggSpec> specs{
+        quantile_spec(0, "median", 0.5, Interpolation::Linear)};
+    DataFrame r = dftu_utils_test::ok(dataframe::group_agg(
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&sk}),
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&sv}),
+        specs, dftu_utils_test::span_of<dstd::String>({"k"})));
+    const Series med = r.column("median");
+    REQUIRE(med.length() == 3);
+    const std::int64_t g0 = row_of(r, "k", 0);
+    const std::int64_t g1 = row_of(r, "k", 1);
+    const std::int64_t g2 = row_of(r, "k", 2);
+    CHECK(med.data<double>()[g0] == 2.5);  // ranks 1 2 3 NaN
+    CHECK(med.data<double>()[g1] == 8.0);
+    CHECK(med.is_null(g2));
+}
+
+// The exact quantile of every level i/100 and every interpolation must equal
+// Series::quantile, which is the reference, for one group of n values.
+static void check_quantile_against_series(std::int64_t n) {
+    dstd::Vector<std::int64_t> keys(static_cast<std::size_t>(n), 0);
+    dstd::Vector<double> vals(static_cast<std::size_t>(n));
+    for (std::int64_t i = 0; i < n; ++i)
+        vals[static_cast<std::size_t>(i)] = static_cast<double>((i * 7) % n);
+    Series sk = Series::flat_i64(keys.data(), n);
+    Series sv = Series::flat_f64(vals.data(), n);
+    const Interpolation interps[] = {
+        Interpolation::Linear, Interpolation::Nearest, Interpolation::Lower,
+        Interpolation::Higher, Interpolation::Midpoint};
+    for (const Interpolation interp : interps) {
+        for (int i = 0; i <= 100; ++i) {
+            const double q = static_cast<double>(i) / 100.0;
+            dstd::Vector<AggSpec> specs{quantile_spec(0, "q", q, interp)};
+            DataFrame r = dftu_utils_test::ok(dataframe::group_agg(
+                dftu_utils_test::span_of<
+                    const dftracer::utils::dataframe::Series*>({&sk}),
+                dftu_utils_test::span_of<
+                    const dftracer::utils::dataframe::Series*>({&sv}),
+                specs, dftu_utils_test::span_of<dstd::String>({"k"})));
+            CAPTURE(n);
+            CAPTURE(static_cast<int>(interp));
+            CAPTURE(q);
+            CHECK(r.column("q").data<double>()[0] == sv.quantile(q, interp));
+        }
+    }
+}
+
+TEST_CASE("Quantile equals Series::quantile at every level and interpolation") {
+    check_quantile_against_series(11);
+    check_quantile_against_series(100);
+}
+
+TEST_CASE("Quantile refuses a level outside [0, 1] and NaN") {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    dstd::Vector<std::int64_t> k{0, 0, 0};
+    dstd::Vector<double> v{1.0, 2.0, 3.0};
+    Series sk = Series::flat_i64(k.data(), 3);
+    Series sv = Series::flat_f64(v.data(), 3);
+    for (const double q : {-0.1, 1.5, 2.3, nan}) {
+        CAPTURE(q);
+        CHECK_FALSE(
+            dataframe::agg_quantile(dataframe::expr_col(0), q).has_value());
+        dstd::Vector<AggSpec> specs{
+            quantile_spec(0, "q", q, Interpolation::Linear)};
+        CHECK_FALSE(dataframe::group_agg(
+                        dftu_utils_test::span_of<
+                            const dftracer::utils::dataframe::Series*>({&sk}),
+                        dftu_utils_test::span_of<
+                            const dftracer::utils::dataframe::Series*>({&sv}),
+                        specs, dftu_utils_test::span_of<dstd::String>({"k"}))
+                        .has_value());
+        dftu_expr* key = dftu_expr_col(0);
+        dftu_expr* value = dftu_expr_col(1);
+        const dftu_agg_spec c =
+            dftu_agg_quantile(value, q, DFTU_INTERP_LOWER, "q");
+        CHECK(c.interp == DFTU_INTERP_LOWER);
+        const dftu_series* inputs[] = {sk.handle(), sv.handle()};
+        dftu_series* out_key = nullptr;
+        dftu_series* out_value = nullptr;
+        CHECK(dftu_dataframe_group_agg_expr(key, &c, 1, inputs, 2, &out_key,
+                                            &out_value) == -1);
+        dftu_expr_free(key);
+        dftu_expr_free(value);
+    }
+    CHECK(dataframe::agg_quantile(dataframe::expr_col(0), 0.0).has_value());
+    CHECK(dataframe::agg_quantile(dataframe::expr_col(0), 1.0).has_value());
+    dstd::Vector<AggSpec> bad{
+        quantile_spec(0, "q", 0.5, static_cast<Interpolation>(9))};
+    CHECK_FALSE(
+        dataframe::group_agg(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&sk}),
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&sv}),
+            bad, dftu_utils_test::span_of<dstd::String>({"k"}))
+            .has_value());
+}
+
+TEST_CASE("a keyless aggregate over no rows is one row") {
+    dstd::Vector<std::int64_t> none;
+    Series sv = Series::flat_i64(none.data(), 0);
+    dstd::Vector<AggSpec> specs{
+        AggSpec{AggOp::Sum, 0, "sum"}, AggSpec{AggOp::Mean, 0, "mean"},
+        quantile_spec(0, "q", 0.5, Interpolation::Linear)};
+    DataFrame r = dftu_utils_test::ok(dataframe::group_agg(
+        {},
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&sv}),
+        specs, dstd::Vector<dstd::String>{}));
+    REQUIRE(r.num_rows() == 1);
+    CHECK(r.column("sum").data<std::int64_t>()[0] == 0);
+    CHECK(r.column("mean").is_null(0));
+    CHECK(r.column("q").is_null(0));
 }
 
 TEST_CASE("extended aggregate ops round-trip through serialize/deserialize") {
@@ -390,11 +536,12 @@ TEST_CASE("group_agg_expr reads a value column in a view encoding") {
     const std::int64_t kv[2] = {7, 7};
     Series k = Series::flat_i64(kv, 2);
     dstd::Vector<const Series*> inputs{&k, &xs, &y};
-    DataFrame r = dftu_utils_test::ok(
-        dataframe::group_agg_expr(dataframe::col(0),
-                                  {dataframe::agg_sum(dataframe::col(1), "sx"),
-                                   dataframe::agg_sum(dataframe::col(2), "sy")},
-                                  inputs, "k"));
+    DataFrame r = dftu_utils_test::ok(dataframe::group_agg_expr(
+        dataframe::col(0),
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggExprSpec>(
+            {dataframe::agg_sum(dataframe::col(1), "sx"),
+             dataframe::agg_sum(dataframe::col(2), "sy")}),
+        inputs, "k"));
     REQUIRE(r.num_rows() == 1);
     CHECK(r.column("sx").data<double>()[0] == doctest::Approx(1.0));
     CHECK(r.column("sy").data<double>()[0] == doctest::Approx(4.0));
@@ -433,4 +580,295 @@ TEST_CASE("agg_deserialize survives mutated and truncated blobs") {
     }
     CHECK(decoded + refused == 2000);
     CHECK(refused > 0);
+}
+
+namespace {
+
+// Finalize the ArgMaxPos and ArgMinPos of one value column over the keys
+// `k`, as the Int64 columns and their validity (-1 for a null).
+struct PosResult {
+    dstd::Vector<std::int64_t> max_pos, min_pos;
+};
+
+PosResult positions(const Series& k, const Series& v, std::int64_t groups) {
+    dstd::Vector<AggSpec> specs{AggSpec{AggOp::ArgMaxPos, 0, "mx"},
+                                AggSpec{AggOp::ArgMinPos, 0, "mn"}};
+    auto st = dataframe::agg_new(specs);
+    dstd::Vector<const Series*> keys{&k};
+    dstd::Vector<const Series*> values{&v};
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st, keys, values));
+    dftu_utils_test::ok(dataframe::agg_check(*st));
+    const DataFrame out = dataframe::agg_finalize(*st, "k");
+    REQUIRE(out.num_rows() == groups);
+    PosResult r;
+    const Series mx = out.column("mx");
+    const Series mn = out.column("mn");
+    CHECK(mx.type() == TypeId::Int64);
+    for (std::int64_t g = 0; g < groups; ++g) {
+        const std::int64_t at = row_of(out, "k", g);
+        REQUIRE(at >= 0);
+        r.max_pos.push_back(mx.is_null(at) ? -1 : mx.data<std::int64_t>()[at]);
+        r.min_pos.push_back(mn.is_null(at) ? -1 : mn.data<std::int64_t>()[at]);
+    }
+    return r;
+}
+
+}  // namespace
+
+TEST_CASE(
+    "ArgMaxPos and ArgMinPos give the first extreme's position in its group") {
+    // Group 0: 3 9 9 (the tie keeps the first 9); group 1: 5 5; group 2 holds
+    // only nulls; group 3 interleaves with the others, so its positions count
+    // its own rows.
+    const std::int64_t k[10] = {0, 3, 0, 0, 1, 3, 1, 2, 2, 3};
+    const std::int64_t v[10] = {3, -2, 9, 9, 5, -7, 5, 0, 0, -7};
+    // Rows 7 and 8 (group 2) are null.
+    const std::uint8_t bits[2] = {0x7F, 0xFE};
+    const Series sk = Series::flat_i64(k, 10);
+    const Series sv = Series::flat_i64(v, 10, bits);
+    const PosResult r = positions(sk, sv, 4);
+    CHECK(r.max_pos[0] == 1);
+    CHECK(r.min_pos[0] == 0);
+    CHECK(r.max_pos[1] == 0);
+    CHECK(r.min_pos[1] == 0);
+    CHECK(r.max_pos[2] == -1);
+    CHECK(r.min_pos[2] == -1);
+    CHECK(r.max_pos[3] == 0);  // -2, -7, -7: the max is the first row
+    CHECK(r.min_pos[3] == 1);  // the first -7 (its own second row)
+}
+
+TEST_CASE(
+    "ArgMaxPos and ArgMinPos rank a NaN last and compare big integers "
+    "exactly") {
+    const std::int64_t k[8] = {0, 0, 0, 0, 1, 2, 2, 2};
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double f[8] = {nan, 2.0, nan, 1.0, nan, 4.0, 4.0, -1.0};
+    const PosResult r =
+        positions(Series::flat_i64(k, 8), Series::flat_f64(f, 8), 3);
+    CHECK(r.max_pos[0] == 1);
+    CHECK(r.min_pos[0] == 3);
+    CHECK(r.max_pos[1] == 0);  // only a NaN: it wins
+    CHECK(r.min_pos[1] == 0);
+    CHECK(r.max_pos[2] == 0);
+    CHECK(r.min_pos[2] == 2);
+
+    // 2^62 and 2^62 + 1 are equal as doubles.
+    const std::int64_t big_k[4] = {0, 0, 1, 1};
+    const std::int64_t big[4] = {4611686018427387904, 4611686018427387905,
+                                 4611686018427387905, 4611686018427387904};
+    const PosResult b =
+        positions(Series::flat_i64(big_k, 4), Series::flat_i64(big, 4), 2);
+    CHECK(b.max_pos[0] == 1);
+    CHECK(b.min_pos[0] == 0);
+    CHECK(b.max_pos[1] == 0);
+    CHECK(b.min_pos[1] == 1);
+
+    // Unsigned values above the signed range order as unsigned.
+    const std::uint64_t u[3] = {1, 9223372036854775809ULL,
+                                9223372036854775808ULL};
+    const std::int64_t uk[3] = {0, 0, 0};
+    const PosResult ur = positions(Series::flat_i64(uk, 3),
+                                   Series::flat(TypeId::Uint64, u, 3), 1);
+    CHECK(ur.max_pos[0] == 1);
+    CHECK(ur.min_pos[0] == 0);
+}
+
+TEST_CASE("ArgMaxPos and ArgMinPos round-trip and merge in row order") {
+    const std::int64_t k[8] = {0, 1, 0, 1, 0, 1, 0, 1};
+    const std::int64_t v[8] = {1, 4, 7, 4, 7, 9, 2, 0};
+    const Series sk = Series::flat_i64(k, 8);
+    const Series sv = Series::flat_i64(v, 8);
+    dstd::Vector<const Series*> keys{&sk};
+    dstd::Vector<const Series*> values{&sv};
+    auto specs = [] {
+        return dstd::Vector<AggSpec>{AggSpec{AggOp::ArgMaxPos, 0, "mx"},
+                                     AggSpec{AggOp::ArgMinPos, 0, "mn"}};
+    };
+    auto whole = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*whole, keys, values));
+    const DataFrame want = dataframe::agg_finalize(*whole, "k");
+
+    auto back = dftu_utils_test::ok(
+        dataframe::agg_deserialize(dataframe::agg_serialize(*whole)));
+    check_same(want, dataframe::agg_finalize(*back, "k"));
+
+    auto lo = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*lo, keys, values, 0, 5));
+    auto hi = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*hi, keys, values, 5, 8));
+    dataframe::agg_merge(*lo, *hi);
+    dftu_utils_test::ok(dataframe::agg_check(*lo));
+    check_same(want, dataframe::agg_finalize(*lo, "k"));
+
+    // A partial that starts before the one it joins cannot be shifted.
+    auto lo2 = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*lo2, keys, values, 0, 5));
+    auto hi2 = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*hi2, keys, values, 5, 8));
+    dataframe::agg_merge(*hi2, *lo2);
+    CHECK_FALSE(dataframe::agg_check(*hi2).has_value());
+}
+
+TEST_CASE("ArgMaxPos refuses a text column") {
+    const std::int64_t k[2] = {0, 0};
+    dstd::Vector<dstd::String> s{"a", "b"};
+    const Series sk = Series::flat_i64(k, 2);
+    const Series sv = Series::strings(s);
+    dstd::Vector<const Series*> keys{&sk};
+    dstd::Vector<const Series*> values{&sv};
+    auto st = dataframe::agg_new({AggSpec{AggOp::ArgMaxPos, 0, "mx"}});
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st, keys, values));
+    CHECK_FALSE(dataframe::agg_check(*st).has_value());
+}
+
+namespace {
+
+// The three bitwise reductions of one value column over the keys `k`.
+DataFrame bitwise_frame(const Series& k, const Series& v) {
+    dstd::Vector<AggSpec> specs{AggSpec{AggOp::BitwiseAnd, 0, "a"},
+                                AggSpec{AggOp::BitwiseOr, 0, "o"},
+                                AggSpec{AggOp::BitwiseXor, 0, "x"}};
+    auto st = dataframe::agg_new(specs);
+    dstd::Vector<const Series*> keys{&k};
+    dstd::Vector<const Series*> values{&v};
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st, keys, values));
+    dftu_utils_test::ok(dataframe::agg_check(*st));
+    return dataframe::agg_finalize(*st, "k");
+}
+
+}  // namespace
+
+TEST_CASE("bitwise aggregates keep the column type and null an empty group") {
+    // Group 0: 6, 3, -5 (as int8); group 1: 5 and a null; group 2: only nulls.
+    const std::int64_t k[6] = {0, 0, 1, 1, 2, 0};
+    const std::int8_t v[6] = {6, 3, 5, 0, 0, -5};
+    const std::uint8_t valid[1] = {0b0010'0111};
+    const DataFrame r = bitwise_frame(Series::flat_i64(k, 6),
+                                      Series::flat(TypeId::Int8, v, 6, valid));
+    REQUIRE(r.num_rows() == 3);
+    for (const char* name : {"a", "o", "x"})
+        CHECK(r.column(name).type() == TypeId::Int8);
+    const std::int64_t g0 = row_of(r, "k", 0);
+    const std::int64_t g1 = row_of(r, "k", 1);
+    const std::int64_t g2 = row_of(r, "k", 2);
+    CHECK(r.column("a").data<std::int8_t>()[g0] == (6 & 3 & -5));
+    CHECK(r.column("o").data<std::int8_t>()[g0] == (6 | 3 | -5));
+    CHECK(r.column("x").data<std::int8_t>()[g0] == (6 ^ 3 ^ -5));
+    CHECK(r.column("a").data<std::int8_t>()[g1] == 5);
+    CHECK(r.column("x").data<std::int8_t>()[g1] == 5);
+    for (const char* name : {"a", "o", "x"}) {
+        CHECK_FALSE(r.column(name).is_null(g0));
+        CHECK_FALSE(r.column(name).is_null(g1));
+        CHECK(r.column(name).is_null(g2));
+    }
+}
+
+TEST_CASE("bitwise aggregates read every width and a Bool as the column does") {
+    const std::int64_t k[3] = {0, 0, 0};
+    const std::uint64_t u64[3] = {0xF0F0F0F0F0F0F0F0ULL, 0xFF00FF00FF00FF00ULL,
+                                  0x8000000000000001ULL};
+    DataFrame r = bitwise_frame(Series::flat_i64(k, 3),
+                                Series::flat(TypeId::Uint64, u64, 3));
+    CHECK(r.column("a").type() == TypeId::Uint64);
+    CHECK(r.column("a").data<std::uint64_t>()[0] == (u64[0] & u64[1] & u64[2]));
+    CHECK(r.column("o").data<std::uint64_t>()[0] == (u64[0] | u64[1] | u64[2]));
+    CHECK(r.column("x").data<std::uint64_t>()[0] == (u64[0] ^ u64[1] ^ u64[2]));
+
+    const std::uint16_t u16[3] = {0xFFFF, 0x8001, 0x00FF};
+    r = bitwise_frame(Series::flat_i64(k, 3),
+                      Series::flat(TypeId::Uint16, u16, 3));
+    CHECK(r.column("a").type() == TypeId::Uint16);
+    CHECK(r.column("a").data<std::uint16_t>()[0] == 0x0001);
+    CHECK(r.column("o").data<std::uint16_t>()[0] == 0xFFFF);
+    CHECK(r.column("x").data<std::uint16_t>()[0] == (0xFFFF ^ 0x8001 ^ 0x00FF));
+
+    const std::int32_t i32[2] = {-1, std::numeric_limits<std::int32_t>::min()};
+    const std::int64_t k2[2] = {0, 0};
+    r = bitwise_frame(Series::flat_i64(k2, 2),
+                      Series::flat(TypeId::Int32, i32, 2));
+    CHECK(r.column("a").data<std::int32_t>()[0] ==
+          std::numeric_limits<std::int32_t>::min());
+
+    // Bool: rows 1, 0, 1 in group 0 and a lone 1 in group 1.
+    const std::int64_t kb[4] = {0, 0, 0, 1};
+    const std::uint8_t bits[1] = {0b0000'1101};
+    r = bitwise_frame(Series::flat_i64(kb, 4),
+                      Series::flat(TypeId::Bool, bits, 4));
+    CHECK(r.column("a").type() == TypeId::Bool);
+    const std::int64_t b0 = row_of(r, "k", 0);
+    const std::int64_t b1 = row_of(r, "k", 1);
+    auto bit = [&](dstd::StringView name, std::int64_t at) {
+        return ((r.column(name).data<std::uint8_t>()[at >> 3] >> (at & 7)) &
+                1) != 0;
+    };
+    CHECK_FALSE(bit("a", b0));
+    CHECK(bit("o", b0));
+    CHECK_FALSE(bit("x", b0));
+    CHECK(bit("a", b1));
+    CHECK(bit("x", b1));
+}
+
+TEST_CASE("bitwise aggregates merge in any order and round-trip") {
+    const std::int64_t k[8] = {0, 1, 0, 1, 0, 1, 0, 1};
+    const std::int64_t v[8] = {12, -4, 10, 7, 9, 5, 3, -1};
+    const Series sk = Series::flat_i64(k, 8);
+    const Series sv = Series::flat_i64(v, 8);
+    dstd::Vector<const Series*> keys{&sk};
+    dstd::Vector<const Series*> values{&sv};
+    auto specs = [] {
+        return dstd::Vector<AggSpec>{AggSpec{AggOp::BitwiseAnd, 0, "a"},
+                                     AggSpec{AggOp::BitwiseOr, 0, "o"},
+                                     AggSpec{AggOp::BitwiseXor, 0, "x"}};
+    };
+    auto whole = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*whole, keys, values));
+    const DataFrame want = dataframe::agg_finalize(*whole, "k");
+
+    check_same(want, dataframe::agg_finalize(
+                         *dftu_utils_test::ok(dataframe::agg_deserialize(
+                             dataframe::agg_serialize(*whole))),
+                         "k"));
+
+    auto lo = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*lo, keys, values, 0, 4));
+    auto hi = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*hi, keys, values, 4, 8));
+    dataframe::agg_merge(*hi, *lo);
+    check_same(want, dataframe::agg_finalize(*hi, "k"));
+
+    auto lo2 = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*lo2, keys, values, 0, 4));
+    auto hi2 = dataframe::agg_new(specs());
+    dftu_utils_test::ok(dataframe::agg_accumulate(*hi2, keys, values, 4, 8));
+    dataframe::agg_merge(*lo2, *hi2);
+    check_same(want, dataframe::agg_finalize(*lo2, "k"));
+}
+
+TEST_CASE("bitwise aggregates refuse a float and a text column") {
+    const std::int64_t k[2] = {0, 0};
+    const double f[2] = {1.0, 2.0};
+    const Series sk = Series::flat_i64(k, 2);
+    const Series sv = Series::flat_f64(f, 2);
+    dstd::Vector<const Series*> keys{&sk};
+    dstd::Vector<const Series*> values{&sv};
+    auto st = dataframe::agg_new({AggSpec{AggOp::BitwiseAnd, 0, "a"}});
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st, keys, values));
+    CHECK_FALSE(dataframe::agg_check(*st).has_value());
+}
+
+TEST_CASE(
+    "bitwise aggregates refuse an unsupported column even when it is null") {
+    const std::int64_t k[3] = {0, 0, 1};
+    const std::uint8_t none[1] = {0};
+    const double f[3] = {1.0, 2.0, 3.0};
+    const Series sk = Series::flat_i64(k, 3);
+    const Series sf = Series::flat(TypeId::Float64, f, 3, none);
+    dstd::Vector<const Series*> keys{&sk};
+    dstd::Vector<const Series*> values{&sf};
+    for (const AggOp op :
+         {AggOp::BitwiseAnd, AggOp::BitwiseOr, AggOp::BitwiseXor}) {
+        auto st = dataframe::agg_new({AggSpec{op, 0, "a"}});
+        dftu_utils_test::ok(dataframe::agg_accumulate(*st, keys, values));
+        CHECK_FALSE(dataframe::agg_check(*st).has_value());
+    }
 }

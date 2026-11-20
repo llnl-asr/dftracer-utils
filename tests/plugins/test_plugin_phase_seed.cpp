@@ -6,11 +6,13 @@
 // test wrote, and the plan rules and the refusal to contribute are checked.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -55,7 +57,7 @@ struct Reference {
 
 // The three seeds as the files' events define them: every event that is not
 // metadata, the earliest start above 0, the latest end.
-Reference reference_of(const dstd::Vector<dstd::Vector<TestEvent>>& files) {
+Reference reference_of(dstd::Vector<dstd::Vector<TestEvent>> files) {
     Reference ref;
     bool any_start = false;
     for (const auto& events : files) {
@@ -74,8 +76,7 @@ Reference reference_of(const dstd::Vector<dstd::Vector<TestEvent>>& files) {
 
 // Indexes `gz_files` whole, statistics included, as a View on them would
 // rebuild a stale index.
-dstd::Vector<ViewFile> build_indexes(
-    const dstd::Vector<dstd::String>& gz_files) {
+dstd::Vector<ViewFile> build_indexes(dstd::Vector<dstd::String> gz_files) {
     trace::index::build::ResolveAndBuildInput in;
     for (const auto& gz : gz_files) in.files.emplace_back(gz);
     in.require_checkpoints = true;
@@ -97,21 +98,21 @@ dstd::Vector<ViewFile> build_indexes(
 }
 
 dstd::String write_trace(dftu_utils_test::TestEnvironment& env,
-                         const char* name,
-                         const dstd::Vector<TestEvent>& events) {
+                         dstd::CStringView name,
+                         dstd::Span<const TestEvent> events) {
     const dstd::String dir = env.dir() + "/seed";
     REQUIRE(dstd::fs::create_directories(dir).has_value());
-    const dstd::String pfw = dir + "/" + name + ".pfw";
+    const dstd::String pfw = dir + "/" + name.c_str() + ".pfw";
     dstd::String lines;
     for (const TestEvent& e : events) {
         if (e.metadata) {
             lines +=
-                "{\"ph\":\"M\",\"name\":\"process_name\",\"cat\":\"dftracer\","
+                "{\"ph\":4,\"name\":\"process_name\",\"cat\":\"dftracer\","
                 "\"pid\":1,\"tid\":1,\"args\":{\"name\":\"app\"}}\n";
             continue;
         }
         dstd::fmt_append<
-            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
             "\"tid\":1,\"ts\":{},\"dur\":{}{}\n">(lines, e.ts, e.dur,
                                                   R"(,"args":{}})");
     }
@@ -123,11 +124,11 @@ dstd::String write_trace(dftu_utils_test::TestEnvironment& env,
 }
 
 dstd::String write_raw_trace(dftu_utils_test::TestEnvironment& env,
-                             const char* folder, const char* name,
-                             const dstd::String& lines) {
-    const dstd::String dir = env.dir() + "/" + folder;
+                             dstd::CStringView folder, dstd::CStringView name,
+                             dstd::StringView lines) {
+    const dstd::String dir = env.dir() + "/" + folder.c_str();
     REQUIRE(dstd::fs::create_directories(dir).has_value());
-    const dstd::String pfw = dir + "/" + name + ".pfw";
+    const dstd::String pfw = dir + "/" + name.c_str() + ".pfw";
     dstd::fs::write_file(dstd::PathView(pfw), lines).discard();
     const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
@@ -173,7 +174,7 @@ dftu_status declare_seeds(dftu_ctx* ctx, const dftu_plugin_host* host) {
     return DFTU_OK;
 }
 
-void read_seed(const plugins::Ports& ports, const char* name,
+void read_seed(const plugins::Ports& ports, dstd::CStringView name,
                std::atomic<std::uint64_t>& slot) {
     std::uint64_t value = 0;
     auto got = ports.phase_result(
@@ -257,7 +258,7 @@ void check_seen(const Reference& ref) {
     CHECK(g_seen.count.load() == ref.count);
 }
 
-bool has_text(const dstd::String& haystack, const char* needle) {
+bool has_text(dstd::StringView haystack, dstd::StringView needle) {
     return haystack.find(needle) != dstd::String::npos;
 }
 
@@ -538,7 +539,7 @@ dstd::String mixed_phase_lines() {
     dstd::String lines;
     for (int i = 0; i < 30; ++i) {
         dstd::fmt_append<
-            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
             "\"tid\":1,\"ts\":{},\"dur\":2{}\n">(lines, 1000 + i,
                                                  R"(,"args":{}})");
     }
@@ -549,9 +550,9 @@ dstd::String mixed_phase_lines() {
            "\"tid\":1,\"ts\":40,\"args\":{}}\n"
            "{\"name\":\"noph\",\"cat\":\"c\",\"pid\":1,\"tid\":1,"
            "\"ts\":10,\"dur\":5,\"args\":{}}\n"
-           "{\"ph\":\"M\",\"name\":\"process_name\",\"cat\":\"dftracer\","
+           "{\"ph\":4,\"name\":\"process_name\",\"cat\":\"dftracer\","
            "\"pid\":1,\"tid\":1,\"args\":{\"name\":\"app\"}}\n"
-           "{\"ph\":\"X\",\"name\":\"x\",\"cat\":\"c\",\"pid\":1,"
+           "{\"ph\":1,\"name\":\"x\",\"cat\":\"c\",\"pid\":1,"
            "\"tid\":1,\"ts\":300,\"dur\":20,\"args\":{}}\n";
 }
 
@@ -732,7 +733,7 @@ TEST_SUITE("phase seeds: files that change during the pass") {
 namespace {
 
 // Every file under `dir` with its size, as text, to compare two states.
-dstd::String tree_listing(const dstd::String& dir) {
+dstd::String tree_listing(dstd::CStringView dir) {
     dstd::String out;
     for (const auto& e : dftu_utils_test::walk_dir(dstd::PathView(dir))) {
         out += e.path.c_str();

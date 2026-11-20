@@ -47,10 +47,11 @@ dftu_indexer_report to_c(const IndexStatus& s) {
                                s.truncated.size()};
 }
 
-char* copy_c_string(const dstd::String& s) {
+char* copy_c_string(dstd::StringView s) {
     char* out = static_cast<char*>(std::malloc(s.size() + 1));
     if (!out) dstd::fatal("out of memory copying a result string");
-    std::memcpy(out, s.c_str(), s.size() + 1);
+    std::memcpy(out, s.data(), s.size());
+    out[s.size()] = '\0';
     return out;
 }
 
@@ -118,7 +119,7 @@ void dftu_indexer_options_init(dftu_indexer_options* out) {
                                 d.aggregation.group_by_file ? 1 : 0};
 }
 
-dftu_status dftu_indexer_open(const char* const* paths, uint64_t n,
+dftu_status dftu_indexer_open(const char* const* paths, std::uint64_t n,
                               const dftu_indexer_options* options,
                               dftu_indexer** out, dftu_error* err) {
     if (!out) return invalid_argument(err, "out is NULL");
@@ -128,7 +129,7 @@ dftu_status dftu_indexer_open(const char* const* paths, uint64_t n,
     }
     dstd::Vector<dstd::String> list;
     list.reserve(n);
-    for (uint64_t i = 0; i < n; ++i) {
+    for (std::uint64_t i = 0; i < n; ++i) {
         if (!paths[i]) return invalid_argument(err, "a path is NULL");
         list.emplace_back(paths[i]);
     }
@@ -155,7 +156,7 @@ dftu_status dftu_indexer_open(const char* const* paths, uint64_t n,
                 return invalid_argument(err,
                                         "bloom_fields is NULL with a count");
             }
-            for (uint32_t i = 0; i < in.bloom_field_count; ++i) {
+            for (std::uint32_t i = 0; i < in.bloom_field_count; ++i) {
                 if (!in.bloom_fields[i]) {
                     return invalid_argument(err, "a bloom field is NULL");
                 }
@@ -173,7 +174,7 @@ dftu_status dftu_indexer_open(const char* const* paths, uint64_t n,
             return invalid_argument(err, "extensions is NULL with a count");
         }
         if (in.extension_count) opts.extensions.clear();
-        for (uint32_t i = 0; i < in.extension_count; ++i) {
+        for (std::uint32_t i = 0; i < in.extension_count; ++i) {
             if (!in.extensions[i]) {
                 return invalid_argument(err, "an extension is NULL");
             }
@@ -260,12 +261,12 @@ dftu_status dftu_indexer_files(dftu_indexer* indexer,
 
 void dftu_indexer_free(dftu_indexer* indexer) { delete indexer; }
 
-uint64_t dftu_indexer_file_list_count(const dftu_indexer_file_list* list) {
+std::uint64_t dftu_indexer_file_list_count(const dftu_indexer_file_list* list) {
     return list ? list->files.size() : 0;
 }
 
 dftu_status dftu_indexer_file_list_get(const dftu_indexer_file_list* list,
-                                       uint64_t i, dftu_indexer_file* out,
+                                       std::uint64_t i, dftu_indexer_file* out,
                                        dftu_error* err) {
     if (!list || !out || i >= list->files.size()) {
         return invalid_argument(

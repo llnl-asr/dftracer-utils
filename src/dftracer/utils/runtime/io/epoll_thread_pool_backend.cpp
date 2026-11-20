@@ -50,7 +50,11 @@ dstd::Result<void> EpollThreadPoolBackend::start() {
         "epoll+threadpool backend started (epoll_fd={}, event_fd={})",
         epoll_fd_.get(), event_fd_.get());
 
-    completion_thread_.start([this] { epoll_loop(); });
+    if (auto started = completion_thread_.start([this] { epoll_loop(); });
+        !started) {
+        stop();
+        return started;
+    }
     return {};
 }
 
@@ -60,7 +64,7 @@ void EpollThreadPoolBackend::stop() {
 
     // Wake epoll_wait by writing to eventfd.
     if (event_fd_.valid()) {
-        uint64_t val = 1;
+        std::uint64_t val = 1;
         [[maybe_unused]] auto r = ::write(event_fd_.get(), &val, sizeof(val));
     }
 
@@ -85,7 +89,7 @@ void EpollThreadPoolBackend::epoll_loop() {
         for (int i = 0; i < n; ++i) {
             if (events[i].data.fd == event_fd_.get()) {
                 // Shutdown signal -- drain the eventfd and exit.
-                uint64_t val = 0;
+                std::uint64_t val = 0;
                 [[maybe_unused]] auto r =
                     ::read(event_fd_.get(), &val, sizeof(val));
                 // Don't break immediately; process any other events first.

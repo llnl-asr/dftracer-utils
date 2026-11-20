@@ -58,18 +58,18 @@ Overview
 How it fits
 -----------
 
-The View is the query surface; the columnar batch is what it returns. A typed
+The View is the query surface; the columnar batch is what it returns. An index records
 read groups, buckets, aggregates, and collects in one pass:
 
 .. code-block:: python
 
-   typed = (
+   records = (
        viewer.group_by("cat", "name")
              .time_bucket(1_000_000)   # 1 second buckets, microsecond ts
              .agg(...)                 # the metrics to compute
-             .collect_typed()          # -> columnar result, Arrow-ready
+             .collect_index_records()  # -> IndexRecords of frames, Arrow-ready
    )
-   frame = typed["aggregated"].to_pandas()
+   frame = records.aggregated.to_pandas()
 
 Because the result is already columnar and Arrow-native, moving it to pandas or
 handing it to another Arrow consumer copies no data. In C++ the same path
@@ -97,7 +97,7 @@ you ask for it**, through a zero-copy edge conversion:
    batch.to_pandas()   # pandas DataFrame  Arrow C stream interface)
    batch.to_polars()   # polars DataFrame
 
-``collect()`` and ``collect_typed()`` return a ``DataFrame`` directly, so
+``collect()`` returns a ``DataFrame`` directly, so
 post-aggregation derived metrics stay entirely in the engine with no input Arrow.
 ``apply`` accepts a ``DataFrame`` (or a ``{name: Series}`` mapping) directly,
 or a ``pyarrow.Table``, whose columns are imported into the engine at the boundary.
@@ -143,7 +143,7 @@ fully in the engine (via ``DataFrame.filter``, ``dftu_series_filter``) and retur
    slow = where(batch, (F.dur > lit(1000)) & (F.ret >= lit(0)))   # DataFrame
 
 Comparisons are numeric scalar predicates for now (string predicates stay in the
-``Field`` / ``Expr`` DSL, which also compiles to the index query string for
+``col`` / ``Expr`` DSL, which also compiles to the index query string for
 scan-time pushdown). A comparison can also take another column expression on its
 right side, ``col("a") >= col("b")``, in an eager ``DataFrame.filter`` and in a
 ``LazyFrame.filter``: the engine compares the two row by row (``expr_cmp_expr``),
@@ -165,7 +165,7 @@ stream (``bytes`` any Arrow IPC reader opens, no pyarrow needed) for transport.
 Arrow interop goes through the Arrow C Stream Interface, so a column or a frame
 crosses without a materialized copy in between: ``__arrow_c_stream__`` is on
 ``Series`` (``pa.chunked_array(series)``), on ``DataFrame`` (``pa.table(df)``) and on
-``LazyFrame`` (``pa.table(lf)``, ``pl.from_arrow(lf)``,
+``LazyFrame`` (``pa.table(lf)``, ``pl.DataFrame(lf)``,
 ``pa.RecordBatchReader.from_stream(lf)``). A ``LazyFrame`` stream runs the query in a
 background task, converts one batch per ``get_next``, and its ``release`` cancels the
 query and waits for the task. C++ has the same in
@@ -255,6 +255,43 @@ named ``sum`` / ``min`` / ``max`` / ``count`` / ``mean`` / ``var`` / ``std`` /
 ``skew`` / ``kurt`` plus ``first`` / ``last`` (the group's first / last non-null
 value in row order). ``first`` / ``last`` merge order-independently, so the
 parallel and distributed path is exact.
+
+The type of an aggregate comes from one rule, the same for ``collect()``, the
+lazy plan ``schema`` and the aggregate state that is merged or spilled:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Aggregate
+     - Column type
+     - Result type
+   * - ``min`` / ``max`` / ``first`` / ``last``
+     - Timestamp (any unit and zone), Date32, Date64, Time32, Time64, Duration
+     - the column's own type, with its unit and zone
+   * - ``sum``
+     - Duration
+     - the same Duration
+   * - ``mean``
+     - Timestamp, Duration
+     - the same type; the mean is the exact integer sum over the count, cut toward zero to the unit (pandas and Polars give the same type; Polars casts its float mean the same way)
+   * - ``sum`` / ``min`` / ``max`` / ``first`` / ``last``
+     - any other number
+     - Int64, Uint64 or Float64, as the column is signed, unsigned or float
+   * - ``count`` / ``count_valid``
+     - any
+     - Int64
+   * - ``mean`` / ``var`` / ``std`` / ``skew`` / ``kurt`` and the other moment aggregates
+     - any other column
+     - Float64
+
+The sum of a Timestamp has no unit of time as a result and stays Int64.
+
+A group with no present value gives null for ``min``, ``max``, ``first``,
+``last`` and ``mean`` of every column type, a sum of zero and a
+``count_valid`` of zero (the Polars defaults, which the engine follows). The
+reduce shortcuts (``group_by(keys).max()``, ``min``, ``sum``, ``mean`` and the
+whole-frame forms) include the temporal columns that the aggregate keeps in
+their own type.
 
 The moment statistics (``variance``/``stddev``/``skewness``/``kurtosis``) reduce
 their values with a Highway SIMD pass; ``abs``/``clip``/``round`` are Highway

@@ -5,6 +5,8 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/shared_string.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -22,8 +24,9 @@ inline constexpr dstd::StringView REST_COLUMN = "__rest";
 /// A flat Struct of `rows` rows over `fields` named `names`. Unlike
 /// Series::structs it keeps the length of a struct with no fields.
 template <class Name>
-inline Series struct_of_length(const dstd::Vector<Name>& names,
-                               dstd::Vector<Series> fields, std::int64_t rows) {
+inline Series struct_of_length_of(dstd::Span<const Name> names,
+                                  dstd::Vector<Series> fields,
+                                  std::int64_t rows) {
     auto* col = new dftu_series();
     col->type = TypeId::Struct;
     col->encoding = Encoding::Flat;
@@ -33,6 +36,17 @@ inline Series struct_of_length(const dstd::Vector<Name>& names,
         col->nested.push_back({adopt_series(fields[i].release()),
                                dstd::String{dstd::StringView{names[i]}}});
     return Series{col};
+}
+
+inline Series struct_of_length(dstd::Span<const dstd::String> names,
+                               dstd::Vector<Series> fields, std::int64_t rows) {
+    return struct_of_length_of<dstd::String>(names, std::move(fields), rows);
+}
+
+inline Series struct_of_length(dstd::Span<const dstd::SharedString> names,
+                               dstd::Vector<Series> fields, std::int64_t rows) {
+    return struct_of_length_of<dstd::SharedString>(names, std::move(fields),
+                                                   rows);
 }
 
 }  // namespace dftracer::utils::dataframe

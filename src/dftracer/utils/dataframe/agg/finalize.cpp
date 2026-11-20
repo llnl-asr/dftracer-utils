@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
+#include <dftracer/utils/dataframe/kernels/stats.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -78,8 +79,9 @@ double kmv_estimate(const KmvMap& m, std::size_t k) {
 // Time32/Time64/Timestamp/Duration group key column. Series::flat has no
 // parametric constructor, so this builds the dftu_series directly to carry
 // the source's own time_unit (and, for Timestamp, timezone).
-Series flat_temporal(TypeId type, TimeUnit unit, const dstd::String& timezone,
-                     const void* data, std::int64_t n) {
+Series flat_temporal(TypeId type, TimeUnit unit, dstd::StringView timezone,
+                     const void* data, std::int64_t n,
+                     const std::uint8_t* validity = nullptr) {
     auto* col = new dftu_series();
     col->type = type;
     col->encoding = Encoding::Flat;
@@ -89,13 +91,54 @@ Series flat_temporal(TypeId type, TimeUnit unit, const dstd::String& timezone,
     const std::size_t bytes = buffer_bytes(type, n);
     col->data = new_buffer(bytes);
     if (bytes != 0) std::memcpy(writable(col->data), data, bytes);
+    if (validity != nullptr) {
+        const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
+        col->validity = new_buffer(vbytes);
+        std::memcpy(writable(col->validity), validity, vbytes);
+        for (std::int64_t i = 0; i < n; ++i)
+            if ((validity[i >> 3] & (1u << (i & 7))) == 0) ++col->null_count;
+    }
     return Series{col};
+}
+
+// The aggregate column of a temporal output type from per-group I64 values:
+// Date32 and Time32 narrow to 32 bits, the rest keep 64.
+Series temporal_column(const DataType& t, dstd::Span<const std::int64_t> v,
+                       const std::uint8_t* validity) {
+    const std::int64_t n = static_cast<std::int64_t>(v.size());
+    if (t.id == TypeId::Date32 || t.id == TypeId::Time32) {
+        dstd::Vector<std::int32_t> narrow(v.size());
+        for (std::size_t i = 0; i < v.size(); ++i)
+            narrow[i] = static_cast<std::int32_t>(v[i]);
+        return flat_temporal(t.id, t.time_unit(), dstd::String(t.timezone()),
+                             narrow.data(), n, validity);
+    }
+    return flat_temporal(t.id, t.time_unit(), dstd::String(t.timezone()),
+                         v.data(), n, validity);
+}
+
+// The value column of field `fi` as agg_output_type sees it.
+DataType field_data_type(const AggState& st, int fi) {
+    if (fi < 0) return scalar(TypeId::Unknown);
+    const std::size_t i = static_cast<std::size_t>(fi);
+    const TypeId id =
+        i < st.field_type.size() ? st.field_type[i] : TypeId::Unknown;
+    const TimeUnit unit =
+        i < st.field_time_unit.size() ? st.field_time_unit[i] : TimeUnit::Micro;
+    DataType dt = scalar(id);
+    if (id == TypeId::Timestamp || id == TypeId::Duration ||
+        id == TypeId::Time32 || id == TypeId::Time64)
+        dt.set_time_unit(unit);
+    if (id == TypeId::Timestamp)
+        dt.set_timezone(i < st.field_timezone.size() ? st.field_timezone[i]
+                                                     : dstd::String());
+    return dt;
 }
 
 // A String/Binary (32-bit offset) group key column: skey_cols already holds
 // each group's raw bytes. Series::strings hardcodes TypeId::String, so a
 // Binary key is built directly, mirroring wide_bytes_key below.
-Series bytes_key(TypeId type, const dstd::Vector<dstd::String>& values) {
+Series bytes_key(TypeId type, dstd::Span<const dstd::String> values) {
     auto* col = new dftu_series();
     col->type = type;
     col->encoding = Encoding::Flat;
@@ -120,7 +163,7 @@ Series bytes_key(TypeId type, const dstd::Vector<dstd::String>& values) {
 // group's raw bytes (its distinct value). dftu_series_new_string only builds
 // the 32-bit offset String/Binary pair, so this is built directly, mirroring
 // flat_temporal above.
-Series wide_bytes_key(TypeId type, const dstd::Vector<dstd::String>& values) {
+Series wide_bytes_key(TypeId type, dstd::Span<const dstd::String> values) {
     auto* col = new dftu_series();
     col->type = type;
     col->encoding = Encoding::Flat;
@@ -149,7 +192,7 @@ Series wide_bytes_key(TypeId type, const dstd::Vector<dstd::String>& values) {
 Series bytes_flat_key(TypeId type, std::int32_t fixed_size,
                       std::int32_t decimal_precision,
                       std::int32_t decimal_scale,
-                      const dstd::Vector<dstd::String>& values) {
+                      dstd::Span<const dstd::String> values) {
     auto* col = new dftu_series();
     col->type = type;
     col->encoding = Encoding::Flat;
@@ -165,7 +208,7 @@ Series bytes_flat_key(TypeId type, std::int32_t fixed_size,
 }
 
 // One list<string> column from a per-group vector of already-ordered reprs.
-Series strings_list(const dstd::Vector<dstd::Vector<dstd::String>>& rows) {
+Series strings_list(dstd::Span<const dstd::Vector<dstd::String>> rows) {
     dstd::Vector<std::int32_t> off{0};
     dstd::Vector<dstd::String> flat;
     off.reserve(rows.size() + 1);
@@ -208,8 +251,7 @@ double co_readout(AggOp op, const CoStat& c) {
 }  // namespace
 
 // The null key groups of column k as the output column's validity bitmap.
-static void mark_null_keys(Series& col,
-                           const dstd::Vector<std::uint8_t>& nulls) {
+static void mark_null_keys(Series& col, dstd::Span<const std::uint8_t> nulls) {
     std::int64_t count = 0;
     for (std::uint8_t n : nulls) count += n ? 1 : 0;
     if (count == 0) return;
@@ -277,7 +319,7 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
             dstd::Vector<double> v;
             for (const dstd::StringView x : sorted) {
                 double d = 0.0;
-                dstd::from_chars_double(x.data(), x.data() + x.size(), d);
+                dstd::from_chars_double(x, d);
                 if (et == TypeId::Float32)
                     d = static_cast<double>(static_cast<float>(d));
                 v.push_back(d);
@@ -290,7 +332,7 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
             dstd::Vector<std::uint64_t> v;
             for (const dstd::StringView x : sorted) {
                 std::uint64_t d = 0;
-                dstd::from_chars(x.data(), x.data() + x.size(), d);
+                dstd::from_chars(x, d);
                 v.push_back(d);
             }
             std::sort(v.begin(), v.end());
@@ -299,7 +341,7 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
             dstd::Vector<std::int64_t> v;
             for (const dstd::StringView x : sorted) {
                 std::int64_t d = 0;
-                dstd::from_chars(x.data(), x.data() + x.size(), d);
+                dstd::from_chars(x, d);
                 v.push_back(d);
             }
             std::sort(v.begin(), v.end());
@@ -327,7 +369,7 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
 // The finalized columns of one state. `with_keys` false leaves the key columns
 // out, for a caller that writes them itself (the in-place group-by).
 static DataFrame finalize_impl(const AggState& st_in,
-                               const dstd::Vector<dstd::String>& key_names,
+                               dstd::Span<const dstd::String> key_names,
                                bool with_keys,
                                const AggDynLayout* layout = nullptr) {
     // A light state is read cell by cell, never expanded into field stats.
@@ -505,39 +547,80 @@ static DataFrame finalize_impl(const AggState& st_in,
                 first ? st.fl_first : st.fl_last;
             const dstd::Vector<dstd::String>& strs =
                 first ? st.fl_first_s : st.fl_last_s;
+            const dstd::Vector<std::int64_t>& idx =
+                first ? st.fl_first_idx : st.fl_last_idx;
             auto slot = [&](std::int64_t g) {
                 return static_cast<std::size_t>(g) * st.nf +
                        static_cast<std::size_t>(fi);
             };
+            // A group with no present value has no first or last: null.
+            dstd::Vector<std::uint8_t> valid(
+                static_cast<std::size_t>((ng + 7) / 8), 0);
+            bool any_null = false;
+            for (std::int64_t g = 0; g < ng; ++g) {
+                if (idx[slot(g)] >= 0)
+                    valid[static_cast<std::size_t>(g >> 3)] |=
+                        static_cast<std::uint8_t>(1u << (g & 7));
+                else
+                    any_null = true;
+            }
+            const std::uint8_t* validity = any_null ? valid.data() : nullptr;
             if (fi >= 0 && st.field_is_str[static_cast<std::size_t>(fi)]) {
-                dstd::Vector<dstd::String> v(static_cast<std::size_t>(ng));
+                dstd::Vector<dstd::StringView> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] = strs[slot(g)];
-                out.columns.push_back(Series::strings(v));
+                out.columns.push_back(Series::strings(
+                    dstd::Span<const dstd::StringView>(v.data(), v.size()),
+                    validity));
             } else if (dom == FieldStatDomain::F64) {
                 dstd::Vector<double> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] =
                         std::bit_cast<double>(bits[slot(g)]);
-                out.columns.push_back(Series::flat_f64(v.data(), ng));
+                out.columns.push_back(Series::flat_f64(v.data(), ng, validity));
             } else if (dom == FieldStatDomain::U64) {
                 dstd::Vector<std::uint64_t> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] = bits[slot(g)];
                 out.columns.push_back(
-                    Series::flat(TypeId::Uint64, v.data(), ng));
+                    Series::flat(TypeId::Uint64, v.data(), ng, validity));
             } else {
                 dstd::Vector<std::int64_t> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] =
                         std::bit_cast<std::int64_t>(bits[slot(g)]);
-                out.columns.push_back(Series::flat_i64(v.data(), ng));
+                const DataType want =
+                    agg_output_type(sp.op, field_data_type(st, fi), sp.param);
+                if (is_temporal_type(want.id))
+                    out.columns.push_back(temporal_column(want, v, validity));
+                else
+                    out.columns.push_back(
+                        Series::flat_i64(v.data(), ng, validity));
             }
         } else if (sp.op == AggOp::SumSq) {
             dstd::Vector<double> v(static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng; ++g)
                 v[static_cast<std::size_t>(g)] = fs_at(g).sumsq();
             out.columns.push_back(Series::flat_f64(v.data(), ng));
+        } else if (sp.op == AggOp::ArgMaxPos || sp.op == AggOp::ArgMinPos) {
+            const int slot = st.spec_apos[s];
+            dstd::Vector<std::int64_t> v(static_cast<std::size_t>(ng), 0);
+            dstd::Vector<std::uint8_t> valid(
+                static_cast<std::size_t>((ng + 7) / 8), 0);
+            bool any_null = false;
+            for (std::int64_t g = 0; g < ng; ++g) {
+                const std::size_t at = static_cast<std::size_t>(g) * st.n_apos +
+                                       static_cast<std::size_t>(slot);
+                if (slot >= 0 && st.apos_dom[at] != 0) {
+                    v[static_cast<std::size_t>(g)] = st.apos_rank[at];
+                    valid[static_cast<std::size_t>(g >> 3)] |=
+                        static_cast<std::uint8_t>(1u << (g & 7));
+                } else {
+                    any_null = true;
+                }
+            }
+            out.columns.push_back(Series::flat_i64(
+                v.data(), ng, any_null ? valid.data() : nullptr));
         } else if (sp.op == AggOp::ArgMax || sp.op == AggOp::ArgMin) {
             const int slot = st.spec_arg[s];
             const int ri = st.spec_arg_repr[s];
@@ -552,6 +635,43 @@ static DataFrame finalize_impl(const AggState& st_in,
                                     static_cast<std::size_t>(ri)];
             }
             out.columns.push_back(Series::strings(v));
+        } else if (agg_is_bitwise(sp.op)) {
+            const int slot = st.spec_bw[s];
+            const TypeId t =
+                slot >= 0 && st.bw_type[static_cast<std::size_t>(slot)] !=
+                                 TypeId::Unknown
+                    ? st.bw_type[static_cast<std::size_t>(slot)]
+                    : TypeId::Int64;
+            std::size_t width = 8;
+            if (t == TypeId::Int8 || t == TypeId::Uint8) width = 1;
+            if (t == TypeId::Int16 || t == TypeId::Uint16) width = 2;
+            if (t == TypeId::Int32 || t == TypeId::Uint32) width = 4;
+            const auto n = static_cast<std::size_t>(ng);
+            dstd::Vector<std::uint8_t> bytes(
+                t == TypeId::Bool ? (n + 7) / 8 : n * width, 0);
+            dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0);
+            bool any_null = false;
+            for (std::size_t g = 0; g < n; ++g) {
+                const std::size_t at =
+                    g * st.n_bw + static_cast<std::size_t>(slot);
+                if (slot < 0 || !st.bw_seen[at]) {
+                    any_null = true;
+                    continue;
+                }
+                valid[g >> 3] |= static_cast<std::uint8_t>(1u << (g & 7));
+                const std::uint64_t word = st.bw_acc[at];
+                if (t == TypeId::Bool) {
+                    if (word & 1)
+                        bytes[g >> 3] |=
+                            static_cast<std::uint8_t>(1u << (g & 7));
+                } else {
+                    for (std::size_t k = 0; k < width; ++k)
+                        bytes[g * width + k] =
+                            static_cast<std::uint8_t>(word >> (8 * k));
+                }
+            }
+            out.columns.push_back(Series::flat(
+                t, bytes.data(), ng, any_null ? valid.data() : nullptr));
         } else if (sp.op == AggOp::BitOr) {
             const int slot = st.spec_bitor[s];
             dstd::Vector<std::uint64_t> v(static_cast<std::size_t>(ng), 0);
@@ -568,6 +688,21 @@ static DataFrame finalize_impl(const AggState& st_in,
                     st.prod_acc[static_cast<std::size_t>(g) * st.n_prod +
                                 static_cast<std::size_t>(slot)];
             out.columns.push_back(Series::flat_f64(v.data(), ng));
+        } else if (sp.op == AggOp::Quantile) {
+            const int slot = st.spec_qv[s];
+            const auto n = static_cast<std::size_t>(ng);
+            const double q = sp.param;
+            const Interpolation interp = sp.interp;
+            dstd::Vector<double> v(n, 0.0);
+            dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0);
+            for (std::size_t g = 0; g < n && slot >= 0; ++g) {
+                dstd::Vector<double> values =
+                    st.qv[g * st.n_qv + static_cast<std::size_t>(slot)];
+                if (values.empty()) continue;
+                v[g] = quantile_of(values, q, interp);
+                valid[g >> 3] |= static_cast<std::uint8_t>(1u << (g & 7));
+            }
+            out.columns.push_back(Series::flat_f64(v.data(), ng, valid.data()));
         } else if (sp.op == AggOp::SketchQuantile) {
             const int slot = st.spec_msk[s];
             const auto n = static_cast<std::size_t>(ng);
@@ -774,7 +909,13 @@ static DataFrame finalize_impl(const AggState& st_in,
                 dstd::Vector<std::int64_t> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] = exact(fs_at(g));
-                out.columns.push_back(Series::flat_i64(v.data(), ng, validity));
+                const DataType want =
+                    agg_output_type(sp.op, field_data_type(st, fi), sp.param);
+                if (is_temporal_type(want.id))
+                    out.columns.push_back(temporal_column(want, v, validity));
+                else
+                    out.columns.push_back(
+                        Series::flat_i64(v.data(), ng, validity));
             } else {
                 dstd::Vector<double> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
@@ -785,11 +926,15 @@ static DataFrame finalize_impl(const AggState& st_in,
             // Each moment needs that many present values to exist at all
             // (one for a mean, two for a sample variance, three and four for
             // the higher moments); below that the cell is null, not 0.
-            const std::uint64_t needed = sp.op == AggOp::Mean   ? 1
-                                         : sp.op == AggOp::Var  ? 2
-                                         : sp.op == AggOp::Std  ? 2
-                                         : sp.op == AggOp::Skew ? 3
-                                                                : 4;
+            // The unbiased moments are NaN below their count, as pandas has
+            // them, and never null.
+            const std::uint64_t needed = sp.op == AggOp::Mean           ? 1
+                                         : sp.op == AggOp::Var          ? 2
+                                         : sp.op == AggOp::Std          ? 2
+                                         : sp.op == AggOp::Skew         ? 3
+                                         : sp.op == AggOp::SkewUnbiased ? 0
+                                         : sp.op == AggOp::KurtUnbiased ? 0
+                                                                        : 4;
             dstd::Vector<double> v(static_cast<std::size_t>(ng));
             dstd::Vector<std::uint8_t> valid(
                 static_cast<std::size_t>((ng + 7) / 8), 0);
@@ -810,6 +955,12 @@ static DataFrame finalize_impl(const AggState& st_in,
                     case AggOp::Skew:
                         r = f.skewness();
                         break;
+                    case AggOp::SkewUnbiased:
+                        r = f.skewness_unbiased();
+                        break;
+                    case AggOp::KurtUnbiased:
+                        r = f.kurtosis_unbiased();
+                        break;
                     default:
                         r = f.kurtosis();
                 }
@@ -820,8 +971,18 @@ static DataFrame finalize_impl(const AggState& st_in,
                 else
                     any_missing = true;
             }
-            out.columns.push_back(Series::flat_f64(
-                v.data(), ng, any_missing ? valid.data() : nullptr));
+            const DataType want =
+                agg_output_type(sp.op, field_data_type(st, fi), sp.param);
+            if (is_temporal_type(want.id)) {
+                dstd::Vector<std::int64_t> t(static_cast<std::size_t>(ng));
+                for (std::size_t g = 0; g < t.size(); ++g)
+                    t[g] = fs_at(static_cast<std::int64_t>(g)).mean_int();
+                out.columns.push_back(temporal_column(
+                    want, t, any_missing ? valid.data() : nullptr));
+            } else {
+                out.columns.push_back(Series::flat_f64(
+                    v.data(), ng, any_missing ? valid.data() : nullptr));
+            }
         }
     }
 
@@ -940,6 +1101,12 @@ static DataFrame finalize_impl(const AggState& st_in,
                             case AggOp::Kurt:
                                 r = f->kurtosis();
                                 break;
+                            case AggOp::SkewUnbiased:
+                                r = f->skewness_unbiased();
+                                break;
+                            case AggOp::KurtUnbiased:
+                                r = f->kurtosis_unbiased();
+                                break;
                             default:
                                 r = 0.0;
                         }
@@ -954,7 +1121,7 @@ static DataFrame finalize_impl(const AggState& st_in,
 }
 
 DataFrame agg_finalize(const AggState& st,
-                       const dstd::Vector<dstd::String>& key_names) {
+                       dstd::Span<const dstd::String> key_names) {
     return finalize_impl(st, key_names, true);
 }
 
@@ -970,7 +1137,7 @@ void agg_dyn_layout_add(AggDynLayout& layout, const AggState& in) {
 }
 
 DataFrame agg_finalize(const AggState& st,
-                       const dstd::Vector<dstd::String>& key_names,
+                       dstd::Span<const dstd::String> key_names,
                        const AggDynLayout& layout) {
     return finalize_impl(st, key_names, true, &layout);
 }
@@ -979,8 +1146,9 @@ DataFrame agg_finalize_values(const AggState& st) {
     return finalize_impl(st, {}, false);
 }
 
-DataFrame agg_finalize(const AggState& st, const dstd::String& key_name) {
-    return agg_finalize(st, dstd::Vector<dstd::String>{key_name});
+DataFrame agg_finalize(const AggState& st, dstd::StringView key_name) {
+    const dstd::String name(key_name);
+    return agg_finalize(st, dstd::Span<const dstd::String>(&name, 1));
 }
 
 }  // namespace dftracer::utils::dataframe

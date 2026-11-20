@@ -291,7 +291,7 @@ class Runtime {
     unsigned io_batch_threshold_ = 0;
     bool process_runtime_ = false;
     std::atomic<bool> shutdown_called_{false};
-    std::atomic<uint64_t> task_name_counter_{0};
+    std::atomic<std::uint64_t> task_name_counter_{0};
     dstd::Vector<dstd::SharedFuture<dstd::Result<void>>> outstanding_futures_;
     std::mutex futures_mutex_;
 };

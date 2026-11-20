@@ -46,7 +46,7 @@ gzip trace so the rest of the lesson has something to read:
            cat = "POSIX" if i % 2 else "STDIO"
            f.write(
                f'{{"name":"read","cat":"{cat}","pid":1,"tid":1,'
-               f'"ts":{1000 + i},"dur":{10 + i},"ph":"X","args":{{}}}}\n'
+               f'"ts":{1000 + i},"dur":{10 + i},"ph":1,"args":{{}}}}\n'
            )
 
 You now have ``trace.pfw.gz`` with 500 events, alternating between the
@@ -64,7 +64,7 @@ Python and C++ analysis paths both use it.
    import dftracer.utils as dft
 
    with dft.Indexer(files=["trace.pfw.gz"]) as ix:
-       ix.ensure_indexed()
+       ix.ensure()
 
 The CLI does the same without Python. It indexes every trace under a directory,
 so run ``dftracer_index .`` in the folder that holds ``trace.pfw.gz``.
@@ -186,7 +186,8 @@ spec: ``count``, ``sum_dur``, ``mean_dur``.
 4. Filter before aggregating
 ----------------------------
 
-Add a predicate to keep only the rows you care about. Build it with ``Field``:
+Add a predicate to keep only the rows you care about. Build it with ``col`` in
+Python and ``Field`` in C++:
 the same predicate reads almost identically in Python and C++. Keep only the
 ``POSIX`` events, then aggregate as before.
 
@@ -199,11 +200,11 @@ the same predicate reads almost identically in Python and C++. Keep only the
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer, Field
+         from dftracer.utils import TraceViewer, col
 
          df = (
              TraceViewer("trace.pfw.gz")
-             .duql(str(Field("cat") == "POSIX"))
+             .duql(str(col("cat") == "POSIX"))
              .group_by("cat")
              .agg("count", "mean:dur")
              .collect()
@@ -220,7 +221,7 @@ the same predicate reads almost identically in Python and C++. Keep only the
    .. tab-item:: C++
 
       The C++ ``Field`` builder (namespace ``dftracer::utils::duql``, header
-      ``duql/builder.h``) mirrors the Python one. ``Field("cat") == "POSIX"``
+      ``duql/builder.h``) mirrors the Python ``col``. ``Field("cat") == "POSIX"``
       returns an ``Expr``; ``.to_string()`` serializes it to the duql string that
       ``View::duql`` takes.
 
@@ -351,12 +352,12 @@ What you learned
 
 - A trace is JSON lines, gzip-compressed for the Python reader (``.pfw.gz``);
   **index** it once
-  (``Indexer.ensure_indexed()`` or ``dftracer_index <dir>``) and both
+  (``Indexer.ensure()`` or ``dftracer_index <dir>``) and both
   languages read the same index.
 - **Query** it with ``TraceViewer`` (Python) or ``View`` (C++): ``group_by`` +
   ``agg`` + ``collect``, with aggregate columns named ``count`` / ``sum_dur`` /
   ``mean_dur``.
-- **Filter** with a ``Field`` predicate: ``str(...)`` in Python,
+- **Filter** with a ``col`` predicate (``Field`` in C++): ``str(...)`` in Python,
   ``.to_string()`` in C++.
 - Point at a **directory** to scan a whole tree in parallel.
 

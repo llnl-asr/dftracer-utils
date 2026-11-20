@@ -28,7 +28,7 @@ using Rows = dstd::Vector<dstd::Pair<dstd::String, dstd::String>>;
 
 constexpr std::size_t BIG_VALUE_BYTES = 2 * 1024 * 1024;
 
-dstd::ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(dstd::StringView bytes) {
     return {bytes.data(), bytes.size()};
 }
 
@@ -37,15 +37,14 @@ dstd::String to_string(dstd::ByteView bytes) {
                         bytes.size());
 }
 
-NamespaceSpec spec_of(const dstd::String& name,
-                      FoldKind fold = FoldKind::None) {
+NamespaceSpec spec_of(dstd::StringView name, FoldKind fold = FoldKind::None) {
     NamespaceSpec spec;
     spec.name = name;
     spec.fold = fold;
     return spec;
 }
 
-ScopeKey scope_of(const dstd::String& path) {
+ScopeKey scope_of(dstd::StringView path) {
     return ScopeKey::file(dstd::StringView(path.data(), path.size()));
 }
 
@@ -104,7 +103,7 @@ std::size_t data_files(const dftu_utils_test::ScopedTestDir& dir) {
     return count;
 }
 
-std::uint64_t count_of(const dstd::String& value) {
+std::uint64_t count_of(dstd::StringView value) {
     REQUIRE(value.size() == sizeof(std::uint64_t));
     return dstd::read_le<std::uint64_t>(
         reinterpret_cast<const std::uint8_t*>(value.data()));

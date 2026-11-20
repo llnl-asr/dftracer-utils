@@ -41,11 +41,7 @@ TEST_CASE("the host's dftu. prefix stays refused") {
     CHECK_FALSE(plugins::host::name_in_plugin_namespace("dftu.rows", "dftu"));
 }
 
-TEST_CASE("an absent name or plugin is refused") {
-    CHECK_FALSE(plugins::host::name_in_plugin_namespace(
-        static_cast<const char*>(nullptr), "toy"));
-    CHECK_FALSE(plugins::host::name_in_plugin_namespace(
-        "toy", static_cast<const char*>(nullptr)));
+TEST_CASE("an empty name or plugin is refused") {
     CHECK_FALSE(plugins::host::name_in_plugin_namespace("", "toy"));
     CHECK_FALSE(plugins::host::name_in_plugin_namespace("toy", ""));
 }

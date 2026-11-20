@@ -38,14 +38,15 @@ inline dftracer::utils::dstd::String find_mpi_launcher() {
 // vars rather than --allow-run-as-root, which MPICH does not recognize. MPICH
 // ignores unknown env vars, so this is portable across implementations.
 inline int run_mpi(
-    const dftracer::utils::dstd::String& launcher, int np,
-    const dftracer::utils::dstd::String& binary,
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>&
+    dftracer::utils::dstd::CStringView launcher, int np,
+    dftracer::utils::dstd::StringView binary,
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String>
         binary_args) {
     ::setenv("OMPI_ALLOW_RUN_AS_ROOT", "1", 1);
     ::setenv("OMPI_ALLOW_RUN_AS_ROOT_CONFIRM", "1", 1);
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> args = {
-        "-n", dftracer::utils::dstd::to_string(np), binary};
+        "-n", dftracer::utils::dstd::to_string(np),
+        dftracer::utils::dstd::String(binary)};
     for (const auto& a : binary_args) args.push_back(a);
     return run_process(launcher, args);
 }
@@ -60,20 +61,22 @@ struct MpiTestEnv {
     bool ready = false;
     dftracer::utils::dstd::String skip_reason;
 
-    MpiTestEnv(const dftracer::utils::dstd::String& serial_name,
-               const char* serial_env,
-               const dftracer::utils::dstd::String& mpi_name,
-               const char* mpi_env) {
+    MpiTestEnv(dftracer::utils::dstd::StringView serial_name,
+               dftracer::utils::dstd::CStringView serial_env,
+               dftracer::utils::dstd::StringView mpi_name,
+               dftracer::utils::dstd::CStringView mpi_env) {
         serial_bin = find_binary_by_name(serial_env, serial_name);
         mpi_bin = find_binary_by_name(mpi_env, mpi_name);
         launcher = find_mpi_launcher();
         if (serial_bin.empty()) {
-            skip_reason = serial_name + " binary not found";
+            skip_reason = dftracer::utils::dstd::String(serial_name) +
+                          " binary not found";
             return;
         }
         if (mpi_bin.empty()) {
-            skip_reason = mpi_name + " binary not found (set " +
-                          dftracer::utils::dstd::String(mpi_env) +
+            skip_reason = dftracer::utils::dstd::String(mpi_name) +
+                          " binary not found (set " +
+                          dftracer::utils::dstd::String(mpi_env.view()) +
                           " or build with DFTRACER_UTILS_ENABLE_MPI=ON)";
             return;
         }

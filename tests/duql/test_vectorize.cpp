@@ -4,12 +4,14 @@
 #include <dftracer/utils/dataframe/mask.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -39,19 +41,19 @@ const dstd::Vector<OptS> S = {"a", "B", "", {}, "abc", " x y ", "Ab", "zz"};
 const dstd::Vector<OptS> T = {"a", "B", "", "q", "bc", " x", "b", {}};
 const dstd::Vector<OptB> B = {true, false, {}, true, false, true, false, true};
 
-template <class T>
-dstd::Vector<std::uint8_t> validity(const dstd::Vector<dstd::Optional<T>>& v) {
+template <class V>
+dstd::Vector<std::uint8_t> validity(const V& v) {
     dstd::Vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
     for (std::size_t r = 0; r < v.size(); ++r)
         if (v[r]) bits[r / 8] |= static_cast<std::uint8_t>(1U << (r % 8));
     return bits;
 }
 
-template <class T>
-dataframe::Series numbers(dataframe::TypeId type,
-                          const dstd::Vector<dstd::Optional<T>>& v) {
-    dstd::Vector<T> data;
-    for (const auto& x : v) data.push_back(x.value_or(T{}));
+template <class V>
+dataframe::Series numbers(dataframe::TypeId type, const V& v) {
+    using Elem = typename V::value_type::value_type;
+    dstd::Vector<Elem> data;
+    for (const auto& x : v) data.push_back(x.value_or(Elem{}));
     const auto bits = validity(v);
     return dataframe::Series::flat(type, data.data(), N, bits.data());
 }
@@ -254,7 +256,8 @@ TEST_CASE("calendar time agrees between the column and row evaluators") {
     f.columns.push_back(numbers(dataframe::TypeId::Int64, TS));
     f.columns.push_back(numbers(dataframe::TypeId::Float64, SECS));
     f.columns.push_back(
-        dataframe::Series::strings({"a", "b", "c", "d", "e", "f", "g", "h"}));
+        dataframe::Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"a", "b", "c", "d", "e", "f", "g", "h"})));
     Roles roles;
     roles.fields.emplace("ts", 1000);
     roles.fields.emplace("secs", 1000000000);
@@ -309,7 +312,8 @@ TEST_CASE("quantifiers over a list column agree with the row evaluator") {
         dataframe::Series::list(
             offs, dataframe::Series::flat_i64(vals.data(), 5, valid.data()))
             .take(dstd::Vector<std::int64_t>{0, 1, -1, 3, 4}));
-    f.columns.push_back(dataframe::Series::strings({"a", "b", "c", "d", "e"}));
+    f.columns.push_back(dataframe::Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"a", "b", "c", "d", "e"})));
     const char* const JSON[] = {"[1,5]", "[]", nullptr, "[2,null]", "[7]"};
     const char* const S5[] = {"a", "b", "c", "d", "e"};
     const char* const FORMS[] = {

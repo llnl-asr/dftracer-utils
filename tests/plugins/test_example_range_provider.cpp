@@ -22,17 +22,18 @@ using namespace dftracer::utils;
 
 namespace {
 
-dstd::Result<plugins::host::Plugins> load(const char* config_json) {
+dstd::Result<plugins::host::Plugins> load(dstd::StringView config_json = {}) {
     auto builder = plugins::host::Plugins::builder();
-    if (config_json == nullptr)
+    if (config_json.empty())
         return builder.add(RANGE_PROVIDER_PLUGIN_PATH).build();
-    return builder.add(RANGE_PROVIDER_PLUGIN_PATH, config_json).build();
+    return builder.add(RANGE_PROVIDER_PLUGIN_PATH, dstd::String(config_json))
+        .build();
 }
 
 dstd::Vector<std::int64_t> i64_column(const dftu_dataframe* df,
-                                      const char* name) {
+                                      dstd::CStringView name) {
     dstd::Vector<std::int64_t> out;
-    dftu_series* column = dftu_dataframe_column(df, name);
+    dftu_series* column = dftu_dataframe_column(df, name.c_str());
     REQUIRE(column);
     CHECK(dftu_series_type(column) == DFTU_TYPE_INT64);
     const auto* data =
@@ -46,7 +47,7 @@ dstd::Vector<std::int64_t> i64_column(const dftu_dataframe* df,
 }  // namespace
 
 TEST_CASE("the example provider builds a table of squares") {
-    auto plugins = load(nullptr);
+    auto plugins = load();
     REQUIRE(plugins.has_value());
 
     dftu_lazyframe* frame =
@@ -81,7 +82,7 @@ TEST_CASE("the rows config key sets the table size") {
 }
 
 TEST_CASE("a projection keeps exactly the columns it names, in its order") {
-    auto plugins = load(nullptr);
+    auto plugins = load();
     REQUIRE(plugins.has_value());
 
     dftu_lazyframe* frame =
@@ -107,7 +108,7 @@ TEST_CASE("a projection keeps exactly the columns it names, in its order") {
 }
 
 TEST_CASE("a repeated projection name gives the column twice") {
-    auto plugins = load(nullptr);
+    auto plugins = load();
     REQUIRE(plugins.has_value());
 
     dftu_lazyframe* frame =
@@ -131,7 +132,7 @@ TEST_CASE("a repeated projection name gives the column twice") {
 }
 
 TEST_CASE("a projection keeps only the column it names") {
-    auto plugins = load(nullptr);
+    auto plugins = load();
     REQUIRE(plugins.has_value());
 
     dftu_lazyframe* frame =

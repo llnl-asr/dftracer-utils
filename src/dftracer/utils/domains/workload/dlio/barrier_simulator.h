@@ -5,6 +5,7 @@
 #include <dftracer/utils/domains/workload/dlio/statistic.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
@@ -106,10 +107,9 @@ class BarrierSimulator {
 
 /// 1 - Kolmogorov-Smirnov statistic between the two empirical distributions.
 /// Returns 1.0 for perfect match, 0.0 for fully disjoint.
-double cdf_similarity(const dstd::Vector<double>& a,
-                      const dstd::Vector<double>& b);
+double cdf_similarity(dstd::Span<const double> a, dstd::Span<const double> b);
 
-double variance(const dstd::Vector<double>& values);
+double variance(dstd::Span<const double> values);
 
 }  // namespace dftracer::utils::domains::workload::dlio
 

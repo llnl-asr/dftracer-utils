@@ -38,7 +38,7 @@ constexpr bool TSAN_BUILD = false;
 /// holding it.
 constexpr unsigned CHILD_LIMIT_SECONDS = 120;
 
-dstd::ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(dstd::StringView bytes) {
     return {bytes.data(), bytes.size()};
 }
 
@@ -55,7 +55,7 @@ NamespaceSpec shared_spec() {
     return made;
 }
 
-ScopeKey scope_of(const dstd::String& path) {
+ScopeKey scope_of(dstd::StringView path) {
     return ScopeKey::file(dstd::StringView(path.data(), path.size()));
 }
 
@@ -66,8 +66,8 @@ dstd::Expected<void, dstd::Error> run(
 
 dstd::Expected<void, dstd::Error> put(Store& store, const Namespace& ns,
                                       const ScopeKey& scope,
-                                      const dstd::String& key,
-                                      const dstd::String& value) {
+                                      dstd::StringView key,
+                                      dstd::StringView value) {
     Batch batch = store.batch(ns, scope);
     batch.put(view_of(key), view_of(value));
     return run(store.commit(std::move(batch)));
@@ -104,7 +104,7 @@ int check_inherited(Store& inherited, const Namespace& ns,
 }
 
 int child_writes_own_copy(Store& inherited, const Namespace& ns,
-                          const dstd::String& dir) {
+                          dstd::StringView dir) {
     const ScopeKey parent_scope = scope_of("/traces/parent.pfw");
     if (const int failed = check_inherited(inherited, ns, parent_scope)) {
         return failed;
@@ -141,7 +141,7 @@ int wait_for(pid_t pid) {
 dstd::String key_of(int index) { return dstd::fmt<"artifact-{}">(index); }
 
 /// Writes its own share of the keys and each key that all processes share.
-int child_writes_keys(const dstd::String& dir, const NamespaceSpec& made,
+int child_writes_keys(dstd::StringView dir, const NamespaceSpec& made,
                       int process, int process_count, int key_count) {
     auto opened = Store::open(dstd::StringView(dir.data(), dir.size()));
     if (!opened) return 30;
@@ -158,7 +158,7 @@ int child_writes_keys(const dstd::String& dir, const NamespaceSpec& made,
 constexpr int PROCESSES = 4;
 constexpr int KEYS = 100;
 
-void write_from_processes(const dstd::String& dir, const NamespaceSpec& made) {
+void write_from_processes(dstd::StringView dir, const NamespaceSpec& made) {
     pid_t children[PROCESSES];
     for (int p = 0; p < PROCESSES; ++p) {
         children[p] = ::fork();
@@ -173,7 +173,7 @@ void write_from_processes(const dstd::String& dir, const NamespaceSpec& made) {
 
 /// Reads with a handle of its own in a child. The exit code is the number of
 /// keys found, or above KEYS on a failure.
-int count_keys_in_child(const dstd::String& dir, const NamespaceSpec& made) {
+int count_keys_in_child(dstd::StringView dir, const NamespaceSpec& made) {
     const pid_t pid = ::fork();
     REQUIRE(pid >= 0);
     if (pid != 0) return wait_for(pid);
@@ -442,8 +442,8 @@ TEST_CASE("publish with replaces_older hides the older copies of a scope") {
 namespace {
 
 /// One writer process, which closes its handle before it ends.
-void write_in_child(const dstd::String& dir, const ScopeKey& scope,
-                    const dstd::String& key, const dstd::String& value) {
+void write_in_child(dstd::StringView dir, const ScopeKey& scope,
+                    dstd::StringView key, dstd::StringView value) {
     const pid_t pid = ::fork();
     REQUIRE(pid >= 0);
     if (pid == 0) {
@@ -459,7 +459,7 @@ void write_in_child(const dstd::String& dir, const ScopeKey& scope,
 }
 
 bool holds(const Snapshot& view, const Namespace& ns, const ScopeKey& scope,
-           const dstd::String& key, const char* value) {
+           dstd::StringView key, dstd::StringView value) {
     auto found = view.get(ns, scope, view_of(key));
     if (!found || !found->has_value()) return false;
     const dstd::ByteView bytes = (*found)->bytes();
@@ -484,7 +484,7 @@ dstd::String rows_of(Cursor cursor) {
 
 /// The newest of three writers wins for `k` in S1, S2 keeps its own `k`, and
 /// `x` of the oldest writer stays. Exit code 0 when all that holds.
-int check_newest_wins(const dstd::String& dir) {
+int check_newest_wins(dstd::StringView dir) {
     auto opened = Store::open(dstd::StringView(dir.data(), dir.size()));
     if (!opened) return 70;
     auto ns = opened->ns(shared_spec());

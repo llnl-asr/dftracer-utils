@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -109,9 +110,7 @@ struct ExtentWriter::OpenExtent : dstd::HeapObject {
 
     OpenExtent(std::uint32_t open_namespace_id, PageCodec open_codec,
                std::uint32_t bytes)
-        : namespace_id(open_namespace_id),
-          codec(open_codec),
-          buffer(bytes, 0) {}
+        : namespace_id(open_namespace_id), codec(open_codec), buffer(bytes) {}
     ~OpenExtent() {
         for (auto& block : blocks) delete block.load(std::memory_order_relaxed);
     }
@@ -120,7 +119,9 @@ struct ExtentWriter::OpenExtent : dstd::HeapObject {
     PageCodec codec = PageCodec::Zstd;
     std::atomic<std::uint64_t> state{0};
     std::atomic<SlotBlock*> blocks[OPEN_EXTENT_SLOT_BLOCKS] = {};
-    dstd::Vector<std::uint8_t> buffer;
+    /// Left uninitialized: a segment writes every byte it claims, so only the
+    /// pages that segments reach become resident.
+    dstd::RawBuffer<std::uint8_t> buffer;
     /// Filled from the slots once the last appender has left.
     dstd::Vector<OpenSegment> segments;
 };
@@ -581,7 +582,7 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
         reject();
         return;
     }
-    extent->buffer = dstd::Vector<std::uint8_t>();
+    extent->buffer.release();
     const std::uint32_t length = static_cast<std::uint32_t>(stored->size());
     auto* pending = new PendingWrite;
     pending->owner = this;
@@ -724,7 +725,11 @@ dstd::Expected<void, dstd::Error> ExtentWriter::seal_all() {
             continue;
         }
         if (seal_extent(extent)) leave_extent(extent);
-        publish_extent(*slot, extent);
+        // The next append installs a fresh buffer, so an idle writer holds
+        // none.
+        slot->extent.compare_exchange_strong(extent, nullptr,
+                                             std::memory_order_acq_rel,
+                                             std::memory_order_acquire);
     }
     return {};
 }
@@ -755,6 +760,16 @@ bool ExtentWriterTestHook::seal_in_place(ExtentWriter& writer,
     if (!writer.seal_extent(extent)) return false;
     writer.leave_extent(extent);
     return true;
+}
+
+std::size_t ExtentWriterTestHook::open_bytes(ExtentWriter& writer) {
+    std::size_t bytes = 0;
+    for (auto* slot = writer.namespaces_.load(std::memory_order_acquire);
+         slot != nullptr; slot = slot->next) {
+        const auto* extent = slot->extent.load(std::memory_order_acquire);
+        if (extent != nullptr) bytes += extent->buffer.capacity();
+    }
+    return bytes;
 }
 
 std::size_t ExtentWriterTestHook::retired_bytes(ExtentWriter& writer) {

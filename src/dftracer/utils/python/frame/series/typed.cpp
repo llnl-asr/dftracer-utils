@@ -2,11 +2,15 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
+#include <dftracer/utils/dataframe/internal/reshape.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/frame/series_detail.h>
 
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <utility>
 
 namespace dftracer::utils::python::frame::series_detail {
@@ -34,7 +38,7 @@ Series flat_copy(const Series& s) {
 }  // namespace
 
 Series retype_series(const Series& s, TypeId type, dataframe::TimeUnit unit,
-                     const dftracer::utils::dstd::String& zone, int precision,
+                     dftracer::utils::dstd::StringView zone, int precision,
                      int scale, int width) {
     Series flat = flat_copy(s);
     const auto from_width = dataframe::byte_width(flat.type());
@@ -54,7 +58,7 @@ Series retype_series(const Series& s, TypeId type, dataframe::TimeUnit unit,
 // column, sharing its buffers and nulls: int32 for date32 and time32, int64
 // for date64, time64, timestamp and duration, uint16 for float16.
 PyObject* Series_physical(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     Series flat = flat_copy(*a);
     TypeId to = TypeId::Int64;
@@ -93,7 +97,7 @@ PyObject* series_retype(PyObject*, PyObject* args) {
     if (!PyArg_ParseTuple(args, "Oi|isiii", &obj, &type, &unit, &zone,
                           &precision, &scale, &width))
         return nullptr;
-    Series* a = as_series_or_null(obj);
+    Series* a = as_native_or_null<Series>(obj);
     if (!a) {
         PyErr_SetString(PyExc_TypeError, "retype: expected a Series");
         return nullptr;
@@ -114,30 +118,75 @@ PyObject* series_retype(PyObject*, PyObject* args) {
     return make_series(std::move(out));
 }
 
+// _series_list_of(values, ends): a List column whose row i holds
+// values[ends[i - 1]:ends[i]], the first row starting at 0.
+PyObject* series_list_of(PyObject*, PyObject* args) {
+    PyObject* values_obj = nullptr;
+    PyObject* offsets_obj = nullptr;
+    if (!PyArg_ParseTuple(args, "OO", &values_obj, &offsets_obj))
+        return nullptr;
+    Series* values = as_native_or_null<Series>(values_obj);
+    Series* ends = as_native_or_null<Series>(offsets_obj);
+    if (!values || !ends) {
+        PyErr_SetString(PyExc_TypeError, "list_of: expected two Series");
+        return nullptr;
+    }
+    const Series flat_ends = ends->materialize();
+    if (flat_ends.type() != TypeId::Int64 || flat_ends.null_count() != 0) {
+        PyErr_SetString(PyExc_ValueError,
+                        "list_of: ends must be an Int64 column without nulls");
+        return nullptr;
+    }
+    const std::int64_t n = flat_ends.length();
+    const auto* src = flat_ends.data<std::int64_t>();
+    dftracer::utils::dstd::Vector<std::int32_t> narrow(
+        static_cast<std::size_t>(n) + 1, 0);
+    for (std::int64_t i = 0; i < n; ++i) {
+        const std::int64_t at = src[i];
+        if (at < 0 || at > values->length() || (i > 0 && at < src[i - 1]) ||
+            at > std::numeric_limits<std::int32_t>::max()) {
+            PyErr_SetString(PyExc_ValueError,
+                            "list_of: ends must not decrease and must stay "
+                            "within the values");
+            return nullptr;
+        }
+        narrow[static_cast<std::size_t>(i) + 1] = static_cast<std::int32_t>(at);
+    }
+    return make_series(Series::list(narrow, values->materialize()));
+}
+
 PyObject* Series_get_nbytes(PyObject* self, void*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     return PyLong_FromSize_t(nbytes_of(*a->handle()));
 }
 
 PyObject* Series_to_bytes(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
-    try {
+    return guard_as(PyExc_TypeError, [&]() -> PyObject* {
         dataframe::DataFrame f;
         f.names.emplace_back("v");
         f.columns.push_back(a->share());
-        const auto bytes = dataframe::frame_to_native(f);
+        const auto bytes = without_gil(
+            a->length(), [&] { return dataframe::frame_to_native(f); });
         if (!bytes) {
             PyErr_SetString(PyExc_TypeError, bytes.error().c_str());
             return nullptr;
         }
         return PyBytes_FromStringAndSize(
             bytes->data(), static_cast<Py_ssize_t>(bytes->size()));
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_TypeError, e.what());
-        return nullptr;
-    }
+    });
+}
+
+// _tz_set_search_path(paths): the directories searched first for time zone
+// files, separated by ':'.
+PyObject* tz_set_search_path(PyObject*, PyObject* arg) {
+    Py_ssize_t size = 0;
+    const char* paths = PyUnicode_AsUTF8AndSize(arg, &size);
+    if (!paths) return nullptr;
+    dftu_tz_set_search_path(paths, static_cast<std::int32_t>(size));
+    Py_RETURN_NONE;
 }
 
 // _series_nulls(type_id, n): a column of `n` nulls of the given type.
@@ -152,6 +201,109 @@ PyObject* series_nulls(PyObject*, PyObject* args) {
     }
     return make_series(Series::nulls(static_cast<TypeId>(type_id),
                                      static_cast<std::int64_t>(n)));
+}
+
+// _number_rows(keys, sorted) -> (ids, first): see dataframe::number_rows.
+PyObject* number_rows(PyObject*, PyObject* args) {
+    PyObject* keys_obj = nullptr;
+    int sorted = 0;
+    if (!PyArg_ParseTuple(args, "Op", &keys_obj, &sorted)) return nullptr;
+    PyObject* seq =
+        PySequence_Fast(keys_obj, "_number_rows: keys must be a list");
+    if (!seq) return nullptr;
+    dftracer::utils::dstd::Vector<Series> keys;
+    for (Py_ssize_t i = 0; i < PySequence_Fast_GET_SIZE(seq); ++i) {
+        Series* k = as_native_or_null<Series>(PySequence_Fast_GET_ITEM(seq, i));
+        if (!k) {
+            Py_DECREF(seq);
+            PyErr_SetString(PyExc_TypeError, "_number_rows: expected Series");
+            return nullptr;
+        }
+        keys.push_back(k->share());
+    }
+    Py_DECREF(seq);
+    auto out = without_gil(keys.empty() ? 0 : keys.front().length(), [&] {
+        return dataframe::number_rows(keys, sorted != 0);
+    });
+    if (!out) {
+        core::set_py_error(out.error());
+        return nullptr;
+    }
+    PyObject* ids = make_series(std::move(out->ids));
+    PyObject* first = make_series(std::move(out->first));
+    if (!ids || !first) {
+        Py_XDECREF(ids);
+        Py_XDECREF(first);
+        return nullptr;
+    }
+    PyObject* pair = PyTuple_Pack(2, ids, first);
+    Py_DECREF(ids);
+    Py_DECREF(first);
+    return pair;
+}
+
+// _unstack_positions(rows, cols, row_count, col_count) -> Series: see
+// dataframe::unstack_positions.
+PyObject* unstack_positions(PyObject*, PyObject* args) {
+    PyObject* rows_obj = nullptr;
+    PyObject* cols_obj = nullptr;
+    long long row_count = 0;
+    long long col_count = 0;
+    if (!PyArg_ParseTuple(args, "OOLL", &rows_obj, &cols_obj, &row_count,
+                          &col_count))
+        return nullptr;
+    Series* rows = as_native_or_null<Series>(rows_obj);
+    Series* cols = as_native_or_null<Series>(cols_obj);
+    if (!rows || !cols) {
+        PyErr_SetString(PyExc_TypeError, "_unstack_positions: expected Series");
+        return nullptr;
+    }
+    const Series r = rows->share();
+    const Series c = cols->share();
+    auto out = without_gil(r.length(), [&] {
+        return dataframe::unstack_positions(r, c, row_count, col_count);
+    });
+    if (!out) {
+        core::set_py_error(out.error());
+        return nullptr;
+    }
+    return make_series(std::move(*out));
+}
+
+// _unstack_columns(values, positions, row_count) -> list of Series: see
+// dataframe::unstack_columns.
+PyObject* unstack_columns(PyObject*, PyObject* args) {
+    PyObject* values_obj = nullptr;
+    PyObject* positions_obj = nullptr;
+    long long row_count = 0;
+    if (!PyArg_ParseTuple(args, "OOL", &values_obj, &positions_obj, &row_count))
+        return nullptr;
+    Series* values = as_native_or_null<Series>(values_obj);
+    Series* positions = as_native_or_null<Series>(positions_obj);
+    if (!values || !positions) {
+        PyErr_SetString(PyExc_TypeError, "_unstack_columns: expected Series");
+        return nullptr;
+    }
+    const Series v = values->share();
+    const Series p = positions->share();
+    auto out = without_gil(p.length(), [&] {
+        return dataframe::unstack_columns(v, p, row_count);
+    });
+    if (!out) {
+        core::set_py_error(out.error());
+        return nullptr;
+    }
+    PyObject* list = PyList_New(static_cast<Py_ssize_t>(out->size()));
+    if (!list) return nullptr;
+    for (std::size_t i = 0; i < out->size(); ++i) {
+        PyObject* item = make_series(std::move((*out)[i]));
+        if (!item) {
+            Py_DECREF(list);
+            return nullptr;
+        }
+        PyList_SET_ITEM(list, static_cast<Py_ssize_t>(i), item);
+    }
+    return list;
 }
 
 PyObject* series_from_bytes(PyObject*, PyObject* obj) {

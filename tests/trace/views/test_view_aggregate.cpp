@@ -2,12 +2,14 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -143,7 +145,7 @@ dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& v) {
 
 // Build the aggregation tier every build makes, so the chunk partials can
 // answer without a scan.
-void build_tier_index(const dstd::String& gz) {
+void build_tier_index(dstd::CStringView gz) {
     dftracer::utils::trace::index::IndexerOptions options;
     dftu_utils_test::ok(
         dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
@@ -159,11 +161,11 @@ dstd::String write_agg_trace(TestEnvironment& env) {
     {
         dftu_utils_test::FileOut ofs(pfw);
         for (int i = 0; i < 30; ++i)
-            ofs << R"({"ph":"X","name":")" << (i % 2 ? "pread" : "read")
+            ofs << R"({"ph":1,"name":")" << (i % 2 ? "pread" : "read")
                 << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << (1000 + i)
                 << R"(,"dur":500,"args":{"level":)" << i << R"(}})" << "\n";
         for (int i = 0; i < 20; ++i)
-            ofs << R"({"ph":"X","name":"fwrite","cat":"STDIO","pid":2,"tid":2,"ts":)"
+            ofs << R"({"ph":1,"name":"fwrite","cat":"STDIO","pid":2,"tid":2,"ts":)"
                 << (2000 + i * 5) << R"(,"dur":300,"args":{"level":)"
                 << (100 + i) << R"(}})" << "\n";
     }
@@ -176,7 +178,7 @@ dstd::String write_agg_trace(TestEnvironment& env) {
 // Two aggregation frames equal, pairing rows by their composite key text so a
 // differently-ordered group set still compares row for row.
 void frames_equal(const dataframe::DataFrame& a, const dataframe::DataFrame& b,
-                  const dstd::Vector<dstd::String>& keys) {
+                  dstd::Vector<dstd::String> keys) {
     REQUIRE(a.names.size() == b.names.size());
     for (std::size_t i = 0; i < a.names.size(); ++i) {
         CHECK(a.names[i] == b.names[i]);
@@ -443,8 +445,8 @@ TEST_SUITE("View") {
         const dstd::String pfw = env.dir() + "/overflow.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            auto event = [&](const char* name, int ts, std::uint64_t dur) {
-                ofs << R"({"ph":"X","name":")" << name
+            auto event = [&](dstd::StringView name, int ts, std::uint64_t dur) {
+                ofs << R"({"ph":1,"name":")" << name
                     << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << ts
                     << R"(,"dur":)" << dur << R"(,"args":{}})" << "\n";
             };
@@ -487,11 +489,11 @@ TEST_SUITE("View") {
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 10; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << (1000 + i * 10) << R"(,"dur":5,"args":{"level":)" << i
                     << R"(}})" << "\n";
             for (int i = 0; i < 4; ++i)
-                ofs << R"({"ph":"X","name":"seek","cat":"STDIO","pid":1,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"seek","cat":"STDIO","pid":1,"tid":1,"ts":)"
                     << (5000 + i * 10) << R"(,"dur":5,"args":{"level":)"
                     << (100 + i) << R"(}})" << "\n";
         }
@@ -607,7 +609,7 @@ TEST_SUITE("View") {
         auto merged = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .agg({{AggOp::SetUnion, "name", "names"}})
-                .merge_partials({p}));
+                .merge_partials(test_view_common::partial_views(p)));
         REQUIRE(merged.num_rows() == 1);
         CHECK(bstr(merged, 0, "names") == joined);
 
@@ -761,8 +763,8 @@ TEST_SUITE("View") {
         // Partial + merge path (serializes the accumulator and back).
         dstd::String p =
             dftu_utils_test::ok(make().aggregate_partial().collect().get());
-        dataframe::DataFrame merged =
-            dftu_utils_test::ok(make().merge_partials({p}));
+        dataframe::DataFrame merged = dftu_utils_test::ok(
+            make().merge_partials(test_view_common::partial_views(p)));
 
         REQUIRE(direct.num_rows() == 1);
         REQUIRE(merged.num_rows() == 1);
@@ -1261,7 +1263,8 @@ TEST_SUITE("View") {
                                     .collect()
                                     .get());
         StringSink merged;
-        dftu_utils_test::ok(view({}).merge_counter_partials({pa, pb}, merged));
+        dftu_utils_test::ok(view({}).merge_counter_partials(
+            test_view_common::partial_views(pa, pb), merged));
 
         // Compare against aggregating both shards at once.
         StringSink single;
@@ -1340,10 +1343,11 @@ TEST_SUITE("View") {
         };
 
         auto check = [&](const views::detail::scan::ScanPlan& v,
-                         const dstd::Vector<dstd::String>& keys) {
+                         dstd::Vector<dstd::String> keys) {
             dstd::String p = run(views::detail::scan::aggregate_partial(v));
             dataframe::DataFrame merged = dftu_utils_test::ok(
-                views::detail::scan::merge_partials_to_table(v, {p}));
+                views::detail::scan::merge_partials_to_table(
+                    v, test_view_common::partial_views(p)));
             frames_equal(merged, engine_collect(v), keys);
         };
         // Numeric reductions, a percentile sketch, and SetUnion survive the
@@ -1367,7 +1371,8 @@ TEST_SUITE("View") {
             by(GroupKey::cat(), {{AggOp::Hist, "dur", "h"}});
         dataframe::DataFrame mh =
             dftu_utils_test::ok(views::detail::scan::merge_partials_to_table(
-                vh, {run(views::detail::scan::aggregate_partial(vh))}));
+                vh, test_view_common::partial_views(
+                        run(views::detail::scan::aggregate_partial(vh)))));
         dataframe::DataFrame eh = engine_collect(vh);
         REQUIRE(mh.num_rows() == eh.num_rows());
         dstd::Map<dstd::String, std::int64_t> mrow, erow;
@@ -1413,7 +1418,8 @@ TEST_SUITE("View") {
                                     .collect()
                                     .get());
         StringSink merged;
-        dftu_utils_test::ok(view({}).merge_counter_partials({pa, pb}, merged));
+        dftu_utils_test::ok(view({}).merge_counter_partials(
+            test_view_common::partial_views(pa, pb), merged));
 
         StringSink single;
         dftu_utils_test::ok(view({{dstd::String(a), dstd::String(ia)},
@@ -1443,11 +1449,18 @@ TEST_SUITE("View") {
         dstd::String bad = good;
         bad[0] = static_cast<char>(0x7e);  // wrong version tag
         dftu_utils_test::expect_error(
-            v.merge_partials({bad}),
+            v.merge_partials(test_view_common::partial_views(bad)),
+            dftracer::utils::common::ErrorCode::Aggregation);
+        // The tag of the previous blob layout is refused as well.
+        dstd::String old_layout = good;
+        old_layout[0] = static_cast<char>(2);
+        dftu_utils_test::expect_error(
+            v.merge_partials(test_view_common::partial_views(old_layout)),
             dftracer::utils::common::ErrorCode::Aggregation);
         // A present-but-empty partial (no tag byte) is also rejected loudly.
         dftu_utils_test::expect_error(
-            v.merge_partials({dstd::StringView()}),
+            v.merge_partials(
+                test_view_common::partial_views(dstd::StringView())),
             dftracer::utils::common::ErrorCode::Aggregation);
     }
 
@@ -1536,11 +1549,11 @@ TEST_SUITE("View") {
         dstd::String pfw = env.dir() + "/am.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
+            ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
                 << "\n"
-                << R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":99,"args":{}})"
+                << R"({"ph":1,"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":99,"args":{}})"
                 << "\n"
-                << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1200,"dur":20,"args":{}})"
+                << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1200,"dur":20,"args":{}})"
                 << "\n";
         }
         dstd::String gz = pfw + ".gz";
@@ -1571,15 +1584,15 @@ TEST_SUITE("View") {
         dstd::String pfw = env.dir() + "/rank.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"ph":"M","name":"PR","cat":"dftracer","pid":100,"tid":0,"args":{"name":"rank","value":"0"}})"
+            ofs << R"({"ph":4,"name":"PR","cat":"dftracer","pid":100,"tid":0,"args":{"name":"rank","value":"0"}})"
                 << "\n"
-                << R"({"ph":"M","name":"PR","cat":"dftracer","pid":200,"tid":0,"args":{"name":"rank","value":"1"}})"
+                << R"({"ph":4,"name":"PR","cat":"dftracer","pid":200,"tid":0,"args":{"name":"rank","value":"1"}})"
                 << "\n";
             for (int i = 0; i < 3; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":100,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":100,"tid":1,"ts":)"
                     << (1000 + i * 10) << R"(,"dur":5,"args":{}})" << "\n";
             for (int i = 0; i < 2; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":200,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":200,"tid":1,"ts":)"
                     << (2000 + i * 10) << R"(,"dur":5,"args":{}})" << "\n";
         }
         dstd::String gz = pfw + ".gz";
@@ -1628,7 +1641,7 @@ TEST_SUITE("View") {
         auto res = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .map_batches<Acc>(
-                    [&](Acc& a, const dstd::Vector<dstd::StringView>& evs) {
+                    [&](Acc& a, dstd::Span<const dstd::StringView> evs) {
                         for (auto e : evs) {
                             double d = dur_of(e);
                             if (d < 25) {
@@ -1670,7 +1683,7 @@ TEST_SUITE("View") {
         auto res = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .map_batches<Cnt>(
-                    [](Cnt& c, const dstd::Vector<dstd::StringView>& e) {
+                    [](Cnt& c, dstd::Span<const dstd::StringView> e) {
                         c.n += e.size();
                     },
                     [](Cnt&& a, Cnt&& b) {
@@ -1758,22 +1771,22 @@ TEST_SUITE("View") {
     }
 
     TEST_CASE(
-        "View - phase(Events) vs phase(Counters) separate ph=X and ph=C") {
+        "View - phase(Events) vs phase(Counters) separate ph=1 and ph=2") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         dstd::String gz = create_trace_with_counters(env);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        // Events: the 10 ph=X reads, no counters.
+        // Events: the 10 ph=1 reads, no counters.
         StringSink ev;
         dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
                                 .phase(Phase::Events)
                                 .sink_json(ev)
                                 .get());
         CHECK(ev.lines().size() == 10);
-        CHECK(count_containing(ev.lines(), R"("ph":"C")") == 0);
+        CHECK(count_containing(ev.lines(), R"("ph":2)") == 0);
 
-        // Counters: the 2 ph=C events only.
+        // Counters: the 2 ph=2 events only.
         StringSink ct;
         dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
                                 .phase(Phase::Counters)
@@ -1784,7 +1797,7 @@ TEST_SUITE("View") {
     }
 
     TEST_CASE(
-        "View - export_counters emits re-parseable ph=C aggregate trace") {
+        "View - export_counters emits re-parseable ph=2 aggregate trace") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // 30 POSIX reads, ts 1000..3900, dur 10..39.
@@ -1831,8 +1844,8 @@ TEST_SUITE("View") {
         dstd::String pfw = env.dir() + "/occ.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            auto ev = [&](const char* name, long ts, long dur) {
-                ofs << R"({"ph":"X","name":")" << name
+            auto ev = [&](dstd::StringView name, long ts, long dur) {
+                ofs << R"({"ph":1,"name":")" << name
                     << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << ts
                     << R"(,"dur":)" << dur << R"(,"args":{}})" << "\n";
             };
@@ -1859,7 +1872,7 @@ TEST_SUITE("View") {
                 .get());
 
         REQUIRE(bhas(b, "busy_cell_us"));
-        auto row_of = [&](const dstd::String& nm) {
+        auto row_of = [&](dstd::StringView nm) {
             for (std::int64_t i = 0; i < b.num_rows(); ++i)
                 if (bstr(b, i, "name") == nm) return i;
             return static_cast<std::int64_t>(-1);
@@ -1890,7 +1903,7 @@ TEST_SUITE("View") {
 
     // Exact interval union of half-open [ts, ts+dur) events.
     static std::uint64_t exact_union(
-        const dstd::Vector<dstd::Pair<long, long>>& iv) {
+        dstd::Span<const dstd::Pair<long, long>> iv) {
         dstd::Vector<dstd::Pair<long, long>> spans;
         for (const auto& [ts, dur] : iv) spans.emplace_back(ts, ts + dur);
         std::sort(spans.begin(), spans.end());
@@ -1914,12 +1927,12 @@ TEST_SUITE("View") {
         return total;
     }
 
-    static void write_occ_trace(const dstd::String& pfw,
-                                const dstd::Vector<dstd::Pair<long, long>>& iv,
-                                const char* name = "e") {
+    static void write_occ_trace(dstd::StringView pfw,
+                                dstd::Span<const dstd::Pair<long, long>> iv,
+                                dstd::StringView name = "e") {
         dftu_utils_test::FileOut ofs(pfw);
         for (const auto& [ts, dur] : iv) {
-            ofs << R"({"ph":"X","name":")" << name
+            ofs << R"({"ph":1,"name":")" << name
                 << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << ts
                 << R"(,"dur":)" << dur << R"(,"args":{}})" << "\n";
         }
@@ -2156,9 +2169,9 @@ TEST_SUITE("View") {
         dstd::String pfw = env.dir() + "/schemaless.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            auto ev = [&](const char* type, const char* host, const char* tag0,
-                          int v, long ts) {
-                ofs << R"({"ph":"X","name":"op","cat":"POSIX","type":")" << type
+            auto ev = [&](dstd::StringView type, dstd::StringView host,
+                          dstd::StringView tag0, int v, long ts) {
+                ofs << R"({"ph":1,"name":"op","cat":"POSIX","type":")" << type
                     << R"(","pid":1,"tid":1,"ts":)" << ts
                     << R"(,"dur":10,"args":{"meta":{"host":")" << host
                     << R"("},"tags":[")" << tag0 << R"(","y"],"n":{"v":)" << v
@@ -2173,7 +2186,7 @@ TEST_SUITE("View") {
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        auto counts = [&](const dstd::String& col, const GroupKey& gk) {
+        auto counts = [&](dstd::StringView col, const GroupKey& gk) {
             dataframe::DataFrame b = dftu_utils_test::ok(
                 View::from_file(dstd::String(gz), dstd::String(idx))
                     .group_by({gk})
@@ -2226,18 +2239,18 @@ TEST_SUITE("View") {
             // Top-level type "mpi" on every record; four also carry an
             // unrelated args.type parameter (the shadowing trap).
             for (int i = 0; i < 4; ++i)
-                ofs << R"({"ph":"X","name":"kv","cat":"MPI","type":"mpi","pid":1,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"kv","cat":"MPI","type":"mpi","pid":1,"tid":1,"ts":)"
                     << (1000 + i) << R"(,"dur":5,"args":{"type":)" << (i + 1)
                     << R"(}})" << "\n";
             for (int i = 0; i < 6; ++i)
-                ofs << R"({"ph":"X","name":"send","cat":"MPI","type":"mpi","pid":1,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"send","cat":"MPI","type":"mpi","pid":1,"tid":1,"ts":)"
                     << (2000 + i) << R"(,"dur":5,"args":{"count":10}})" << "\n";
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        auto counts = [&](const dstd::String& col, const GroupKey& gk) {
+        auto counts = [&](dstd::StringView col, const GroupKey& gk) {
             dataframe::DataFrame b = dftu_utils_test::ok(
                 View::from_file(dstd::String(gz), dstd::String(idx))
                     .group_by({gk})
@@ -2270,12 +2283,12 @@ TEST_SUITE("View") {
         dstd::String pfw = env.dir() + "/time_metric.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"name":"CM","ph":"M","cat":"dftracer","pid":0,"tid":0,)"
+            ofs << R"({"name":"CM","ph":4,"cat":"dftracer","pid":0,"tid":0,)"
                    R"("args":{"name":"time_metric","value":"NS"}})"
                 << "\n";
             int ts = 1000;
             for (int i = 0; i < 20; ++i) {
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,)"
                        R"("tid":10,"ts":)"
                     << ts << R"(,"dur":5,"args":{}})" << "\n";
                 ts += 100;
@@ -2294,15 +2307,15 @@ TEST_SUITE("View") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
         const dstd::String gz = env.dir() + "/grow.pfw.gz";
-        const auto append_member = [&](int first, const char* name,
-                                       const char* cat, int ts_base) {
+        const auto append_member = [&](int first, dstd::StringView name,
+                                       dstd::StringView cat, int ts_base) {
             const dstd::String plain = env.dir() + "/part.txt";
             const dstd::String part = env.dir() + "/part.txt.gz";
             {
                 dftu_utils_test::FileOut ofs(plain);
                 if (first == 0) ofs << "[\n";
                 for (int i = first; i < first + 200; ++i)
-                    ofs << R"({"id":)" << i << R"(,"ph":"X","name":")" << name
+                    ofs << R"({"id":)" << i << R"(,"ph":1,"name":")" << name
                         << R"(","cat":")" << cat << R"(","pid":1,"tid":1,"ts":)"
                         << (ts_base + i * 100)
                         << R"(,"dur":50,"args":{"level":)" << i << "}}\n";
@@ -2336,8 +2349,8 @@ TEST_SUITE("View") {
                                              {AggOp::Max, "dur", "longest"}};
             const auto scan_plan = views::detail::scan::from_file(
                 dstd::String(gz), dstd::String(idx));
-            const auto same = [&](const dstd::Vector<GroupKey>& keys,
-                                  const dstd::Vector<dstd::String>& names) {
+            const auto same = [&](dstd::Vector<GroupKey> keys,
+                                  dstd::Vector<dstd::String> names) {
                 const auto answer = dftu_utils_test::ok(
                     View::from_file(dstd::String(gz), dstd::String(idx))
                         .group_by(keys)

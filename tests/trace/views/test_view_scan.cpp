@@ -3,10 +3,12 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -15,6 +17,7 @@
 #include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
@@ -317,11 +320,11 @@ TEST_SUITE("View") {
         const dstd::String idx_b =
             dstd::String(determine_index_path(out_bgz, ""));
 
-        auto run = [](const dstd::String& f, const dstd::String& ix,
-                      const char* q) {
+        auto run = [](dstd::StringView f, dstd::StringView ix,
+                      dstd::StringView q) {
             StringSink s;
             View v = View::from_file(dstd::String(f), dstd::String(ix));
-            if (q != nullptr) v = v.duql(q);
+            if (!q.empty()) v = v.duql(q);
             dftu_utils_test::ok(v.sink_json(s).get());
             auto ls = s.lines();
             std::sort(ls.begin(), ls.end());
@@ -329,7 +332,7 @@ TEST_SUITE("View") {
         };
 
         // Full scan and pruned queries: fused (A) must equal lazy (B).
-        CHECK(run(out_agz, idx_a, nullptr) == run(out_bgz, idx_b, nullptr));
+        CHECK(run(out_agz, idx_a, {}) == run(out_bgz, idx_b, {}));
         CHECK(run(out_agz, idx_a, R"(cat == "POSIX")") ==
               run(out_bgz, idx_b, R"(cat == "POSIX")"));
         CHECK(run(out_agz, idx_a, R"(cat == "STDIO")") ==
@@ -339,7 +342,7 @@ TEST_SUITE("View") {
         CHECK(run(out_agz, idx_a, R"(name == "does_not_exist")").empty());
         CHECK(run(out_bgz, idx_b, R"(name == "does_not_exist")").empty());
         // Fused full scan returns every written event.
-        CHECK(run(out_agz, idx_a, nullptr).size() == st.events_matched);
+        CHECK(run(out_agz, idx_a, {}).size() == st.events_matched);
     }
 
     // Parts are folded and compressed on parallel workers, so the member
@@ -389,7 +392,7 @@ TEST_SUITE("View") {
                       matched_b = 0;
         dstd::Vector<dstd::String> cols_a, cols_b;
         for (std::size_t i = 0; i < parts_a.size(); ++i) {
-            auto q = [&](const dstd::String& f, const dstd::String& ix,
+            auto q = [&](dstd::StringView f, dstd::StringView ix,
                          std::uint64_t& sc, std::uint64_t& mt,
                          dstd::Vector<dstd::String>& cols) {
                 StringSink sink;
@@ -496,10 +499,10 @@ TEST_SUITE("View") {
         dstd::String pfw = env.dir() + "/collide.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,)"
                    R"("ts":1000,"dur":10,"args":{"name":"inner_read"}})"
                 << "\n";
-            ofs << R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"write","cat":"POSIX","pid":1,"tid":1,)"
                    R"("ts":1100,"dur":10,"args":{"name":"inner_write"}})"
                 << "\n";
         }
@@ -549,16 +552,16 @@ TEST_SUITE("View") {
         dstd::String pfw = env.dir() + "/nested.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"ph":"X","name":"hot","cat":"APP","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"hot","cat":"APP","pid":1,"tid":1,)"
                    R"("ts":1000,"dur":42,"args":{"dur":{"p99":7000},)"
                    R"("counters":{"X":{"p50":3}},"label":{"v":"A"},)"
                    R"("cqe.raw_ns":5}})"
                 << "\n";
-            ofs << R"({"ph":"X","name":"cold","cat":"APP","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"cold","cat":"APP","pid":1,"tid":1,)"
                    R"("ts":1010,"dur":20,"args":{"dur":{"p99":500},)"
                    R"("counters":{"X":{"p50":3}},"label":{"v":"B"}}})"
                 << "\n";
-            ofs << R"({"ph":"X","name":"flat","cat":"APP","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"flat","cat":"APP","pid":1,"tid":1,)"
                    R"("ts":2000,"dur":7,"args":{"run":1}})"
                 << "\n";
         }
@@ -581,7 +584,7 @@ TEST_SUITE("View") {
         dstd::Vector<dstd::String> declared = v.lazy().schema();
         std::sort(collected.begin(), collected.end());
         std::sort(declared.begin(), declared.end());
-        auto joined = [](const dstd::Vector<dstd::String>& xs) {
+        auto joined = [](dstd::Span<const dstd::String> xs) {
             dstd::String out;
             for (const auto& x : xs) out += x + ",";
             return out;
@@ -646,21 +649,21 @@ TEST_SUITE("View") {
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 20; ++i)
-                ofs << R"({"ph":"X","name":"plain","cat":"APP","pid":2,)"
+                ofs << R"({"ph":1,"name":"plain","cat":"APP","pid":2,)"
                        R"("tid":1,"ts":)"
                     << 5000 + i * 100
                     << R"(,"dur":10,"args":{"label":)"
                        R"({"v":"P"}}})"
                     << "\n";
-            ofs << R"({"ph":"X","name":"hot","cat":"APP","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"hot","cat":"APP","pid":1,"tid":1,)"
                    R"("ts":1000,"dur":42,"args":{"label":{"v":"A"},)"
                    R"("f":1e400,"big":123456789012345678901234567890}})"
                 << "\n";
-            ofs << R"({"ph":"X","name":"mid","cat":"APP","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"mid","cat":"APP","pid":1,"tid":1,)"
                    R"("ts":1010,"dur":20,"args":{"label":{"v":"B"},)"
                    R"("s":"x\qy"}})"
                 << "\n";
-            ofs << "{\"ph\":\"X\",\"name\":\"cold\",\"cat\":\"APP\",\"pid\":1,"
+            ofs << "{\"ph\":1,\"name\":\"cold\",\"cat\":\"APP\",\"pid\":1,"
                    "\"tid\":1,\"ts\":1020,\"dur\":5,\"args\":{\"label\":"
                    "{\"v\":\"C\"},\"s\":\"p\xff"
                    "q\"}}\n";
@@ -697,7 +700,7 @@ TEST_SUITE("View") {
         dstd::String gz = create_trace_with_counters(env);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        // ph="C" cpu counters: (user_pct,idle_pct) = (40,60) and (80,20).
+        // ph=2 cpu counters: (user_pct,idle_pct) = (40,60) and (80,20).
         auto table = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .phase(Phase::Counters)
@@ -728,7 +731,7 @@ TEST_SUITE("View") {
         dstd::String gz = create_trace_with_counters(env);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        // ph="C" cpu counters: user_pct=(40,80), idle_pct=(60,20).
+        // ph=2 cpu counters: user_pct=(40,80), idle_pct=(60,20).
         auto table = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .phase(Phase::Counters)
@@ -753,7 +756,7 @@ TEST_SUITE("View") {
         "View - select a counter arg then group_by/agg over it (expr path)") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        // ph="X" events with no "cycles", plus ph="C" counters whose "cycles"
+        // ph=1 events with no "cycles", plus ph=2 counters whose "cycles"
         // arg is a string, so the selected column is String-typed. The Python
         // two-step .group_by(k).agg("count:cycles"/"sum:cycles") lowers to
         // group_agg_expr, which used to feed an invalid (non-numeric) evaluated
@@ -762,12 +765,12 @@ TEST_SUITE("View") {
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 4; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << (1000 + i * 100) << R"(,"dur":10,"args":{}})" << "\n";
             const char* vals[] = {"lots", "few", "some"};
             for (int i = 0; i < 6; ++i) {
                 const char* nm = (i % 2 == 0) ? "cpu" : "gpu";
-                ofs << R"({"ph":"C","name":")" << nm
+                ofs << R"({"ph":2,"name":")" << nm
                     << R"(","cat":"sys","pid":0,"tid":0,"ts":)"
                     << (2000 + i * 10) << R"(,"args":{"cycles":")"
                     << vals[i % 3] << R"("}})"
@@ -808,7 +811,7 @@ TEST_SUITE("View") {
             CHECK(name_counts["read"] == 4);
             CHECK(name_counts["cpu"] == 3);
             CHECK(name_counts["gpu"] == 3);
-            CHECK(nnull == 4);  // the 4 ph="X" rows lack "cycles"
+            CHECK(nnull == 4);  // the 4 ph=1 rows lack "cycles"
             CHECK(cyc_counts["lots"] == 2);
             CHECK(cyc_counts["few"] == 2);
             CHECK(cyc_counts["some"] == 2);
@@ -845,14 +848,18 @@ TEST_SUITE("View") {
                       doctest::Approx(nm == "read" ? 0 : 3));
             }
             auto refused = dataframe::group_agg_expr(
-                key, {dataframe::agg_sum(cyc, "sum_cycles")}, inputs, "name");
+                key,
+                dftu_utils_test::span_of<
+                    dftracer::utils::dataframe::AggExprSpec>(
+                    {dataframe::agg_sum(cyc, "sum_cycles")}),
+                inputs, "name");
             REQUIRE(!refused.has_value());
             CHECK(common::errorcode_of(refused.error()) ==
                   common::ErrorCode::InvalidArgument);
         }
     }
 
-    TEST_CASE("View - sink_counters emits a ph=C event per group") {
+    TEST_CASE("View - sink_counters emits a ph=2 event per group") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         dstd::String gz = create_trace_with_counters(env);
@@ -881,16 +888,16 @@ TEST_SUITE("View") {
 
         // Distinct cat + pid per file so the grouped counts unambiguously
         // report which files (and how many events) the scan actually read.
-        auto write_trace = [](const dstd::String& gz, const dstd::String& cat,
+        auto write_trace = [](dstd::CStringView gz, dstd::StringView cat,
                               int pid, int n) {
-            dstd::String pfw = gz.substr(0, gz.size() - 3);  // drop ".gz"
+            dstd::String pfw(gz.view().substr(0, gz.size() - 3));  // drop ".gz"
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < n; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":")" << cat
+                ofs << R"({"ph":1,"name":"read","cat":")" << cat
                     << R"(","pid":)" << pid << R"(,"tid":1,"ts":)" << (1000 + i)
                     << R"(,"dur":5,"args":{}})" << "\n";
             ofs.close();
-            dftu_utils_test::compress_file_to_gzip(pfw, gz);
+            dftu_utils_test::compress_file_to_gzip(pfw, dstd::String(gz));
             dstd::fs::remove(pfw).discard();
         };
         write_trace(dir + "/a.pfw.gz", "AAA", 1, 10);
@@ -927,7 +934,7 @@ View dict_trace(TestEnvironment& env) {
     {
         dftu_utils_test::FileOut o(pfw);
         for (int i = 0; i < DICT_ROWS; ++i) {
-            o << R"({"ph":"X","name":"n)" << i % 2 << R"(","cat":"c)" << i % 3
+            o << R"({"ph":1,"name":"n)" << i % 2 << R"(","cat":"c)" << i % 3
               << R"(","pid":1,"tid":1,"ts":)" << 1000 + i * 10
               << R"(,"dur":5,"args":{"path":"p)" << i % 900 << '"';
             if (i % 2 == 0) o << R"(,"metric":"m)" << i % 3 << '"';
@@ -1010,7 +1017,7 @@ TEST_SUITE("View scan string columns") {
     TEST_CASE("filter, group and sort read string values") {
         TestEnvironment env(10);
         const View v = dict_trace(env);
-        auto q = [&](const char* text) {
+        auto q = [&](dstd::StringView text) {
             return test_view_common::run(v.duql(text).collect());
         };
 

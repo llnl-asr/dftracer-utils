@@ -115,7 +115,7 @@ bool unregister_udf(dstd::StringView name);
 /// The expression that calls `udf` over `args`, each a valid expression (fatal
 /// otherwise). Counts and types are checked when it compiles.
 Expr udf_call_expr(dstd::SharedPtr<const UdfRecord> udf,
-                   const dstd::Vector<Expr>& args);
+                   dstd::Span<const Expr> args);
 
 /// The cancel that @ref UdfCancelScope holds on this thread (empty without a
 /// scope).

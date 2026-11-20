@@ -35,7 +35,7 @@ T run(coro::CoroTask<dstd::Result<T>> t) {
 }
 
 dstd::Vector<std::int64_t> ints(const dataframe::DataFrame& df,
-                                const dstd::String& name) {
+                                dstd::StringView name) {
     const dataframe::Series& c = df.column(name);
     const std::int64_t* p = c.data<std::int64_t>();
     return dstd::Vector<std::int64_t>(p, p + c.length());
@@ -151,9 +151,15 @@ void c_root_destroy(void*) {}
 dftu_status c_apply(dftu_ctx*, void* self, const dftu_apply_request* req,
                     dftu_apply_result* out);
 
-const dftu_source_vt DERIVED_VT = {
-    sizeof(dftu_source_vt), c_schema, c_derived_scan,
-    c_derived_destroy,      nullptr,  nullptr};
+const dftu_source_vt DERIVED_VT = {sizeof(dftu_source_vt),
+                                   c_schema,
+                                   c_derived_scan,
+                                   c_derived_destroy,
+                                   nullptr,
+                                   nullptr,
+                                   nullptr,
+                                   nullptr,
+                                   nullptr};
 
 dftu_status c_apply(dftu_ctx*, void* self, const dftu_apply_request* req,
                     dftu_apply_result* out) {
@@ -188,8 +194,15 @@ dftu_status c_apply(dftu_ctx*, void* self, const dftu_apply_request* req,
     return DFTU_OK;
 }
 
-const dftu_source_vt ROOT_VT = {sizeof(dftu_source_vt), c_schema, c_root_scan,
-                                c_root_destroy,         nullptr,  c_apply};
+const dftu_source_vt ROOT_VT = {sizeof(dftu_source_vt),
+                                c_schema,
+                                c_root_scan,
+                                c_root_destroy,
+                                nullptr,
+                                c_apply,
+                                nullptr,
+                                nullptr,
+                                nullptr};
 
 dataframe::LazyFrame c_frame(ApplyFixture& fx) {
     return dataframe::LazyFrame::scan(
@@ -258,6 +271,25 @@ TEST_SUITE("source_hooks_c_abi") {
         CHECK(fx.agg_has_input == dstd::Vector<bool>{false, true});
     }
 
+    TEST_CASE("a quantile is offered only with linear interpolation") {
+        for (const dataframe::Interpolation interp :
+             {dataframe::Interpolation::Linear,
+              dataframe::Interpolation::Lower}) {
+            ApplyFixture fx;
+            fx.answer = DFTU_APPLY_NO_CHANGE;
+            dataframe::GroupAgg q{dataframe::Agg::Quantile, "val", "q", 0.3};
+            q.interp = interp;
+            dstd::Vector<dataframe::GroupAgg> aggs;
+            aggs.push_back(std::move(q));
+            dataframe::LazyFrame lf = c_frame(fx).group_by(
+                dstd::Vector<dstd::String>{"id"}, std::move(aggs));
+            lf.explain();
+            const bool linear = interp == dataframe::Interpolation::Linear;
+            CHECK(fx.agg_ops == (linear ? dstd::Vector<dstd::String>{"quantile"}
+                                        : dstd::Vector<dstd::String>{}));
+        }
+    }
+
     TEST_CASE("tail marshals its row count") {
         ApplyFixture fx;
         fx.answer = DFTU_APPLY_NO_CHANGE;
@@ -288,9 +320,15 @@ TEST_SUITE("source_hooks_c_abi") {
 
     TEST_CASE("a source without apply keeps the ScanRequest path") {
         ApplyFixture fx;
-        const dftu_source_vt vt = {
-            sizeof(dftu_source_vt), c_schema, c_root_scan,
-            c_root_destroy,         nullptr,  nullptr};
+        const dftu_source_vt vt = {sizeof(dftu_source_vt),
+                                   c_schema,
+                                   c_root_scan,
+                                   c_root_destroy,
+                                   nullptr,
+                                   nullptr,
+                                   nullptr,
+                                   nullptr,
+                                   nullptr};
         dataframe::LazyFrame lf =
             dataframe::LazyFrame::scan(
                 plugins::host::make_provider_source(vt, &fx))
@@ -331,8 +369,15 @@ void chain_destroy(void* self) {
 dftu_status chain_apply(dftu_ctx*, void* self, const dftu_apply_request*,
                         dftu_apply_result* out);
 
-const dftu_source_vt CHAIN_VT = {sizeof(dftu_source_vt), c_schema, chain_scan,
-                                 chain_destroy,          nullptr,  chain_apply};
+const dftu_source_vt CHAIN_VT = {sizeof(dftu_source_vt),
+                                 c_schema,
+                                 chain_scan,
+                                 chain_destroy,
+                                 nullptr,
+                                 chain_apply,
+                                 nullptr,
+                                 nullptr,
+                                 nullptr};
 
 dftu_status chain_apply(dftu_ctx*, void* self, const dftu_apply_request*,
                         dftu_apply_result* out) {

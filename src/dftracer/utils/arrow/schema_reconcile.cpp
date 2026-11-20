@@ -15,36 +15,30 @@ namespace dftracer::utils::arrow {
 
 namespace {
 
-bool cstr_eq(const char *a, const char *b) {
-    if (a == b) return true;
-    if (!a || !b) return false;
-    return std::strcmp(a, b) == 0;
-}
-
 // Unknown formats fall back to NA so we can still emit a safe null column.
 ArrowType type_from_format(const ArrowSchema *s) {
     if (!s || !s->format) return NANOARROW_TYPE_NA;
-    const char *f = s->format;
-    if (cstr_eq(f, "n")) return NANOARROW_TYPE_NA;
-    if (cstr_eq(f, "b")) return NANOARROW_TYPE_BOOL;
-    if (cstr_eq(f, "c")) return NANOARROW_TYPE_INT8;
-    if (cstr_eq(f, "s")) return NANOARROW_TYPE_INT16;
-    if (cstr_eq(f, "i")) return NANOARROW_TYPE_INT32;
-    if (cstr_eq(f, "l")) return NANOARROW_TYPE_INT64;
-    if (cstr_eq(f, "C")) return NANOARROW_TYPE_UINT8;
-    if (cstr_eq(f, "S")) return NANOARROW_TYPE_UINT16;
-    if (cstr_eq(f, "I")) return NANOARROW_TYPE_UINT32;
-    if (cstr_eq(f, "L")) return NANOARROW_TYPE_UINT64;
-    if (cstr_eq(f, "f")) return NANOARROW_TYPE_FLOAT;
-    if (cstr_eq(f, "g")) return NANOARROW_TYPE_DOUBLE;
-    if (cstr_eq(f, "u")) return NANOARROW_TYPE_STRING;
-    if (cstr_eq(f, "z")) return NANOARROW_TYPE_BINARY;
-    if (cstr_eq(f, "U")) return NANOARROW_TYPE_LARGE_STRING;
-    if (cstr_eq(f, "Z")) return NANOARROW_TYPE_LARGE_BINARY;
+    const dstd::StringView f = s->format;
+    if (f == "n") return NANOARROW_TYPE_NA;
+    if (f == "b") return NANOARROW_TYPE_BOOL;
+    if (f == "c") return NANOARROW_TYPE_INT8;
+    if (f == "s") return NANOARROW_TYPE_INT16;
+    if (f == "i") return NANOARROW_TYPE_INT32;
+    if (f == "l") return NANOARROW_TYPE_INT64;
+    if (f == "C") return NANOARROW_TYPE_UINT8;
+    if (f == "S") return NANOARROW_TYPE_UINT16;
+    if (f == "I") return NANOARROW_TYPE_UINT32;
+    if (f == "L") return NANOARROW_TYPE_UINT64;
+    if (f == "f") return NANOARROW_TYPE_FLOAT;
+    if (f == "g") return NANOARROW_TYPE_DOUBLE;
+    if (f == "u") return NANOARROW_TYPE_STRING;
+    if (f == "z") return NANOARROW_TYPE_BINARY;
+    if (f == "U") return NANOARROW_TYPE_LARGE_STRING;
+    if (f == "Z") return NANOARROW_TYPE_LARGE_BINARY;
     return NANOARROW_TYPE_NA;
 }
 
-int build_null_array(const ArrowSchema *child_schema, int64_t length,
+int build_null_array(const ArrowSchema *child_schema, std::int64_t length,
                      ArrowArray *out) {
     ArrowError err;
     ArrowErrorInit(&err);
@@ -90,8 +84,8 @@ void json_escape(dstd::StringView in, dstd::String &out) {
 
 // `view` is prepared once per column (init + SetArray) by the caller; a null
 // view signals a column that failed to bind and always emits JSON null.
-void append_json_scalar(const ArrowArrayView *view, ArrowType t, int64_t row,
-                        dstd::String &out) {
+void append_json_scalar(const ArrowArrayView *view, ArrowType t,
+                        std::int64_t row, dstd::String &out) {
     if (!view || ArrowArrayViewIsNull(view, row)) {
         out.append("null");
         return;
@@ -148,7 +142,8 @@ void append_json_scalar(const ArrowArrayView *view, ArrowType t, int64_t row,
 }
 
 bool same_format(const ArrowSchema *a, const ArrowSchema *b) {
-    return a && b && a->format && b->format && cstr_eq(a->format, b->format);
+    return a && b && a->format && b->format &&
+           dstd::StringView(a->format) == dstd::StringView(b->format);
 }
 
 }  // namespace
@@ -158,7 +153,7 @@ SchemaReconciler::SchemaReconciler() = default;
 bool SchemaReconciler::merge(const ArrowSchema *incoming) {
     if (finalized_ || !incoming) return false;
     bool added = false;
-    for (int64_t i = 0; i < incoming->n_children; ++i) {
+    for (std::int64_t i = 0; i < incoming->n_children; ++i) {
         const ArrowSchema *child = incoming->children[i];
         if (!child || !child->name) continue;
         dstd::String name(child->name);
@@ -169,7 +164,7 @@ bool SchemaReconciler::merge(const ArrowSchema *incoming) {
             last_error_ = "schema deep-copy failed while merging";
             return added;
         }
-        int64_t idx = static_cast<int64_t>(names_.size());
+        std::int64_t idx = static_cast<std::int64_t>(names_.size());
         names_.push_back(name);
         child_schemas_.push_back(std::move(copy));
         name_to_idx_.emplace(std::move(name), idx);
@@ -180,13 +175,13 @@ bool SchemaReconciler::merge(const ArrowSchema *incoming) {
 
 int SchemaReconciler::finalize() {
     if (finalized_) return 0;
-    int64_t n = static_cast<int64_t>(child_schemas_.size()) + 1;
+    std::int64_t n = static_cast<std::int64_t>(child_schemas_.size()) + 1;
     ArrowSchemaInit(locked_schema_.get());
     if (ArrowSchemaSetTypeStruct(locked_schema_.get(), n) != NANOARROW_OK) {
         last_error_ = "failed to initialize union struct schema";
         return -1;
     }
-    for (size_t i = 0; i < child_schemas_.size(); ++i) {
+    for (std::size_t i = 0; i < child_schemas_.size(); ++i) {
         nanoarrow::UniqueSchema tmp;
         if (ArrowSchemaDeepCopy(child_schemas_[i].get(), tmp.get()) !=
             NANOARROW_OK) {
@@ -230,7 +225,7 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
     }
     if (!in_schema || !in_array || !out) return -1;
 
-    int64_t num_rows = in_array->length;
+    std::int64_t num_rows = in_array->length;
 
     // Initialize out as a struct matching the locked schema. This allocates
     // children of the right types; we'll populate them below.
@@ -243,18 +238,18 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
     }
 
     // Build: input-name -> input-child-index
-    dstd::HashMap<dstd::String, int64_t> in_idx;
-    in_idx.reserve(static_cast<size_t>(in_schema->n_children));
-    for (int64_t i = 0; i < in_schema->n_children; ++i) {
+    dstd::HashMap<dstd::String, std::int64_t> in_idx;
+    in_idx.reserve(static_cast<std::size_t>(in_schema->n_children));
+    for (std::int64_t i = 0; i < in_schema->n_children; ++i) {
         const ArrowSchema *c = in_schema->children[i];
         if (c && c->name) in_idx.emplace(c->name, i);
     }
 
     // For each known union column (all except the final _extra), try to take
     // it from the input batch. If missing, null-pad.
-    int64_t n_known = known_column_count();
-    for (int64_t i = 0; i < n_known; ++i) {
-        const dstd::String &name = names_[static_cast<size_t>(i)];
+    std::int64_t n_known = known_column_count();
+    for (std::int64_t i = 0; i < n_known; ++i) {
+        const dstd::String &name = names_[static_cast<std::size_t>(i)];
         auto it = in_idx.find(name);
         if (it != in_idx.end() &&
             same_format(locked_schema_->children[i],
@@ -279,8 +274,8 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
     // Input children whose names aren't in the union feed _extra, and so do
     // those whose type differs from the locked column: moving such a child in
     // would make a reader misread its buffers.
-    dstd::Vector<int64_t> unknown_in;
-    for (int64_t i = 0; i < in_schema->n_children; ++i) {
+    dstd::Vector<std::int64_t> unknown_in;
+    for (std::int64_t i = 0; i < in_schema->n_children; ++i) {
         const ArrowSchema *c = in_schema->children[i];
         if (!c || !c->name) continue;
         const auto known = name_to_idx_.find(dstd::StringView(c->name));
@@ -323,8 +318,8 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
             bool valid = false;
         };
         dstd::Vector<UnknownColumn> unknown_views(unknown_in.size());
-        for (size_t k = 0; k < unknown_in.size(); ++k) {
-            int64_t u = unknown_in[k];
+        for (std::size_t k = 0; k < unknown_in.size(); ++k) {
+            std::int64_t u = unknown_in[k];
             const ArrowSchema *cs = in_schema->children[u];
             const ArrowArray *ca = in_array->children[u];
             if (!cs || !ca || !cs->name) continue;
@@ -341,12 +336,12 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
         }
 
         dstd::String buf;
-        for (int64_t row = 0; row < num_rows; ++row) {
+        for (std::int64_t row = 0; row < num_rows; ++row) {
             buf.clear();
             buf.push_back('{');
             bool first = true;
-            for (size_t k = 0; k < unknown_in.size(); ++k) {
-                int64_t u = unknown_in[k];
+            for (std::size_t k = 0; k < unknown_in.size(); ++k) {
+                std::int64_t u = unknown_in[k];
                 const ArrowSchema *cs = in_schema->children[u];
                 const ArrowArray *ca = in_array->children[u];
                 if (!cs || !ca || !cs->name) continue;
@@ -360,7 +355,8 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
                                    buf);
             }
             buf.push_back('}');
-            ArrowStringView sv{buf.data(), static_cast<int64_t>(buf.size())};
+            ArrowStringView sv{buf.data(),
+                               static_cast<std::int64_t>(buf.size())};
             if (ArrowArrayAppendString(extra_slot, sv) != NANOARROW_OK) {
                 last_error_ = "failed to append _extra row";
                 for (auto &uc : unknown_views) {

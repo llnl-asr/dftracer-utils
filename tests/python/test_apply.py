@@ -195,7 +195,7 @@ def test_apply_lowers_is_none_to_the_null_mask(caplog):
 
 
 def test_select_expressions():
-    from dftracer.utils.columnar import if_else, when
+    from dftracer.utils.expr import if_else, when
 
     df = DataFrame({"a": [1, 5, None, 9], "s": ["x", "y", "z", "w"]})
     assert _lst(df.apply(when(col("a") > 2).then(col("a")).otherwise(0))) == [0, 5, 0, 9]

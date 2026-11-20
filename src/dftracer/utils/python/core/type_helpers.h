@@ -20,4 +20,39 @@ inline int register_type(PyObject *m, PyTypeObject *type, const char *name) {
     return 0;
 }
 
+// The offset of the weak reference list of a native type: the first member
+// after PyObject_HEAD. A type that sets tp_weaklistoffset to it clears the list
+// in its dealloc.
+inline constexpr Py_ssize_t WEAKLIST_OFFSET = sizeof(PyObject);
+
+// A native type that Python subclasses. `base` is the native type object and
+// `*slot` the type its factories allocate: `base` until the Python subclass is
+// bound, then that subclass, so a native method returns the public class.
+struct TypeBinding {
+    const char *name;
+    PyTypeObject *base;
+    PyTypeObject **slot;
+};
+
+// Whether `sub` is a class derived from `binding.base`. Sets a TypeError when
+// it is not.
+inline bool check_binding(const TypeBinding &binding, PyObject *sub) {
+    if (PyType_Check(sub) &&
+        PyType_IsSubtype(reinterpret_cast<PyTypeObject *>(sub), binding.base))
+        return true;
+    PyErr_Format(PyExc_TypeError, "%s must be a subclass of %s", binding.name,
+                 binding.base->tp_name);
+    return false;
+}
+
+// Make the factories of `binding` allocate `sub`, which check_binding accepted.
+// Holds a reference to the bound class.
+inline void bind_type(const TypeBinding &binding, PyObject *sub) {
+    PyTypeObject *bound = reinterpret_cast<PyTypeObject *>(sub);
+    Py_INCREF(bound);
+    PyTypeObject *old = *binding.slot;
+    *binding.slot = bound;
+    if (old != binding.base) Py_DECREF(old);
+}
+
 #endif  // DFTRACER_UTILS_PYTHON_CORE_TYPE_HELPERS_H

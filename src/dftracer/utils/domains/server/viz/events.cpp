@@ -64,7 +64,7 @@ static dstd::String build_viz_events_body(dstd::Vector<dstd::String>& events,
     // Even without an offset, a non-US trace still needs ts/dur scaled to us.
     if (global_min > 0 || metric != TraceIndex::TimeMetric::Us) {
         for (auto& event : events) {
-            event = normalize_event_ts(event, global_min, metric);
+            event = normalize_event_ts(std::move(event), global_min, metric);
         }
     }
 
@@ -222,7 +222,7 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
     if (view.query) v = v.filter(*view.query);
     if (!single_file || fields.by_path) v = v.time_range(scan_begin, end);
     auto mapped = co_await v.map_batches<EvAcc>(
-        [&fields](EvAcc& a, const dstd::Vector<dstd::StringView>& events) {
+        [&fields](EvAcc& a, dstd::Span<const dstd::StringView> events) {
             a.events.reserve(a.events.size() + events.size());
             fields.for_each_event(events, [&a](dstd::StringView ev) {
                 a.events.emplace_back(ev);
@@ -335,7 +335,7 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
     // offset and limit, so memory follows the page, not the match count. A
     // path schema's rows name its label, entity and duration fields as the
     // trace fields they play.
-    const auto respond = [&](const dstd::String& page, std::uint64_t count) {
+    const auto respond = [&](dstd::StringView page, std::uint64_t count) {
         auto& b = scratch_json_builder();
         b.start_object();
         b.escape_and_append_with_quotes("events");
@@ -387,7 +387,7 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
 
     dstd::Vector<dstd::String> columns;
     dstd::Vector<dstd::String> names;
-    auto add = [&](const dstd::String& field, const char* name) {
+    auto add = [&](dstd::StringView field, dstd::StringView name) {
         if (field.empty()) return;
         columns.emplace_back(field);
         names.emplace_back(name);

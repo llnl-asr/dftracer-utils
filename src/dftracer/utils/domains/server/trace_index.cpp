@@ -117,7 +117,7 @@ dstd::Result<dftracer::utils::trace::index::gzip::TimeBounds> timeline_bounds(
 // directory only when its parent directory is the directory, because the scan
 // is not recursive and a subfolder is a trace folder of its own.
 dstd::Result<bool> index_is_stale(dstd::StringView root,
-                                  const dstd::Vector<dstd::String>& paths,
+                                  dstd::Span<const dstd::String> paths,
                                   dstd::StringView directory,
                                   dstd::Vector<dstd::String>& unlisted) {
     auto opened = trace::index::plan::open_snapshot(root);
@@ -220,7 +220,7 @@ struct BufWriter {
     void u64(std::uint64_t v) { b.append(reinterpret_cast<char*>(&v), 8); }
     void i64(std::int64_t v) { u64(static_cast<std::uint64_t>(v)); }
     void dbl(double v) { b.append(reinterpret_cast<char*>(&v), 8); }
-    void str(const dstd::String& s) {
+    void str(dstd::StringView s) {
         u64(s.size());
         b.append(s);
     }
@@ -281,7 +281,7 @@ struct BufReader {
 };
 
 void write_group_rows(BufWriter& w,
-                      const dstd::Vector<VizSummary::GroupRow>& rows) {
+                      dstd::Span<const VizSummary::GroupRow> rows) {
     w.u64(rows.size());
     for (const auto& r : rows) {
         w.str(r.key);
@@ -306,7 +306,7 @@ bool read_group_rows(BufReader& r, dstd::Vector<VizSummary::GroupRow>& rows) {
     return r.ok;
 }
 
-void write_spans(BufWriter& w, const dstd::Vector<VizSummary::AppSpan>& spans) {
+void write_spans(BufWriter& w, dstd::Span<const VizSummary::AppSpan> spans) {
     w.u64(spans.size());
     for (const auto& s : spans) {
         w.u64(s.begin);
@@ -351,7 +351,7 @@ void serialize_summary(BufWriter& w, const VizSummary& s) {
     for (const auto& lv : s.levels) {
         w.u64(lv.nbuckets);
         w.dbl(lv.bucket_us);
-        auto wvec_lvl = [&](const dstd::Vector<double>& v) {
+        auto wvec_lvl = [&](dstd::Span<const double> v) {
             std::uint64_t nonzero = 0;
             for (double x : v) nonzero += x != 0.0;
             w.u64(v.size());
@@ -659,7 +659,7 @@ std::uint64_t viz_result_store_limit() {
 // A stored result key carries the folder's fingerprint, so a re-indexed folder
 // or a changed file misses even before the stale scope is dropped.
 dstd::String viz_result_key(const TraceIndex& index,
-                            const dstd::String& request_key) {
+                            dstd::StringView request_key) {
     return dstd::fmt<"{}|{}">(index.folder_fingerprint(), request_key);
 }
 
@@ -677,11 +677,10 @@ coro::CoroTask<void> flush_viz_store(dftracer::utils::store::Store store,
 
 }  // namespace
 
-TraceIndex::TraceIndex(const dstd::String& directory,
-                       const dstd::String& index_dir,
+TraceIndex::TraceIndex(dstd::String directory, dstd::String index_dir,
                        std::size_t max_concurrent, std::size_t checkpoint_size)
-    : directory_(directory),
-      index_dir_(index_dir),
+    : directory_(std::move(directory)),
+      index_dir_(std::move(index_dir)),
       max_concurrent_(max_concurrent == 0 ? 8 : max_concurrent),
       checkpoint_size_(checkpoint_size == 0
                            ? common::constants::indexer::DEFAULT_CHECKPOINT_SIZE
@@ -1086,8 +1085,7 @@ coro::CoroTask<dstd::Result<void>> TraceIndex::initialize() {
 }
 
 dstd::String TraceIndex::resolve(dstd::StringView rowset, dstd::StringView key,
-                                 dstd::StringView value,
-                                 const dstd::String& k) {
+                                 dstd::StringView value, dstd::StringView k) {
     if (k.empty()) return {};
     dstd::String column(rowset);
     column.append(1, '\0').append(key).append(1, '\0').append(value);
@@ -1098,9 +1096,11 @@ dstd::String TraceIndex::resolve(dstd::StringView rowset, dstd::StringView key,
         for (const auto& f : files_)
             files.push_back({dstd::String(dstd::StringView(f.path)),
                              dstd::String(dstd::StringView(f.index_path))});
-        dftracer::utils::trace::index::plan::GroupResolver r(
-            files, {{"v", dstd::String(rowset), dstd::String(key),
-                     dstd::String(value)}});
+        using dftracer::utils::trace::index::plan::GroupResolver;
+        const GroupResolver::Column rowset_column{
+            "v", dstd::String(rowset), dstd::String(key), dstd::String(value)};
+        GroupResolver r(
+            files, dstd::Span<const GroupResolver::Column>(&rowset_column, 1));
         dstd::HashMap<dstd::String, dstd::String> values;
         if (const auto* c = r.column("v"))
             for (const auto& [kk, vv] : *c)
@@ -1211,8 +1211,7 @@ coro::CoroTask<void> TraceIndex::write_viz_result(dstd::SharedPtr<VizStore> viz,
                 const dstd::ByteView bytes = (**found).bytes();
                 std::uint64_t stored = 0;
                 dstd::from_chars(
-                    reinterpret_cast<const char*>(bytes.data()),
-                    reinterpret_cast<const char*>(bytes.data()) + bytes.size(),
+                    {reinterpret_cast<const char*>(bytes.data()), bytes.size()},
                     stored);
                 viz->bytes = stored;
             }
@@ -1274,7 +1273,7 @@ void TraceIndex::store_viz_result(dstd::String request_key, dstd::String body) {
 }
 
 dstd::Vector<dstd::Optional<dstd::String>> TraceIndex::load_viz_results(
-    const dstd::Vector<dstd::String>& request_keys) {
+    dstd::Span<const dstd::String> request_keys) {
     dstd::Vector<dstd::Optional<dstd::String>> out(request_keys.size());
     if (request_keys.empty()) return out;
     viz_result_store_read_count_.fetch_add(1, std::memory_order_relaxed);
@@ -1389,8 +1388,7 @@ void TraceIndex::drain_viz_writes() {
     viz_store_flush_count_.fetch_add(1, std::memory_order_relaxed);
 }
 
-const TraceIndex::FileInfo* TraceIndex::find_file(
-    const dstd::String& path) const {
+const TraceIndex::FileInfo* TraceIndex::find_file(dstd::StringView path) const {
     auto it = path_to_index_.find(path);
     if (it == path_to_index_.end()) return nullptr;
     return &files_[it->second];

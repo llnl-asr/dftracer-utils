@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/result.h>
@@ -54,9 +55,10 @@ using runtime::io::IoOpKind;
 
 class TempFile {
    public:
-    TempFile() : TempFile(dstd::fs::temp_directory().c_str()) {}
-    explicit TempFile(const char* folder) {
-        std::snprintf(path_, sizeof(path_), "%s/dftu_io_op_XXXXXX", folder);
+    TempFile() : TempFile(dstd::fs::temp_directory().str()) {}
+    explicit TempFile(dstd::StringView folder) {
+        std::snprintf(path_, sizeof(path_), "%.*s/dftu_io_op_XXXXXX",
+                      static_cast<int>(folder.size()), folder.data());
         fd_ = ::mkstemp(path_);
         REQUIRE(fd_ >= 0);
     }
@@ -73,13 +75,14 @@ class TempFile {
 
 class TempDir {
    public:
-    TempDir() : TempDir(dstd::fs::temp_directory().c_str()) {}
-    explicit TempDir(const char* folder) {
-        std::snprintf(path_, sizeof(path_), "%s/dftu_io_dir_XXXXXX", folder);
+    TempDir() : TempDir(dstd::fs::temp_directory().str()) {}
+    explicit TempDir(dstd::StringView folder) {
+        std::snprintf(path_, sizeof(path_), "%.*s/dftu_io_dir_XXXXXX",
+                      static_cast<int>(folder.size()), folder.data());
         REQUIRE(::mkdtemp(path_) != nullptr);
     }
     ~TempDir() { dstd::fs::remove_all(dstd::PathView(path_)).discard(); }
-    dstd::String join(const char* name) const {
+    dstd::String join(dstd::StringView name) const {
         return dstd::fmt<"{}/{}">(path_, name);
     }
 
@@ -87,15 +90,15 @@ class TempDir {
     char path_[512];
 };
 
-void write_text(const dstd::String& path, const char* text) {
+void write_text(dstd::CStringView path, dstd::StringView text) {
     const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     REQUIRE(fd >= 0);
-    const auto length = static_cast<ssize_t>(std::strlen(text));
-    REQUIRE(::write(fd, text, std::strlen(text)) == length);
+    const auto length = static_cast<ssize_t>(text.size());
+    REQUIRE(::write(fd, text.data(), text.size()) == length);
     ::close(fd);
 }
 
-dstd::String read_text(const dstd::String& path) {
+dstd::String read_text(dstd::CStringView path) {
     char buffer[256] = {};
     const int fd = ::open(path.c_str(), O_RDONLY);
     if (fd < 0) return dstd::String("<missing>");
@@ -104,7 +107,7 @@ dstd::String read_text(const dstd::String& path) {
     return got < 0 ? dstd::String("<unreadable>") : dstd::String(buffer);
 }
 
-bool is_on_disk(const dstd::String& path) {
+bool is_on_disk(dstd::CStringView path) {
     return ::access(path.c_str(), F_OK) == 0;
 }
 

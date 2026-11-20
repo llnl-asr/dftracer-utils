@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_TIME_METRIC_EVENT_H
 #define DFTRACER_UTILS_TRACE_TIME_METRIC_EVENT_H
 
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/time_metric.h>
@@ -24,7 +25,7 @@ inline bool extract_time_metric(const DFTracerEvent& event, TimeMetric& out) {
 /// The trace's native time unit, from the leading CM time_metric in the first
 /// gzip member (US when absent/unreadable). Used to normalize ts/dur to a
 /// target unit without decoding the whole trace.
-TimeMetric read_time_metric(const dstd::String& trace_path);
+TimeMetric read_time_metric(dstd::CStringView trace_path);
 
 }  // namespace dftracer::utils::trace
 

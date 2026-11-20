@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/internal/file_format_registry.h>
 #include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dataframe/udf_registry.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -12,6 +13,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/queue.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -21,6 +23,7 @@
 #include <dftracer/utils/plugins/host/build_host.h>
 #include <dftracer/utils/plugins/host/config.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
+#include <dftracer/utils/plugins/host/global_plugins.h>
 #include <dftracer/utils/plugins/host/phase_seed.h>
 #include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/host/plugin_memory.h>
@@ -102,6 +105,10 @@ struct Plugins::Impl {
         dstd::String version;
         /* The channel ends and phase results the factory declared. */
         PortDecls ports;
+        /* A copy of an entry of the process-wide set: the set that holds the
+           path registered what the plugin adds and unregisters it, so this one
+           only keeps the library mapped. */
+        bool shared = false;
     };
 
     ~Impl() {
@@ -111,6 +118,11 @@ struct Plugins::Impl {
         // dftu_lazyframe_from_provider finds nothing, and what a plan or
         // cursor still holds keeps the library mapped until it is gone.
         for (auto& p : plugins) {
+            if (p.shared) {
+                p.library.reset();
+                p.memory.reset();
+                continue;
+            }
             for (const dstd::String& name : p.registered_ops)
                 ::dftu_op_unregister(name.c_str());
             for (const dstd::String& name : p.registered_udfs)
@@ -145,6 +157,8 @@ struct Plugins::Impl {
     // declarations, which the hub of each scan is built from.
     dstd::Vector<ChannelDecl> channels;
     dstd::Vector<PhaseDecl> phases;
+    // Every channel end, owner or reference, that declared SENDS.
+    dstd::Vector<ChannelDecl> senders;
 };
 
 struct Plugins::Builder::State {
@@ -168,6 +182,27 @@ struct PluginsInternalAccess {
     }
     static const Plugins::Impl& impl(const Plugins& set) { return *set.impl_; }
 };
+
+// A plugin built against the dataframe C ABI (a jit plugin builds columns
+// with dftu_series_new_flat and frames with dftu_dataframe_new) resolves
+// those symbols at load. On macOS a two-level-namespace lookup finds them in
+// the loaded dylib; on Linux a library a Python extension pulled in sits in
+// its local scope, so the plugin's RTLD_NOW dlopen would fail on the first
+// dftu_* symbol. Promote the library that holds the ABI to the global scope
+// once (RTLD_NOLOAD | RTLD_GLOBAL re-opens an already loaded library without
+// loading it again); no plugin links the host, as section 17 requires.
+void expose_dataframe_abi() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    Dl_info info{};
+    if (dladdr(reinterpret_cast<const void*>(&dftu_dataframe_new), &info) ==
+            0 ||
+        !info.dli_fname)
+        return;
+    // Promotes the loaded library to RTLD_GLOBAL; the handle is never closed.
+    dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
+}
 
 namespace {
 
@@ -220,9 +255,9 @@ const char* op_kind_name(dftu_op_sig sig) {
 // is not in the registry (it cannot be, while its plugin is loaded, but a
 // describe() that silently dropped an op would be worse than one that says
 // less about it).
-dstd::String op_summary(const dstd::String& name) {
+dstd::String op_summary(dstd::CStringView name) {
     const dftu_op_desc* desc = ::dftu_op_find(name.c_str());
-    if (!desc) return name;
+    if (!desc) return dstd::String(name);
     // dftu_op_signature returns a thread_local buffer reused by the next call.
     return dstd::fmt<"{}{} [{}]">(name, ::dftu_op_signature(desc->sig),
                                   op_kind_name(desc->sig));
@@ -286,8 +321,8 @@ dstd::String config_violation(const dftu_plugin* plugin,
 
 // A malformed literal fails at build() alongside every other plugin load
 // error, not in Builder::add.
-dstd::Result<ConfigTree> parse_config_json(const dstd::String& path,
-                                           const dstd::String& json) {
+dstd::Result<ConfigTree> parse_config_json(dstd::StringView path,
+                                           dstd::StringView json) {
     auto parsed = ConfigTree::from_json_string(json);
     if (!parsed)
         return common::make_error<"plugin '{}' config does not parse: {}">(
@@ -295,28 +330,7 @@ dstd::Result<ConfigTree> parse_config_json(const dstd::String& path,
     return parsed;
 }
 
-// A plugin built against the dataframe C ABI (a jit plugin builds columns
-// with dftu_series_new_flat and frames with dftu_dataframe_new) resolves
-// those symbols at load. On macOS a two-level-namespace lookup finds them in
-// the loaded dylib; on Linux a library a Python extension pulled in sits in
-// its local scope, so the plugin's RTLD_NOW dlopen would fail on the first
-// dftu_* symbol. Promote the library that holds the ABI to the global scope
-// once (RTLD_NOLOAD | RTLD_GLOBAL re-opens an already loaded library without
-// loading it again); no plugin links the host, as section 17 requires.
-void expose_dataframe_abi() {
-    static bool done = false;
-    if (done) return;
-    done = true;
-    Dl_info info{};
-    if (dladdr(reinterpret_cast<const void*>(&dftu_dataframe_new), &info) ==
-            0 ||
-        !info.dli_fname)
-        return;
-    // Promotes the loaded library to RTLD_GLOBAL; the handle is never closed.
-    dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
-}
-
-dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
+dstd::Result<Plugins::Impl::Loaded> load_plugin(dstd::CStringView path,
                                                 const dftu_value* config) {
     expose_dataframe_abi();
     void* handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
@@ -449,6 +463,9 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
             plugin_struct_min_size(PluginStruct::Plugin));
     }
     plugin = plugin_copy.get();
+    // The library owns the checked copy from here, so every rejection below
+    // runs the plugin's destroy once its registrations are undone.
+    library->adopt(std::move(plugin_copy));
 
     if (dstd::String bad = config_violation(plugin, config); !bad.empty()) {
         unregister_all();
@@ -479,19 +496,14 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
         }
     }
 
-    // The library runs the checked copy's destroy once the last object the
-    // plugin made is gone. It owns that copy, so the pointer stays valid for
-    // as long as the library is mapped. It must adopt only after the size
-    // check, and only through the checked copy, so the destructor never reads
-    // a field beyond the descriptor's declared size.
-    library->adopt(std::move(plugin_copy));
-
+    // The library, which adopted the checked copy above, runs its destroy once
+    // the last object the plugin made is gone.
     return Plugins::Impl::Loaded{
         std::move(library),
         plugin,
         true,
         plugin_name_from_path(path),
-        path,
+        dstd::String(path),
         build_host.take_states(),
         build_host.take_registered_ops(),
         build_host.take_registered_udfs(),
@@ -512,7 +524,7 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
 // its registration order. A short return signals a cycle.
 dstd::Vector<std::size_t> topo_sort(
     std::size_t n,
-    const dstd::Vector<dstd::Pair<std::size_t, std::size_t>>& edges) {
+    dstd::Span<const dstd::Pair<std::size_t, std::size_t>> edges) {
     dstd::Vector<dstd::Vector<std::size_t>> succ(n);
     dstd::Vector<std::size_t> indeg(n, 0);
     for (const auto& [a, b] : edges) {
@@ -546,8 +558,8 @@ dstd::String port_namespace(const Plugins::Impl::Loaded& loaded) {
     return loaded.declared_name.empty() ? loaded.name : loaded.declared_name;
 }
 
-dstd::Vector<dstd::String> name_list(const char* const* (*slot)(void*),
-                                     void* self) {
+template <class Slot>
+dstd::Vector<dstd::String> name_list(Slot slot, void* self) {
     dstd::Vector<dstd::String> out;
     if (!slot) return out;
     const char* const* names = slot(self);
@@ -608,6 +620,9 @@ dstd::Result<void> settle_ports(
             if (decl.is_ref) continue;
             owners.emplace(decl.name, Owner{i, &decl});
             impl.channels.push_back(decl);
+        }
+        for (const ChannelDecl& decl : impl.plugins[i].ports.channels) {
+            if (decl.sends) impl.senders.push_back(decl);
         }
     }
 
@@ -688,9 +703,9 @@ dstd::Result<void> settle_ports(
 // place has an unplaced predecessor, so walking back from one reaches a node
 // twice, and the nodes between the two visits are the cycle.
 dstd::String describe_cycle(
-    const Plugins::Impl& impl, const dstd::Vector<bool>& sorted,
-    const dstd::Vector<dstd::Pair<std::size_t, std::size_t>>& edges,
-    const dstd::Vector<dstd::String>& labels) {
+    const Plugins::Impl& impl, dstd::Span<const std::uint8_t> sorted,
+    dstd::Span<const dstd::Pair<std::size_t, std::size_t>> edges,
+    dstd::Span<const dstd::String> labels) {
     std::size_t at = 0;
     while (at < sorted.size() && sorted[at]) ++at;
     dstd::Vector<std::size_t> walk;
@@ -775,8 +790,8 @@ dstd::Result<void> settle_order(Plugins::Impl& impl) {
 
     impl.order = topo_sort(impl.plugins.size(), edges);
     if (impl.order.size() != impl.plugins.size()) {
-        dstd::Vector<bool> sorted(impl.plugins.size(), false);
-        for (std::size_t i : impl.order) sorted[i] = true;
+        dstd::Vector<std::uint8_t> sorted(impl.plugins.size(), 0);
+        for (std::size_t i : impl.order) sorted[i] = 1;
         impl.order.clear();
         return common::make_error<
             "plugin provides/consumes graph has a cycle: {}">(
@@ -801,7 +816,7 @@ void settle_prune(Plugins::Impl& impl) {
 namespace detail {
 
 dstd::Optional<Query> plugin_union_prune_query(
-    const dstd::Vector<const char*>& plan_queries) {
+    dstd::Span<const char* const> plan_queries) {
     if (plan_queries.empty()) return dstd::nullopt;
     dstd::Vector<dstd::StringView> distinct;
     for (const char* s : plan_queries) {
@@ -868,6 +883,15 @@ dstd::Result<Plugins> Plugins::Builder::build() {
             impl->configs.push_back(std::move(pending.config));
             root = impl->configs.back().root();
         }
+        bool shared = false;
+        if (with_global_plugin(pending.path, [&](const Plugins& held) {
+                const auto& source = PluginsInternalAccess::impl(held).plugins;
+                if (source.size() != 1) return;
+                impl->plugins.push_back(source.front());
+                impl->plugins.back().shared = true;
+                shared = true;
+            }))
+            if (shared) continue;
         auto loaded = load_plugin(pending.path, root);
         if (!loaded) return dstd::Unexpected(std::move(loaded).error());
         impl->plugins.push_back(std::move(*loaded));
@@ -933,6 +957,15 @@ dstd::Vector<Plugins::PluginInfo> Plugins::describe() const {
     return out;
 }
 
+bool Plugins::in_use() const {
+    for (const auto& p : impl_->plugins)
+        for (const dstd::String& name : p.registered_file_formats)
+            if (auto format = dataframe::find_file_format(name);
+                format && format->open_file_count() > 0)
+                return true;
+    return false;
+}
+
 View Plugins::prune(const View& view) const {
     return impl_->prune ? view.filter(*impl_->prune) : view;
 }
@@ -943,7 +976,7 @@ coro::CoroTask<dstd::Result<PluginRun>> Plugins::run(const View& view) const {
     // One registry for the whole scan; every plugin's finalize publishes its
     // merged accumulators here and later plugins read them by name.
     SharedResultRegistry shared;
-    PortHub hub(impl_->channels, impl_->phases);
+    PortHub hub(impl_->channels, impl_->phases, impl_->senders);
     if (auto kept = view.status(); !kept) co_return kept.error();
     auto seeding = seed_phases(trace::views::detail::scan_plan_of(view),
                                impl_->phases, &hub);
@@ -995,7 +1028,8 @@ trace::views::Deferred<PluginRun> Plugins::attach(
     auto shared = dstd::make_shared<SharedResultRegistry>();
     auto out = dstd::make_shared<PluginRun>();
     auto executed = dstd::make_shared<bool>(false);
-    auto hub = dstd::make_shared<PortHub>(impl_->channels, impl_->phases);
+    auto hub = dstd::make_shared<PortHub>(impl_->channels, impl_->phases,
+                                          impl_->senders);
     utils::plugins::NamedResultRegistry* named = &out->results;
     const std::size_t n = impl_->order.size();
     if (n == 0) {
@@ -1112,7 +1146,7 @@ dstd::Result<Plugins> build_injected_plugins_declaring(
 
 dstd::UniquePtr<PortHub> make_port_hub(const Plugins& set) {
     const Plugins::Impl& impl = PluginsInternalAccess::impl(set);
-    return dstd::make_unique<PortHub>(impl.channels, impl.phases);
+    return dstd::make_unique<PortHub>(impl.channels, impl.phases, impl.senders);
 }
 
 dstd::Vector<std::size_t> fold_order(const Plugins& set) {

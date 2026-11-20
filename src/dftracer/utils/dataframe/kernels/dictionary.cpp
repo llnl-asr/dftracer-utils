@@ -85,7 +85,7 @@ struct ShortKeyHash {
 
 template <class Off>
 dstd::Vector<std::int32_t> dictionary_encode_parallel(
-    const Off* off, const char* data, std::int64_t n,
+    const Off* off, dstd::StringView data, std::int64_t n,
     dstd::Vector<Off>& dict_offsets, dstd::String& dict_data) {
     // One hash per row: each chunk assigns local codes in its own flat map
     // and records them; the chunk dictionaries are then merged into the
@@ -103,7 +103,7 @@ dstd::Vector<std::int32_t> dictionary_encode_parallel(
         dstd::Vector<std::int64_t> first_row;  // per local code
     };
     auto at = [&](std::int64_t i) {
-        return dstd::StringView(data + off[i],
+        return dstd::StringView(data.data() + off[i],
                                 static_cast<std::size_t>(off[i + 1] - off[i]));
     };
     dstd::Vector<Local> local(static_cast<std::size_t>(nchunks));
@@ -168,7 +168,8 @@ dstd::Vector<std::int32_t> dictionary_encode_parallel(
 template <class Off>
 dftu_series* dictionary_encode_w(const dftu_series* v) {
     const Off* off = reinterpret_cast<const Off*>(offsets_of<Off>(*v).data());
-    const char* data = reinterpret_cast<const char*>(v->data.data());
+    const dstd::StringView data(reinterpret_cast<const char*>(v->data.data()),
+                                v->data.size());
 
     dstd::Vector<std::int32_t> codes;
     dstd::Vector<Off> dict_offsets{0};
@@ -180,7 +181,7 @@ dftu_series* dictionary_encode_w(const dftu_series* v) {
         codes.resize(static_cast<std::size_t>(v->length));
         dstd::HashMap<dstd::StringView, std::int32_t> codes_of;
         for (std::int64_t i = 0; i < v->length; ++i) {
-            dstd::StringView s(data + off[i],
+            dstd::StringView s(data.data() + off[i],
                                static_cast<std::size_t>(off[i + 1] - off[i]));
             auto it = codes_of.find(s);
             std::int32_t code;

@@ -63,17 +63,17 @@ inline bool enabled(Level lvl) noexcept {
 inline constexpr std::size_t MESSAGE_CAP = 1536;
 
 /// Writes one line: timestamp, level, @p msg and, when location is on and
-/// @p file is not null, the file base name and @p line. Thread-safe without a
+/// @p file is not empty, the file base name and @p line. Thread-safe without a
 /// lock: the whole line is built locally and written in a single call (stdio
 /// per-stream lock).
-void emit(Level lvl, const char* file, int line, dstd::StringView msg);
+void emit(Level lvl, dstd::StringView file, int line, dstd::StringView msg);
 
 /// Formats the compile-time format `S` with `a...` and emits it as one line.
 /// A wrong hole count, a bad spec or an argument type that does not fit does
 /// not compile (see @ref dstd::fmt).
 template <dstd::FixedString S, class... A>
     requires(dstd::fmt_detail::Check<S, A...>::OK)
-DFTRACER_UTILS_NOINLINE void write(Level lvl, const char* file, int line,
+DFTRACER_UTILS_NOINLINE void write(Level lvl, dstd::StringView file, int line,
                                    const A&... a) {
     char msg[MESSAGE_CAP];
     const dstd::FmtResult r = dstd::fmt_to<S>(msg, sizeof(msg), a...);
@@ -84,7 +84,7 @@ DFTRACER_UTILS_NOINLINE void write(Level lvl, const char* file, int line,
 /// Open/close a trace scope. The returned handle lives in the @ref ScopeTracer
 /// object so it follows a coroutine across thread migration (a thread-local
 /// stack would not).
-void* scope_open(const char* file, int line, dstd::StringView label);
+void* scope_open(dstd::StringView file, int line, dstd::StringView label);
 void scope_close(void* handle);
 
 /// Auto coroutine tracing, driven from the @ref dftracer::utils::coro::CoroTask
@@ -92,7 +92,7 @@ void scope_close(void* handle);
 /// `handle`, logs "-> <name>" with the definition-site location (file/line
 /// captured at get_return_object), and returns an opaque handle (null when
 /// Trace is off); leave logs "<- <name> [ms]".
-void* coro_trace_enter(const void* handle, const char* file, int line);
+void* coro_trace_enter(const void* handle, dstd::StringView file, int line);
 void coro_trace_leave(void* handle);
 
 /// RAII scope tracer for DFTRACER_UTILS_TRACE_SCOPE. Holds only a pointer-sized
@@ -100,15 +100,15 @@ void coro_trace_leave(void* handle);
 /// large non-trivial frame locals). Near-free unless Trace is enabled.
 class ScopeTracer {
    public:
-    ScopeTracer(const char* file, int line, const char* func) {
+    ScopeTracer(dstd::StringView file, int line, dstd::StringView func) {
         if (enabled(Level::Trace)) handle_ = scope_open(file, line, func);
     }
 
     /// The label is "func: " and the text of the format `S` filled with `a...`.
     template <dstd::FixedString S, class... A>
         requires(dstd::fmt_detail::Check<S, A...>::OK)
-    ScopeTracer(const char* file, int line, const char* func, dstd::Format<S>,
-                const A&... a) {
+    ScopeTracer(dstd::StringView file, int line, dstd::StringView func,
+                dstd::Format<S>, const A&... a) {
         if (!enabled(Level::Trace)) return;
         char label[256];
         const dstd::FmtResult head =
@@ -135,7 +135,7 @@ class ScopeTracer {
 
 /// Emission macros: compile-gated by DFTRACER_UTILS_LOGGER_LEVEL_* and runtime-
 /// gated by the current level. The first argument is a string literal in the
-/// @ref dstd::fmt syntax; every site is type-checked in every build. A disabled
+/// `dstd::fmt` syntax; every site is type-checked in every build. A disabled
 /// level costs nothing (its call sits in a discarded `if constexpr` branch) or
 /// one predicted branch with its arguments left unevaluated. Do not put
 /// DEBUG/TRACE in a per-event/per-byte inner loop; guard those with `#if`

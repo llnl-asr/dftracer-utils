@@ -280,11 +280,34 @@ struct JoinView {
     dstd::StringView suffix;
 };
 
+/// What a plan hook answers for a scan: how completely the plugin will apply
+/// each filter, what the scan costs, how many rows it gives, and a token for
+/// the plugin's own use that scan() reads back in ScanView::plan.
+struct PlanResult {
+    /// One vote per ScanView::filters; a missing entry reads as Pushed::No.
+    /// These are the scan's votes: the host ignores ScanResult::filters of a
+    /// planned scan, so scan() must apply what the votes promise.
+    dstd::Vector<Pushed> votes;
+    /// The relative price of the scan, one unit about one row read and
+    /// decoded; comparable only between plans of one plugin. Negative: unknown.
+    double cost = -1.0;
+    /// The rows the scan gives after the filters voted Pushed::Exact. Negative:
+    /// unknown.
+    std::int64_t est_rows = -1;
+    /// Opaque to the host, handed back to scan() unchanged. The host never
+    /// frees it and scan() may not run, so it should name state that needs no
+    /// release.
+    std::uint64_t token = 0;
+};
+
 struct ScanView {
     dstd::Vector<dstd::StringView> projection;  ///< empty: every column
     dstd::Vector<ExprView> filters;  ///< positional against the projection
     std::int64_t limit = -1;         ///< -1: none
     std::uint64_t memory_budget = 0;
+    /// What the plan hook gave for this request, set in scan() and explain()
+    /// when the source has a plan hook; none otherwise, and in a plan hook.
+    dstd::Optional<PlanResult> plan;
 };
 
 template <class Cursor>
@@ -307,7 +330,8 @@ class SchemaBuilder {
     explicit SchemaBuilder(dftu_schema* s) noexcept : s_(s) {}
 
     /// Append a column whose time values are microseconds, the unit an ABI
-    /// column that declares none reads in.
+    /// column that declares none reads in. `name` must not be null (@ref
+    /// dstd::CStringView); an empty `name` gives an unnamed column.
     std::int32_t add(dstd::CStringView name, TypeId type,
                      bool nullable = true) {
         return add(name, type, TimeUnit::Micro, nullable);
@@ -429,17 +453,130 @@ concept HasApply =
     requires(const S& s) { s.apply_tail(std::int64_t{}); } ||
     requires(const S& s, const JoinView<S>& v) { s.apply_join(v); };
 
-inline dstd::Vector<dstd::StringView> string_views(const char* const* p,
-                                                   std::int32_t n) {
+inline std::size_t abi_count(std::int32_t n) noexcept {
+    return n > 0 ? static_cast<std::size_t>(n) : 0;
+}
+
+inline dstd::Vector<dstd::StringView> string_views(
+    dstd::Span<const char* const> p) {
     dstd::Vector<dstd::StringView> out;
-    out.reserve(static_cast<std::size_t>(n > 0 ? n : 0));
-    for (std::int32_t i = 0; i < n; ++i) out.emplace_back(p[i] ? p[i] : "");
+    out.reserve(p.size());
+    for (const char* s : p) out.emplace_back(s ? s : "");
     return out;
 }
+
+inline ScanView scan_view_of(const dftu_scan_request& req) {
+    ScanView view;
+    view.projection =
+        string_views({req.projection, abi_count(req.n_projection)});
+    for (std::int32_t i = 0; i < req.n_filters; ++i)
+        view.filters.emplace_back(req.filters[i]);
+    view.limit = req.limit;
+    view.memory_budget = req.memory_budget;
+    if (req.plan) {
+        PlanResult plan;
+        for (std::int32_t i = 0; i < req.n_filters; ++i)
+            plan.votes.push_back(static_cast<Pushed>(req.plan->votes[i]));
+        plan.cost = req.plan->cost;
+        plan.est_rows = req.plan->est_rows;
+        plan.token = req.plan->token;
+        view.plan = std::move(plan);
+    }
+    return view;
+}
+
+/// Writes `plan` into the answer a host plan call gave.
+inline void write_plan(const PlanResult& plan, const dftu_scan_request& req,
+                       dftu_plan_result* out) {
+    const std::size_t n = std::min<std::size_t>(
+        plan.votes.size(), static_cast<std::size_t>(abi_count(req.n_filters)));
+    for (std::size_t i = 0; i < n; ++i)
+        out->votes[i] = static_cast<std::int32_t>(plan.votes[i]);
+    out->cost = plan.cost;
+    out->est_rows = plan.est_rows;
+    out->token = plan.token;
+}
+
+/// A source that says what its scan will do before it opens a cursor:
+///   dstd::Result<PlanResult> plan(const ScanView&) const;
+/// The host then sets dftu_source_vt::plan and uses the votes (see
+/// @ref PlanResult).
+template <class S>
+concept HasPlan = requires(const S& s, const ScanView& v) {
+    { s.plan(v) } -> std::same_as<dstd::Result<PlanResult>>;
+};
+
+/// A source that reads duql plans from the filters as one duql text:
+///   dstd::Result<PlanResult> plan_duql(const ScanView&, dstd::StringView text,
+///       dstd::Span<const std::int32_t> filter_index) const;
+/// `text` is the conjunction of the filters the host can say in duql and
+/// `filter_index[i]` the index in ScanView::filters of the i-th conjunct; the
+/// votes are indexed by ScanView::filters. It runs in place of plan() when some
+/// filter is expressible.
+template <class S>
+concept HasPlanDuql =
+    requires(const S& s, const ScanView& v, dstd::StringView text,
+             dstd::Span<const std::int32_t> index) {
+        {
+            s.plan_duql(v, text, index)
+        } -> std::same_as<dstd::Result<PlanResult>>;
+    };
+
+/// A source that says what scan() would do for a request:
+///   dstd::Result<void> explain(const ScanView&, const ExplainOut&) const;
+/// The host then sets dftu_source_vt::explain and prints its lines.
+template <class S>
+concept HasExplain =
+    requires(const S& s, const ScanView& v, const ExplainOut& out) {
+        { s.explain(v, out) } -> std::same_as<dstd::Result<void>>;
+    };
 
 template <class S>
 struct SourceVt {
     using Box = SourceBox<S>;
+
+    static dftu_status explain(dftu_ctx* ctx, void* self,
+                               const dftu_scan_request* req,
+                               const dftu_explain_out* out) noexcept
+        requires HasExplain<S>
+    {
+        auto* box = static_cast<Box*>(self);
+        return to_status(ctx, [&]() {
+            return box->source->explain(scan_view_of(*req), ExplainOut(out));
+        });
+    }
+
+    static dftu_status plan(dftu_ctx* ctx, void* self,
+                            const dftu_scan_request* req,
+                            dftu_plan_result* out) noexcept
+        requires HasPlan<S>
+    {
+        auto* box = static_cast<Box*>(self);
+        return to_status(ctx, [&]() -> dftu_status {
+            auto planned = box->source->plan(scan_view_of(*req));
+            if (!planned.has_value()) return report(ctx, planned.error());
+            write_plan(*planned, *req, out);
+            return DFTU_OK;
+        });
+    }
+
+    static dftu_status plan_duql(dftu_ctx* ctx, void* self,
+                                 const dftu_scan_request* req,
+                                 const dftu_plan_duql* q,
+                                 dftu_plan_result* out) noexcept
+        requires HasPlanDuql<S>
+    {
+        auto* box = static_cast<Box*>(self);
+        return to_status(ctx, [&]() -> dftu_status {
+            auto planned = box->source->plan_duql(
+                scan_view_of(*req), dstd::StringView(q->text, q->text_len),
+                dstd::Span<const std::int32_t>(q->filter_index,
+                                               abi_count(q->n_filters)));
+            if (!planned.has_value()) return report(ctx, planned.error());
+            write_plan(*planned, *req, out);
+            return DFTU_OK;
+        });
+    }
 
     static dftu_status schema(dftu_ctx* ctx, void* self,
                               const char* const** out_names,
@@ -466,12 +603,7 @@ struct SourceVt {
                             const dftu_cursor_vt** out_vt) noexcept {
         auto* box = static_cast<Box*>(self);
         return to_status(ctx, [&]() -> dftu_status {
-            ScanView view;
-            view.projection = string_views(req->projection, req->n_projection);
-            for (std::int32_t i = 0; i < req->n_filters; ++i)
-                view.filters.emplace_back(req->filters[i]);
-            view.limit = req->limit;
-            view.memory_budget = req->memory_budget;
+            const ScanView view = scan_view_of(*req);
             auto scanned =
                 box->source->scan(view, detail::host_from_raw(host, ctx));
             if (!scanned.has_value()) return report(ctx, scanned.error());
@@ -571,10 +703,10 @@ struct SourceVt {
                     if (!j.other_vt || j.other_vt->scan != &SourceVt<S>::scan)
                         break;
                     const S& other = *static_cast<Box*>(j.other_self)->source;
-                    JoinView<S> v{other, string_views(j.left_on, j.n_on),
-                                  string_views(j.right_on, j.n_on),
-                                  static_cast<JoinHow>(j.how),
-                                  j.suffix ? j.suffix : ""};
+                    JoinView<S> v{
+                        other, string_views({j.left_on, abi_count(j.n_on)}),
+                        string_views({j.right_on, abi_count(j.n_on)}),
+                        static_cast<JoinHow>(j.how), j.suffix ? j.suffix : ""};
                     return s.apply_join(v);
                 }
                 break;
@@ -586,7 +718,7 @@ struct SourceVt {
 
     static SortView sort_view(const dftu_apply_sort_args& a) {
         SortView v;
-        v.by = string_views(a.by, a.n_by);
+        v.by = string_views({a.by, abi_count(a.n_by)});
         for (std::int32_t i = 0; i < a.n_by; ++i)
             v.descending.push_back(a.descending[i] != 0);
         return v;
@@ -620,6 +752,9 @@ struct SourceVt {
             t.destroy = destroy;
             if constexpr (HasSchema<S>) t.schema_types = schema_types;
             if constexpr (HasApply<S>) t.apply = apply;
+            if constexpr (HasExplain<S>) t.explain = explain;
+            if constexpr (HasPlan<S>) t.plan = plan;
+            if constexpr (HasPlanDuql<S>) t.plan_duql = plan_duql;
             return t;
         }();
         return &VT;

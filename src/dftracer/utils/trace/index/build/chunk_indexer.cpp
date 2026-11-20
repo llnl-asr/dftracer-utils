@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/hash/value_hash.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -17,7 +18,7 @@
 #include <cstring>
 
 using dftracer::utils::json::JsonParser;
-using dftracer::utils::json::ondemand_value_to_string;
+using dftracer::utils::json::ondemand_value_hash;
 
 namespace dftracer::utils::trace::index::build {
 
@@ -174,140 +175,225 @@ coro::CoroTask<dstd::Result<ChunkIndexerOutput>> ChunkIndexer::operator()(
     const bool need_shash = output.bloom_filters.count(DIM_SHASH) > 0;
     const bool has_extra_dims = !input.config.extra_dimensions.empty();
 
-    auto scanned = co_await dftracer::utils::trace::internal::scan_chunk_lines(
-        *stream, [&](dstd::StringView line_sv,
-                     [[maybe_unused]] std::uint32_t line_number) {
-            if (!parser.parse(line_sv)) {
-                return;
-            }
+    auto scanned =
+        co_await dftracer::utils::trace::
+            internal::scan_chunk_lines(*stream,
+                                       [&](dstd::StringView line_sv,
+                                           [[maybe_unused]] std::uint32_t
+                                               line_number) {
+                                           if (!parser.parse(line_sv)) {
+                                               return;
+                                           }
 
-            trace::RecordPhase phase = trace::read_phase(parser);
-            if (phase == trace::RecordPhase::Unknown) {
-                return;
-            }
+                                           trace::RecordPhase phase =
+                                               trace::read_phase(parser);
+                                           if (phase ==
+                                               trace::RecordPhase::Unknown) {
+                                               return;
+                                           }
 
-            bool is_metadata = (phase == trace::RecordPhase::Metadata);
+                                           bool is_metadata =
+                                               (phase ==
+                                                trace::RecordPhase::Metadata);
 
-            if (!is_metadata) {
-                // The phase read above consumed the document's cursor. A
-                // syntax error in what it read drops the line.
-                if (!parser.raw_document().is_alive()) return;
-                parser.rewind();
-                auto name_opt = parser.get_string("name");
-                dstd::StringView name = name_opt.value_or("");
-                auto cat_opt = parser.get_string("cat");
-                dstd::StringView cat = cat_opt.value_or("");
+                                           if (!is_metadata) {
+                                               // The phase read above consumed
+                                               // the document's cursor. A
+                                               // syntax error in what it read
+                                               // drops the line.
+                                               if (!parser.raw_document()
+                                                        .is_alive())
+                                                   return;
+                                               parser.rewind();
+                                               auto name_opt =
+                                                   parser.get_string("name");
+                                               dstd::StringView name =
+                                                   name_opt.value_or("");
+                                               auto cat_opt =
+                                                   parser.get_string("cat");
+                                               dstd::StringView cat =
+                                                   cat_opt.value_or("");
 
-                auto pid = parser.get_uint64("pid").value_or(0);
-                auto tid = parser.get_uint64("tid").value_or(0);
-                auto ts = parser.get_uint64("ts").value_or(0);
-                auto dur_opt = parser.get_uint64("dur");
-                auto dur = dur_opt.value_or(0);
+                                               auto pid =
+                                                   parser.get_uint64("pid")
+                                                       .value_or(0);
+                                               auto tid =
+                                                   parser.get_uint64("tid")
+                                                       .value_or(0);
+                                               auto ts = parser.get_uint64("ts")
+                                                             .value_or(0);
+                                               auto dur_opt =
+                                                   parser.get_uint64("dur");
+                                               auto dur = dur_opt.value_or(0);
 
-                output.statistics.update_from_event(name, cat, pid, tid, ts,
-                                                    dur, dur_opt.has_value());
+                                               output.statistics
+                                                   .update_from_event(
+                                                       name, cat, pid, tid, ts,
+                                                       dur,
+                                                       dur_opt.has_value());
 
-                if (need_name && !name.empty()) {
-                    output.bloom_filters[DIM_NAME].add(name);
-                }
+                                               if (need_name && !name.empty()) {
+                                                   output
+                                                       .bloom_filters[DIM_NAME]
+                                                       .add(name);
+                                               }
 
-                if (need_cat && !cat.empty()) {
-                    output.bloom_filters[DIM_CAT].add(cat);
-                }
+                                               if (need_cat && !cat.empty()) {
+                                                   output.bloom_filters[DIM_CAT]
+                                                       .add(cat);
+                                               }
 
-                if (need_pid) {
-                    char pid_buf[32];
-                    const auto text =
-                        dstd::fmt_to<"{}">(pid_buf, sizeof(pid_buf), pid);
-                    output.bloom_filters[DIM_PID].add(
-                        dstd::StringView(pid_buf, text.size));
-                }
+                                               if (need_pid) {
+                                                   output.bloom_filters[DIM_PID]
+                                                       .add_hashed(
+                                                           dstd::hash::
+                                                               value_hash_uint64(
+                                                                   pid));
+                                               }
 
-                if (need_tid) {
-                    char tid_buf[32];
-                    const auto text =
-                        dstd::fmt_to<"{}">(tid_buf, sizeof(tid_buf), tid);
-                    output.bloom_filters[DIM_TID].add(
-                        dstd::StringView(tid_buf, text.size));
-                }
+                                               if (need_tid) {
+                                                   output.bloom_filters[DIM_TID]
+                                                       .add_hashed(
+                                                           dstd::hash::
+                                                               value_hash_uint64(
+                                                                   tid));
+                                               }
 
-                if (need_hhash || need_fhash || need_shash || has_extra_dims) {
-                    parser.for_each_field("args", [&](dstd::StringView key,
-                                                      simdjson::ondemand::value
-                                                          val) {
-                        if (need_hhash && key == "hhash") {
-                            auto s = val.get_string();
-                            if (!s.error() && !s.value_unsafe().empty()) {
-                                output.bloom_filters[DIM_HHASH].add(
-                                    s.value_unsafe());
-                            }
-                        } else if (need_fhash && key == "fhash") {
-                            auto s = val.get_string();
-                            if (!s.error() && !s.value_unsafe().empty()) {
-                                output.bloom_filters[DIM_FHASH].add(
-                                    s.value_unsafe());
-                            }
-                        } else if (need_shash &&
-                                   (key == "cmd_hash" || key == "exec_hash")) {
-                            auto s = val.get_string();
-                            if (!s.error() && !s.value_unsafe().empty()) {
-                                output.bloom_filters[DIM_SHASH].add(
-                                    s.value_unsafe());
-                            }
-                        } else if (has_extra_dims) {
-                            for (const auto& dim :
-                                 input.config.extra_dimensions) {
-                                if (key == dim) {
-                                    dstd::String str_val =
-                                        ondemand_value_to_string(val);
-                                    if (!str_val.empty()) {
-                                        output.bloom_filters[dim].add(str_val);
-                                    }
-                                    break;
-                                }
-                                // Nested dimension, e.g. "io.size".
-                                auto dot_pos = dim.find('.');
-                                if (dot_pos != dstd::String::npos) {
-                                    dstd::StringView prefix(dim.data(),
-                                                            dot_pos);
-                                    if (key == prefix) {
-                                        dstd::StringView suffix(
-                                            dim.data() + dot_pos + 1,
-                                            dim.size() - dot_pos - 1);
-                                        auto obj = val.get_object();
-                                        if (!obj.error()) {
-                                            for (auto field :
-                                                 obj.value_unsafe()) {
-                                                if (field.error()) continue;
-                                                auto fkey =
-                                                    field.unescaped_key();
-                                                if (fkey.error()) continue;
-                                                if (fkey.value_unsafe() ==
-                                                    suffix) {
-                                                    auto fval = field.value();
-                                                    if (fval.error()) continue;
-                                                    dstd::String str_val =
-                                                        ondemand_value_to_string(
-                                                            fval.value_unsafe());
-                                                    if (!str_val.empty()) {
-                                                        output
-                                                            .bloom_filters[dim]
-                                                            .add(str_val);
-                                                    }
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
+                                               if (need_hhash || need_fhash ||
+                                                   need_shash ||
+                                                   has_extra_dims) {
+                                                   parser.for_each_field("args",
+                                                                         [&](dstd::StringView
+                                                                                 key,
+                                                                             simdjson::ondemand::value val) {
+                                                                             if (need_hhash &&
+                                                                                 key ==
+                                                                                     "hhash") {
+                                                                                 auto s =
+                                                                                     val.get_string();
+                                                                                 if (!s.error() &&
+                                                                                     !s.value_unsafe()
+                                                                                          .empty()) {
+                                                                                     output
+                                                                                         .bloom_filters
+                                                                                             [DIM_HHASH]
+                                                                                         .add(
+                                                                                             s.value_unsafe());
+                                                                                 }
+                                                                             } else if (
+                                                                                 need_fhash &&
+                                                                                 key ==
+                                                                                     "fhash") {
+                                                                                 auto s =
+                                                                                     val.get_string();
+                                                                                 if (!s.error() &&
+                                                                                     !s.value_unsafe()
+                                                                                          .empty()) {
+                                                                                     output
+                                                                                         .bloom_filters
+                                                                                             [DIM_FHASH]
+                                                                                         .add(
+                                                                                             s.value_unsafe());
+                                                                                 }
+                                                                             } else if (
+                                                                                 need_shash &&
+                                                                                 (key ==
+                                                                                      "cmd_hash" ||
+                                                                                  key ==
+                                                                                      "exec_hash")) {
+                                                                                 auto s =
+                                                                                     val.get_string();
+                                                                                 if (!s.error() &&
+                                                                                     !s.value_unsafe()
+                                                                                          .empty()) {
+                                                                                     output
+                                                                                         .bloom_filters
+                                                                                             [DIM_SHASH]
+                                                                                         .add(
+                                                                                             s.value_unsafe());
+                                                                                 }
+                                                                             } else if (
+                                                                                 has_extra_dims) {
+                                                                                 for (
+                                                                                     const auto&
+                                                                                         dim :
+                                                                                     input
+                                                                                         .config
+                                                                                         .extra_dimensions) {
+                                                                                     if (key ==
+                                                                                         dim) {
+                                                                                         if (const auto
+                                                                                                 h = ondemand_value_hash(
+                                                                                                     val))
+                                                                                             output
+                                                                                                 .bloom_filters
+                                                                                                     [dim]
+                                                                                                 .add_hashed(
+                                                                                                     *h);
+                                                                                         break;
+                                                                                     }
+                                                                                     // Nested dimension, e.g. "io.size".
+                                                                                     auto dot_pos =
+                                                                                         dim.find(
+                                                                                             '.');
+                                                                                     if (dot_pos !=
+                                                                                         dstd::String::
+                                                                                             npos) {
+                                                                                         dstd::StringView prefix(
+                                                                                             dim.data(),
+                                                                                             dot_pos);
+                                                                                         if (key ==
+                                                                                             prefix) {
+                                                                                             dstd::StringView suffix(
+                                                                                                 dim.data() +
+                                                                                                     dot_pos +
+                                                                                                     1,
+                                                                                                 dim.size() -
+                                                                                                     dot_pos -
+                                                                                                     1);
+                                                                                             auto obj =
+                                                                                                 val.get_object();
+                                                                                             if (!obj.error()) {
+                                                                                                 for (
+                                                                                                     auto
+                                                                                                         field :
+                                                                                                     obj.value_unsafe()) {
+                                                                                                     if (field
+                                                                                                             .error())
+                                                                                                         continue;
+                                                                                                     auto fkey =
+                                                                                                         field
+                                                                                                             .unescaped_key();
+                                                                                                     if (fkey.error())
+                                                                                                         continue;
+                                                                                                     if (fkey.value_unsafe() ==
+                                                                                                         suffix) {
+                                                                                                         auto fval =
+                                                                                                             field
+                                                                                                                 .value();
+                                                                                                         if (fval.error())
+                                                                                                             continue;
+                                                                                                         if (const auto h = ondemand_value_hash(
+                                                                                                                 fval.value_unsafe()))
+                                                                                                             output
+                                                                                                                 .bloom_filters
+                                                                                                                     [dim]
+                                                                                                                 .add_hashed(
+                                                                                                                     *h);
+                                                                                                         break;
+                                                                                                     }
+                                                                                                 }
+                                                                                             }
+                                                                                         }
+                                                                                     }
+                                                                                 }
+                                                                             }
+                                                                         });
+                                               }
 
-                output.events_processed++;
-            }
-        });
+                                               output.events_processed++;
+                                           }
+                                       });
     if (!scanned) {
         co_return scanned.error();
     }

@@ -310,9 +310,8 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
 }
 
 static coro::CoroTask<dstd::Result<void>> auto_index_and_resolve(
-    dstd::Vector<FileWorkItem>& files_needing_index,
-    const dstd::String& index_dir, std::size_t checkpoint_size,
-    std::size_t executor_threads,
+    dstd::Vector<FileWorkItem>& files_needing_index, dstd::String index_dir,
+    std::size_t checkpoint_size, std::size_t executor_threads,
     dstd::HashMap<dstd::String, dstd::Vector<ResolvedFile>>& indexed_groups) {
     auto index_path = internal::determine_index_path(
         files_needing_index.front().file_path, index_dir);

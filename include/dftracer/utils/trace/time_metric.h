@@ -10,7 +10,7 @@
 namespace dftracer::utils::trace {
 
 /// Time unit a trace records ts/dur in, declared via the CM metadata event
-/// {"name":"CM","ph":"M","args":{"name":"time_metric","value":"NS"}}.
+/// {"name":"CM","ph":4,"args":{"name":"time_metric","value":"NS"}}.
 /// Microseconds (US) is the canonical unit; an absent or unknown metric is US.
 enum class TimeMetric { Us, Ns, Ms, Sec };
 

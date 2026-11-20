@@ -51,14 +51,14 @@ const char* FAILING_NAMES[] = {"x"};
 using dftracer::utils::plugins::Column;
 using dftracer::utils::plugins::FrameBuilder;
 
-::dftu_dataframe* make_rows_frame(const int64_t* ids, const int64_t* vals,
-                                  int64_t n) {
+::dftu_dataframe* make_rows_frame(const std::int64_t* ids,
+                                  const std::int64_t* vals, std::int64_t n) {
     FrameBuilder builder;
     // Copied: the caller's buffers do not outlive the frame it hands out.
     builder.add(ROWS_NAMES[0],
-                Column::from_int64(dstd::Vector<int64_t>(ids, ids + n)));
+                Column::from_int64(dstd::Vector<std::int64_t>(ids, ids + n)));
     builder.add(ROWS_NAMES[1],
-                Column::from_int64(dstd::Vector<int64_t>(vals, vals + n)));
+                Column::from_int64(dstd::Vector<std::int64_t>(vals, vals + n)));
     auto built = builder.build();
     return built ? built->release() : nullptr;
 }
@@ -66,7 +66,7 @@ using dftracer::utils::plugins::FrameBuilder;
 /* ---- provider_fixture.rows: two frames, then EOS ---- */
 
 dftu_status rows_schema(dftu_ctx*, void*, const char* const** out_names,
-                        int32_t* out_count) {
+                        std::int32_t* out_count) {
     *out_names = ROWS_NAMES;
     *out_count = 2;
     return DFTU_OK;
@@ -76,19 +76,19 @@ struct RowsCursor {
     int call = 0;
 };
 
-dftu_status rows_next(dftu_ctx*, void* self, int64_t, ::dftu_dataframe** out,
-                      dftu_task**) {
+dftu_status rows_next(dftu_ctx*, void* self, std::int64_t,
+                      ::dftu_dataframe** out, dftu_task**) {
     auto* cur = static_cast<RowsCursor*>(self);
     const int call = cur->call++;
     if (call == 0) {
-        const int64_t ids[] = {1, 2, 3};
-        const int64_t vals[] = {10, 20, 30};
+        const std::int64_t ids[] = {1, 2, 3};
+        const std::int64_t vals[] = {10, 20, 30};
         *out = make_rows_frame(ids, vals, 3);
         return DFTU_OK;  // synchronous
     }
     if (call == 1) {
-        const int64_t ids[] = {4, 5};
-        const int64_t vals[] = {40, 50};
+        const std::int64_t ids[] = {4, 5};
+        const std::int64_t vals[] = {40, 50};
         *out = make_rows_frame(ids, vals, 2);
         return DFTU_OK;
     }
@@ -106,7 +106,7 @@ const ::dftu_cursor_vt ROWS_CURSOR_VT = {.struct_size = sizeof(dftu_cursor_vt),
                                          .destroy = rows_cursor_destroy};
 
 dftu_status rows_scan(dftu_ctx*, void*, const dftu_plugin_host*,
-                      const ::dftu_scan_request*, int32_t*,
+                      const ::dftu_scan_request*, std::int32_t*,
                       void** out_cursor_self, const ::dftu_cursor_vt** out_vt) {
     auto* cur = new RowsCursor();
     *out_cursor_self = cur;
@@ -124,13 +124,13 @@ const ::dftu_source_vt ROWS_SOURCE_VT = {.struct_size = sizeof(dftu_source_vt),
 /* ---- provider_fixture.failing: next() fails on the first call ---- */
 
 dftu_status failing_schema(dftu_ctx*, void*, const char* const** out_names,
-                           int32_t* out_count) {
+                           std::int32_t* out_count) {
     *out_names = FAILING_NAMES;
     *out_count = 1;
     return DFTU_OK;
 }
 
-dftu_status failing_next(dftu_ctx* ctx, void*, int64_t, ::dftu_dataframe**,
+dftu_status failing_next(dftu_ctx* ctx, void*, std::int64_t, ::dftu_dataframe**,
                          dftu_task**) {
     g_failing_next_calls.fetch_add(1);
     return dftu_fail(ctx, DFTU_E_IO,
@@ -145,7 +145,7 @@ const ::dftu_cursor_vt FAILING_CURSOR_VT = {
     .destroy = failing_cursor_destroy};
 
 dftu_status failing_scan(dftu_ctx*, void*, const dftu_plugin_host*,
-                         const ::dftu_scan_request*, int32_t*,
+                         const ::dftu_scan_request*, std::int32_t*,
                          void** out_cursor_self,
                          const ::dftu_cursor_vt** out_vt) {
     static int dummy = 0;
@@ -179,7 +179,9 @@ std::atomic<int> g_sdk_filters{0};
 
 class SdkRange {
    public:
-    SdkRange(int64_t lo, int64_t hi) : lo_(lo), hi_(hi) { ++g_sdk_alive; }
+    SdkRange(std::int64_t lo, std::int64_t hi) : lo_(lo), hi_(hi) {
+        ++g_sdk_alive;
+    }
     SdkRange(const SdkRange&) = delete;
     ~SdkRange() { --g_sdk_alive; }
 
@@ -190,7 +192,7 @@ class SdkRange {
         explicit Cursor(dftracer::utils::plugins::OwnedDataFrame f)
             : f_(std::move(f)) {}
         dstd::Result<dstd::Optional<dftracer::utils::plugins::OwnedDataFrame>>
-        next(int64_t) {
+        next(std::int64_t) {
             if (!f_) return dstd::nullopt;
             return std::move(f_);
         }
@@ -202,15 +204,15 @@ class SdkRange {
     dstd::Result<dftracer::utils::plugins::ScanResult<Cursor>> scan(
         const dftracer::utils::plugins::ScanView&,
         const dftracer::utils::plugins::Host&) const {
-        dstd::Vector<int64_t> ids, vals;
-        for (int64_t i = lo_; i < hi_; ++i) {
+        dstd::Vector<std::int64_t> ids, vals;
+        for (std::int64_t i = lo_; i < hi_; ++i) {
             ids.push_back(i);
             vals.push_back(i * 10);
         }
         return dftracer::utils::plugins::ScanResult<Cursor>{
             dstd::make_unique<Cursor>(dftracer::utils::plugins::OwnedDataFrame(
                 make_rows_frame(ids.data(), vals.data(),
-                                static_cast<int64_t>(ids.size())))),
+                                static_cast<std::int64_t>(ids.size())))),
             {}};
     }
 
@@ -228,8 +230,8 @@ class SdkRange {
     }
 
    private:
-    int64_t lo_;
-    int64_t hi_;
+    std::int64_t lo_;
+    std::int64_t hi_;
 };
 
 class DoubleVal {
@@ -245,18 +247,18 @@ class DoubleVal {
         explicit Cursor(dftracer::utils::plugins::InputCursor in)
             : in_(std::move(in)) {}
         dstd::Result<dstd::Optional<dftracer::utils::plugins::OwnedDataFrame>>
-        next(int64_t max_rows) {
+        next(std::int64_t max_rows) {
             DFTRACER_UTILS_TRY(
                 dstd::Optional<dftracer::utils::plugins::OwnedDataFrame> f,
                 in_.next(max_rows));
             if (!f) return dstd::nullopt;
             Column id(::dftu_dataframe_column(f->get(), "id"));
             Column val(::dftu_dataframe_column(f->get(), "val"));
-            const int64_t n = val.size();
+            const std::int64_t n = val.size();
             const auto* v =
-                static_cast<const int64_t*>(::dftu_series_data(val.get()));
-            dstd::Vector<int64_t> doubled(v, v + n);
-            for (int64_t& x : doubled) x *= 2;
+                static_cast<const std::int64_t*>(::dftu_series_data(val.get()));
+            dstd::Vector<std::int64_t> doubled(v, v + n);
+            for (std::int64_t& x : doubled) x *= 2;
             FrameBuilder builder;
             builder.add(ROWS_NAMES[0], std::move(id));
             builder.add(ROWS_NAMES[1], Column::from_int64(std::move(doubled)));

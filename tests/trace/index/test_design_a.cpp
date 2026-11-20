@@ -2,10 +2,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -41,20 +43,20 @@ constexpr std::size_t SLACK = std::size_t{24} << 20;
 constexpr int SMALL_FILES = 96;
 constexpr int SMALL_EVENTS = 3000;
 
-dstd::String small_trace(const dstd::String& dir, int n) {
+dstd::String small_trace(dstd::CStringView dir, int n) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < SMALL_EVENTS; ++i) {
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"op{}\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":"
-            "{},\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{\"fname\":\"/data/"
+            "{},\"ph\":1,\"ts\":{},\"dur\":{},\"args\":{\"fname\":\"/data/"
             "d{}/f{}\",\"size\":{},\"hhash\":\"h{}\"}}\n">(
             out, i, (i + n) % 40, 1 + n % 7, 10 + i % 5, 1000 + i * 10 + n * 7,
             3 + i % 50, n % 9, (i * 31 + n) % 700, (i * 17) % 4096, n);
     }
     out += "]\n";
     return dftu_utils_test::write_gz_trace(
-        dir + "/s" + dstd::to_string(n) + ".pfw.gz", out);
+        dstd::String(dir) + "/s" + dstd::to_string(n) + ".pfw.gz", out);
 }
 
 // Each segment walks the same names in another order, so the first appearance
@@ -62,8 +64,8 @@ dstd::String small_trace(const dstd::String& dir, int n) {
 constexpr int SEGMENT_LINES = 4096;
 constexpr int NAMES = 61;
 
-dstd::String big_trace(const dstd::String& dir, const dstd::String& stem,
-                       int lines, int variant) {
+dstd::String big_trace(dstd::CStringView dir, dstd::StringView stem, int lines,
+                       int variant) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < lines; ++i) {
@@ -72,7 +74,7 @@ dstd::String big_trace(const dstd::String& dir, const dstd::String& stem,
         const int pick = (i * step + seg * 13) % NAMES;
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"op{}\",\"cat\":\"c{}\",\"pid\":{},\"tid\":{}"
-            ",\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{\"fname\":\"/data/"
+            ",\"ph\":1,\"ts\":{},\"dur\":{},\"args\":{\"fname\":\"/data/"
             "s{}/f{}\",\"size\":{},\"hhash\":\"h{}\",\"path\":\"/p{}/q{}/"
             "r{}\",\"note\":\"abcdefghijklmnopqrstuvwxyz0123456789\"}}\n">(
             out, i, pick, (pick * 3 + seg) % 11, 1 + (i + seg) % 7, 10 + i % 5,
@@ -80,14 +82,15 @@ dstd::String big_trace(const dstd::String& dir, const dstd::String& stem,
             (pick + variant) % 17, seg % 5, (pick * 5 + i) % 53, i % 31);
     }
     out += "]\n";
-    return dftu_utils_test::write_gz_trace(dir + "/" + stem + ".pfw.gz", out);
+    return dftu_utils_test::write_gz_trace(
+        dstd::String(dir) + "/" + dstd::String(stem) + ".pfw.gz", out);
 }
 
 trace::index::build::IndexBuildBatchResult build_with(
-    const dstd::Vector<dstd::String>& files, const dstd::String& index_dir,
+    dstd::Span<const dstd::String> files, dstd::CStringView index_dir,
     std::size_t workers, std::uint64_t budget) {
     trace::index::build::IndexBuildBatchResult result;
-    const dstd::String staging = index_dir + ".staging";
+    const dstd::String staging = dstd::String(index_dir) + ".staging";
     auto counter = dstd::make_shared<std::atomic<std::size_t>>(0);
     Runtime rt(workers);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -110,8 +113,8 @@ struct Peak {
     std::size_t in_flight = 0;
 };
 
-Peak peak_of_build(const dstd::Vector<dstd::String>& files,
-                   const dstd::String& index_dir, std::size_t workers,
+Peak peak_of_build(dstd::Span<const dstd::String> files,
+                   dstd::CStringView index_dir, std::size_t workers,
                    std::uint64_t budget) {
     std::atomic<bool> done{false};
     std::atomic<std::size_t> peak{0};
@@ -137,7 +140,7 @@ Peak peak_of_build(const dstd::Vector<dstd::String>& files,
 using Family = dstd::Vector<dstd::Pair<dstd::String, dstd::String>>;
 using Dump = dstd::Map<dstd::String, Family>;
 
-Dump dump_index(const dstd::String& first_file, const dstd::String& index_dir) {
+Dump dump_index(dstd::CStringView first_file, dstd::CStringView index_dir) {
     const auto path = dstd::String(
         trace::internal::determine_index_path(first_file, index_dir));
     Dump out;
@@ -147,7 +150,7 @@ Dump dump_index(const dstd::String& first_file, const dstd::String& index_dir) {
     return out;
 }
 
-void check_same(const Dump& a, const Dump& b, const char* what) {
+void check_same(const Dump& a, const Dump& b, dstd::StringView what) {
     REQUIRE(a.size() == b.size());
     for (const auto& [name, rows] : a) {
         const auto it = b.find(name);

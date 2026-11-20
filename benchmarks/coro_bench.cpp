@@ -53,7 +53,9 @@
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io.h>
@@ -345,10 +347,11 @@ std::size_t per_worker(std::size_t n) {
 
 dstd::Vector<Case> make_cases() {
     dstd::Vector<Case> cases;
-    auto add = [&cases](const char *name, std::size_t full_ops,
+    auto add = [&cases](dstd::CStringView name, std::size_t full_ops,
                         dstd::Function<Result(std::size_t)> run,
                         dstd::Function<std::size_t(std::size_t)> ops) {
-        cases.push_back(Case{name, full_ops, std::move(run), std::move(ops)});
+        cases.push_back(
+            Case{name.c_str(), full_ops, std::move(run), std::move(ops)});
     };
     add("semaphore_uncontended", 25000000, semaphore_uncontended, exact);
     add("semaphore_contended", 25000000, semaphore_contended, per_worker);
@@ -403,8 +406,8 @@ struct Recorded {
     double instr_spread_pct = 0.0;
 };
 
-bool write_record(const char *path, const dstd::Vector<Recorded> &rows) {
-    std::FILE *f = std::fopen(path, "w");
+bool write_record(dstd::CStringView path, dstd::Span<const Recorded> rows) {
+    std::FILE *f = std::fopen(path.c_str(), "w");
     if (f == nullptr) return false;
     std::fprintf(f, "{\n");
     for (std::size_t i = 0; i < rows.size(); ++i) {
@@ -420,8 +423,8 @@ bool write_record(const char *path, const dstd::Vector<Recorded> &rows) {
     return std::fclose(f) == 0;
 }
 
-bool read_record(const char *path, dstd::Vector<Recorded> &rows) {
-    std::FILE *f = std::fopen(path, "r");
+bool read_record(dstd::CStringView path, dstd::Vector<Recorded> &rows) {
+    std::FILE *f = std::fopen(path.c_str(), "r");
     if (f == nullptr) return false;
     char line[512];
     while (std::fgets(line, sizeof(line), f) != nullptr) {
@@ -445,10 +448,10 @@ double pct_change(double now, double base) {
     return base > 0.0 ? (now / base - 1.0) * 100.0 : 0.0;
 }
 
-int check_record(const char *path, const dstd::Vector<Recorded> &now) {
+int check_record(dstd::CStringView path, dstd::Span<const Recorded> now) {
     dstd::Vector<Recorded> base;
     if (!read_record(path, base)) {
-        std::fprintf(stderr, "cannot read record: %s\n", path);
+        std::fprintf(stderr, "cannot read record: %s\n", path.c_str());
         return 1;
     }
     int worse = 0;
@@ -479,8 +482,8 @@ int check_record(const char *path, const dstd::Vector<Recorded> &now) {
     return worse == 0 ? 0 : 1;
 }
 
-int run(const dstd::Vector<Case> &cases, int reps, bool smoke, bool csv,
-        const char *record, const char *check) {
+int run(dstd::Span<const Case> cases, int reps, bool smoke, bool csv,
+        dstd::CStringView record, dstd::CStringView check) {
     dstd::Vector<Recorded> rows;
     if (csv) {
         std::printf(
@@ -544,11 +547,11 @@ int run(const dstd::Vector<Case> &cases, int reps, bool smoke, bool csv,
         std::fflush(stdout);
     }
     int status = failures == 0 ? 0 : 1;
-    if (record != nullptr && !write_record(record, rows)) {
-        std::fprintf(stderr, "cannot write record: %s\n", record);
+    if (!record.empty() && !write_record(record, rows)) {
+        std::fprintf(stderr, "cannot write record: %s\n", record.c_str());
         status = 1;
     }
-    if (check != nullptr && check_record(check, rows) != 0) status = 1;
+    if (!check.empty() && check_record(check, rows) != 0) status = 1;
     return status;
 }
 
@@ -572,8 +575,8 @@ int main(int argc, char **argv) {
     bool smoke = false;
     bool csv = false;
     dstd::String only;
-    const char *record = nullptr;
-    const char *check = nullptr;
+    dstd::CStringView record;
+    dstd::CStringView check;
     for (int i = 1; i < argc; ++i) {
         dstd::StringView arg = argv[i];
         bool has_value = i + 1 < argc;

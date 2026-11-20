@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/domains/server/trace_index.h>
 #include <dftracer/utils/domains/server/viz_result_cache.h>
+#include <dftracer/utils/dstd/span.h>
 
 #include <utility>
 
@@ -9,8 +10,8 @@ namespace dftracer::utils::domains::server {
 VizResultCache::VizResultCache(std::size_t max_bytes, TraceIndex* index)
     : index_(index), max_bytes_(max_bytes) {}
 
-dstd::Optional<dstd::String> VizResultCache::get(const dstd::String& key) {
-    const dstd::String keys[] = {key};
+dstd::Optional<dstd::String> VizResultCache::get(dstd::StringView key) {
+    const dstd::String keys[] = {dstd::String(key)};
     auto got = get_many(dstd::Span<const dstd::String>(keys, 1));
     return std::move(got.front());
 }
@@ -51,13 +52,13 @@ dstd::Vector<dstd::Optional<dstd::String>> VizResultCache::get_many(
     return out;
 }
 
-void VizResultCache::put(const dstd::String& key, dstd::String body) {
+void VizResultCache::put(dstd::String key, dstd::String body) {
     put_memory(key, body);
     if (index_ == nullptr) return;
-    index_->store_viz_result(dstd::String(key), std::move(body));
+    index_->store_viz_result(std::move(key), std::move(body));
 }
 
-void VizResultCache::put_memory(const dstd::String& key, dstd::String body) {
+void VizResultCache::put_memory(dstd::String key, dstd::String body) {
     std::lock_guard<std::mutex> lk(mu_);
     auto it = map_.find(key);
     if (it != map_.end()) {
@@ -74,7 +75,7 @@ void VizResultCache::put_memory(const dstd::String& key, dstd::String body) {
     e.body = std::move(body);
     e.pos = order_.begin();
     bytes_ += e.body.size();
-    map_.emplace(key, std::move(e));
+    map_.emplace(std::move(key), std::move(e));
     evict();
 }
 

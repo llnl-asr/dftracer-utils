@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -15,7 +16,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-dstd::Vector<std::uint8_t> gzip(const dstd::String& text) {
+dstd::Vector<std::uint8_t> gzip(dstd::StringView text) {
     fileio::compress::GzipMemberCompressor c;
     dstd::Vector<std::uint8_t> out(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), out.data(), out.size());
@@ -25,7 +26,7 @@ dstd::Vector<std::uint8_t> gzip(const dstd::String& text) {
 }
 
 // Reference: zlib's own prefix decode, then the complete lines of it.
-std::size_t reference_complete_lines(const dstd::Vector<std::uint8_t>& comp) {
+std::size_t reference_complete_lines(dstd::Span<const std::uint8_t> comp) {
     z_stream zs{};
     REQUIRE(inflateInit2(&zs, 16 + MAX_WBITS) == Z_OK);
     dstd::Vector<unsigned char> out(1 << 22);
@@ -43,9 +44,8 @@ std::size_t reference_complete_lines(const dstd::Vector<std::uint8_t>& comp) {
 dstd::String lines(int n) {
     dstd::String s;
     for (int i = 0; i < n; ++i)
-        s +=
-            dstd::fmt<"{\"id\":{},\"name\":\"read\",\"ph\":\"X\",\"ts\":{}}\n">(
-                i, i * 7);
+        s += dstd::fmt<"{\"id\":{},\"name\":\"read\",\"ph\":1,\"ts\":{}}\n">(
+            i, i * 7);
     return s;
 }
 

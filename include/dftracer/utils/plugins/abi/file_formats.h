@@ -110,6 +110,43 @@ typedef struct dftu_file_format_vt {
     /** Release the format's `self`; called once, after every registration is
        gone and every file it opened is closed. */
     void (*destroy)(void* self);
+    /** Optional (NULL means the file's chunks have no identity). Set `*token`
+       to the token of chunk `chunk` of `file`, a value below the count
+       chunks() reported. A token names one chunk of one file by what is in the
+       file, such as the byte offset of the chunk or the number of its row
+       group, so scan() with that chunk reads the same rows whenever the file
+       has the same bytes. It is deterministic (the same bytes always give the
+       same tokens) and strictly increasing with `chunk`. The host stores the
+       tokens of a file it indexes, and uses the index at scan time only when
+       the file's tokens still equal the stored ones, so an index never speaks
+       for a chunk it did not see. A format that leaves this NULL is indexed as
+       one chunk, the whole file: the index can rule out the file, never one of
+       its chunks. Called once per open, after chunks(), with a `ctx` the host
+       frees when the call returns; on failure the status and its ctx message
+       are the error the host reports and the file is not indexed. */
+    dftu_status (*chunk_token)(dftu_ctx* ctx, void* file, uint64_t chunk,
+                               uint64_t* token);
+    /** Optional (NULL means nothing to add to an explain). Append to `out` the
+       key and value lines that describe what a scan of `file` would do for
+       `req`, as dftu_source_vt::explain does; `req` is borrowed for the call.
+       The host adds the file's chunk count and the chunks the index keeps. */
+    dftu_status (*explain)(dftu_ctx* ctx, void* file,
+                           const dftu_scan_request* req,
+                           const dftu_explain_out* out);
+    /** Optional (NULL means the votes come from scan(), as before). Plan a scan
+       of `file` for `req`, as dftu_source_vt::plan does: fill `out` with a vote
+       for each filter, a cost, an estimated row count and a token. It is called
+       once per scan of the file, before the first chunk is opened, and also for
+       an explain; the votes and the token it gives hold for every chunk of the
+       scan, so the host does not compare the votes of the chunks, and each
+       scan() of the scan gets the answer in dftu_scan_request::plan. `file` is
+       borrowed and stays valid until close(). */
+    dftu_status (*plan)(dftu_ctx* ctx, void* file, const dftu_scan_request* req,
+                        dftu_plan_result* out);
+    /** Optional (NULL means plan() is used). As dftu_source_vt::plan_duql. */
+    dftu_status (*plan_duql)(dftu_ctx* ctx, void* file,
+                             const dftu_scan_request* req,
+                             const dftu_plan_duql* q, dftu_plan_result* out);
 } dftu_file_format_vt;
 
 /** A writer a plugin registers under a name: it takes whole dataframes and

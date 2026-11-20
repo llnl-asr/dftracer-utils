@@ -20,16 +20,17 @@ namespace dftracer::utils::yaml {
 constexpr std::size_t MAX_DEPTH = 128;
 
 /// A key of under 8 bytes as one word: its bytes, then its length in the top
-/// byte. Two such keys are the same when their words are. `limit` ends the
-/// text: a load of 8 bytes stays inside it.
-inline std::uint64_t short_key_word(const char* p, std::size_t n,
-                                    const char* limit) {
+/// byte. Two such keys are the same when their words are. `readable` is the
+/// bytes readable from `key.data()`: a load of 8 bytes stays inside them.
+inline std::uint64_t short_key_word(dstd::StringView key,
+                                    std::size_t readable) {
+    const std::size_t n = key.size();
     std::uint64_t word = 0;
-    if (p + 8 <= limit) {
-        std::memcpy(&word, p, 8);
+    if (readable >= 8) {
+        std::memcpy(&word, key.data(), 8);
         word &= (std::uint64_t{1} << (8 * n)) - 1;
     } else {
-        std::memcpy(&word, p, n);
+        std::memcpy(&word, key.data(), n);
     }
     return word | (static_cast<std::uint64_t>(n) << 56);
 }
@@ -39,13 +40,14 @@ inline std::uint32_t hash_short_word(std::uint64_t word) {
 }
 
 /// A 32-bit hash of a key from its first and last 8 bytes and its length,
-/// which are the whole key up to 16 bytes. `limit` is as for short_key_word.
-inline std::uint32_t hash_key(const char* p, std::size_t n, const char* limit) {
-    if (n < 8) return hash_short_word(short_key_word(p, n, limit));
+/// which are the whole key up to 16 bytes. `readable` is as for short_key_word.
+inline std::uint32_t hash_key(dstd::StringView key, std::size_t readable) {
+    const std::size_t n = key.size();
+    if (n < 8) return hash_short_word(short_key_word(key, readable));
     std::uint64_t first = 0;
     std::uint64_t last = 0;
-    std::memcpy(&first, p, 8);
-    std::memcpy(&last, p + n - 8, 8);
+    std::memcpy(&first, key.data(), 8);
+    std::memcpy(&last, key.data() + n - 8, 8);
     std::uint64_t h = first * dstd::hash::GOLDEN_RATIO;
     h ^= (last + n) * dstd::hash::XXH64_PRIME2;
     h ^= h >> 32;
@@ -92,17 +94,15 @@ class KeySet {
     }
 
     /// Adds the key `key` of the entry `id`. False when an earlier key of the
-    /// map is the same: `same(other_id, key)` tells it. `limit` ends the text
-    /// that holds the key, or is the start of the key when it is somewhere
-    /// else.
+    /// map is the same: `same(other_id, key)` tells it. `readable` is the bytes
+    /// readable from `key.data()`, or 0 when the key is not in the text.
     template <class Same>
     DFTRACER_UTILS_ALWAYS_INLINE bool add(Level& level, std::size_t slot,
                                           std::uint32_t id,
                                           dstd::StringView key,
-                                          const char* limit, Same&& same) {
+                                          std::size_t readable, Same&& same) {
         if (level.is_small && key.size() < 8 && level.count < SMALL_KEYS) {
-            const std::uint64_t word =
-                short_key_word(key.data(), key.size(), limit);
+            const std::uint64_t word = short_key_word(key, readable);
             // The bytes of `tags` equal to the tag of `word`, as the zero
             // bytes of their XOR, with a false hit only above a true one.
             const std::uint64_t tag = (word * dstd::hash::GOLDEN_RATIO) >> 56;
@@ -121,7 +121,7 @@ class KeySet {
             return true;
         }
         if (level.is_small) spill(level);
-        const std::uint32_t hash = hash_key(key.data(), key.size(), limit);
+        const std::uint32_t hash = hash_key(key, readable);
         const std::uint32_t index = level.count;
         if (index >= LINEAR_KEY_LIMIT) {
             if (!table_insert(level, slot, hash, id, key, same)) return false;

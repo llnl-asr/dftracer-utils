@@ -18,6 +18,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -34,14 +35,14 @@ namespace {
 using I = dstd::Optional<std::int64_t>;
 using S = dstd::Optional<dstd::String>;
 
-dstd::Vector<std::uint8_t> bits_of(const dstd::Vector<bool>& valid) {
+dstd::Vector<std::uint8_t> bits_of(dstd::Vector<bool> valid) {
     dstd::Vector<std::uint8_t> bits((valid.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < valid.size(); ++i)
         if (valid[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
     return bits;
 }
 
-Series i64s(const dstd::Vector<I>& v) {
+Series i64s(dstd::Vector<I> v) {
     dstd::Vector<std::int64_t> d(v.size());
     dstd::Vector<bool> valid(v.size());
     for (std::size_t i = 0; i < v.size(); ++i) {
@@ -54,7 +55,7 @@ Series i64s(const dstd::Vector<I>& v) {
 }
 
 // A null time is a null in half the rows and a NaN in the others.
-Series f64s(const dstd::Vector<I>& v) {
+Series f64s(dstd::Vector<I> v) {
     dstd::Vector<double> d(v.size());
     dstd::Vector<bool> valid(v.size());
     for (std::size_t i = 0; i < v.size(); ++i) {
@@ -68,7 +69,7 @@ Series f64s(const dstd::Vector<I>& v) {
                         static_cast<std::int64_t>(d.size()), bits.data());
 }
 
-Series strs(const dstd::Vector<S>& v) {
+Series strs(dstd::Vector<S> v) {
     dstd::Vector<dstd::StringView> views;
     dstd::Vector<bool> valid(v.size());
     for (std::size_t i = 0; i < v.size(); ++i) {
@@ -119,7 +120,7 @@ dstd::Vector<dstd::String> row_keys(const DataFrame& d) {
     return keys;
 }
 
-dstd::Vector<dstd::String> row_keys(const dstd::Vector<DataFrame>& parts) {
+dstd::Vector<dstd::String> row_keys(dstd::Span<const DataFrame> parts) {
     dstd::Vector<dstd::String> keys;
     for (const DataFrame& p : parts)
         for (dstd::String& k : row_keys(p)) keys.push_back(std::move(k));
@@ -128,7 +129,7 @@ dstd::Vector<dstd::String> row_keys(const dstd::Vector<DataFrame>& parts) {
 
 // The lazy rows must equal the eager rows in value and order, and the lazy
 // morsels must carry the eager names and types.
-void expect_same(const dstd::Vector<DataFrame>& lazy, const DataFrame& eager) {
+void expect_same(dstd::Span<const DataFrame> lazy, const DataFrame& eager) {
     CHECK(row_keys(lazy) == row_keys(eager));
     if (eager.num_rows() == 0) return;
     REQUIRE(!lazy.empty());
@@ -192,7 +193,7 @@ LazyFrame budgeted(const DataFrame& d, std::uint64_t budget) {
 }
 
 dstd::Vector<DataFrame> run_asof(const Inputs& in, std::uint64_t budget,
-                                 const dstd::Vector<dstd::String>& by,
+                                 dstd::Vector<dstd::String> by,
                                  AsofDirection dir,
                                  dstd::Optional<double> tol) {
     return morsels(
@@ -235,9 +236,9 @@ TEST_CASE("asof leaves in several morsels cut by the budget") {
         in, SMALL_BUDGET, {"g"}, AsofDirection::Backward, dstd::nullopt);
     // Collect-then-eager would hand the whole result over in one morsel.
     CHECK(parts.size() > 4);
-    const DataFrame eager = dftu_utils_test::ok(
-        dataframe::asof(in.left, in.right, "ts", {"g"}, AsofDirection::Backward,
-                        dstd::nullopt));
+    const DataFrame eager = dftu_utils_test::ok(dataframe::asof(
+        in.left, in.right, "ts", dftu_utils_test::span_of<dstd::String>({"g"}),
+        AsofDirection::Backward, dstd::nullopt));
     CHECK(row_keys(parts) == row_keys(eager));
 }
 
@@ -251,12 +252,16 @@ TEST_CASE("asof with an empty side") {
                                 .asof(in.right.lazy(), "ts", {"g"}, dir,
                                       dstd::nullopt)),
                     dftu_utils_test::ok(dataframe::asof(
-                        none_l, in.right, "ts", {"g"}, dir, dstd::nullopt)));
+                        none_l, in.right, "ts",
+                        dftu_utils_test::span_of<dstd::String>({"g"}), dir,
+                        dstd::nullopt)));
         expect_same(
             morsels(budgeted(in.left, SMALL_BUDGET)
                         .asof(none_r.lazy(), "ts", {"g"}, dir, dstd::nullopt)),
-            dftu_utils_test::ok(dataframe::asof(in.left, none_r, "ts", {"g"},
-                                                dir, dstd::nullopt)));
+            dftu_utils_test::ok(
+                dataframe::asof(in.left, none_r, "ts",
+                                dftu_utils_test::span_of<dstd::String>({"g"}),
+                                dir, dstd::nullopt)));
         expect_same(
             morsels(budgeted(none_l, SMALL_BUDGET)
                         .asof(none_r.lazy(), "ts", {}, dir, dstd::nullopt)),
@@ -413,7 +418,8 @@ TEST_CASE(
     "without a budget both plans are collected and the rows are the same") {
     const Inputs in = make_inputs(8, 120, 90, TimeKind::Int, false);
     const DataFrame eager = dftu_utils_test::ok(dataframe::asof(
-        in.left, in.right, "ts", {"g"}, AsofDirection::Nearest, 4.0));
+        in.left, in.right, "ts", dftu_utils_test::span_of<dstd::String>({"g"}),
+        AsofDirection::Nearest, 4.0));
     expect_same(morsels(in.left.lazy().asof(in.right.lazy(), "ts", {"g"},
                                             AsofDirection::Nearest, 4.0)),
                 eager);

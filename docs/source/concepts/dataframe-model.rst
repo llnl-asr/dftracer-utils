@@ -80,9 +80,12 @@ column's type without scanning (an ``args.<key>`` column, whose type can
 differ between traces) reports ``Unknown`` for that column rather than
 guessing, and a real ``Series`` never carries it; a dispatch switch over
 column data refuses it at the boundary the way it refuses an out-of-range
-value. A timezone is type metadata: ``tz_localize`` and ``tz_convert`` never
-move the instants, and only UTC can mark a naive column, since the engine
-has no zone database.
+value. A timezone is type metadata: the ticks of a Timestamp column are always
+UTC instants, ``tz_convert`` never moves them, and ``tz_localize`` reads
+wall times in a zone and gives the instants. The calendar kernels (parts,
+``strftime``, rounding, ``date``, ``time``) of a column with a zone read the
+wall time through the zone files the engine loads; a naive or UTC column is
+read directly.
 
 SIMD kernels, dispatched once
 --------------------------------

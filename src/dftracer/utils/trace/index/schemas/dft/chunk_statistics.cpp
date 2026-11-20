@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -242,22 +243,20 @@ double ChunkStatistics::duration_variance() const {
 
 dstd::String ChunkStatistics::name_category_json() const {
     dstd::String out = "{";
-    bool first = true;
-    for (const auto& [key, value] : name_category) {
-        if (!first) out += ',';
-        first = false;
-        out += '"';
-        out += key;
-        out += "\":\"";
-        out += value;
-        out += '"';
-    }
+    dstd::fmt_append_join<",">(out, name_category,
+                               [](dstd::String& o, const auto& kv) {
+                                   o += '"';
+                                   o += kv.first;
+                                   o += "\":\"";
+                                   o += kv.second;
+                                   o += '"';
+                               });
     out += '}';
     return out;
 }
 
 dstd::StringViewMap<dstd::String> ChunkStatistics::parse_string_map_json(
-    const dstd::String& json) {
+    dstd::StringView json) {
     dstd::StringViewMap<dstd::String> result;
 
     dftracer::utils::json::RecordParser parser;
@@ -280,15 +279,13 @@ dstd::StringViewMap<dstd::String> ChunkStatistics::parse_string_map_json(
 
 dstd::String ChunkStatistics::name_duration_histograms_json() const {
     dstd::String out = "{";
-    bool first = true;
-    for (const auto& [key, hist] : name_duration_histograms) {
-        if (!first) out += ',';
-        first = false;
-        out += '"';
-        out += key;
-        out += "\":";
-        out += hist.to_json();
-    }
+    dstd::fmt_append_join<",">(out, name_duration_histograms,
+                               [](dstd::String& o, const auto& kv) {
+                                   o += '"';
+                                   o += kv.first;
+                                   o += "\":";
+                                   o += kv.second.to_json();
+                               });
     out += '}';
     return out;
 }
@@ -297,19 +294,16 @@ namespace {
 template <typename Map>
 dstd::String double_map_to_json(const Map& map) {
     dstd::String out = "{";
-    bool first = true;
-    for (const auto& [key, value] : map) {
-        if (!first) out += ',';
-        first = false;
+    dstd::fmt_append_join<",">(out, map, [](dstd::String& o, const auto& kv) {
         // 17 significant digits, as the stored index text has always been.
         char buf[32];
         char* const end = dstd::to_chars_general(
-            buf, buf + sizeof(buf), static_cast<double>(value), 17);
-        out += '"';
-        out += key;
-        out += "\":";
-        out.append(buf, static_cast<std::size_t>(end - buf));
-    }
+            buf, buf + sizeof(buf), static_cast<double>(kv.second), 17);
+        o += '"';
+        o += kv.first;
+        o += "\":";
+        o.append(buf, static_cast<std::size_t>(end - buf));
+    });
     out += '}';
     return out;
 }
@@ -364,7 +358,7 @@ dstd::Vector<std::uint8_t> ChunkStatistics::serialize_sketch_map(
 }
 
 dstd::StringViewMap<double> ChunkStatistics::parse_double_map_json(
-    const dstd::String& json) {
+    dstd::StringView json) {
     dstd::StringViewMap<double> result;
 
     dftracer::utils::json::RecordParser parser;
@@ -397,7 +391,7 @@ dstd::StringViewMap<double> ChunkStatistics::parse_double_map_json(
 }
 
 dstd::StringViewMap<dataframe::Log2Histogram>
-ChunkStatistics::parse_histogram_map_json(const dstd::String& json) {
+ChunkStatistics::parse_histogram_map_json(dstd::StringView json) {
     dstd::StringViewMap<dataframe::Log2Histogram> result;
 
     dftracer::utils::json::RecordParser parser;

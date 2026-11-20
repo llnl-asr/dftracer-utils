@@ -57,7 +57,7 @@ class RootPermit {
 };
 
 // The shared state of the root at `index_path`, keyed by canonical path.
-dstd::SharedPtr<IndexRoot> index_root(const dstd::String& index_path);
+dstd::SharedPtr<IndexRoot> index_root(dstd::StringView index_path);
 
 }  // namespace dftracer::utils::trace::internal
 

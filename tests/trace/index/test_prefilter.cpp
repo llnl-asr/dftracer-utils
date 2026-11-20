@@ -21,7 +21,7 @@ using Clauses = dstd::Vector<dstd::Vector<dstd::String>>;
 
 namespace {
 
-plan::Prefilter of(const char* q) {
+plan::Prefilter of(dstd::StringView q) {
     return plan::Prefilter(
         dftu_utils_test::ok(dftracer::utils::duql::Query::from_string(q)));
 }

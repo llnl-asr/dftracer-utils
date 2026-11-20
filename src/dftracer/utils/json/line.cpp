@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/line.h>
 
 namespace dftracer::utils::json {
@@ -7,10 +8,10 @@ inline bool is_json_ws(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
-bool json_trim_impl(const char* data, std::size_t length, const char*& start,
-                    std::size_t& trimmed_size, bool trim_trailing_comma) {
-    start = data;
-    const char* end = data + length - 1;
+bool json_trim_impl(dstd::StringView line, dstd::StringView& trimmed,
+                    bool trim_trailing_comma) {
+    const char* start = line.data();
+    const char* end = start + line.size() - 1;
 
     while (start <= end && is_json_ws(*start)) {
         start++;
@@ -24,7 +25,9 @@ bool json_trim_impl(const char* data, std::size_t length, const char*& start,
         end--;
     }
 
-    trimmed_size = (end >= start) ? (end - start + 1) : 0;
+    const std::size_t trimmed_size =
+        (end >= start) ? static_cast<std::size_t>(end - start + 1) : 0;
+    trimmed = dstd::StringView(start, trimmed_size);
 
     if (trimmed_size == 0 ||
         (trimmed_size == 1 &&
@@ -38,14 +41,12 @@ bool json_trim_impl(const char* data, std::size_t length, const char*& start,
 }
 }  // namespace
 
-bool trim_and_validate(const char* data, std::size_t length, const char*& start,
-                       std::size_t& trimmed_size) {
-    return json_trim_impl(data, length, start, trimmed_size, false);
+bool trim_and_validate(dstd::StringView line, dstd::StringView& trimmed) {
+    return json_trim_impl(line, trimmed, false);
 }
 
-bool trim_and_validate_with_comma(const char* data, std::size_t length,
-                                  const char*& start,
-                                  std::size_t& trimmed_size) {
-    return json_trim_impl(data, length, start, trimmed_size, true);
+bool trim_and_validate_with_comma(dstd::StringView line,
+                                  dstd::StringView& trimmed) {
+    return json_trim_impl(line, trimmed, true);
 }
 }  // namespace dftracer::utils::json

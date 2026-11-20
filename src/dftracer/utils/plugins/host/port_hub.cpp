@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/plugins/host/port_hub.h>
 
 #include <algorithm>
@@ -70,7 +71,7 @@ bool scalar_type(dftu_type type) {
     return type == DFTU_T_I64 || type == DFTU_T_U64 || type == DFTU_T_F64;
 }
 
-dftu_port_status copy_out(const dstd::Vector<std::byte>& from, void* buf,
+dftu_port_status copy_out(dstd::Span<const std::byte> from, void* buf,
                           std::uint32_t cap, std::uint32_t* out_len) {
     *out_len = static_cast<std::uint32_t>(from.size());
     if (from.size() > cap) return DFTU_PORT_TOO_BIG;
@@ -408,13 +409,23 @@ dstd::Result<dftu_port_status> PortPhase::result(std::uint64_t generation,
     return copy_out(out, buf, cap, out_len);
 }
 
-PortHub::PortHub(const dstd::Vector<ChannelDecl>& channels,
-                 const dstd::Vector<PhaseDecl>& phases) {
+PortHub::PortHub(dstd::Span<const ChannelDecl> channels,
+                 dstd::Span<const PhaseDecl> phases,
+                 dstd::Span<const ChannelDecl> senders) {
     for (const ChannelDecl& decl : channels) {
         if (decl.is_ref) continue;
         const std::uint64_t handle = dstd::hash::fnv1a_hash(decl.name);
         handles_.emplace(decl.name, handle);
         channels_.emplace(handle, dstd::make_unique<PortChannel>(decl));
+    }
+    for (const ChannelDecl& decl : senders) {
+        const auto handle = handles_.find(decl.name);
+        if (handle == handles_.end()) continue;
+        dstd::Vector<std::uint64_t>& mine = sends_of_[decl.declarer];
+        if (std::find(mine.begin(), mine.end(), handle->second) != mine.end())
+            continue;
+        mine.push_back(handle->second);
+        ++senders_left_[handle->second];
     }
     dstd::HashMap<dstd::String, std::uint64_t> generations;
     for (const PhaseDecl& decl : phases) {
@@ -447,6 +458,22 @@ PortChannel* PortHub::channel(std::uint64_t handle) const {
 
 void PortHub::close_all() {
     for (auto& entry : channels_) entry.second->close();
+}
+
+void PortHub::sender_finished(dstd::StringView declarer) {
+    dstd::Vector<std::uint64_t> to_close;
+    {
+        std::lock_guard<std::mutex> lock(senders_mutex_);
+        const auto it = sends_of_.find(declarer);
+        if (it == sends_of_.end()) return;
+        for (const std::uint64_t handle : it->second) {
+            if (--senders_left_[handle] == 0) to_close.push_back(handle);
+        }
+        sends_of_.erase(it);
+    }
+    for (const std::uint64_t handle : to_close) {
+        if (PortChannel* ch = channel(handle)) ch->close();
+    }
 }
 
 PortLatest* PortHub::latest(dstd::StringView name) {

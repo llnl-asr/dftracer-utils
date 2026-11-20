@@ -2,11 +2,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -33,20 +35,20 @@ dstd::String error_of(Fn&& fn) {
     return dstd::String(result.error().message());
 }
 
-bool mentions(const dstd::String& text, const dstd::String& part) {
+bool mentions(dstd::StringView text, dstd::StringView part) {
     return text.find(part) != dstd::String::npos;
 }
 
 // nginx-style JSON logs over small gzip members: `upstream` is constant for
 // runs of 300 records, so chunks hold disjoint upstreams.
-dstd::String write_nginx(const dstd::String& dir, int records) {
+dstd::String write_nginx(dstd::CStringView dir, int records) {
     dstd::String out;
     for (int i = 0; i < records; ++i)
         dstd::fmt_append<
             "{\"remote_addr\":\"10.0.0.{}\",\"status\":{},\"request_time\":{}."
             "25,\"upstream\":\"u{}\",\"path\":\"/p{}\"}\n">(
             out, i % 7, (i % 11 == 0 ? 404 : 200), i % 13, i / 300, i % 5);
-    const auto plain = dir + "/access.ndjson";
+    const auto plain = dstd::String(dir) + "/access.ndjson";
     {
         dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
@@ -58,7 +60,7 @@ dstd::String write_nginx(const dstd::String& dir, int records) {
 }
 
 std::size_t count_rows(dstd::StringView trace, dstd::StringView index_dir,
-                       const dstd::String& query, bool skip_pruning) {
+                       dstd::StringView query, bool skip_pruning) {
     auto run = [&]() -> coro::CoroTask<std::size_t> {
         trace::reader::TraceReader reader(
             {.file_path = dstd::String(trace),
@@ -305,7 +307,7 @@ TEST_SUITE("SchemaRegistry") {
     }
 
     TEST_CASE("malformed specs name the source and the key") {
-        auto reject = [](const char* text, const char* part) {
+        auto reject = [](dstd::StringView text, dstd::StringView part) {
             const auto what = error_of([&] {
                 return trace::index::register_schema(text, "bad.yaml");
             });
@@ -421,7 +423,7 @@ TEST_SUITE("SchemaRegistry") {
             dftu_utils_test::ok_ref(trace::index::detect_schema(counters)).id ==
             "genesis");
         const dstd::Vector<dstd::StringView> dft = {
-            R"({"id":1,"name":"read","cat":"POSIX","ph":"X","ts":1})"};
+            R"({"id":1,"name":"read","cat":"POSIX","ph":1,"ts":1})"};
         CHECK(dftu_utils_test::ok_ref(trace::index::detect_schema(dft)).id ==
               "dftracer");
         const dstd::Vector<dstd::StringView> other = {
@@ -540,17 +542,35 @@ TEST_SUITE("SchemaRegistry") {
     }
 }
 
+TEST_CASE("an unknown schema id lists the registered ids with commas") {
+    const dstd::String message =
+        error_of([] { return trace::index::get_schema("no_such_schema"); });
+    CHECK(mentions(message,
+                   "unknown record schema no_such_schema (registered: "));
+    CHECK(mentions(message, "generic"));
+    const std::size_t at = message.find("(registered: ");
+    const std::size_t end = message.find(')', at);
+    REQUIRE(at != dstd::String::npos);
+    REQUIRE(end != dstd::String::npos);
+    const dstd::StringView ids =
+        dstd::StringView(message).substr(at + 13, end - at - 13);
+    CHECK(mentions(ids, ", "));
+    CHECK(ids.front() != ',');
+    CHECK(ids.back() != ' ');
+}
+
 TEST_SUITE("SchemaDetection") {
     static dstd::String dft_event(int i) {
         return R"({"id":)" + dstd::to_string(i) +
                R"(,"name":"read","cat":"POSIX","pid":1,"tid":2,"ts":)" +
                dstd::to_string(100 + i) +
-               R"(,"dur":5,"ph":"X","args":{"fhash":"f1","ret":4096}})";
+               R"(,"dur":5,"ph":1,"args":{"fhash":"f1","ret":4096}})";
     }
 
-    static dstd::String hash_line(const char* kind, int i) {
-        return R"({"id":)" + dstd::to_string(i) + R"(,"name":")" + kind +
-               R"(","cat":"dftracer","pid":1,"tid":2,"ph":"M","args":)"
+    static dstd::String hash_line(dstd::StringView kind, int i) {
+        return R"({"id":)" + dstd::to_string(i) + R"(,"name":")" +
+               dstd::String(kind) +
+               R"(","cat":"dftracer","pid":1,"tid":2,"ph":4,"args":)"
                R"({"name":"/p/)" +
                dstd::to_string(i) + R"(","value":"h)" + dstd::to_string(i) +
                "\"}}";
@@ -567,8 +587,8 @@ TEST_SUITE("SchemaDetection") {
 
     // `text` as `name` under a fresh directory, gzip when `gz`.
     static dstd::String write_file(dftu_utils_test::TestEnvironment & env,
-                                   const dstd::String& name,
-                                   const dstd::String& text, bool gz) {
+                                   dstd::StringView name, dstd::StringView text,
+                                   bool gz) {
         dstd::String plain(dstd::StringView(env.dir()));
         plain += "/";
         plain += name;
@@ -581,7 +601,7 @@ TEST_SUITE("SchemaDetection") {
         return out;
     }
 
-    static dstd::String chosen(const dstd::Vector<dstd::String>& lines) {
+    static dstd::String chosen(dstd::Span<const dstd::String> lines) {
         dstd::Vector<dstd::StringView> views(lines.begin(), lines.end());
         return dftu_utils_test::ok_ref(trace::index::detect_schema(views)).id;
     }
@@ -685,7 +705,7 @@ TEST_SUITE("SchemaDetection") {
             "det_tie.yaml"));
         dstd::Vector<dstd::String> tie;
         for (int i = 0; i < 5; ++i)
-            tie.push_back(R"({"ph":"X","name":"n","ts":1,"zz_tie":)" +
+            tie.push_back(R"({"ph":1,"name":"n","ts":1,"zz_tie":)" +
                           dstd::to_string(i) + "}");
         CHECK(chosen(tie) == "det_tie");
 
@@ -806,9 +826,8 @@ TEST_SUITE("SchemaDetection") {
                 .id == "dftracer");
 
         // A first record past the 16 MiB text cap is read whole.
-        dstd::String big =
-            R"({"id":0,"name":"read","cat":"POSIX","pid":1,)"
-            R"("tid":2,"ts":1,"dur":5,"ph":"X","args":{"blob":")";
+        dstd::String big = R"({"id":0,"name":"read","cat":"POSIX","pid":1,)"
+                           R"("tid":2,"ts":1,"dur":5,"ph":1,"args":{"blob":")";
         big.append(17u * 1024 * 1024, 'x');
         big += "\"}}\n" + dft_event(2) + "\n";
         CHECK(

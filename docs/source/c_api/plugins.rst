@@ -152,8 +152,9 @@ and batched stat.
    :project: dftracer-utils
 
 ``dftu.svc.index``: register an index extension. The host hands its builder
-every record line of a file during an index build and asks it, per filter
-leaf, which chunks may hold a match.
+every record line of a file during an index build, or the typed columns of the
+paths it names, and asks it, per filter leaf, which chunks may hold a match. It
+also hashes values and columns with the host's own value hash.
 
 .. doxygenfile:: dftracer/utils/plugins/abi/index.h
    :project: dftracer-utils

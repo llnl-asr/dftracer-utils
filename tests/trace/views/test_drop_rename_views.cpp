@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -26,9 +27,9 @@ namespace {
 
 constexpr int RECORDS = 3000;
 
-dstd::String gzip_of(TestEnvironment& env, const dstd::String& stem,
-                     const dstd::String& body) {
-    const dstd::String plain = env.dir() + "/" + stem + ".ndjson";
+dstd::String gzip_of(TestEnvironment& env, dstd::StringView stem,
+                     dstd::StringView body) {
+    const dstd::String plain = env.dir() + "/" + dstd::String(stem) + ".ndjson";
     {
         dftu_utils_test::FileOut out(plain);
         out << body;
@@ -69,21 +70,20 @@ dstd::String shapes_trace(TestEnvironment& env) {
 dstd::String dft_trace(TestEnvironment& env) {
     dstd::String body;
     for (int i = 0; i < RECORDS; ++i)
-        body +=
-            R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
-            dstd::to_string(1000 + i * 100) + R"(,"dur":)" +
-            dstd::to_string(10 + i) + R"(,"args":{"size":)" +
-            dstd::to_string(i % 13) + R"(,"offset":)" + dstd::to_string(i) +
-            R"(}})" + "\n";
+        body += R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
+                dstd::to_string(1000 + i * 100) + R"(,"dur":)" +
+                dstd::to_string(10 + i) + R"(,"args":{"size":)" +
+                dstd::to_string(i % 13) + R"(,"offset":)" + dstd::to_string(i) +
+                R"(}})" + "\n";
     return gzip_of(env, "dft", body);
 }
 
-View query_indexed(const dstd::String& gz, const dstd::String& schema) {
+View query_indexed(dstd::CStringView gz, dstd::StringView schema) {
     return View::from_file(dstd::String(gz))
         .record_schema(dstd::String(schema));
 }
 
-View full_index(const dstd::String& gz, const dstd::String& schema) {
+View full_index(dstd::CStringView gz, dstd::StringView schema) {
     dftu_utils_test::ok(
         dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                 {dstd::String(dstd::StringView(gz))}))
@@ -96,20 +96,20 @@ View full_index(const dstd::String& gz, const dstd::String& schema) {
 
 // The query's rows, or its error.
 dstd::Result<dataframe::DataFrame> frame_result(const View& v,
-                                                const dstd::String& q) {
+                                                dstd::StringView q) {
     return v.duql(q).collect().get();
 }
 
-dataframe::DataFrame frame(const View& v, const dstd::String& q) {
+dataframe::DataFrame frame(const View& v, dstd::StringView q) {
     return dftu_utils_test::ok(frame_result(v, q));
 }
 
-bool has(const dataframe::DataFrame& f, const dstd::String& n) {
+bool has(const dataframe::DataFrame& f, dstd::StringView n) {
     return std::find(f.names.begin(), f.names.end(), n) != f.names.end();
 }
 
 // Reads the catalog as it is: schema_tree() would build a missing one.
-bool declares(const View& v, const dstd::String& path) {
+bool declares(const View& v, dstd::CStringView path) {
     for (const auto& leaf : dftu_utils_test::ok(
              dftracer::utils::trace::views::detail::catalog_leaves(v)))
         if (dstd::String(leaf.path) == path) return true;
@@ -122,7 +122,7 @@ dstd::Vector<dstd::String> sorted(dstd::Vector<dstd::String> n) {
 }
 
 void same_rows(const dataframe::DataFrame& a, const dataframe::DataFrame& b,
-               const dstd::Vector<dstd::String>& cols) {
+               dstd::Vector<dstd::String> cols) {
     REQUIRE(a.num_rows() == b.num_rows());
     CHECK(sorted_row_keys(a, cols) == sorted_row_keys(b, cols));
 }
@@ -138,7 +138,7 @@ dstd::String join_names(const dataframe::DataFrame& f) {
     return out;
 }
 
-bool has_catalog(const dstd::String& gz) {
+bool has_catalog(dstd::CStringView gz) {
     auto index = dftracer::utils::trace::index::Index::open(
         dftracer::utils::trace::index::normalize_index_root(
             dstd::String(determine_index_path(gz, ""))));
@@ -161,7 +161,7 @@ struct Fresh {
 
 using Gen = dstd::String (*)(TestEnvironment&);
 
-Fresh fresh(Gen gen, const dstd::String& schema) {
+Fresh fresh(Gen gen, dstd::StringView schema) {
     Fresh f;
     f.env = dstd::make_unique<TestEnvironment>(10);
     f.gz = gen(*f.env);
@@ -172,7 +172,7 @@ Fresh fresh(Gen gen, const dstd::String& schema) {
 
 // The query on a fresh catalog-less view equals the full-index result; an
 // error on one must be the same error on the other.
-void same_as_full(Gen gen, const dstd::String& schema, const dstd::String& q) {
+void same_as_full(Gen gen, dstd::StringView schema, dstd::StringView q) {
     TestEnvironment full_env(10);
     const View f = full_index(gen(full_env), schema);
     const Fresh p = fresh(gen, schema);
@@ -273,7 +273,7 @@ TEST_SUITE("DropRenameViews") {
         REQUIRE_FALSE(declares(q, "args.offset"));
         REQUIRE(declares(f, "args.offset"));
 
-        const dstd::String base = "ph == \"X\"";
+        const dstd::String base = "ph == 1";
         const auto renamed = frame(q, base + " | rename off = args.offset");
         const auto renamed_full =
             frame(f, base + " | rename off = args.offset");
@@ -314,7 +314,7 @@ TEST_SUITE("DropRenameViews") {
             "count "
             "> 1 | lookup r on ts | sort ts";
         const dstd::String d =
-            "let r = where ph == \"X\" | select ts, rd = dur; where dur > 20 | "
+            "let r = where ph == 1 | select ts, rd = dur; where dur > 20 | "
             "lookup r on ts | sort ts";
         same_as_full(genesis_trace, "genesis", g);
         same_as_full(dft_trace, "dftracer", d);

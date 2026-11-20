@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cmath>
@@ -29,8 +30,10 @@ using namespace dftracer::utils::dataframe::test_types;
 
 TEST_SUITE("dataframe_types_compute") {
     TEST_CASE("Float16 arithmetic promotes to Float32 and computes exactly") {
-        Series a = make_float16({1.5f, 2.5f, -3.0f});
-        Series b = make_float16({1.0f, 1.0f, 1.0f});
+        Series a =
+            make_float16(dftu_utils_test::span_of<float>({1.5f, 2.5f, -3.0f}));
+        Series b =
+            make_float16(dftu_utils_test::span_of<float>({1.0f, 1.0f, 1.0f}));
         REQUIRE(a.valid());
         REQUIRE(b.valid());
 
@@ -45,14 +48,18 @@ TEST_SUITE("dataframe_types_compute") {
     }
 
     TEST_CASE("Float16 reduction (sum) promotes to Float32 and computes") {
-        Series a = make_float16({1.0f, 2.0f, 3.0f});
+        Series a =
+            make_float16(dftu_utils_test::span_of<float>({1.0f, 2.0f, 3.0f}));
         REQUIRE(a.valid());
         Scalar total = dftu_utils_test::ok(a.sum());
         CHECK(total.f64() == doctest::Approx(6.0));
     }
 
     TEST_CASE("FixedSizeBinary sorts by exact byte order") {
-        Series s = make_fixed_size_binary({"bbbb", "aaaa", "cccc", "aaaa"}, 4);
+        Series s =
+            make_fixed_size_binary(dftu_utils_test::span_of<dstd::String>(
+                                       {"bbbb", "aaaa", "cccc", "aaaa"}),
+                                   4);
         REQUIRE(s.valid());
         Series sorted = s.sort(false);
         REQUIRE(sorted.valid());
@@ -66,8 +73,11 @@ TEST_SUITE("dataframe_types_compute") {
     }
 
     TEST_CASE("FixedSizeBinary is_in matches on exact bytes") {
-        Series s = make_fixed_size_binary({"aaaa", "bbbb", "cccc"}, 4);
-        Series needles = make_fixed_size_binary({"bbbb"}, 4);
+        Series s = make_fixed_size_binary(
+            dftu_utils_test::span_of<dstd::String>({"aaaa", "bbbb", "cccc"}),
+            4);
+        Series needles = make_fixed_size_binary(
+            dftu_utils_test::span_of<dstd::String>({"bbbb"}), 4);
         REQUIRE(s.valid());
         REQUIRE(needles.valid());
         Series mask = s.is_in(needles);
@@ -86,7 +96,9 @@ TEST_SUITE("dataframe_types_compute") {
 
     TEST_CASE("FixedSizeBinary groups by exact byte equality") {
         Series keys = make_fixed_size_binary(
-            {"aaaa", "bbbb", "aaaa", "cccc", "bbbb", "aaaa"}, 4);
+            dftu_utils_test::span_of<dstd::String>(
+                {"aaaa", "bbbb", "aaaa", "cccc", "bbbb", "aaaa"}),
+            4);
         dstd::Vector<std::int64_t> ones = {1, 1, 1, 1, 1, 1};
         Series values = Series::flat_i64(ones.data(), 6);
         REQUIRE(keys.valid());
@@ -114,7 +126,8 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE("Decimal128 sorts by exact numeric order, not byte order") {
         // -1 and 300 both have a nonzero low byte; only a signed 128-bit
         // compare (not memcmp) orders them correctly.
-        Series s = make_decimal128({300, -1, 100});
+        Series s = make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({300, -1, 100}));
         REQUIRE(s.valid());
         Series sorted = s.sort(false);
         REQUIRE(sorted.valid());
@@ -131,7 +144,8 @@ TEST_SUITE("dataframe_types_compute") {
     }
 
     TEST_CASE("Decimal128 groups by exact value") {
-        Series keys = make_decimal128({100, 300, 100});
+        Series keys = make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({100, 300, 100}));
         dstd::Vector<std::int64_t> ones = {1, 1, 1};
         Series values = Series::flat_i64(ones.data(), 3);
         REQUIRE(keys.valid());
@@ -152,8 +166,10 @@ TEST_SUITE("dataframe_types_compute") {
     }
 
     TEST_CASE("Decimal128 + Decimal128 same scale is exact, not Float64") {
-        Series a = make_decimal128({100, 200});  // scale 0
-        Series b = make_decimal128({1, 1});
+        Series a = make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({100, 200}));  // scale 0
+        Series b =
+            make_decimal128(dftu_utils_test::span_of<std::int64_t>({1, 1}));
         REQUIRE(a.valid());
         Series sum = a.add(b);
         REQUIRE(sum.valid());
@@ -171,7 +187,8 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE(
         "Decimal128 arithmetic against a plain scalar still converts "
         "to Float64 (documented precision loss)") {
-        Series a = make_decimal128({100, 200});
+        Series a =
+            make_decimal128(dftu_utils_test::span_of<std::int64_t>({100, 200}));
         dftu_scalar one{};
         one.kind = DFTU_SCALAR_TAG_I64;
         one.value.i = 1;
@@ -188,8 +205,10 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE("Decimal128 add rescales the lower-scale operand exactly") {
         // 1.50 (scale 2) + 1.5 (scale 1) = 3.00 (scale 2): the scale-1
         // operand's 15 must become 150, not just be added as 15.
-        Series a = make_decimal128({150}, 10, 2);
-        Series b = make_decimal128({15}, 10, 1);
+        Series a = make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({150}), 10, 2);
+        Series b = make_decimal128(dftu_utils_test::span_of<std::int64_t>({15}),
+                                   10, 1);
         REQUIRE(a.valid());
         REQUIRE(b.valid());
         Series sum = a.add(b);
@@ -203,8 +222,10 @@ TEST_SUITE("dataframe_types_compute") {
 
     TEST_CASE("Decimal128 subtract rescales and computes exactly") {
         // 5.00 (scale 2) - 1.5 (scale 1) = 3.50 (scale 2).
-        Series a = make_decimal128({500}, 10, 2);
-        Series b = make_decimal128({15}, 10, 1);
+        Series a = make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({500}), 10, 2);
+        Series b = make_decimal128(dftu_utils_test::span_of<std::int64_t>({15}),
+                                   10, 1);
         Series diff = a.sub(b);
         REQUIRE(diff.valid());
         CHECK(diff.data_type().decimal_scale() == 2);
@@ -215,8 +236,10 @@ TEST_SUITE("dataframe_types_compute") {
 
     TEST_CASE("Decimal128 multiply adds the scales exactly") {
         // 1.25 (scale 2) * 2.0 (scale 1) = 2.500 (scale 3).
-        Series a = make_decimal128({125}, 10, 2);
-        Series b = make_decimal128({20}, 10, 1);
+        Series a = make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({125}), 10, 2);
+        Series b = make_decimal128(dftu_utils_test::span_of<std::int64_t>({20}),
+                                   10, 1);
         Series prod = a.mul(b);
         REQUIRE(prod.valid());
         CHECK(prod.type() == TypeId::Decimal128);
@@ -230,8 +253,10 @@ TEST_SUITE("dataframe_types_compute") {
         // 10.00 (scale 2) / 3.0 (scale 1), 4-digit scale increment:
         // result scale = 2 + 4 = 6; 10 / 3 = 3.333333... truncated to
         // 3.333333 -> raw 3333333.
-        Series a = make_decimal128({1000}, 20, 2);
-        Series b = make_decimal128({30}, 20, 1);
+        Series a = make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({1000}), 20, 2);
+        Series b = make_decimal128(dftu_utils_test::span_of<std::int64_t>({30}),
+                                   20, 1);
         Series quot = a.div(b);
         REQUIRE(quot.valid());
         CHECK(quot.data_type().decimal_scale() == 6);
@@ -245,8 +270,10 @@ TEST_SUITE("dataframe_types_compute") {
         "loudly, not a wrapped value") {
         // A raw value already far past what "precision 3" can hold (the
         // engine trusts the caller's declared precision, same as Arrow).
-        Series a = make_decimal128({999999999999LL}, 3, 0);
-        Series b = make_decimal128({999999999999LL}, 3, 0);
+        Series a = make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({999999999999LL}), 3, 0);
+        Series b = make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({999999999999LL}), 3, 0);
         Series sum = a.add(b);
         CHECK_FALSE(sum.valid());
     }
@@ -254,8 +281,10 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE(
         "Decimal128 multiply overflowing its declared precision "
         "refuses loudly") {
-        Series a = make_decimal128({999999999LL}, 4, 0);
-        Series b = make_decimal128({999999999LL}, 4, 0);
+        Series a = make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({999999999LL}), 4, 0);
+        Series b = make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({999999999LL}), 4, 0);
         Series prod = a.mul(b);
         CHECK_FALSE(prod.valid());
     }
@@ -263,15 +292,21 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE(
         "Decimal128 add refuses loudly when the scale mismatch "
         "overflows the 128-bit container itself") {
-        Series a = make_decimal128({999999999999999999LL}, 38, 0);
-        Series b = make_decimal128({999999999999999999LL}, 38, 30);
+        Series a = make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({999999999999999999LL}), 38,
+            0);
+        Series b = make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({999999999999999999LL}), 38,
+            30);
         Series sum = a.add(b);
         CHECK_FALSE(sum.valid());
     }
 
     TEST_CASE("Decimal256 + Decimal256 same scale is exact") {
-        Series a = make_decimal256({100, 200}, 40, 0);
-        Series b = make_decimal256({1, 1}, 40, 0);
+        Series a = make_decimal256(
+            dftu_utils_test::span_of<std::int64_t>({100, 200}), 40, 0);
+        Series b = make_decimal256(
+            dftu_utils_test::span_of<std::int64_t>({1, 1}), 40, 0);
         REQUIRE(a.valid());
         Series sum = a.add(b);
         REQUIRE(sum.valid());
@@ -285,8 +320,10 @@ TEST_SUITE("dataframe_types_compute") {
     }
 
     TEST_CASE("Decimal256 subtract rescales exactly") {
-        Series a = make_decimal256({500}, 40, 2);
-        Series b = make_decimal256({15}, 40, 1);
+        Series a = make_decimal256(
+            dftu_utils_test::span_of<std::int64_t>({500}), 40, 2);
+        Series b = make_decimal256(dftu_utils_test::span_of<std::int64_t>({15}),
+                                   40, 1);
         Series diff = a.sub(b);
         REQUIRE(diff.valid());
         CHECK(diff.data_type().decimal_scale() == 2);
@@ -298,8 +335,10 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE(
         "Decimal256 multiply/divide still fall back to Float64 "
         "(no exact 512-bit path here)") {
-        Series a = make_decimal256({100, 200}, 40, 0);
-        Series b = make_decimal256({2, 2}, 40, 0);
+        Series a = make_decimal256(
+            dftu_utils_test::span_of<std::int64_t>({100, 200}), 40, 0);
+        Series b = make_decimal256(
+            dftu_utils_test::span_of<std::int64_t>({2, 2}), 40, 0);
         Series prod = a.mul(b);
         REQUIRE(prod.valid());
         CHECK(prod.type() == TypeId::Float64);
@@ -317,7 +356,8 @@ TEST_SUITE("dataframe_types_compute") {
     }
 
     TEST_CASE("Timestamp sorts on its exact physical Int64 value") {
-        Series s = make_timestamp({300, -1, 100});
+        Series s = make_timestamp(
+            dftu_utils_test::span_of<std::int64_t>({300, -1, 100}));
         REQUIRE(s.valid());
         Series sorted = s.sort(false);
         REQUIRE(sorted.valid());
@@ -331,7 +371,8 @@ TEST_SUITE("dataframe_types_compute") {
     }
 
     TEST_CASE("Timestamp min/max compute on the exact value") {
-        Series s = make_timestamp({300, -1, 100});
+        Series s = make_timestamp(
+            dftu_utils_test::span_of<std::int64_t>({300, -1, 100}));
         REQUIRE(s.valid());
         Scalar mn = dftu_utils_test::ok(s.min());
         Scalar mx = dftu_utils_test::ok(s.max());
@@ -340,7 +381,8 @@ TEST_SUITE("dataframe_types_compute") {
     }
 
     TEST_CASE("Timestamp comparison works against a scalar threshold") {
-        Series s = make_timestamp({300, -1, 100});
+        Series s = make_timestamp(
+            dftu_utils_test::span_of<std::int64_t>({300, -1, 100}));
         REQUIRE(s.valid());
         dftu_scalar rhs{};
         rhs.kind = DFTU_SCALAR_TAG_I64;
@@ -360,8 +402,10 @@ TEST_SUITE("dataframe_types_compute") {
     }
 
     TEST_CASE("Timestamp is_in matches on the exact value") {
-        Series s = make_timestamp({300, -1, 100});
-        Series needles = make_timestamp({100});
+        Series s = make_timestamp(
+            dftu_utils_test::span_of<std::int64_t>({300, -1, 100}));
+        Series needles =
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({100}));
         REQUIRE(s.valid());
         Series mask = s.is_in(needles);
         REQUIRE(mask.valid());
@@ -377,7 +421,8 @@ TEST_SUITE("dataframe_types_compute") {
     }
 
     TEST_CASE("Timestamp groups on the exact value, via both group_by paths") {
-        Series keys = make_timestamp({100, 300, 100});
+        Series keys = make_timestamp(
+            dftu_utils_test::span_of<std::int64_t>({100, 300, 100}));
         dstd::Vector<std::int64_t> ones = {1, 1, 1};
         Series values = Series::flat_i64(ones.data(), 3);
         REQUIRE(keys.valid());
@@ -401,8 +446,10 @@ TEST_SUITE("dataframe_types_compute") {
         df.names = dstd::make_shared_strings({"ts", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = dftu_utils_test::ok(
-            df.group_by("ts", {GroupAgg{Agg::Count, "v", "n"}}));
+        DataFrame grouped = dftu_utils_test::ok(df.group_by(
+            "ts",
+            dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                {GroupAgg{Agg::Count, "v", "n"}})));
         REQUIRE(grouped.num_rows() == 2);
         Series gkeys = grouped.column("ts");
         Series gn = grouped.column("n");
@@ -422,17 +469,23 @@ TEST_SUITE("dataframe_types_compute") {
     }
 
     TEST_CASE("Timestamp + Timestamp is refused, not silently an integer") {
-        Series a = make_timestamp({100, 200});
-        Series b = make_timestamp({1, 1});
+        Series a =
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({100, 200}));
+        Series b =
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 1}));
         REQUIRE(a.valid());
         Series sum = a.add(b);
         CHECK_FALSE(sum.valid());
     }
 
     TEST_CASE("Timestamp - Timestamp is an exact Duration at the finer unit") {
-        Series a = make_timestamp({5000, 9000}, TimeUnit::Milli, "UTC");
-        Series b = make_timestamp({1000000, 2000000}, TimeUnit::Micro,
-                                  "UTC");  // 1s, 2s in micros
+        Series a =
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({5000, 9000}),
+                           TimeUnit::Milli, "UTC");
+        Series b = make_timestamp(
+            dftu_utils_test::span_of<std::int64_t>({1000000, 2000000}),
+            TimeUnit::Micro,
+            "UTC");  // 1s, 2s in micros
         REQUIRE(a.valid());
         REQUIRE(b.valid());
         Series diff = a.sub(b);
@@ -451,12 +504,15 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE(
         "Timestamp - Timestamp with mismatched timezones is refused, "
         "not silently naive-vs-aware") {
-        Series a = make_timestamp({100}, TimeUnit::Micro, "UTC");
-        Series b = make_timestamp({50}, TimeUnit::Micro, "America/Denver");
+        Series a = make_timestamp(dftu_utils_test::span_of<std::int64_t>({100}),
+                                  TimeUnit::Micro, "UTC");
+        Series b = make_timestamp(dftu_utils_test::span_of<std::int64_t>({50}),
+                                  TimeUnit::Micro, "America/Denver");
         Series diff = a.sub(b);
         CHECK_FALSE(diff.valid());
 
-        Series naive = make_timestamp({50}, TimeUnit::Micro, nullptr);
+        Series naive = make_timestamp(
+            dftu_utils_test::span_of<std::int64_t>({50}), TimeUnit::Micro, "");
         Series diff2 = a.sub(naive);
         CHECK_FALSE(diff2.valid());
     }
@@ -464,8 +520,12 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE(
         "Timestamp + Duration is an exact Timestamp keeping the "
         "timezone, at the finer unit") {
-        Series ts = make_timestamp({10, 20}, TimeUnit::Second, "UTC");
-        Series dur = make_duration({500, 1500}, TimeUnit::Milli);
+        Series ts =
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({10, 20}),
+                           TimeUnit::Second, "UTC");
+        Series dur =
+            make_duration(dftu_utils_test::span_of<std::int64_t>({500, 1500}),
+                          TimeUnit::Milli);
         Series sum = ts.add(dur);
         REQUIRE(sum.valid());
         CHECK(sum.type() == TypeId::Timestamp);
@@ -485,8 +545,10 @@ TEST_SUITE("dataframe_types_compute") {
     }
 
     TEST_CASE("Timestamp - Duration is an exact Timestamp") {
-        Series ts = make_timestamp({10}, TimeUnit::Second, "UTC");
-        Series dur = make_duration({3}, TimeUnit::Second);
+        Series ts = make_timestamp(dftu_utils_test::span_of<std::int64_t>({10}),
+                                   TimeUnit::Second, "UTC");
+        Series dur = make_duration(dftu_utils_test::span_of<std::int64_t>({3}),
+                                   TimeUnit::Second);
         Series diff = ts.sub(dur);
         REQUIRE(diff.valid());
         CHECK(diff.type() == TypeId::Timestamp);
@@ -494,15 +556,19 @@ TEST_SUITE("dataframe_types_compute") {
     }
 
     TEST_CASE("Duration - Timestamp is refused (wrong order)") {
-        Series ts = make_timestamp({10});
-        Series dur = make_duration({3}, TimeUnit::Micro);
+        Series ts =
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({10}));
+        Series dur = make_duration(dftu_utils_test::span_of<std::int64_t>({3}),
+                                   TimeUnit::Micro);
         Series diff = dur.sub(ts);
         CHECK_FALSE(diff.valid());
     }
 
     TEST_CASE("Duration +/- Duration is exact at the finer unit") {
-        Series a = make_duration({2}, TimeUnit::Second);
-        Series b = make_duration({500}, TimeUnit::Milli);
+        Series a = make_duration(dftu_utils_test::span_of<std::int64_t>({2}),
+                                 TimeUnit::Second);
+        Series b = make_duration(dftu_utils_test::span_of<std::int64_t>({500}),
+                                 TimeUnit::Milli);
         Series sum = a.add(b);
         REQUIRE(sum.valid());
         CHECK(sum.type() == TypeId::Duration);
@@ -518,7 +584,9 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE(
         "Duration * scalar and Duration / scalar stay Duration, "
         "unit unchanged") {
-        Series d = make_duration({100, 200}, TimeUnit::Milli);
+        Series d =
+            make_duration(dftu_utils_test::span_of<std::int64_t>({100, 200}),
+                          TimeUnit::Milli);
         dftu_scalar three{};
         three.kind = DFTU_SCALAR_TAG_I64;
         three.value.i = 3;
@@ -541,7 +609,8 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE(
         "Timestamp +/- a plain scalar is refused: a scalar has no "
         "unit") {
-        Series ts = make_timestamp({100});
+        Series ts =
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({100}));
         dftu_scalar one{};
         one.kind = DFTU_SCALAR_TAG_I64;
         one.value.i = 1;
@@ -552,7 +621,9 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE(
         "Duration SUM reduces to a Duration total; PRODUCT stays "
         "refused") {
-        Series d = make_duration({10, 20, 30}, TimeUnit::Micro);
+        Series d =
+            make_duration(dftu_utils_test::span_of<std::int64_t>({10, 20, 30}),
+                          TimeUnit::Micro);
         REQUIRE(d.valid());
         Scalar total = dftu_utils_test::ok(d.sum());
         CHECK(total.i64() == 60);
@@ -567,8 +638,12 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE(
         "Time64 - Time64 is an exact Duration; Time64 + Time64 is "
         "refused") {
-        Series a = make_time64({5000, 9000}, TimeUnit::Micro);
-        Series b = make_time64({1000, 2000}, TimeUnit::Micro);
+        Series a =
+            make_time64(dftu_utils_test::span_of<std::int64_t>({5000, 9000}),
+                        TimeUnit::Micro);
+        Series b =
+            make_time64(dftu_utils_test::span_of<std::int64_t>({1000, 2000}),
+                        TimeUnit::Micro);
         Series diff = a.sub(b);
         REQUIRE(diff.valid());
         CHECK(diff.type() == TypeId::Duration);
@@ -580,8 +655,10 @@ TEST_SUITE("dataframe_types_compute") {
     }
 
     TEST_CASE("Time64 +/- Duration is an exact Time64 at the finer unit") {
-        Series t = make_time64({5000}, TimeUnit::Micro);
-        Series dur = make_duration({2000}, TimeUnit::Nano);
+        Series t = make_time64(dftu_utils_test::span_of<std::int64_t>({5000}),
+                               TimeUnit::Micro);
+        Series dur = make_duration(
+            dftu_utils_test::span_of<std::int64_t>({2000}), TimeUnit::Nano);
         Series sum = t.add(dur);
         REQUIRE(sum.valid());
         CHECK(sum.type() == TypeId::Time64);
@@ -593,8 +670,10 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE(
         "Time64 + a coarser (Second) Duration still resolves to "
         "Time64's own finer unit") {
-        Series t = make_time64({5000}, TimeUnit::Micro);
-        Series dur = make_duration({1}, TimeUnit::Second);
+        Series t = make_time64(dftu_utils_test::span_of<std::int64_t>({5000}),
+                               TimeUnit::Micro);
+        Series dur = make_duration(dftu_utils_test::span_of<std::int64_t>({1}),
+                                   TimeUnit::Second);
         Series sum = t.add(dur);
         REQUIRE(sum.valid());
         CHECK(sum.type() == TypeId::Time64);
@@ -620,15 +699,18 @@ TEST_SUITE("dataframe_types_compute") {
         "DataFrame::group_by groups a FixedSizeBinary key by exact byte "
         "equality, keeping the width") {
         Series keys = make_fixed_size_binary(
-            {"aaaa", "bbbb", "aaaa", "cccc", "bbbb", "aaaa"}, 4);
+            dftu_utils_test::span_of<dstd::String>(
+                {"aaaa", "bbbb", "aaaa", "cccc", "bbbb", "aaaa"}),
+            4);
         dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
         df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = dftu_utils_test::ok(
-            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
+        DataFrame grouped = dftu_utils_test::ok(df.group_by(
+            "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                     {GroupAgg{Agg::Count, "v", "n"}})));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::FixedSizeBinary);
@@ -653,8 +735,12 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE(
         "FixedSizeBinary group keys merge correctly across two partial "
         "AggStates") {
-        Series k1 = make_fixed_size_binary({"aaaa", "bbbb", "aaaa"}, 4);
-        Series k2 = make_fixed_size_binary({"cccc", "bbbb", "aaaa"}, 4);
+        Series k1 = make_fixed_size_binary(
+            dftu_utils_test::span_of<dstd::String>({"aaaa", "bbbb", "aaaa"}),
+            4);
+        Series k2 = make_fixed_size_binary(
+            dftu_utils_test::span_of<dstd::String>({"cccc", "bbbb", "aaaa"}),
+            4);
         dstd::Vector<std::int64_t> ones3(3, 1);
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
@@ -694,7 +780,9 @@ TEST_SUITE("dataframe_types_compute") {
         "FixedSizeBinary group state survives a serialize/deserialize "
         "(spill) round trip") {
         Series keys = make_fixed_size_binary(
-            {"aaaa", "bbbb", "aaaa", "cccc", "bbbb", "aaaa"}, 4);
+            dftu_utils_test::span_of<dstd::String>(
+                {"aaaa", "bbbb", "aaaa", "cccc", "bbbb", "aaaa"}),
+            4);
         dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
 
@@ -729,15 +817,18 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE(
         "DataFrame::group_by groups a Decimal128(38, 9) key by exact "
         "value, keeping precision and scale") {
-        Series keys = make_decimal128({100, 300, 100, 500, 300, 100}, 38, 9);
+        Series keys = make_decimal128(dftu_utils_test::span_of<std::int64_t>(
+                                          {100, 300, 100, 500, 300, 100}),
+                                      38, 9);
         dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
         df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = dftu_utils_test::ok(
-            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
+        DataFrame grouped = dftu_utils_test::ok(df.group_by(
+            "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                     {GroupAgg{Agg::Count, "v", "n"}})));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Decimal128);
@@ -765,8 +856,10 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE(
         "Decimal128 group keys merge correctly across two partial "
         "AggStates and survive a spill round trip") {
-        Series k1 = make_decimal128({100, 300, 100}, 38, 9);
-        Series k2 = make_decimal128({500, 300, 100}, 38, 9);
+        Series k1 = make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({100, 300, 100}), 38, 9);
+        Series k2 = make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({500, 300, 100}), 38, 9);
         dstd::Vector<std::int64_t> ones3(3, 1);
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
@@ -814,15 +907,18 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE(
         "DataFrame::group_by groups a Decimal256 key by exact value, "
         "keeping precision and scale") {
-        Series keys = make_decimal256({100, 300, 100, 500, 300, 100}, 50, 20);
+        Series keys = make_decimal256(dftu_utils_test::span_of<std::int64_t>(
+                                          {100, 300, 100, 500, 300, 100}),
+                                      50, 20);
         dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
         df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = dftu_utils_test::ok(
-            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
+        DataFrame grouped = dftu_utils_test::ok(df.group_by(
+            "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                     {GroupAgg{Agg::Count, "v", "n"}})));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Decimal256);
@@ -850,8 +946,10 @@ TEST_SUITE("dataframe_types_compute") {
     TEST_CASE(
         "Decimal256 group keys merge correctly across two partial "
         "AggStates and survive a spill round trip") {
-        Series k1 = make_decimal256({100, 300, 100}, 50, 20);
-        Series k2 = make_decimal256({500, 300, 100}, 50, 20);
+        Series k1 = make_decimal256(
+            dftu_utils_test::span_of<std::int64_t>({100, 300, 100}), 50, 20);
+        Series k2 = make_decimal256(
+            dftu_utils_test::span_of<std::int64_t>({500, 300, 100}), 50, 20);
         dstd::Vector<std::int64_t> ones3(3, 1);
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
@@ -904,8 +1002,9 @@ TEST_SUITE("dataframe_types_compute") {
         df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = dftu_utils_test::ok(
-            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
+        DataFrame grouped = dftu_utils_test::ok(df.group_by(
+            "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                     {GroupAgg{Agg::Count, "v", "n"}})));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Binary);
@@ -978,8 +1077,9 @@ TEST_SUITE("dataframe_types_compute") {
         df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = dftu_utils_test::ok(
-            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
+        DataFrame grouped = dftu_utils_test::ok(df.group_by(
+            "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                     {GroupAgg{Agg::Count, "v", "n"}})));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::LargeBinary);
@@ -1042,43 +1142,37 @@ TEST_SUITE("dataframe_types_compute") {
     }
 
     TEST_CASE(
-        "DataFrame::group_by groups a Float16 key by exact bit pattern, "
-        "keeping +-0.0 and NaN distinct") {
-        // rows: 1.0, -0.0, 1.0, +0.0, NaN, -0.0 -> four groups: {1.0}x2,
-        // {-0.0}x2, {+0.0}x1, {NaN}x1. -0.0/+0.0 must stay separate groups
-        // (their half bit patterns differ) and NaN must group with itself
-        // (bit-pattern equality, not IEEE float equality where NaN != NaN).
-        Series keys =
-            make_float16({1.0f, -0.0f, 1.0f, 0.0f, std::nanf(""), -0.0f});
+        "DataFrame::group_by groups a Float16 key with -0.0 equal to +0.0 "
+        "and NaN equal to itself") {
+        // rows: 1.0, -0.0, 1.0, +0.0, NaN, -0.0 -> three groups: {1.0}x2,
+        // {0.0}x3, {NaN}x1, as pandas and Polars key a float.
+        Series keys = make_float16(dftu_utils_test::span_of<float>(
+            {1.0f, -0.0f, 1.0f, 0.0f, std::nanf(""), -0.0f}));
         dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
         df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = dftu_utils_test::ok(
-            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
-        REQUIRE(grouped.num_rows() == 4);
+        DataFrame grouped = dftu_utils_test::ok(df.group_by(
+            "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                     {GroupAgg{Agg::Count, "v", "n"}})));
+        REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Float16);
         const std::uint16_t* bits = gk.data<std::uint16_t>();
         REQUIRE(bits != nullptr);
         const std::int64_t* n = grouped.column("n").data<std::int64_t>();
         REQUIRE(n != nullptr);
-        int seen_one = 0, seen_neg_zero = 0, seen_pos_zero = 0, seen_nan = 0;
-        for (std::int64_t r = 0; r < 4; ++r) {
+        int seen_one = 0, seen_zero = 0, seen_nan = 0;
+        for (std::int64_t r = 0; r < 3; ++r) {
             const float f = dataframe::half_to_float(bits[r]);
             if (std::isnan(f)) {
                 ++seen_nan;
                 CHECK(n[r] == 1);
             } else if (f == 0.0f) {
-                if (std::signbit(f)) {
-                    ++seen_neg_zero;
-                    CHECK(n[r] == 2);
-                } else {
-                    ++seen_pos_zero;
-                    CHECK(n[r] == 1);
-                }
+                ++seen_zero;
+                CHECK(n[r] == 3);
             } else if (f == 1.0f) {
                 ++seen_one;
                 CHECK(n[r] == 2);
@@ -1087,16 +1181,17 @@ TEST_SUITE("dataframe_types_compute") {
             }
         }
         CHECK(seen_one == 1);
-        CHECK(seen_neg_zero == 1);
-        CHECK(seen_pos_zero == 1);
+        CHECK(seen_zero == 1);
         CHECK(seen_nan == 1);
     }
 
     TEST_CASE(
         "Float16 group keys merge correctly across two partial AggStates "
         "and survive a spill round trip") {
-        Series k1 = make_float16({1.0f, -0.0f, std::nanf("")});
-        Series k2 = make_float16({0.0f, -0.0f, 1.0f});
+        Series k1 = make_float16(
+            dftu_utils_test::span_of<float>({1.0f, -0.0f, std::nanf("")}));
+        Series k2 =
+            make_float16(dftu_utils_test::span_of<float>({0.0f, -0.0f, 1.0f}));
         dstd::Vector<std::int64_t> ones3(3, 1);
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
@@ -1110,34 +1205,29 @@ TEST_SUITE("dataframe_types_compute") {
             dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
                                       dstd::Vector<const Series*>{&v2}));
         dataframe::agg_merge(*st1, *st2);
-        // {1.0}x2, {-0.0}x2, {+0.0}x1, {NaN}x1
-        REQUIRE(dataframe::agg_group_count(*st1) == 4);
+        // {1.0}x2, {0.0}x3, {NaN}x1
+        REQUIRE(dataframe::agg_group_count(*st1) == 3);
 
         const dstd::String blob = dataframe::agg_serialize(*st1);
         AggStatePtr back =
             dftu_utils_test::ok(dataframe::agg_deserialize(blob));
-        REQUIRE(dataframe::agg_group_count(*back) == 4);
+        REQUIRE(dataframe::agg_group_count(*back) == 3);
 
         DataFrame out = dataframe::agg_finalize(*back, "k");
-        REQUIRE(out.num_rows() == 4);
+        REQUIRE(out.num_rows() == 3);
         CHECK(out.column("k").type() == TypeId::Float16);
         const std::uint16_t* bits = out.column("k").data<std::uint16_t>();
         REQUIRE(bits != nullptr);
         const std::int64_t* n = out.column("n").data<std::int64_t>();
-        int seen_one = 0, seen_neg_zero = 0, seen_pos_zero = 0, seen_nan = 0;
-        for (std::int64_t r = 0; r < 4; ++r) {
+        int seen_one = 0, seen_zero = 0, seen_nan = 0;
+        for (std::int64_t r = 0; r < 3; ++r) {
             const float f = dataframe::half_to_float(bits[r]);
             if (std::isnan(f)) {
                 ++seen_nan;
                 CHECK(n[r] == 1);
             } else if (f == 0.0f) {
-                if (std::signbit(f)) {
-                    ++seen_neg_zero;
-                    CHECK(n[r] == 2);
-                } else {
-                    ++seen_pos_zero;
-                    CHECK(n[r] == 1);
-                }
+                ++seen_zero;
+                CHECK(n[r] == 3);
             } else if (f == 1.0f) {
                 ++seen_one;
                 CHECK(n[r] == 2);
@@ -1146,8 +1236,7 @@ TEST_SUITE("dataframe_types_compute") {
             }
         }
         CHECK(seen_one == 1);
-        CHECK(seen_neg_zero == 1);
-        CHECK(seen_pos_zero == 1);
+        CHECK(seen_zero == 1);
         CHECK(seen_nan == 1);
     }
 }

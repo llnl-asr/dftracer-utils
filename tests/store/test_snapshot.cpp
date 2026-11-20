@@ -76,11 +76,11 @@ constexpr std::size_t HEADER_CRC_AT = 12;
 constexpr std::size_t KEY_COUNT = 1000;
 constexpr int RUNTIME_THREADS = 8;
 
-dstd::ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(dstd::StringView bytes) {
     return {bytes.data(), bytes.size()};
 }
 
-dstd::ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {
+dstd::ByteView view_of(dstd::Span<const std::uint8_t> bytes) {
     return {bytes.data(), bytes.size()};
 }
 
@@ -119,7 +119,7 @@ double read_f64(dstd::ByteView bytes) {
         reinterpret_cast<const std::uint8_t*>(bytes.data()));
 }
 
-NamespaceSpec put_spec(const dstd::String& name, std::uint32_t version = 0) {
+NamespaceSpec put_spec(dstd::StringView name, std::uint32_t version = 0) {
     NamespaceSpec spec;
     spec.name = dstd::String(name);
     spec.format_version = version;
@@ -127,7 +127,7 @@ NamespaceSpec put_spec(const dstd::String& name, std::uint32_t version = 0) {
     return spec;
 }
 
-NamespaceSpec fold_spec(const dstd::String& name, FoldKind kind) {
+NamespaceSpec fold_spec(dstd::StringView name, FoldKind kind) {
     NamespaceSpec spec;
     spec.name = dstd::String(name);
     spec.format_version = 0;
@@ -135,7 +135,7 @@ NamespaceSpec fold_spec(const dstd::String& name, FoldKind kind) {
     return spec;
 }
 
-ScopeKey file_scope(const dstd::String& path) {
+ScopeKey file_scope(dstd::StringView path) {
     return ScopeKey::file(dstd::String(path));
 }
 
@@ -206,7 +206,7 @@ dstd::Vector<std::uint8_t> read_file(dstd::PathView path) {
     return dstd::Vector<std::uint8_t>(text.begin(), text.end());
 }
 
-void write_file(dstd::PathView path, const dstd::Vector<std::uint8_t>& bytes) {
+void write_file(dstd::PathView path, dstd::Span<const std::uint8_t> bytes) {
     const dstd::Path owned(path.str());
     dftu_utils_test::FileOut output(owned);
     output.write(reinterpret_cast<const char*>(bytes.data()),
@@ -238,7 +238,7 @@ bool is_data_file(const dstd::Path& path) {
     return path.view().extension() == ".dfs";
 }
 
-dstd::String only_data_file(const dstd::String& dir) {
+dstd::String only_data_file(dstd::StringView dir) {
     dstd::Vector<dstd::String> found;
     for (const auto& entry : dftu_utils_test::list_dir(dir)) {
         if (is_data_file(entry.path))
@@ -248,7 +248,7 @@ dstd::String only_data_file(const dstd::String& dir) {
     return found.front();
 }
 
-void drop_summary(const dstd::String& dir) {
+void drop_summary(dstd::StringView dir) {
     dstd::fs::remove(dstd::Path(dir) /
                      dstd::String(store::engine::SUMMARY_FILE_NAME))
         .discard();
@@ -294,9 +294,9 @@ void rewrite_header_crc(dstd::Vector<std::uint8_t>& bytes) {
 /// Copies `source` into `target` under `name`, with the header writer id and
 /// the header crc rewritten so the copy verifies, and without its footer, so
 /// the reader takes the writer id from the header.
-dstd::String forge_copy(const dstd::String& source,
+dstd::String forge_copy(dstd::StringView source,
                         const dftu_utils_test::ScopedTestDir& target,
-                        const dstd::String& name, std::uint64_t writer_random) {
+                        dstd::StringView name, std::uint64_t writer_random) {
     dstd::Vector<std::uint8_t> bytes = read_file(source);
     REQUIRE(bytes.size() > store::engine::FILE_HEADER_BYTES);
     dstd::write_u64_le(bytes.data() + HEADER_WRITER_RANDOM_AT, writer_random);
@@ -306,13 +306,13 @@ dstd::String forge_copy(const dstd::String& source,
     return path;
 }
 
-std::uint64_t header_writer_random(const dstd::String& path) {
+std::uint64_t header_writer_random(dstd::StringView path) {
     auto reader = engine::DataFileReader::open(path);
     REQUIRE(reader.has_value());
     return reader->index().writer_random;
 }
 
-dstd::Vector<std::uint64_t> copy_generations(const dstd::String& path) {
+dstd::Vector<std::uint64_t> copy_generations(dstd::StringView path) {
     auto reader = engine::DataFileReader::open(path);
     REQUIRE(reader.has_value());
     dstd::Vector<std::uint64_t> out;
@@ -323,7 +323,7 @@ dstd::Vector<std::uint64_t> copy_generations(const dstd::String& path) {
     return out;
 }
 
-dstd::Vector<std::uint64_t> drop_generations(const dstd::String& path) {
+dstd::Vector<std::uint64_t> drop_generations(dstd::StringView path) {
     auto reader = engine::DataFileReader::open(path);
     REQUIRE(reader.has_value());
     dstd::Vector<std::uint64_t> out;
@@ -334,7 +334,7 @@ dstd::Vector<std::uint64_t> drop_generations(const dstd::String& path) {
     return out;
 }
 
-std::uint64_t only_copy_generation(const dstd::String& path) {
+std::uint64_t only_copy_generation(dstd::StringView path) {
     auto reader = engine::DataFileReader::open(path);
     REQUIRE(reader.has_value());
     REQUIRE(reader->index().copies.size() == 1);
@@ -342,7 +342,7 @@ std::uint64_t only_copy_generation(const dstd::String& path) {
 }
 
 void check_generation(const engine::Snapshot& snapshot,
-                      const dstd::String& namespace_name, const ScopeKey& scope,
+                      dstd::StringView namespace_name, const ScopeKey& scope,
                       std::uint64_t expected) {
     auto listed = snapshot.generations();
     REQUIRE(listed.has_value());
@@ -356,7 +356,7 @@ void check_generation(const engine::Snapshot& snapshot,
     CHECK(all[0].generation == expected);
 }
 
-dstd::Vector<std::uint8_t> bytes_vector(const dstd::String& bytes) {
+dstd::Vector<std::uint8_t> bytes_vector(dstd::StringView bytes) {
     return dstd::Vector<std::uint8_t>(bytes.begin(), bytes.end());
 }
 
@@ -402,7 +402,7 @@ struct OpenDump {
 
 OpenDump dump_open(const dftu_utils_test::ScopedTestDir& root,
                    const NamespaceSpec& spec,
-                   const dstd::Vector<ScopeKey>& scopes) {
+                   dstd::Span<const ScopeKey> scopes) {
     auto snapshot = engine::Snapshot::open(root.str());
     REQUIRE(snapshot.has_value());
     CHECK(snapshot->skipped().empty());
@@ -431,7 +431,7 @@ OpenDump dump_open(const dftu_utils_test::ScopedTestDir& root,
     return dump;
 }
 
-int descriptor_of(const dstd::String& path) {
+int descriptor_of(dstd::CStringView path) {
     struct stat file_stat{};
     if (::stat(path.c_str(), &file_stat) != 0) return -1;
     for (int fd = 0; fd < 4096; ++fd) {
@@ -446,7 +446,7 @@ int descriptor_of(const dstd::String& path) {
 
 void write_scopes_file(const dftu_utils_test::ScopedTestDir& dir,
                        const NamespaceSpec& spec,
-                       const dstd::Vector<ScopeKey>& scopes, int keys,
+                       dstd::Span<const ScopeKey> scopes, int keys,
                        bool flushed) {
     auto writer = make_writer(dir);
     auto id = writer->add_namespace(spec);
@@ -486,7 +486,7 @@ void write_scoped_file(const dftu_utils_test::ScopedTestDir& dir,
 
 dstd::Vector<dstd::Map<dstd::String, dstd::String>> write_many_commits(
     const dftu_utils_test::ScopedTestDir& dir, const NamespaceSpec& spec,
-    const dstd::Vector<ScopeKey>& scopes, int commits) {
+    dstd::Span<const ScopeKey> scopes, int commits) {
     constexpr int PER_COMMIT = 8;
     constexpr int KEY_SPAN = 32;
     dstd::Vector<dstd::Map<dstd::String, dstd::String>> model(scopes.size());
@@ -799,7 +799,7 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.building");
         const auto get =
             [&](const engine::Snapshot& snapshot,
-                const dstd::String& key) -> dstd::Optional<dstd::String> {
+                dstd::StringView key) -> dstd::Optional<dstd::String> {
             auto found = snapshot.get(spec, scope, view_of(key));
             REQUIRE(found.has_value());
             if (!found->has_value()) return dstd::nullopt;
@@ -958,12 +958,12 @@ TEST_SUITE("index store snapshot") {
         auto concat_id = writer->add_namespace(concat);
         REQUIRE(concat_id.has_value());
 
-        const auto put_value = [&](const dstd::String& value) {
+        const auto put_value = [&](dstd::StringView value) {
             Batch batch = writer->batch(*put_id, scope, 0);
             batch.put(view_of(key), view_of(value));
             REQUIRE(writer->commit(std::move(batch)).has_value());
         };
-        const auto fold_value = [&](const dstd::String& value) {
+        const auto fold_value = [&](dstd::StringView value) {
             Batch batch = writer->batch(*concat_id, scope, 0);
             batch.fold(view_of(key), view_of(value));
             REQUIRE(writer->commit(std::move(batch)).has_value());
@@ -1701,8 +1701,7 @@ TEST_SUITE("index store snapshot") {
         auto writer = make_writer(dir);
         auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
-        const auto fold = [&](const dstd::String& key,
-                              const dstd::String& value) {
+        const auto fold = [&](dstd::StringView key, dstd::StringView value) {
             Batch batch = writer->batch(*id, scope, 0);
             batch.fold(view_of(key), view_of(value));
             REQUIRE(writer->commit(std::move(batch)).has_value());
@@ -1941,7 +1940,7 @@ TEST_SUITE("index store snapshot") {
         dstd::Vector<SourceStat> new_sources;
         new_sources.push_back(SourceStat{7, 8, 9});
 
-        const auto write = [&](const dstd::Vector<SourceStat>& sources) {
+        const auto write = [&](dstd::Vector<SourceStat> sources) {
             auto writer = make_writer(dir);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
@@ -1951,8 +1950,8 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(writer->commit(std::move(batch)).has_value());
             REQUIRE(close_writer(*writer).has_value());
         };
-        write(old_sources);
-        write(new_sources);
+        write(std::move(old_sources));
+        write(std::move(new_sources));
 
         auto snapshot = engine::Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -1983,7 +1982,7 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(other_id.has_value());
             const auto put =
                 [&](store::engine::NamespaceId at, const ScopeKey& scope,
-                    std::uint64_t params_hash, const dstd::String& value) {
+                    std::uint64_t params_hash, dstd::StringView value) {
                     Batch batch = writer->batch(at, scope, params_hash);
                     batch.put(view_of(dstd::String("key")), view_of(value));
                     REQUIRE(writer->commit(std::move(batch)).has_value());
@@ -2570,13 +2569,13 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(concat_id.has_value());
 
         const auto fold_last = [&](const ScopeKey& scope,
-                                   const dstd::String& value) {
+                                   dstd::StringView value) {
             Batch batch = writer->batch(*last_id, scope, 0);
             batch.fold(view_of(key), view_of(value));
             REQUIRE(writer->commit(std::move(batch)).has_value());
         };
         const auto fold_concat = [&](const ScopeKey& scope,
-                                     const dstd::String& value) {
+                                     dstd::StringView value) {
             Batch batch = writer->batch(*concat_id, scope, 0);
             batch.fold(view_of(key), view_of(value));
             REQUIRE(writer->commit(std::move(batch)).has_value());
@@ -2594,7 +2593,7 @@ TEST_SUITE("index store snapshot") {
         auto snapshot = engine::Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
         const auto expect_one = [&key](store::engine::ScanCursor& cursor,
-                                       const dstd::String& expected) {
+                                       dstd::StringView expected) {
             const auto rows = collect(cursor);
             REQUIRE(rows.size() == 1);
             CHECK(rows[0].first == key);
@@ -2729,8 +2728,7 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey third = file_scope("/traces/c.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
-        const auto seal = [](const dstd::String& key,
-                             const dstd::String& value) {
+        const auto seal = [](dstd::StringView key, dstd::StringView value) {
             store::engine::SegmentBuilder builder;
             builder.add(view_of(key), view_of(value));
             auto sealed = builder.seal(nullptr, nullptr, nullptr);
@@ -2738,7 +2736,7 @@ TEST_SUITE("index store snapshot") {
             return std::move(*sealed);
         };
         const auto add_scope = [](store::engine::DataFileWriter& file,
-                                  std::uint32_t id, const dstd::String& path) {
+                                  std::uint32_t id, dstd::StringView path) {
             store::engine::ScopeItem item;
             item.local_id = id;
             item.kind = store::ScopeKind::File;
@@ -2757,8 +2755,7 @@ TEST_SUITE("index store snapshot") {
         };
         const auto extent_segment =
             [](std::uint32_t copy_id, std::uint32_t offset,
-               const dstd::String& key,
-               const dstd::Vector<std::uint8_t>& bytes) {
+               dstd::StringView key, dstd::Span<const std::uint8_t> bytes) {
                 store::engine::ExtentSegment segment;
                 segment.copy_id = copy_id;
                 segment.offset_in_extent = offset;
@@ -2770,7 +2767,7 @@ TEST_SUITE("index store snapshot") {
             };
         const auto append_extent =
             [](store::engine::DataFileWriter& file, std::uint64_t sequence,
-               const dstd::Vector<std::uint8_t>& extent,
+               dstd::Span<const std::uint8_t> extent,
                dstd::Vector<store::engine::ExtentSegment> segments) {
                 auto reference = file.append_extent(view_of(extent));
                 REQUIRE(reference.has_value());
@@ -3232,8 +3229,7 @@ TEST_SUITE("index store snapshot") {
             auto writer = make_writer(dir);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            const auto put = [&](const ScopeKey& scope,
-                                 const dstd::String& tag) {
+            const auto put = [&](const ScopeKey& scope, dstd::StringView tag) {
                 Batch entries = writer->batch(*id, scope, 0);
                 for (int k = 0; k < 100; ++k) {
                     const dstd::String key = dstd::fmt<"{}-{}">(tag, key_of(k));
@@ -3421,7 +3417,7 @@ TEST_SUITE("index store snapshot") {
             file_scope("/traces/c.pfw"), file_scope("/traces/d.pfw")};
         const auto put = [&](engine::Writer& writer,
                              store::engine::NamespaceId id,
-                             const ScopeKey& scope, const dstd::String& tag) {
+                             const ScopeKey& scope, dstd::StringView tag) {
             Batch entries = writer.batch(id, scope, 0);
             for (int k = 0; k < 50; ++k) {
                 const dstd::String key = dstd::fmt<"key-{}">(key_of(k));
@@ -3488,7 +3484,7 @@ TEST_SUITE("index store snapshot") {
                        without_footer(read_file(path)));
         }
 
-        const auto dump = [&](const dstd::String& root) {
+        const auto dump = [&](dstd::StringView root) {
             auto snapshot = engine::Snapshot::open(root);
             REQUIRE(snapshot.has_value());
             CHECK(snapshot->skipped().empty());
@@ -3519,7 +3515,7 @@ TEST_SUITE("index store snapshot") {
               dstd::String::npos);
         CHECK(closed.find(dstd::fmt<"/traces/m1.pfw many-big={}">(
                   dstd::String(3 * SMALL_EXTENT, 'b'))) != dstd::String::npos);
-        const auto checked = [](const dstd::String& root) {
+        const auto checked = [](dstd::StringView root) {
             auto snapshot = engine::Snapshot::open(root);
             REQUIRE(snapshot.has_value());
             auto report = snapshot->check();
@@ -3552,8 +3548,7 @@ TEST_SUITE("index store snapshot") {
             auto writer = make_writer(dir);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            const auto put = [&](const ScopeKey& scope,
-                                 const dstd::String& tag) {
+            const auto put = [&](const ScopeKey& scope, dstd::StringView tag) {
                 Batch entries = writer->batch(*id, scope, 0);
                 for (int k = 0; k < 100; ++k) {
                     const dstd::String key = dstd::fmt<"{}-{}">(tag, key_of(k));
@@ -3673,7 +3668,8 @@ TEST_SUITE("index store snapshot") {
             "snapshot_open_cut_records_copy");
         const NamespaceSpec spec = put_spec("dftu.test.put");
         const ScopeKey scope = file_scope("/traces/a.pfw");
-        write_scopes_file(cut_dir, spec, {scope}, 4000, false);
+        const ScopeKey cut_scopes[] = {scope};
+        write_scopes_file(cut_dir, spec, cut_scopes, 4000, false);
         const dstd::String copied = only_data_file(cut_dir.str());
         dstd::Vector<std::uint8_t> bytes = read_file(copied);
         auto copied_reader = engine::DataFileReader::open(copied);
@@ -4204,7 +4200,7 @@ TEST_SUITE("index store snapshot") {
             write_file(cut_dir.file(entry.path.view().filename()),
                        without_footer(read_file(entry.path)));
         }
-        const auto touch_all = [&](const dstd::String& root, bool synced) {
+        const auto touch_all = [&](dstd::StringView root, bool synced) {
             auto opened = engine::Snapshot::open(root);
             REQUIRE(opened.has_value());
             const engine::Snapshot& snapshot = *opened;

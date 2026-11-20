@@ -30,8 +30,8 @@ struct JsonDoc {
     simdjson::dom::element elem;
     bool valid = false;
 
-    explicit JsonDoc(const char* json) {
-        auto result = parser.parse(json, std::strlen(json));
+    explicit JsonDoc(dstd::StringView json) {
+        auto result = parser.parse(json.data(), json.size());
         if (!result.error()) {
             elem = result.value_unsafe();
             valid = true;
@@ -196,7 +196,7 @@ TEST_CASE("C ABI builder in / not_in / match") {
     REQUIRE(in_parsed.h != nullptr);
     CHECK(in.str() == in_parsed.str());
 
-    int64_t pids[] = {1, 2, 3};
+    std::int64_t pids[] = {1, 2, 3};
     AbiDuql nin(dftu_duql_not_in_i64("pid", pids, 3));
     REQUIRE(nin.h != nullptr);
     AbiDuql nin_parsed(dftu_duql_parse("pid not in [1, 2, 3]"));
@@ -252,7 +252,7 @@ TEST_CASE("any() builds the same leaf from C++, the C ABI and the DSL") {
 
 namespace {
 
-void check_same_tree(const Pipe& built, const dstd::String& text) {
+void check_same_tree(const Pipe& built, dstd::StringView text) {
     CAPTURE(text);
     CAPTURE(built.raw());
     auto want = syntax::parse(text);

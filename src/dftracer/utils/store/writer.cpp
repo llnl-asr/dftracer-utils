@@ -36,9 +36,9 @@ using dftracer::utils::dstd::ByteView;
 
 constexpr std::size_t SEGMENT_HEADER_BYTES = 20;
 
-dstd::Unexpected<dstd::Error> invalid_error() {
+dstd::Unexpected<dstd::Error> invalid_error(dstd::StringView message) {
     return dstd::Unexpected<dstd::Error>(
-        dstd::Error(dstd::Condition::InvalidArgument));
+        dstd::Error(dstd::Condition::InvalidArgument, message));
 }
 
 /// The bytes one writer may hold in extents when the caller names no quota: the
@@ -73,7 +73,7 @@ std::size_t encoded_entry_size(std::size_t key_size, std::uint64_t value_size) {
            key_size + static_cast<std::size_t>(stored);
 }
 
-bool same_name(const dstd::String& name, dstd::StringView other) {
+bool same_name(dstd::StringView name, dstd::StringView other) {
     return name.size() == other.size() &&
            (other.empty() ||
             std::memcmp(name.data(), other.data(), other.size()) == 0);
@@ -173,7 +173,7 @@ ScopeItem scope_item(const ScopeKey& key, std::uint32_t id) {
 CopyItem copy_item(std::uint32_t copy_id, std::uint32_t namespace_id,
                    std::uint32_t scope_id, std::uint64_t params_hash,
                    std::uint64_t generation, CopyState state,
-                   const dstd::Vector<SourceStat>& sources) {
+                   dstd::Vector<SourceStat> sources) {
     CopyItem item;
     item.local_id = copy_id;
     item.namespace_id = namespace_id;
@@ -181,12 +181,12 @@ CopyItem copy_item(std::uint32_t copy_id, std::uint32_t namespace_id,
     item.params_hash = params_hash;
     item.generation = generation;
     item.state = state;
-    item.sources = sources;
+    item.sources = std::move(sources);
     return item;
 }
 
-bool same_sources(const dstd::Vector<SourceStat>& a,
-                  const dstd::Vector<SourceStat>& b) {
+bool same_sources(dstd::Span<const SourceStat> a,
+                  dstd::Span<const SourceStat> b) {
     if (a.size() != b.size()) return false;
     for (std::size_t i = 0; i < a.size(); ++i) {
         if (a[i].mtime != b[i].mtime || a[i].size != b[i].size ||
@@ -408,11 +408,13 @@ std::uint64_t Writer::generation_of(const NamespaceSpec& spec,
 
 dstd::Expected<NamespaceId, dstd::Error> Writer::add_namespace(
     const NamespaceSpec& spec) {
-    if (closed_.load(std::memory_order_acquire)) return invalid_error();
+    if (closed_.load(std::memory_order_acquire))
+        return invalid_error("store: the writer is closed");
     if (committer_.failed()) {
         return dstd::Unexpected<dstd::Error>(committer_.error());
     }
-    if (spec.name.empty()) return invalid_error();
+    if (spec.name.empty())
+        return invalid_error("store: a namespace needs a name");
 
     std::lock_guard<std::mutex> lock(mutex_);
     if (latched_error_) return dstd::Unexpected<dstd::Error>(*latched_error_);
@@ -420,7 +422,8 @@ dstd::Expected<NamespaceId, dstd::Error> Writer::add_namespace(
     NamespaceEntry* existing = find_namespace(name);
     if (existing != nullptr) {
         if (existing->spec == spec) return existing->id;
-        return invalid_error();
+        return invalid_error(
+            "store: the namespace is registered again with another spec");
     }
     NamespaceEntry entry;
     entry.id.value = next_namespace_id_++;
@@ -462,7 +465,8 @@ Batch Writer::building_batch(NamespaceId namespace_id, const ScopeKey& scope) {
 
 dstd::Expected<void, dstd::Error> Writer::apply(
     dstd::Span<const CopyChange> changes) {
-    if (closed_.load(std::memory_order_acquire)) return invalid_error();
+    if (closed_.load(std::memory_order_acquire))
+        return invalid_error("store: the writer is closed");
     if (committer_.failed()) {
         return dstd::Unexpected<dstd::Error>(committer_.error());
     }
@@ -470,7 +474,9 @@ dstd::Expected<void, dstd::Error> Writer::apply(
         if (change.scope == nullptr ||
             (change.kind == ChangeKind::Ready && change.sources != nullptr &&
              change.sources->size() != change.scope->paths.size())) {
-            return invalid_error();
+            return invalid_error(
+                "store: a copy change has no scope or its sources do not match "
+                "the scope");
         }
     }
     dstd::Vector<QueuedChange> queued;
@@ -490,7 +496,10 @@ dstd::Expected<void, dstd::Error> Writer::apply(
         for (const CopyChange& change : changes) {
             NamespaceEntry* namespace_entry =
                 find_namespace(change.namespace_id.value);
-            if (namespace_entry == nullptr) return invalid_error();
+            if (namespace_entry == nullptr)
+                return invalid_error(
+                    "store: a copy change names a namespace that is not "
+                    "registered");
             ScopeEntry* scope_entry = find_scope(*change.scope);
             CopyEntry* copy_entry = nullptr;
             if (change.kind == ChangeKind::Ready) {
@@ -499,7 +508,9 @@ dstd::Expected<void, dstd::Error> Writer::apply(
                         find_copy(change.namespace_id.value, scope_entry->id);
                 }
                 if (copy_entry == nullptr || !copy_entry->building) {
-                    return invalid_error();
+                    return invalid_error(
+                        "store: a copy change publishes a copy that is not "
+                        "being built");
                 }
             } else if (scope_entry == nullptr) {
                 scope_entry = add_scope(*change.scope);
@@ -507,7 +518,8 @@ dstd::Expected<void, dstd::Error> Writer::apply(
             if (!seen.insert(
                          copy_key(change.namespace_id.value, scope_entry->id))
                      .second) {
-                return invalid_error();
+                return invalid_error(
+                    "store: two copy changes name the same copy");
             }
             namespaces.push_back(namespace_entry);
             scopes.push_back(scope_entry);
@@ -724,7 +736,7 @@ dstd::Expected<Writer::SegmentBytes, dstd::Error> Writer::build_segment(
     }
     if (sizer.size() >
         static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
-        return invalid_error();
+        return invalid_error("store: a segment is larger than 4 GiB");
     }
 
     // Charged before the seal places big values and before any id is
@@ -766,7 +778,9 @@ dstd::Expected<Writer::SegmentBytes, dstd::Error> Writer::build_segment(
 dstd::Expected<void, dstd::Error> Writer::prepare(const Batch& batch,
                                                   PendingBatch& pending) {
     NamespaceEntry* namespace_entry = find_namespace(batch.namespace_id_);
-    if (namespace_entry == nullptr) return invalid_error();
+    if (namespace_entry == nullptr)
+        return invalid_error(
+            "store: a batch names a namespace that is not registered");
     ScopeEntry* scope_entry = find_scope(batch.scope_);
     if (scope_entry == nullptr) scope_entry = add_scope(batch.scope_);
 
@@ -789,11 +803,14 @@ dstd::Expected<void, dstd::Error> Writer::prepare(const Batch& batch,
             copy_entry->building = true;
         }
     } else if (copy_entry->building) {
-        return invalid_error();
+        return invalid_error(
+            "store: a plain batch was written to a copy that is being built");
     } else if (copy_entry->announced) {
         if (copy_entry->params_hash != batch.params_hash_ ||
             !same_sources(copy_entry->sources, batch.sources_)) {
-            return invalid_error();
+            return invalid_error(
+                "store: a batch has other parameters or sources than the copy "
+                "it joins");
         }
     } else {
         copy_entry->params_hash = batch.params_hash_;
@@ -845,11 +862,13 @@ dstd::Optional<NamespaceSpec> Writer::spec_when_no_copy(
 }
 
 dstd::Expected<void, dstd::Error> Writer::commit(Batch&& batch) {
-    if (closed_.load(std::memory_order_acquire)) return invalid_error();
+    if (closed_.load(std::memory_order_acquire))
+        return invalid_error("store: the writer is closed");
     if (committer_.failed()) {
         return dstd::Unexpected<dstd::Error>(committer_.error());
     }
-    if (batch.writer_serial_ != serial_) return invalid_error();
+    if (batch.writer_serial_ != serial_)
+        return invalid_error("store: the batch was made by another writer");
     if (batch.error_) return dstd::Unexpected<dstd::Error>(*batch.error_);
 
     auto segment = build_segment(batch);
@@ -992,7 +1011,8 @@ dstd::Expected<void, dstd::Error> Writer::drop(NamespaceId namespace_id,
 dstd::Expected<void, dstd::Error> Writer::drop(NamespaceId namespace_id,
                                                const ScopeKey& scope,
                                                ByteView begin, ByteView end) {
-    if (closed_.load(std::memory_order_acquire)) return invalid_error();
+    if (closed_.load(std::memory_order_acquire))
+        return invalid_error("store: the writer is closed");
     if (committer_.failed()) {
         return dstd::Unexpected<dstd::Error>(committer_.error());
     }
@@ -1003,7 +1023,9 @@ dstd::Expected<void, dstd::Error> Writer::drop(NamespaceId namespace_id,
             return dstd::Unexpected<dstd::Error>(*latched_error_);
         }
         NamespaceEntry* namespace_entry = find_namespace(namespace_id.value);
-        if (namespace_entry == nullptr) return invalid_error();
+        if (namespace_entry == nullptr)
+            return invalid_error(
+                "store: a drop names a namespace that is not registered");
         ScopeEntry* scope_entry = find_scope(scope);
         if (scope_entry == nullptr) scope_entry = add_scope(scope);
         pending = drop_locked(*namespace_entry, *scope_entry, scope);
@@ -1015,7 +1037,8 @@ dstd::Expected<void, dstd::Error> Writer::drop(NamespaceId namespace_id,
 dstd::Expected<bool, dstd::Error> Writer::erase(NamespaceId namespace_id,
                                                 const ScopeKey& scope,
                                                 ByteView begin, ByteView end) {
-    if (closed_.load(std::memory_order_acquire)) return invalid_error();
+    if (closed_.load(std::memory_order_acquire))
+        return invalid_error("store: the writer is closed");
     if (committer_.failed()) {
         return dstd::Unexpected<dstd::Error>(committer_.error());
     }
@@ -1030,7 +1053,8 @@ dstd::Expected<bool, dstd::Error> Writer::erase(NamespaceId namespace_id,
         NamespaceEntry* namespace_entry = find_namespace(namespace_id.value);
         if (namespace_entry == nullptr) {
             delete pending;
-            return invalid_error();
+            return invalid_error(
+                "store: an erase names a namespace that is not registered");
         }
         ScopeEntry* scope_entry = find_scope(scope);
         CopyEntry* copy_entry =
@@ -1069,8 +1093,7 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Writer::flush() {
         if (committer_.failed()) {
             co_return dstd::Unexpected<dstd::Error>(committer_.error());
         }
-        co_return dstd::Unexpected<dstd::Error>(
-            dstd::Error(dstd::Condition::InvalidArgument));
+        co_return invalid_error("store: the writer is closed");
     }
     auto sealed = extents_.seal_all();
     if (!sealed) {

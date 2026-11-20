@@ -28,12 +28,12 @@ class Log2Histogram {
     void merge(const Log2Histogram& other);
     double approx_percentile(double p) const;
     dstd::String render_ascii(std::size_t max_width,
-                              const dstd::String& unit) const;
-    dstd::String render_blocks(std::size_t max_width, const dstd::String& unit,
-                               const dstd::String& indent = "      ") const;
+                              dstd::StringView unit) const;
+    dstd::String render_blocks(std::size_t max_width, dstd::StringView unit,
+                               dstd::StringView indent = "      ") const;
     dstd::String to_json() const;
     dstd::String to_json_detailed() const;
-    static Log2Histogram from_json(const dstd::String& json);
+    static Log2Histogram from_json(dstd::StringView json);
 
     std::uint64_t total_count() const { return total_count_; }
     const std::array<std::uint64_t, NUM_BINS>& bins() const { return bins_; }

@@ -17,6 +17,7 @@
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
 #include <generator_ok.h>
+#include <span_list.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
@@ -40,11 +41,11 @@ dstd::String create_mixed_arg_trace(TestEnvironment& env) {
     dstd::String pfw = env.dir() + "/mixed_args.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < 25; ++i)
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i)
             << R"(,"args":{"x":)" << i << R"(}})" << "\n";
     for (int i = 0; i < 25; ++i)
-        ofs << R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (4000 + i * 100) << R"(,"dur":)" << (10 + i)
             << R"(,"args":{"y":)" << i << R"(}})" << "\n";
     ofs.close();
@@ -81,12 +82,12 @@ dstd::Vector<dstd::Tuple<dstd::String, double, double>> row_key_set(
 }
 
 // 40 events whose args carry exactly `keys`, in a trace named `name`.
-dstd::String create_args_trace(TestEnvironment& env, const dstd::String& name,
-                               const dstd::Vector<dstd::String>& keys) {
-    const dstd::String pfw = env.dir() + "/" + name + ".pfw";
+dstd::String create_args_trace(TestEnvironment& env, dstd::StringView name,
+                               dstd::Vector<dstd::String> keys) {
+    const dstd::String pfw = env.dir() + "/" + dstd::String(name) + ".pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < 40; ++i) {
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{)";
         for (std::size_t k = 0; k < keys.size(); ++k)
             ofs << (k ? "," : "") << '"' << keys[k] << R"(":)" << i;
@@ -126,12 +127,12 @@ dstd::String distinct_metric(int i) {
 // into many small gzip members and indexed with a tiny checkpoint size, so the
 // scan has many units and first occurrences land in different ones.
 dstd::String create_distinct_trace(TestEnvironment& env,
-                                   const dstd::String& idx_dir) {
+                                   dstd::StringView idx_dir) {
     dstd::String pfw = env.dir() + "/distinct.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < DISTINCT_EVENTS; ++i) {
         static const char* const NAMES[] = {"read", "write", "open", "lseek"};
-        ofs << R"({"ph":"X","name":")" << NAMES[i % 4]
+        ofs << R"({"ph":1,"name":")" << NAMES[i % 4]
             << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << (1000 + i)
             << R"(,"dur":1,"run":")" << distinct_run(i) << R"(","metric":")"
             << distinct_metric(i) << R"(","val":)" << (i % 5) << "}\n";
@@ -140,7 +141,7 @@ dstd::String create_distinct_trace(TestEnvironment& env,
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 512);
     dstd::fs::remove(pfw).has_value();
-    REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
+    REQUIRE(dftu_utils_test::build_index(gz, dstd::String(idx_dir),
                                          /*checkpoint_size=*/256));
     return gz;
 }
@@ -559,7 +560,9 @@ TEST_SUITE("trace scan - streaming row query") {
         }
         SUBCASE("is_in pushes exactly") {
             dataframe::Expr pred = dataframe::expr_is_in(
-                dataframe::col(ni), dataframe::Series::strings({"read", "x"}));
+                dataframe::col(ni),
+                dataframe::Series::strings(
+                    dftu_utils_test::span_of<dstd::StringView>({"read", "x"})));
             CHECK(pushed_as(pred) == dataframe::Pushed::Exact);
             CHECK(scanned(pred) == M{{"read", 30}});
             CHECK(pushed_as(~pred) == dataframe::Pushed::Exact);

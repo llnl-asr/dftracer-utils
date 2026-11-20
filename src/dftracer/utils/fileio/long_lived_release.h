@@ -7,6 +7,7 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/spawn_detached.h>
 
@@ -32,7 +33,7 @@ coro::CoroTask<void> join_and_delete(Impl* impl) {
 /// thread the call blocks to join, else (or if that fails) a joiner task takes
 /// the Impl. With no runtime left it leaks, as destroying frames terminates.
 template <typename Impl>
-void release_long_lived(dstd::UniquePtr<Impl> impl, const char* name) {
+void release_long_lived(dstd::UniquePtr<Impl> impl, dstd::StringView name) {
     if (!impl || impl->settled()) return;
     impl->abandon();
     if (!coro::Executor::current()) {

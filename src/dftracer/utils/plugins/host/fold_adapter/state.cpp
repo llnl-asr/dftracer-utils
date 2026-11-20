@@ -53,7 +53,7 @@ const dstd::Path& StateAccum::dir_path() {
 
 dstd::Error StateAccum::error_of(const plugins::AbiContext& ctx,
                                  dftu_status status,
-                                 const char* callback) const {
+                                 dstd::StringView callback) const {
     return callback_error(plugin_,
                           dstd::fmt<"state '{}' {}">(reg_->name, callback),
                           status, ctx.message());
@@ -244,21 +244,19 @@ dstd::Result<void> PluginFold::states_finalize() {
         auto produced = s->finalize(&v);
         if (!produced.has_value()) return produced.error();
         if (!*produced) continue;
-        auto emitted = emit_result(s->name().c_str(), &v);
+        auto emitted = emit_result(s->name(), &v);
         if (!emitted) return emitted.error();
     }
     return {};
 }
 
-std::size_t PluginFold::state_spill_runs(const char* name) const {
-    if (!name) return 0;
+std::size_t PluginFold::state_spill_runs(dstd::StringView name) const {
     for (const dstd::UniquePtr<StateAccum>& s : state_accums_)
         if (s->name() == name) return s->runs();
     return 0;
 }
 
-bool PluginFold::state_spill_refused(const char* name) const {
-    if (!name) return false;
+bool PluginFold::state_spill_refused(dstd::StringView name) const {
     for (const dstd::UniquePtr<StateAccum>& s : state_accums_)
         if (s->name() == name) return s->spill_refused();
     return false;

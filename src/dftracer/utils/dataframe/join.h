@@ -35,29 +35,29 @@ struct JoinRightLayout {
 /// `LeftName` and `RightName` are dstd::String or dstd::SharedString.
 template <class LeftName, class RightName>
 dstd::Result<JoinRightLayout> join_right_layout(
-    const dstd::Vector<LeftName>& left_names,
-    const dstd::Vector<RightName>& right_names,
-    const dstd::Vector<dstd::String>& left_on,
-    const dstd::Vector<dstd::String>& right_on, JoinHow how,
-    const dstd::String& suffix);
+    dstd::Span<const LeftName> left_names,
+    dstd::Span<const RightName> right_names,
+    dstd::Span<const dstd::String> left_on,
+    dstd::Span<const dstd::String> right_on, JoinHow how,
+    dstd::StringView suffix);
 
 /// Output column names of a join: `left_names`, then join_right_layout's.
 /// A NotFound error if a key is absent from its side.
 template <class RightName>
 dstd::Result<dstd::Vector<dstd::String>> join_out_names(
-    const dstd::Vector<dstd::String>& left_names,
-    const dstd::Vector<RightName>& right_names,
-    const dstd::Vector<dstd::String>& left_on,
-    const dstd::Vector<dstd::String>& right_on, JoinHow how,
-    const dstd::String& suffix);
+    dstd::Span<const dstd::String> left_names,
+    dstd::Span<const RightName> right_names,
+    dstd::Span<const dstd::String> left_on,
+    dstd::Span<const dstd::String> right_on, JoinHow how,
+    dstd::StringView suffix);
 
 /// Output fields of a join: join_out_names zipped with the left / right column
 /// types, every field nullable. The errors of @ref join_out_names.
 dstd::Result<dstd::Vector<Field>> join_out_fields(
-    const dstd::Vector<Field>& left, const dstd::Vector<Field>& right,
-    const dstd::Vector<dstd::String>& left_on,
-    const dstd::Vector<dstd::String>& right_on, JoinHow how,
-    const dstd::String& suffix);
+    dstd::Span<const Field> left, dstd::Span<const Field> right,
+    dstd::Span<const dstd::String> left_on,
+    dstd::Span<const dstd::String> right_on, JoinHow how,
+    dstd::StringView suffix);
 
 /// The build side of a hash join, probed by one or more left chunks. The
 /// right frame is hashed once on `right_on`; each probe() joins one left chunk
@@ -80,7 +80,7 @@ class HashJoin {
 
     /// join_out_names over this build side's column names.
     dstd::Result<dstd::Vector<dstd::String>> out_names(
-        const dstd::Vector<dstd::String>& left_names) const;
+        dstd::Span<const dstd::String> left_names) const;
 
     /// Join one left chunk. A NotFound error if a left key is absent; an
     /// InvalidArgument one if a key pair's types differ (not for Lookup or
@@ -109,10 +109,10 @@ class HashJoin {
     /// right value. `left_templates` supplies one Series per left column,
     /// read only for its type (any length). Empty for every other `how`, and
     /// empty again after the first call.
-    DataFrame flush(const dstd::Vector<dstd::SharedString>& left_names,
-                    const dstd::Vector<Series>& left_templates);
-    DataFrame flush(const dstd::Vector<dstd::String>& left_names,
-                    const dstd::Vector<Series>& left_templates);
+    DataFrame flush(dstd::Span<const dstd::SharedString> left_names,
+                    dstd::Span<const Series> left_templates);
+    DataFrame flush(dstd::Span<const dstd::String> left_names,
+                    dstd::Span<const Series> left_templates);
 
     JoinHow how() const noexcept { return how_; }
     const DataFrame& right() const noexcept { return right_; }
@@ -123,15 +123,15 @@ class HashJoin {
              dstd::String suffix, bool nulls_equal);
     template <class Name>
     dstd::Result<dstd::Vector<std::int64_t>> left_key_indices(
-        const dstd::Vector<Name>& left_names) const;
+        dstd::Span<const Name> left_names) const;
     /// Lookup and Nest: the probe, rows matched by value.
     dstd::Result<DataFrame> probe_values(
-        const DataFrame& left, const dstd::Vector<std::int64_t>& key_idx,
+        const DataFrame& left, dstd::Span<const std::int64_t> key_idx,
         dstd::Vector<std::uint8_t>* left_matched, std::int64_t left_base);
     /// The first right row of each group of equal keys, per left row, -1
     /// when none; by the typed index when every key pair shares an exact
     /// type, else by value keys.
-    dstd::Vector<std::int64_t> heads(const dstd::Vector<Series>& left_keys,
+    dstd::Vector<std::int64_t> heads(dstd::Span<const Series> left_keys,
                                      bool typed);
     /// The rows of the group whose first row is `head`.
     void members(std::int64_t head, bool typed,
@@ -143,7 +143,7 @@ class HashJoin {
     /// The key position whose right key shares the name of left column `li`,
     /// or -1.
     template <class Name>
-    std::int64_t shared_key_of(const dstd::Vector<Name>& left_names,
+    std::int64_t shared_key_of(dstd::Span<const Name> left_names,
                                std::size_t li) const;
 
     DataFrame right_;

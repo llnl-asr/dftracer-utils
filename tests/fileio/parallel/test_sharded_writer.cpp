@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/parallel/parallel_writer.h>
@@ -21,19 +22,20 @@ using namespace dftracer::utils::fileio::parallel;
 
 namespace {
 
-dstd::String tmp_path(const char* name) {
-    return dstd::String(dftu_utils_test::make_unique_test_path(name).str());
+dstd::String tmp_path(dstd::StringView name) {
+    return dstd::String(
+        dftu_utils_test::make_unique_test_path(dstd::String(name)).str());
 }
 
-dstd::String read_all(const dstd::String& path) {
+dstd::String read_all(dstd::StringView path) {
     return dstd::fs::read_file(dstd::PathView(path)).value_or(dstd::String());
 }
 
-dstd::ByteView sv(const dstd::String& s) {
+dstd::ByteView sv(dstd::StringView s) {
     return dstd::ByteView(s.data(), s.size());
 }
 
-void cleanup(const dstd::Vector<dstd::String>& paths) {
+void cleanup(dstd::Span<const dstd::String> paths) {
     for (const auto& p : paths) std::remove(p.c_str());
 }
 
@@ -111,7 +113,8 @@ TEST_CASE("ShardedWriter - gzip_extension appends .gz to shard names") {
 
 TEST_CASE("ShardedWriter - out-of-range worker_idx fails") {
     dstd::String base = tmp_path("test_sharded_oor");
-    cleanup({dstd::fmt<"{}.shard_0">(base)});
+    const dstd::String shard_files[] = {dstd::fmt<"{}.shard_0">(base)};
+    cleanup(shard_files);
 
     Runtime runtime(2);
     auto task = [&]() -> CoroTask<int> {
@@ -125,5 +128,6 @@ TEST_CASE("ShardedWriter - out-of-range worker_idx fails") {
     };
     CHECK(dftu_utils_test::ok(runtime.submit(task(), "sharded_oor").get()) ==
           0);
-    cleanup({dstd::fmt<"{}.shard_0">(base)});
+    const dstd::String leftover[] = {dstd::fmt<"{}.shard_0">(base)};
+    cleanup(leftover);
 }

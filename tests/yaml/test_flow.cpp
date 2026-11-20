@@ -30,7 +30,7 @@ dstd::String error_of(dstd::StringView text) {
     return dstd::String(doc.error().message());
 }
 
-bool has(const dstd::String& message, dstd::StringView part) {
+bool has(dstd::StringView message, dstd::StringView part) {
     return message.find(part) != dstd::String::npos;
 }
 

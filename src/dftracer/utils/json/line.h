@@ -2,16 +2,16 @@
 #ifndef DFTRACER_UTILS_JSON_LINE_H
 #define DFTRACER_UTILS_JSON_LINE_H
 
-#include <cstddef>
+#include <dftracer/utils/dstd/string.h>
 
 namespace dftracer::utils::json {
-bool trim_and_validate(const char* data, std::size_t length, const char*& start,
-                       std::size_t& trimmed_size);
+/// Sets @p trimmed to @p line without its surrounding whitespace, a view into
+/// @p line. False for a line that is empty or only a bracket or brace.
+bool trim_and_validate(dstd::StringView line, dstd::StringView& trimmed);
 
 // Trim whitespace and trailing commas (for JSON array format)
-bool trim_and_validate_with_comma(const char* data, std::size_t length,
-                                  const char*& start,
-                                  std::size_t& trimmed_size);
+bool trim_and_validate_with_comma(dstd::StringView line,
+                                  dstd::StringView& trimmed);
 }  // namespace dftracer::utils::json
 
 #endif  // DFTRACER_UTILS_JSON_LINE_H

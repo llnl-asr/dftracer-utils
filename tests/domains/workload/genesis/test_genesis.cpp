@@ -3,9 +3,11 @@
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/domains/workload/genesis/genesis.h>
 #include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -27,31 +29,30 @@ using namespace dftracer::utils::domains::workload::genesis;
 
 namespace {
 
-dstd::String call(std::int64_t pid, std::int64_t tid, const dstd::String& name,
+dstd::String call(std::int64_t pid, std::int64_t tid, dstd::StringView name,
                   std::int64_t ts, std::int64_t dur,
-                  const dstd::String& cat = "CPP_APP",
-                  const dstd::String& extra = "") {
+                  dstd::StringView cat = "CPP_APP",
+                  dstd::StringView extra = "") {
     return dstd::fmt<
         "{\"name\":\"{}\",\"cat\":\"{}\",\"pid\":{},\"tid\":{},\"ts\":{},"
         "\"dur\":{},\"ph\":1,\"args\":{\"hhash\":\"h1\"{}}}\n">(
         name, cat, pid, tid, ts, dur, extra);
 }
 
-dstd::String marker(std::int64_t pid, const dstd::String& name,
-                    std::int64_t ts) {
+dstd::String marker(std::int64_t pid, dstd::StringView name, std::int64_t ts) {
     return call(pid, pid, name, ts, 0, "dftracer");
 }
 
-dstd::String papi(std::int64_t pid, std::int64_t ts,
-                  const dstd::String& counter, double delta) {
+dstd::String papi(std::int64_t pid, std::int64_t ts, dstd::StringView counter,
+                  double delta) {
     return dstd::fmt<
         "{\"name\":\"PAPI\",\"cat\":\"papi\",\"pid\":{},\"tid\":{},\"ts\":{},"
         "\"ph\":2,\"args\":{\"hhash\":\"h1\",\"multiplex\":0,\"{}\":1,\"{}_"
         "delta\":{}}}\n">(pid, pid, ts, counter, counter, delta);
 }
 
-dstd::String host(const dstd::String& cat, const dstd::String& name,
-                  std::int64_t ts, const dstd::String& fields) {
+dstd::String host(dstd::StringView cat, dstd::StringView name, std::int64_t ts,
+                  dstd::StringView fields) {
     return dstd::fmt<
         "{\"name\":\"{}\",\"cat\":\"{}\",\"pid\":0,\"tid\":0,\"ts\":{},\"ph\":"
         "2,\"args\":{\"hhash\":\"h1\",{}}}\n">(name, cat, ts, fields);
@@ -61,19 +62,18 @@ dstd::String rank(std::int64_t pid, std::int64_t start, std::int64_t end) {
     return marker(pid, "start", start) + marker(pid, "end", end);
 }
 
-void write_gz(const dstd::Path& p, const dstd::String& content) {
+void write_gz(const dstd::Path& p, dstd::String content) {
     REQUIRE(dstd::fs::create_directories(p.view().parent()).has_value());
     dftu_utils_test::write_gz_trace(dstd::String(p.str()), content);
 }
 
-void write_text(const dstd::Path& p, const dstd::String& content) {
+void write_text(const dstd::Path& p, dstd::String content) {
     REQUIRE(dstd::fs::create_directories(p.view().parent()).has_value());
     REQUIRE(dstd::fs::write_file(p.view(), content).has_value());
 }
 
 dstd::Path matrix_run(const dftu_utils_test::ScopedTestDir& d, std::int64_t ppn,
-                      const dstd::String& trace,
-                      const dstd::String& input = "in1") {
+                      dstd::String trace, dstd::String input = "in1") {
     const dstd::Path dir = d.path() / "app1" / "sys1" / input / "nodes_1" /
                            ("ppn_" + dstd::to_string(ppn));
     write_text(dir / "summary.json",
@@ -125,7 +125,7 @@ GroupResult process_only(const dftu_utils_test::ScopedTestDir& d) {
     return process(disc.groups[0]);
 }
 
-dstd::Vector<dstd::String> lines_of(const dstd::String& text) {
+dstd::Vector<dstd::String> lines_of(dstd::StringView text) {
     dstd::Vector<dstd::String> out;
     dstd::StringView rest(text);
     while (!rest.empty()) {
@@ -138,8 +138,8 @@ dstd::Vector<dstd::String> lines_of(const dstd::String& text) {
 }
 
 // The first line of `gtype` holding every needle, or "" when absent.
-dstd::String find_line(const GroupResult& r, const dstd::String& type,
-                       const dstd::Vector<dstd::String>& needles) {
+dstd::String find_line(const GroupResult& r, dstd::String type,
+                       dstd::Vector<dstd::String> needles) {
     REQUIRE(r.runs.size() == 1);
     const dstd::String prefix = R"({"gtype":")" + type + R"(",)";
     for (const auto& l : lines_of(r.runs[0].lines())) {
@@ -153,40 +153,40 @@ dstd::String find_line(const GroupResult& r, const dstd::String& type,
 }
 
 // The func record of `path`, or "" when absent.
-dstd::String record(const GroupResult& r, const dstd::String& path) {
+dstd::String record(const GroupResult& r, dstd::String path) {
     return find_line(r, "func", {R"("path":")" + path + R"(",)"});
 }
 
 // The counter record of `path` and `metric`, or "" when absent.
-dstd::String counter(const GroupResult& r, const dstd::String& path,
-                     const dstd::String& metric) {
+dstd::String counter(const GroupResult& r, dstd::String path,
+                     dstd::String metric) {
     return find_line(
         r, "counter",
         {R"("path":")" + path + R"(",)", R"("metric":")" + metric + R"(",)"});
 }
 
-simdjson::dom::element at(simdjson::dom::parser& p, const dstd::String& line,
-                          const dstd::String& pointer) {
+simdjson::dom::element at(simdjson::dom::parser& p, dstd::StringView line,
+                          dstd::StringView pointer) {
     simdjson::dom::element e;
     REQUIRE(p.parse(line.data(), line.size()).at_pointer(pointer).get(e) ==
             simdjson::SUCCESS);
     return e;
 }
 
-double num(const dstd::String& line, const dstd::String& pointer) {
+double num(dstd::StringView line, dstd::StringView pointer) {
     simdjson::dom::parser p;
     double d = 0;
     REQUIRE(at(p, line, pointer).get(d) == simdjson::SUCCESS);
     return d;
 }
 
-bool has(const dstd::String& line, const dstd::String& pointer) {
+bool has(dstd::StringView line, dstd::StringView pointer) {
     simdjson::dom::parser p;
     return p.parse(line.data(), line.size()).at_pointer(pointer).error() ==
            simdjson::SUCCESS;
 }
 
-dstd::String str(const dstd::String& line, const dstd::String& pointer) {
+dstd::String str(dstd::StringView line, dstd::StringView pointer) {
     simdjson::dom::parser p;
     dstd::StringView v;
     REQUIRE(at(p, line, pointer).get(v) == simdjson::SUCCESS);
@@ -195,14 +195,14 @@ dstd::String str(const dstd::String& line, const dstd::String& pointer) {
 
 using Sketch = dataframe::BasicDDSketch<2048>;
 
-Sketch sketch_at(const dstd::String& line, const dstd::String& pointer) {
+Sketch sketch_at(dstd::StringView line, dstd::StringView pointer) {
     const auto raw = dstd::base64_decode(str(line, pointer));
     REQUIRE(raw.has_value());
     return Sketch::deserialize(
         reinterpret_cast<const std::uint8_t*>(raw->data()), raw->size());
 }
 
-bool skipped_with(const GroupResult& r, const dstd::String& text) {
+bool skipped_with(const GroupResult& r, dstd::StringView text) {
     for (const auto& s : r.skips)
         if (s.reason.find(text) != dstd::String::npos ||
             s.file.find(text) != dstd::String::npos)
@@ -652,7 +652,7 @@ TEST_CASE("an overlap in any process skips the run, naming the first") {
 
 TEST_CASE("tioga v2 processes are assigned to sets by PAPI counters") {
     auto make = [](const dftu_utils_test::ScopedTestDir& d,
-                   const dstd::String& extra) {
+                   dstd::StringView extra) {
         const dstd::Path dir =
             d.path() / "l" / "tioga" / "tioga" / "c" / "nodes_1" / "ppn_1";
         write_text(dir / "summary.json",
@@ -663,7 +663,7 @@ TEST_CASE("tioga v2 processes are assigned to sets by PAPI counters") {
                  rank(1, 0, 100) + papi(1, 0, "PAPI_A", 0) +
                      call(1, 1, "a", 0, 10) + rank(2, 200, 300) +
                      papi(2, 200, "PAPI_B", 0) + call(2, 2, "b", 200, 10) +
-                     extra);
+                     dstd::String(extra));
     };
     dftu_utils_test::ScopedTestDir ok("genesis_sets");
     make(ok, "");

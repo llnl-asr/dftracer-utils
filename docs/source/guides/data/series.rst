@@ -85,8 +85,8 @@ name of its column, so ``df["dur"].name`` is ``"dur"``. ``from_pandas`` and
 polars' default name ``""`` means no name), and ``to_pandas`` and ``to_polars``
 give it back.
 
-An op that makes a Series from one Series (``abs``, ``cast``, ``fillna``,
-``cumsum``, ``rolling``, a string op, ``sort``, ``filter``, a slice) gives the
+An op that makes a Series from one Series (``abs``, ``cast``, ``fill_null``,
+``cum_sum``, ``rolling``, a string op, ``sort``, ``filter``, a slice) gives the
 result the same name. A binary op between two Series (``+``, ``-``, ``*``, ``/``,
 a comparison, ``&``, ``|``) keeps the name only when both names are equal. A
 reduction returns a scalar, so it has no name, and the index array of
@@ -182,7 +182,8 @@ Reducers
          std::int64_t hi = dur.max().i64();
 
 Also available on both sides: ``min``, ``product``, ``median``, ``skewness``,
-``kurtosis``, ``mode``, ``all``, ``any``, ``arg_min``, ``arg_max``, ``nunique``.
+``kurtosis``, ``mode``, ``all``, ``any``, ``arg_min``, ``arg_max``, ``nunique``
+(``n_unique`` in Python; ``nunique`` is its pandas name).
 
 Element-wise kernels
 ----------------------
@@ -196,9 +197,9 @@ Element-wise kernels
          positive = dur.abs()
          bounded = dur.clip(0, 1000)
          rounded = dur.round()      # also ceil() floor() trunc() sign()
-         filled = dur.fillna(0)
+         filled = dur.fill_null(0)  # fillna is the pandas name
          root = dur.sqrt()          # also exp() log()
-         as_f64 = dur.cast(10)      # TypeId ordinal: Float64 = 10
+         as_f64 = dur.cast("float64")  # a DType, its name, its code or a Python type
          encoded = names.dictionary_encode()
          interp = dur.interpolate() # linear fill of interior nulls, edges stay null
 
@@ -309,7 +310,7 @@ Select and test rows
          mask = dur.is_in(other)
          nonnull = dur.drop_nulls()
          sorted_ok = dur.is_sorted()
-         seen = dur.value_counts()     # a two-column DataFrame
+         seen = dur.value_counts()     # a Series of counts labelled by the values
          dup_mask = dur.is_duplicated()  # also is_unique(); per-value, not per-row
                                           # (see DataFrame.is_duplicated for whole-row)
 
@@ -376,15 +377,19 @@ pandas ``.str.replace`` stays literal. In C it is ``dftu_series_str_regex_replac
 and ``DFTU_STR_FN_REGEX_REPLACE`` for ``dftu_expr_str_fn``. See :doc:`/reference/duql` for
 the regex dialect and the match limit.
 
-``dt_format(fmt, unit)`` formats a time column as UTC text; ``unit`` is the
+``dt_format(fmt, unit)`` formats a time column as text; ``unit`` is the
 unit of the stored integers, coded as in ``dt_part`` (0 seconds, 1
 milliseconds, 2 microseconds, 3 nanoseconds); a timestamp column uses its own
 unit. In Python
 it is the pandas ``.dt.strftime(fmt)``. The directives are ``%Y %y %m %d %H
 %I %M %S %f %j %a %A %b %B %p %F %T %s %z %Z`` and ``%%``; ``%f`` is six digit
-microseconds, names are English, ``%z`` is ``+0000`` and ``%Z`` is ``UTC``. An
-unknown directive or a trailing ``%`` raises ``ValueError``; there is no other
-time zone. In C it is ``dftu_series_dt_format``, and ``dftu_expr_date_part``
+microseconds and names are English. A timestamp column with a zone prints its
+wall time in that zone, ``%z`` as the offset (``+0530``) and ``%Z`` as the
+abbreviation (``IST``); every other column prints UTC, ``%z`` as ``+0000`` and
+``%Z`` as ``UTC``. An unknown directive or a trailing ``%`` raises
+``ValueError``, and a zone that is not in the time zone database raises
+``KeyError``. The duql ``date_part`` and ``format_time`` read integers as UTC and
+refuse a timestamp column in a zone. In C it is ``dftu_series_dt_format``, and ``dftu_expr_date_part``
 and ``dftu_expr_format_time`` build the expressions that duql ``date_part``
 and ``format_time`` use.
 

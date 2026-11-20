@@ -31,7 +31,7 @@ trace::index::gzip::GzipMemberRecord record(
 }
 
 // Writes `arts` as the members of "trace.pfw.gz" in one build.
-void persist(const dstd::String& index_root,
+void persist(dstd::StringView index_root,
              const trace::index::gzip::GzipBuildArtifacts& arts) {
     auto index = dftracer::utils::trace::index::Index::open(
         dftracer::utils::trace::index::normalize_index_root(index_root));

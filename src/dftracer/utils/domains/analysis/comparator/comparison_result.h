@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -22,9 +23,9 @@ using dftracer::utils::trace::index::schemas::dft::agg::QuantileStore;
 /// Metric-name classification used by the tree formatter. Atomic names are
 /// standalone metrics (e.g. "count"); others split into group + leaf, e.g.
 /// "dur_mean" -> group "dur", leaf "mean".
-bool is_atomic_metric(const dstd::String& name);
-dstd::String metric_group(const dstd::String& name);
-dstd::String metric_leaf(const dstd::String& name);
+bool is_atomic_metric(dstd::StringView name);
+dstd::String metric_group(dstd::StringView name);
+dstd::String metric_leaf(dstd::StringView name);
 
 /// Cohen's d effect size classification.
 enum class Significance : int {
@@ -190,8 +191,8 @@ dstd::Vector<MetricComparison> build_metadata_metrics(
 /// comparing the requested metrics and percentiles.
 dstd::Vector<MetricComparison> compare_metrics(
     const CollapsedMetrics& baseline, const CollapsedMetrics& variant,
-    const dstd::Vector<dstd::String>& metrics,
-    const dstd::Vector<double>& percentiles);
+    dstd::Span<const dstd::String> metrics,
+    dstd::Span<const double> percentiles);
 
 }  // namespace dftracer::utils::domains::analysis::comparator
 

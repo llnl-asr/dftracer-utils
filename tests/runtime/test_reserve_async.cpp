@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <exception>
 #include <random>
+#include <string_view>
 #include <thread>
 
 using namespace dftracer::utils;
@@ -48,7 +49,7 @@ struct Budget {
 
 memory::Pool& root() { return memory::detail::Manager::get().root(); }
 
-memory::PoolHandle open_pool(const char* name) {
+memory::PoolHandle open_pool(dstd::StringView name) {
     memory::PoolHandle pool = root().child(name);
     REQUIRE(pool);
     return pool;

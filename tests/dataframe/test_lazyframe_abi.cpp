@@ -32,8 +32,8 @@ dftu_scalar i64_scalar(std::int64_t v) {
 }
 
 // A two-column frame: "k" keys, "v" values.
-dftu_dataframe* make_frame(const dstd::Vector<std::int64_t>& k,
-                           const dstd::Vector<std::int64_t>& v) {
+dftu_dataframe* make_frame(dstd::Vector<std::int64_t> k,
+                           dstd::Vector<std::int64_t> v) {
     dftu_series* cols[2] = {
         i64_col(k.data(), static_cast<std::int64_t>(k.size())),
         i64_col(v.data(), static_cast<std::int64_t>(v.size()))};

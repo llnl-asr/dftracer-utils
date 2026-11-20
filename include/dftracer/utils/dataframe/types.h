@@ -734,6 +734,16 @@ enum class RankMethod : std::int32_t {
     Max = 4,
 };
 
+/// Mirrors dftu_interpolation: how a quantile that falls between two ranked
+/// values picks its result (Polars `interpolation`, numpy `method`).
+enum class Interpolation : std::int32_t {
+    Linear = 0,
+    Nearest = 1,
+    Lower = 2,
+    Higher = 3,
+    Midpoint = 4,
+};
+
 /// Mirrors dftu_groupwise_op: the group-wise transforms (one value per input
 /// row, in input order) a @ref GroupBy / @ref LazyGroupBy runs.
 enum class GroupwiseOp : std::int32_t {
@@ -851,8 +861,9 @@ enum class JoinHow : std::int32_t {
     Nest = 8,
 };
 
-/// How completely a source applied a pushed-down filter, per @ref ScanRequest
-/// filter. Guides whether the engine must re-apply it over the survivors.
+/// How completely a source applied a pushed-down filter, per @ref
+/// dftracer::utils::dataframe::ScanRequest filter. Guides whether the engine
+/// must re-apply it over the survivors.
 enum class Pushed : std::int32_t {
     No = 0,       ///< Not applied by the source; engine applies it.
     Inexact = 1,  ///< Pruned I/O but did not filter; re-apply.
@@ -939,6 +950,8 @@ enum class UnaryOp : std::int32_t {
     IsNan = 10,
     IsFinite = 11,
     IsInfinite = 12,
+    Log1p = 13,
+    Expm1 = 14,
 };
 
 /// Mirrors dftu_scalar_tag: the domain a dftu_scalar carries.
@@ -948,6 +961,7 @@ enum class ScalarTag : std::int32_t {
     F64 = 2,
     Str = 3,
     Err = 4,
+    Null = 5,
 };
 
 /// Bytes to hold `n` values of `t` in Arrow layout. Bool is bit-packed

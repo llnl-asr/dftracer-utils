@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
@@ -56,7 +57,7 @@ using Key = dstd::Pair<dstd::String, dstd::String>;
 
 const char* const NAMES[] = {"read", "write", "open", "close"};
 
-dstd::String write_trace(const dstd::String& dir, int n,
+dstd::String write_trace(dstd::CStringView dir, int n,
                          dstd::Map<Key, dstd::Vector<double>>& durations,
                          int salt = 0) {
     dstd::String out;
@@ -71,7 +72,7 @@ dstd::String write_trace(const dstd::String& dir, int n,
         std::snprintf(fhash, sizeof fhash, "%016x", 0x1000 + i % 7);
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"{}\",\"cat\":\"{}\",\"pid\":{},\"tid\":{},"
-            "\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{\"ret\":{},\"offset\":"
+            "\"ph\":1,\"ts\":{},\"dur\":{},\"args\":{\"ret\":{},\"offset\":"
             "{},\"level\":{},\"hhash\":\"a1b2c3d4e5f60718\",\"fhash\":\"{}\"}}"
             "\n">(out, i, name, cat, 1 + i % 3, 1 + i % 2, 1000 + i * 997, dur,
                   (i * 13) % 4096, i * 512, i % 3, fhash);
@@ -82,7 +83,7 @@ dstd::String write_trace(const dstd::String& dir, int n,
     }
     out += "]\n";
     const dstd::String pfw =
-        dir + "/t" + dstd::String(dstd::to_string(n)) + ".pfw";
+        dstd::String(dir) + "/t" + dstd::String(dstd::to_string(n)) + ".pfw";
     {
         dstd::fs::write_file(dstd::PathView(pfw), out).discard();
     }
@@ -105,7 +106,7 @@ IndexerOptions options(dstd::StringView index_dir) {
     return o;
 }
 
-double build_seconds(const dstd::Vector<dstd::String>& files,
+double build_seconds(dstd::Vector<dstd::String> files,
                      dstd::StringView index_dir) {
     auto ix = dftu_utils_test::ok(Indexer::open(files, options(index_dir)));
     const auto t0 = dstd::steady_now();
@@ -119,7 +120,7 @@ struct Stored {
     dstd::Set<std::uint32_t> chunks;
 };
 
-trace::index::Snapshot open_index(const dstd::String& index_path) {
+trace::index::Snapshot open_index(dstd::CStringView index_path) {
     return dftu_utils_test::ok(trace::index::plan::open_snapshot(index_path));
 }
 
@@ -276,10 +277,11 @@ constexpr const char* CRASH_DIR_ENV = "DFTRACER_UTILS_TEST_AGG_CRASH_DIR";
 constexpr int CRASH_FILES = 3;
 constexpr std::uint64_t CRASH_RUNS = 2;
 
-dstd::Vector<dstd::String> crash_files(const dstd::String& dir) {
+dstd::Vector<dstd::String> crash_files(dstd::CStringView dir) {
     dstd::Vector<dstd::String> files;
     for (int i = 0; i < CRASH_FILES; ++i)
-        files.push_back(dir + "/t" + dstd::to_string(i) + ".pfw.gz");
+        files.push_back(dstd::String(dir) + "/t" + dstd::to_string(i) +
+                        ".pfw.gz");
     return files;
 }
 
@@ -355,7 +357,7 @@ TEST_SUITE("AggPartialsStore") {
             const int dur = 1 + i % 50;
             dstd::fmt_append<
                 "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
-                "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{"
+                "\"tid\":1,\"ph\":1,\"ts\":{},\"dur\":{},\"args\":{"
                 "\"hhash\":\"a1b2c3d4e5f60718\"{}}}\n">(
                 text, i, 1000 + i * 997, dur,
                 fhash.empty() ? dstd::String()
@@ -775,7 +777,9 @@ TEST_SUITE("AggPartialsStore") {
             target.build("unused.pfw.gz", trace::index::SourceStat{1, 1, 1}));
         dstd::StringIntern intern;
         schemas::dft::agg::AggregationFold fold(
-            intern, schemas::dft::agg::intern_for_index(index_path),
+            intern,
+            schemas::dft::agg::intern_for_index(
+                index_path, dftu_utils_test::ok(target.generation())),
             schemas::dft::agg::standard_aggregation_config());
         dftu_utils_test::ok(fold.write(build));
     }

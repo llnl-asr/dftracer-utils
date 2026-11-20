@@ -37,9 +37,7 @@ DataFrame sample_frame(std::int64_t rows) {
     return frame;
 }
 
-dstd::Path temp_path(const char* name) {
-    return dstd::Path{dstd::StringView(name)};
-}
+dstd::Path temp_path(dstd::StringView name) { return dstd::Path{name}; }
 
 }  // namespace
 

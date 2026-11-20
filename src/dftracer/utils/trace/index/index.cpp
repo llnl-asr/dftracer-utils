@@ -20,7 +20,11 @@
 #include <dftracer/utils/trace/index/tables.h>
 
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
+#include <iterator>
 #include <mutex>
+#include <shared_mutex>
 #include <utility>
 
 namespace dftracer::utils::trace::index {
@@ -49,7 +53,7 @@ dftracer::utils::store::Namespace read_ns(Ext ext) {
 
 bool builtin(Ext ext) { return ext != Ext::Plugin; }
 
-bool has_name(const dstd::Vector<dftracer::utils::store::Namespace>& list,
+bool has_name(dstd::Span<const dftracer::utils::store::Namespace> list,
               const dftracer::utils::store::Namespace& ns) {
     for (const dftracer::utils::store::Namespace& known : list)
         if (known.spec.name == ns.spec.name) return true;
@@ -131,6 +135,15 @@ Index::Impl::find_store() {
     return dstd::Optional<dftracer::utils::store::Store>(std::move(*opened));
 }
 
+bool Index::Impl::is_current() {
+    dstd::Optional<dftracer::utils::store::Store> held;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        held = store;
+    }
+    return !held || held->is_current();
+}
+
 FileRef IndexAccess::make_file(dstd::String path,
                                dftracer::utils::store::ScopeKey scope,
                                const SourceStat& stat) {
@@ -158,6 +171,14 @@ FileBuild IndexAccess::make_build(dstd::String root,
 
 const dstd::String& IndexAccess::root(const Index& index) {
     return index.impl_->root;
+}
+
+bool IndexAccess::is_current(const Index& index) {
+    return index.impl_->is_current();
+}
+
+bool IndexAccess::same(const Index& a, const Index& b) {
+    return a.impl_ == b.impl_;
 }
 
 dstd::Expected<dftracer::utils::store::Store, dstd::Error>
@@ -590,40 +611,88 @@ constexpr std::size_t INDEX_ROOTS_RETAINED = 64;
 
 class RetainedRoots {
    public:
-    Index find_or_add(const dstd::String& root, Index made) {
+    template <class Make>
+    Index find_or_add(dstd::StringView root, Make make) {
         memory::detail::Scope general(memory::detail::Manager::get().general());
-        std::lock_guard<std::mutex> lock(mutex_);
-        const auto known =
-            std::find_if(roots_.begin(), roots_.end(),
-                         [&](const auto& held) { return held.first == root; });
-        if (known != roots_.end()) {
-            roots_.splice(roots_.begin(), roots_, known);
-            return roots_.front().second;
+        // Both are destroyed after the lock is gone: dropping the last handle
+        // of a store closes it.
+        dstd::Optional<Index> candidate;
+        Held dropped;
+        // A hit takes the shared lock only, and stamps its entry, so openers
+        // of the same or of other roots do not queue behind each other.
+        {
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            const auto known = find(root);
+            if (known != roots_.end()) {
+                known->used.store(next_tick(), std::memory_order_relaxed);
+                candidate = known->index;
+            }
         }
-        roots_.emplace_front(root, made);
-        if (roots_.size() > INDEX_ROOTS_RETAINED) roots_.pop_back();
+        // The stat of the check runs outside the lock.
+        if (candidate && IndexAccess::is_current(*candidate)) return *candidate;
+        std::lock_guard<std::shared_mutex> lock(mutex_);
+        const auto known = find(root);
+        if (known != roots_.end()) {
+            if (!candidate || !IndexAccess::same(known->index, *candidate)) {
+                known->used.store(next_tick(), std::memory_order_relaxed);
+                return known->index;
+            }
+            // The directory was deleted or replaced, so the kept handle holds
+            // files that are gone.
+            dropped.splice(dropped.begin(), roots_, known);
+        }
+        Index made = make();
+        roots_.emplace_front(root, made, next_tick());
+        if (roots_.size() > INDEX_ROOTS_RETAINED) {
+            auto oldest = std::next(roots_.begin());
+            for (auto it = oldest; it != roots_.end(); ++it)
+                if (it->used.load(std::memory_order_relaxed) <
+                    oldest->used.load(std::memory_order_relaxed))
+                    oldest = it;
+            dropped.splice(dropped.begin(), roots_, oldest);
+        }
         return made;
     }
 
     void clear() {
         Held dropped;
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::shared_mutex> lock(mutex_);
         dropped.swap(roots_);
     }
 
-    void forget(const dstd::String& root) {
+    void forget(dstd::StringView root) {
         Held dropped;
-        std::lock_guard<std::mutex> lock(mutex_);
-        const auto known =
-            std::find_if(roots_.begin(), roots_.end(),
-                         [&](const auto& held) { return held.first == root; });
+        std::lock_guard<std::shared_mutex> lock(mutex_);
+        const auto known = find(root);
         if (known != roots_.end())
             dropped.splice(dropped.begin(), roots_, known);
     }
 
    private:
-    using Held = dstd::List<dstd::Pair<dstd::String, Index>>;
-    std::mutex mutex_;
+    struct Entry {
+        Entry(dstd::StringView key, Index handle, std::uint64_t tick)
+            : root(key), index(std::move(handle)), used(tick) {}
+
+        dstd::String root;
+        Index index;
+        /// The tick of the last open, so the entry that went unused longest
+        /// is the one dropped past the limit.
+        std::atomic<std::uint64_t> used;
+    };
+    using Held = dstd::List<Entry>;
+
+    std::uint64_t next_tick() {
+        return tick_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+
+    Held::iterator find(dstd::StringView root) {
+        return std::find_if(
+            roots_.begin(), roots_.end(),
+            [&](const auto& held) { return held.root == root; });
+    }
+
+    std::shared_mutex mutex_;
+    std::atomic<std::uint64_t> tick_{0};
     Held roots_;
 };
 
@@ -656,11 +725,18 @@ void release_all_roots() {
 
 dstd::Expected<Index, dstd::Error> Index::open(dstd::StringView root) {
     if (root.empty()) return invalid("index: the root is empty");
-    auto impl = dstd::make_shared<Impl>();
-    impl->root = dstd::String(root);
-    impl->store_dir = trace::index::store_dir(impl->root);
-    const dstd::String key = impl->root;
-    return retained_roots().find_or_add(key, Index(std::move(impl)));
+    return retained_roots().find_or_add(root, [root] {
+        auto impl = dstd::make_shared<Impl>();
+        impl->root = dstd::String(root);
+        impl->store_dir = trace::index::store_dir(impl->root);
+        return Index(std::move(impl));
+    });
+}
+
+dstd::Expected<std::uint64_t, dstd::Error> Index::generation() const {
+    auto opened = impl_->open_store();
+    if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());
+    return opened->generation();
 }
 
 dstd::Expected<Snapshot, dstd::Error> Index::snapshot() const {

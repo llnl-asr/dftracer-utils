@@ -32,6 +32,11 @@ struct AggregationConfig {
     /// Hash of every field that shapes the stored aggregation: the params hash
     /// of the dftracer.agg extension. Data built with another hash is stale.
     std::uint64_t params_hash() const;
+
+    /// Whether data built with this config answers a request built with
+    /// `want`: the same config, or this one with percentile sketches that
+    /// `want` does not ask for. Every other field must match.
+    bool covers(const AggregationConfig& want) const;
 };
 
 /// The aggregation every index build makes: the struct defaults with the

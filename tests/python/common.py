@@ -8,6 +8,7 @@ import gc
 import glob
 import gzip
 import os
+import platform
 import shutil
 import tempfile
 from pathlib import Path
@@ -16,6 +17,35 @@ import pytest
 
 import dftracer.utils.dftracer_utils_ext as _dftracer_utils_ext
 from dftracer.utils.dftracer_utils_ext import CheckpointIndexer as NativeIndexer
+
+_NATIVE_MAGIC = (
+    (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe")
+    if platform.system() == "Darwin"
+    else (b"\x7fELF",)
+)
+
+
+def _is_native_library(path) -> bool:
+    """Whether ``path`` is a shared library of this platform. A build tree made in
+    a Linux container sits in the same checkout and would never load here."""
+    try:
+        with open(path, "rb") as f:
+            return f.read(4) in _NATIVE_MAGIC
+    except OSError:
+        return False
+
+
+def newest_test_plugin(name: str, repo_root) -> str:
+    """The newest built ``tests/plugins/<name>`` shared library of this platform
+    under any build tree in the checkout, or an empty string."""
+    found = []
+    for suffix in ("dylib", "so"):
+        found += [
+            p
+            for p in Path(repo_root).glob(f"build/**/tests/plugins/{name}.{suffix}")
+            if _is_native_library(p)
+        ]
+    return str(max(found, key=os.path.getmtime)) if found else ""
 
 
 def find_example_plugin(name: str, env_var: str, repo_root) -> str:
@@ -47,6 +77,7 @@ def find_example_plugin(name: str, env_var: str, repo_root) -> str:
             os.path.join(str(repo_root), "**", "examples", "plugins", f"{name}.{suffix}"),
             recursive=True,
         )
+    candidates = [c for c in candidates if _is_native_library(c)]
     if not candidates:
         return ""
     return max(candidates, key=os.path.getmtime)
@@ -66,6 +97,22 @@ def find_installed_example_plugin(name: str) -> str:
         if candidate.is_file():
             return str(candidate)
     return ""
+
+
+# Valgrind on arm64 emulates FRINTA, the instruction std::round compiles to, as
+# round to nearest even, so round(2.5) gives 2. A check that rounds an exact tie
+# runs everywhere else.
+VALGRIND_ROUNDS_TIES_TO_EVEN = bool(
+    os.environ.get("DFTRACER_UTILS_VALGRIND")
+) and platform.machine() in ("aarch64", "arm64")
+
+
+def valgrind_capped_threads(n: int) -> int:
+    """``n`` threads as a Valgrind build gives them: ``ThreadPoolExecutor`` caps
+    its I/O pool, and a resize of its compute pool, at 2."""
+    if os.environ.get("DFTRACER_UTILS_VALGRIND"):
+        return min(n, 2)
+    return n
 
 
 def valgrind_scale(n: int, divisor: int = 10) -> int:
@@ -139,7 +186,7 @@ class Environment:
                 f'{{"name":"{name}","cat":"{cat}",'
                 f'"pid":{1000 + i % 4},"tid":{2000 + i % 8},'
                 f'"ts":{1000000 + i * 1000},"dur":{(i * 123 % 10000)},'
-                f'"ph":"X","args":{{"ret":{1024 * i},"hhash":"abc123","data":"'
+                f'"ph":1,"args":{{"ret":{1024 * i},"hhash":"abc123","data":"'
             )
             current_size = len(line)
             needed_padding = 0
@@ -178,7 +225,7 @@ class Environment:
                 f.write(
                     f'{{"name":"{name}","cat":"{cat}","pid":1,"tid":{1 + i % 3},'
                     f'"ts":{1000000 + i * 1000},"dur":{100 + i * 10},'
-                    f'"ph":"X","args":{{"ret":{1024 * (i + 1)},"hhash":"abc123"}}}}\n'
+                    f'"ph":1,"args":{{"ret":{1024 * (i + 1)},"hhash":"abc123"}}}}\n'
                 )
         self.test_files.append(file_path)
         return file_path
@@ -291,7 +338,7 @@ class Environment:
                     "tid": 2000 + i % 8,
                     "ts": 1000000 + i * 1000,
                     "dur": (i * 123) % 10000,
-                    "ph": "X",
+                    "ph": 1,
                     "args": {"ret": 1024 * i, "hhash": f"hash_{i}"},
                 }
 
@@ -331,10 +378,10 @@ class Environment:
         fhash = f"f{pid}"
         with gzip.open(file_path, "wt", encoding="utf-8") as f:
             f.write(
-                f'{{"name":"HH","ph":"M","pid":{pid},"tid":1,"args":{{"name":"host{pid}","value":"{hhash}"}}}}\n'
+                f'{{"name":"HH","ph":4,"pid":{pid},"tid":1,"args":{{"name":"host{pid}","value":"{hhash}"}}}}\n'
             )
             f.write(
-                f'{{"name":"FH","ph":"M","pid":{pid},"tid":1,"args":{{"name":"/data/file{pid}.dat","value":"{fhash}"}}}}\n'
+                f'{{"name":"FH","ph":4,"pid":{pid},"tid":1,"args":{{"name":"/data/file{pid}.dat","value":"{fhash}"}}}}\n'
             )
             for i in range(n):
                 name = io_names[i % len(io_names)]
@@ -342,7 +389,7 @@ class Environment:
                 f.write(
                     f'{{"name":"{name}","cat":"{cat}","pid":{pid},"tid":{1 + i % 3},'
                     f'"ts":{1000000 + i * 1000},"dur":{100 + i * 10},'
-                    f'"ph":"X","args":{{"ret":{1024 * (i + 1)},"hhash":"{hhash}","fhash":"{fhash}"}}}}\n'
+                    f'"ph":1,"args":{{"ret":{1024 * (i + 1)},"hhash":"{hhash}","fhash":"{fhash}"}}}}\n'
                 )
         self.test_files.append(file_path)
         return file_path
@@ -350,7 +397,7 @@ class Environment:
     def create_indexed_traces(self, pids=None, num_events=None):
         """Create trace files and build full index with aggregation.
 
-        Returns the temp directory path (use as directory= for Indexer).
+        Returns the temp directory path (pass it to Indexer).
         """
         from dftracer.utils import AggregationConfig, Indexer
 
@@ -364,9 +411,8 @@ class Environment:
         indexer = Indexer(
             files=files,
             aggregation_config=AggregationConfig(time_interval_ms=5000),
-            force_rebuild=True,
         )
-        indexer.ensure_indexed()
+        indexer.build(force=True)
         return self.temp_dir
 
     def get_index_path(self, gz_file_path):

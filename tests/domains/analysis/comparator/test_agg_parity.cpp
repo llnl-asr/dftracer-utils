@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <span_list.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
@@ -48,21 +51,21 @@ constexpr std::uint64_t SPAN_US = 12000000ULL;
 constexpr std::uint64_t ONE_SECOND_US = 1000000ULL;
 constexpr std::uint64_t FIVE_SECONDS_US = 5000000ULL;
 
-dstd::String read_text(const dstd::String& path) {
+dstd::String read_text(dstd::StringView path) {
     return dftu_utils_test::read_text(path);
 }
 
 // Writes the reference when recording and returns "", else returns the
 // reference text (a failure when the file is missing).
-dstd::String reference(const char* file, dstd::StringView produced) {
+dstd::String reference(dstd::CStringView file, dstd::StringView produced) {
     if (const char* dir = std::getenv(RECORD_ENV)) {
         REQUIRE(dstd::fs::create_directories(dir).has_value());
-        dftu_utils_test::FileOut ofs(dstd::String(dir) + "/" + file);
+        dftu_utils_test::FileOut ofs(dstd::String(dir) + "/" + file.c_str());
         ofs << produced;
         return dstd::String();
     }
     const dstd::String path =
-        dstd::String(DFTRACER_UTILS_AGG_PARITY_DATA_DIR) + "/" + file;
+        dstd::String(DFTRACER_UTILS_AGG_PARITY_DATA_DIR) + "/" + file.c_str();
     dstd::String text = read_text(path);
     INFO("missing reference " << path);
     REQUIRE(!text.empty());
@@ -84,9 +87,10 @@ enum class Kind { Read, Write, Open, Close, Fwrite, Step, Fetch };
 
 // The variant changes durations, sizes and one event name so the comparator
 // report has differences in every direction.
-dstd::String write_trace(const dstd::String& dir, int file, std::uint64_t seed,
+dstd::String write_trace(dstd::StringView dir, int file, std::uint64_t seed,
                          bool variant) {
-    const dstd::String pfw = dir + "/rank_" + dstd::to_string(file) + ".pfw";
+    const dstd::String pfw =
+        dstd::String(dir) + "/rank_" + dstd::to_string(file) + ".pfw";
     {
         dftu_utils_test::FileOut ofs(pfw);
         Rng rng(seed * 1000 + static_cast<std::uint64_t>(file));
@@ -145,7 +149,7 @@ dstd::String write_trace(const dstd::String& dir, int file, std::uint64_t seed,
                 name = "fetch.iter";
                 dur = 200 + rng.below(1500);
             }
-            ofs << R"({"id":)" << i << R"(,"ph":"X","pid":)" << pid
+            ofs << R"({"id":)" << i << R"(,"ph":1,"pid":)" << pid
                 << R"(,"tid":)" << tid << R"(,"name":")" << name
                 << R"(","cat":")" << cat << R"(","ts":)" << ts << R"(,"dur":)"
                 << dur << R"(,"args":{)";
@@ -184,11 +188,11 @@ dstd::String write_trace(const dstd::String& dir, int file, std::uint64_t seed,
 }
 
 // A seeded jitter keeps the fitted distributions from being degenerate.
-void write_dlio_traces(const dstd::String& dir) {
+void write_dlio_traces(dstd::StringView dir) {
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     for (int file = 0; file < 2; ++file) {
         const dstd::String pfw =
-            dir + "/dlio_" + dstd::to_string(file) + ".pfw";
+            dstd::String(dir) + "/dlio_" + dstd::to_string(file) + ".pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
             Rng rng(77 + static_cast<std::uint64_t>(file));
@@ -216,7 +220,7 @@ void write_dlio_traces(const dstd::String& dir) {
                     for (const auto& e : events) {
                         ofs << R"({"id":)" << id++ << R"(,"pid":)" << e.pid
                             << R"(,"tid":)" << tid << R"(,"name":")" << e.name
-                            << R"(","cat":")" << e.cat << R"(","ph":"X","ts":)"
+                            << R"(","cat":")" << e.cat << R"(","ph":1,"ts":)"
                             << ts << R"(,"dur":)" << e.dur
                             << R"(,"args":{"hhash":"h1"}})" << "\n";
                         ts += e.dur;
@@ -305,7 +309,7 @@ bool rel_close(double x, double y, double tol) {
 // Line 1: column names. Line 2: S for a text column, N for a number. Then one
 // line per row, sorted by the key columns, tab separated.
 dstd::String table_text(const dataframe::DataFrame& t,
-                        const dstd::Vector<dstd::String>& keys) {
+                        dstd::Span<const dstd::String> keys) {
     const std::size_t ncols = t.names.size();
     dstd::Vector<bool> text(ncols);
     dstd::Vector<bool> is_key(ncols);
@@ -377,11 +381,11 @@ double column_tolerance(dstd::StringView name, bool& known) {
     return TOL_EXACT;
 }
 
-bool cells_close(const dstd::String& a, const dstd::String& b, double tol) {
+bool cells_close(dstd::StringView a, dstd::StringView b, double tol) {
     if (a == b) return true;
     if (tol == 0.0 || a == "null" || b == "null") return false;
-    return rel_close(std::strtod(a.c_str(), nullptr),
-                     std::strtod(b.c_str(), nullptr), tol);
+    return rel_close(std::strtod(dstd::String(a).c_str(), nullptr),
+                     std::strtod(dstd::String(b).c_str(), nullptr), tol);
 }
 
 struct ParsedTable {
@@ -391,7 +395,7 @@ struct ParsedTable {
 };
 
 ParsedTable parse_table(dstd::StringView text,
-                        const dstd::Vector<dstd::String>& keys) {
+                        dstd::Span<const dstd::String> keys) {
     ParsedTable t;
     const auto lines = split(text, '\n');
     REQUIRE(lines.size() >= 2);
@@ -418,9 +422,9 @@ ParsedTable parse_table(dstd::StringView text,
     return t;
 }
 
-void compare_table(const char* label, dstd::StringView ref_text,
+void compare_table(dstd::StringView label, dstd::StringView ref_text,
                    dstd::StringView out_text,
-                   const dstd::Vector<dstd::String>& keys) {
+                   dstd::Span<const dstd::String> keys) {
     INFO(label);
     const ParsedTable ref = parse_table(ref_text, keys);
     const ParsedTable out = parse_table(out_text, keys);
@@ -574,7 +578,7 @@ dstd::Vector<ViewQuery> view_queries() {
     return queries;
 }
 
-dstd::Vector<ViewFile> view_files(const dstd::Vector<dstd::String>& gz) {
+dstd::Vector<ViewFile> view_files(dstd::Span<const dstd::String> gz) {
     dstd::Vector<ViewFile> files;
     for (const auto& f : gz)
         files.push_back({dstd::String(f), determine_index_path(f, "")});
@@ -609,7 +613,7 @@ dstd::String normalize_report(dstd::String text) {
     return text;
 }
 
-dstd::String run_comparator(const dstd::Vector<dstd::String>& extra) {
+dstd::String run_comparator(dstd::Span<const dstd::String> extra) {
     const dstd::String binary = dftu_utils_test::find_binary_by_name(
         "DFTRACER_UTILS_COMPARATOR_PATH", "dftracer_comparator");
     REQUIRE(!binary.empty());
@@ -628,7 +632,7 @@ using Elem = simdjson::dom::element;
 using Obj = simdjson::dom::object;
 using Arr = simdjson::dom::array;
 using Fields = dstd::Map<dstd::String, Elem>;
-using EachFn = void (*)(const Elem&, const Elem&, const dstd::String&);
+using EachFn = void (*)(const Elem&, const Elem&, dstd::StringView);
 
 enum class MetricKind { Exact, Moment, Quantile };
 
@@ -652,7 +656,7 @@ MetricKind metric_kind(dstd::StringView name, bool& known) {
     return MetricKind::Exact;
 }
 
-Fields fields_of(const Elem& e, const dstd::String& where) {
+Fields fields_of(const Elem& e, dstd::StringView where) {
     Fields out;
     Obj obj;
     REQUIRE_MESSAGE(e.get(obj) == simdjson::SUCCESS,
@@ -661,7 +665,7 @@ Fields fields_of(const Elem& e, const dstd::String& where) {
     return out;
 }
 
-dstd::Vector<Elem> items_of(const Elem& e, const dstd::String& where) {
+dstd::Vector<Elem> items_of(const Elem& e, dstd::StringView where) {
     dstd::Vector<Elem> out;
     Arr arr;
     REQUIRE_MESSAGE(e.get(arr) == simdjson::SUCCESS, where << ": not an array");
@@ -685,7 +689,7 @@ double number_field(const Fields& f, dstd::StringView key) {
 }
 
 void compare_key_sets(const Fields& ref, const Fields& out,
-                      const dstd::String& where) {
+                      dstd::StringView where) {
     for (const auto& entry : ref)
         CHECK_MESSAGE(out.count(entry.first) != 0,
                       where << ": field missing in output: " << entry.first);
@@ -694,8 +698,7 @@ void compare_key_sets(const Fields& ref, const Fields& out,
                       where << ": field not in reference: " << entry.first);
 }
 
-void compare_exact(const Elem& ref, const Elem& out,
-                   const dstd::String& where) {
+void compare_exact(const Elem& ref, const Elem& out, dstd::StringView where) {
     const bool numbers = ref.is_number() && out.is_number();
     const bool same_type = ref.type() == out.type() || numbers;
     CHECK_MESSAGE(same_type, where << ": type differs");
@@ -712,7 +715,7 @@ void compare_exact(const Elem& ref, const Elem& out,
 }
 
 void compare_metric(const Elem& ref_e, const Elem& out_e,
-                    const dstd::String& where) {
+                    dstd::StringView where) {
     const Fields ref = fields_of(ref_e, where);
     const Fields out = fields_of(out_e, where);
     compare_key_sets(ref, out, where);
@@ -730,7 +733,7 @@ void compare_metric(const Elem& ref_e, const Elem& out_e,
     for (const auto& [key, value] : ref) {
         const auto it = out.find(key);
         if (it == out.end()) continue;
-        const dstd::String field = where + "." + key;
+        const dstd::String field = dstd::String(where) + "." + key;
         const double a = number_field(ref, key);
         const double b = number_field(out, key);
         if (key == "baseline" || key == "variant") {
@@ -766,7 +769,7 @@ void compare_metric(const Elem& ref_e, const Elem& out_e,
 // The order of the entries is not compared, as the report orders groups by
 // values that move with the quantiles.
 void compare_named(const Elem& ref_e, const Elem& out_e,
-                   dstd::StringView id_key, const dstd::String& where,
+                   dstd::StringView id_key, dstd::StringView where,
                    EachFn each) {
     dstd::Map<dstd::String, Elem> ref, out;
     for (const auto& item : items_of(ref_e, where))
@@ -776,20 +779,21 @@ void compare_named(const Elem& ref_e, const Elem& out_e,
     for (const auto& [id, item] : ref) {
         const auto it = out.find(id);
         CHECK_MESSAGE(it != out.end(), where << ": missing in output: " << id);
-        if (it != out.end()) each(item, it->second, where + "/" + id);
+        if (it != out.end())
+            each(item, it->second, (dstd::String(where) + "/" + id));
     }
     for (const auto& entry : out)
         CHECK_MESSAGE(ref.count(entry.first) != 0,
                       where << ": not in reference: " << entry.first);
 }
 
-void compare_metrics(const Elem& ref, const Elem& out,
-                     const dstd::String& where) {
-    compare_named(ref, out, "name", where + ".metrics", compare_metric);
+void compare_metrics(const Elem& ref, const Elem& out, dstd::StringView where) {
+    compare_named(ref, out, "name", dstd::String(where) + ".metrics",
+                  compare_metric);
 }
 
 void compare_node(const Elem& ref_e, const Elem& out_e,
-                  const dstd::String& where) {
+                  dstd::StringView where) {
     const Fields ref = fields_of(ref_e, where);
     const Fields out = fields_of(out_e, where);
     compare_key_sets(ref, out, where);
@@ -800,17 +804,17 @@ void compare_node(const Elem& ref_e, const Elem& out_e,
                   where << ".duql");
     compare_metrics(fields_of(ref.at("summary"), where).at("metrics"),
                     fields_of(out.at("summary"), where).at("metrics"),
-                    where + ".summary");
+                    dstd::String(where) + ".summary");
     compare_named(ref.at("groups"), out.at("groups"), "label",
-                  where + ".groups",
-                  [](const Elem& r, const Elem& o, const dstd::String& w) {
+                  dstd::String(where) + ".groups",
+                  [](const Elem& r, const Elem& o, dstd::StringView w) {
                       const Fields rf = fields_of(r, w);
                       const Fields of = fields_of(o, w);
                       compare_key_sets(rf, of, w);
                       compare_metrics(rf.at("metrics"), of.at("metrics"), w);
                   });
     compare_named(ref.at("children"), out.at("children"), "name",
-                  where + ".children", compare_node);
+                  dstd::String(where) + ".children", compare_node);
 }
 
 void compare_report(dstd::StringView ref_text, dstd::StringView out_text) {
@@ -913,8 +917,9 @@ TEST_SUITE("AggParity") {
         REQUIRE(!binary.empty());
         const dstd::String out = fixtures().root.str() + "/dlio_config.yaml";
         REQUIRE(dftu_utils_test::run_process(
-                    binary, {fixtures().dlio_dir, "-o", out,
-                             "--simulation-iterations", "2"}) == 0);
+                    binary, dftu_utils_test::span_of<dstd::String>(
+                                {fixtures().dlio_dir, "-o", out,
+                                 "--simulation-iterations", "2"})) == 0);
         const dstd::String produced = read_text(out);
         const dstd::String ref = reference("dlio_config.yaml", produced);
         if (!ref.empty()) compare_yaml(ref, produced);

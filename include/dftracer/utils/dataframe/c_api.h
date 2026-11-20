@@ -33,7 +33,8 @@ enum {
     DFTU_SCALAR_TAG_U64 = 1,
     DFTU_SCALAR_TAG_F64 = 2,
     DFTU_SCALAR_TAG_STR = 3,
-    DFTU_SCALAR_TAG_ERR = 4
+    DFTU_SCALAR_TAG_ERR = 4,
+    DFTU_SCALAR_TAG_NULL = 5
 };
 
 /** A scalar operand, tagged by its domain so a kernel converts it to the
@@ -51,7 +52,11 @@ enum {
  * the operation and the column type. The error and its message are BORROWED
  * from thread-local storage and stay valid until the next reduction on the same
  * thread, so copy them if they must outlive that. The other value members are
- * not meaningful for an ERR scalar. */
+ * not meaningful for an ERR scalar.
+ *
+ * A NULL scalar means "no value": the C++ Series::min and Series::max return it
+ * for a column with no valid row (the C functions keep their 0 result). Its
+ * `value` is zero, so a reader that ignores the tag sees 0. */
 #ifndef DFTU_TYPEDEF_DFTU_SCALAR
 #define DFTU_TYPEDEF_DFTU_SCALAR
 typedef struct dftu_scalar dftu_scalar;
@@ -377,6 +382,38 @@ DFTU_EXPORT const char* dftu_series_name(const dftu_series* s, size_t* len);
  * NULL `s` and on allocation failure. */
 DFTU_EXPORT dftu_series* dftu_series_rename(const dftu_series* s,
                                             const char* name, size_t len);
+
+/* The row labels of a column: one label column per level, each as long as the
+ * column. A column with none is positional (the pandas RangeIndex, nothing
+ * materialized). dftu_series_share, dftu_series_rename, dftu_series_mark_json
+ * and dftu_series_slice carry the labels, and the shape-keeping functions of
+ * the C++ Series do; a function that reorders or selects rows through this C
+ * ABI promises none. */
+
+/** The number of label levels of `s`: 0 when it has none or `s` is NULL. */
+DFTU_EXPORT int32_t dftu_series_index_count(const dftu_series* s);
+/** Level `i` of `s`: stores its name in `*ptr` (NUL-terminated, not owned) and
+ * its byte length in `*len` (`len` may be NULL). The text stays valid until `s`
+ * is freed. Returns 0, or -1 and leaves `*ptr` and `*len` untouched when `s` or
+ * `ptr` is NULL or `i` is out of range. */
+DFTU_EXPORT int32_t dftu_series_index_name(const dftu_series* s, int32_t i,
+                                           const char** ptr, size_t* len);
+/** A new owned column holding the label column of level `i` of `s`, sharing its
+ * buffers zero-copy and carrying no labels of its own. Free it with
+ * dftu_series_free. NULL for a NULL `s` and an out-of-range `i`. */
+DFTU_EXPORT dftu_series* dftu_series_index_column(const dftu_series* s,
+                                                  int32_t i);
+/** A new owned column sharing `s`'s buffers (as dftu_series_share) whose labels
+ * are the `n` columns in `levels`, named by the `lens[i]` bytes at `names[i]`
+ * (copied; not necessarily NUL-terminated). The level columns are shared, not
+ * consumed, and a level of type List or Struct is refused. `n` == 0 gives a
+ * column with no labels. NULL for a NULL `s`, a NULL pointer with `n` > 0, a
+ * negative `n`, a level whose length differs from `s`, an invalid level, a
+ * repeated name and on allocation failure. Free the result with
+ * dftu_series_free. */
+DFTU_EXPORT dftu_series* dftu_series_with_index(
+    const dftu_series* s, const char* const* names, const size_t* lens,
+    const dftu_series* const* levels, int32_t n);
 
 /** Elementwise binary arithmetic (same numeric type, same length). */
 DFTU_EXPORT dftu_series* dftu_series_add(const dftu_series* a,
@@ -791,18 +828,23 @@ enum {
 };
 /** One calendar `part` (a dftu_dt_part) per row as Int64, of a Timestamp /
  * Date32 / Date64 / Duration column in its own unit, or of an Int64 column
- * read in `unit` (a dftu_time_unit). Naive: a timezone is ignored, every part
- * is UTC. Before the epoch the day still floors correctly. NULL for another
- * type or a bad code. */
+ * read in `unit` (a dftu_time_unit). A Timestamp column with a timezone gives
+ * the parts of its wall time in that zone; a naive column, an Int64 column and
+ * a UTC one give the UTC parts. Before the epoch the day still floors
+ * correctly. NULL for another type, a bad code, or a zone that is not in the
+ * time zone database (see dftu_tz_take_error). */
 DFTU_EXPORT dftu_series* dftu_series_dt_part(const dftu_series* v, int32_t part,
                                              int32_t unit);
 /** Each instant of a Timestamp / Date32 / Date64 / Duration column (its own
- * unit) or an Int64 column read in `unit` (a dftu_time_unit) as UTC text by the
+ * unit) or an Int64 column read in `unit` (a dftu_time_unit) as text by the
  * strftime-style `fmt` (fmt_len bytes): %Y %y %m %d %H %I %M %S %f (six-digit
- * microseconds) %j %a %A %b %B %p %F %T %s (epoch seconds, floored) %z (+0000)
- * %Z (UTC) %%. A null row stays null. NULL for another input type, a bad
- * `unit`, a NULL `fmt` with a positive length, an unknown directive or a
- * trailing '%'. The caller frees the result. */
+ * microseconds) %j %a %A %b %B %p %F %T %s (epoch seconds, floored) %z %Z %%.
+ * A Timestamp column with a timezone prints its wall time in that zone, %z as
+ * the offset (+0530, and seconds when the zone has them) and %Z as the zone's
+ * abbreviation at that instant; every other input prints UTC, %z as +0000 and
+ * %Z as UTC. A null row stays null. NULL for another input type, a bad `unit`,
+ * a NULL `fmt` with a positive length, an unknown directive, a trailing '%',
+ * or a zone that is not in the database. The caller frees the result. */
 DFTU_EXPORT dftu_series* dftu_series_dt_format(const dftu_series* v,
                                                const char* fmt, int32_t fmt_len,
                                                int32_t unit);
@@ -811,17 +853,133 @@ typedef int32_t dftu_dt_round_mode;
 enum { DFTU_DT_FLOOR = 0, DFTU_DT_CEIL = 1, DFTU_DT_ROUND = 2 };
 /** Each instant rounded to a multiple of `every` (in the column's own unit;
  * an Int64 column is taken as it is) by `mode` (a dftu_dt_round_mode; ROUND
- * is half to even, as pandas). The result keeps the input's type. NULL for a
- * date column, another non-instant type, `every` <= 0 or a bad code. */
+ * is half to even, as pandas). A Timestamp column with a timezone rounds its
+ * wall time and maps the result back to UTC; a wall time that happens twice
+ * or never makes the call fail, as pandas. The result keeps the input's type.
+ * NULL for a date column, another non-instant type, `every` <= 0, a bad code,
+ * or a zone failure (see dftu_tz_take_error). */
 DFTU_EXPORT dftu_series* dftu_series_dt_round(const dftu_series* v,
                                               int64_t every, int32_t mode);
-/** The same instants under the timezone `tz` (a zone name such as "UTC" or
- * "Asia/Tokyo"; `tz_len` bytes, 0 for naive): the Timestamp type's zone is
- * replaced and no tick moves, as pandas `tz_convert`, or `tz_localize` on a
- * naive column with "UTC". The buffers are shared. NULL for another type. */
+/** How dftu_series_dt_as_unit rounds to a coarser unit. */
+typedef int32_t dftu_dt_unit_rounding;
+enum {
+    /** Floor toward -infinity, as pandas `as_unit`. */
+    DFTU_DT_UNIT_FLOOR = 0,
+    /** As Polars `cast_time_unit`: a Timestamp floors, a Duration truncates
+     * toward zero. */
+    DFTU_DT_UNIT_POLARS = 1
+};
+/** A Timestamp or Duration column in another `unit` (a dftu_time_unit),
+ * keeping the instant, with the zone kept; a coarser unit rounds by `mode` (a
+ * dftu_dt_unit_rounding). NULL for another type, a bad `unit` or `mode`, or
+ * when a valid row does not fit Int64 in the finer unit (an error, never a
+ * wrap). */
+DFTU_EXPORT dftu_series* dftu_series_dt_as_unit(const dftu_series* v,
+                                                int32_t unit, int32_t mode);
+/** The calendar day of each Timestamp (its own unit; a column with a timezone
+ * gives the day of its wall time in that zone, else the UTC day) or Date64 row
+ * as Date32, floored toward -infinity. NULL for another type, a day outside
+ * Int32 or a zone that is not in the database. */
+DFTU_EXPORT dftu_series* dftu_series_dt_date(const dftu_series* v);
+/** The time of day of each Timestamp row, since midnight in the column's own
+ * unit (the wall time in the column's zone, or UTC when it has none): Time32
+ * for seconds and milliseconds, Time64 for microseconds and nanoseconds. NULL
+ * for another type or a zone that is not in the database. */
+DFTU_EXPORT dftu_series* dftu_series_dt_time(const dftu_series* v);
+/** The same instants under the timezone `tz` (a zone name such as "UTC",
+ * "Asia/Tokyo" or "+05:30"; `tz_len` bytes, 0 for naive): the Timestamp type's
+ * zone is replaced and no tick moves, as pandas `tz_convert`. The buffers are
+ * shared. NULL for another type, or for a name that is not in the time zone
+ * database (see dftu_tz_take_error). */
 DFTU_EXPORT dftu_series* dftu_series_with_timezone(const dftu_series* v,
                                                    const char* tz,
                                                    int32_t tz_len);
+/** Sets the directories searched for time zone files first, as `paths`
+ * (`len` bytes, not NUL terminated) separated as in PATH (':', and ';' on
+ * Windows). The library then also
+ * searches DFTRACER_UTILS_TZDIR, TZDIR and the system zoneinfo directories. A
+ * NULL `paths` or a `len` of 0 or less clears the list. Zones already loaded
+ * stay as they are. The text is copied, so the caller keeps ownership. Thread
+ * safe. */
+DFTU_EXPORT void dftu_tz_set_search_path(const char* paths, int32_t len);
+/** How dftu_series_tz_localize reads a wall time that happens twice (the
+ * clock stepping back). */
+typedef int32_t dftu_tz_ambiguous;
+enum {
+    /** The call fails. */
+    DFTU_TZ_AMBIGUOUS_RAISE = 0,
+    /** The first of the two instants (the daylight time side). */
+    DFTU_TZ_AMBIGUOUS_EARLIEST = 1,
+    /** The second of the two instants (the standard time side). */
+    DFTU_TZ_AMBIGUOUS_LATEST = 2,
+    /** The row becomes null. */
+    DFTU_TZ_AMBIGUOUS_NAT = 3,
+    /** As pandas "infer": in each run of consecutive ambiguous rows the rows
+     * before the wall time steps back take the first instant and the rest the
+     * second; a run needs exactly one step back. */
+    DFTU_TZ_AMBIGUOUS_INFER = 4
+};
+/** How dftu_series_tz_localize reads a wall time that never happens (the
+ * clock stepping forward). */
+typedef int32_t dftu_tz_nonexistent;
+enum {
+    /** The call fails. */
+    DFTU_TZ_NONEXISTENT_RAISE = 0,
+    /** The first instant after the gap. */
+    DFTU_TZ_NONEXISTENT_SHIFT_FORWARD = 1,
+    /** One tick before the gap. */
+    DFTU_TZ_NONEXISTENT_SHIFT_BACKWARD = 2,
+    /** The row becomes null. */
+    DFTU_TZ_NONEXISTENT_NAT = 3,
+    /** The wall time plus `shift` ticks, read at the offset after the gap; the
+     * call fails when that is still not a single instant. */
+    DFTU_TZ_NONEXISTENT_SHIFT = 4
+};
+/** Wall time to UTC, pandas `tz_localize`. A naive Timestamp column read as
+ * wall times in the zone `tz` becomes a column in that zone, its ticks the
+ * UTC instants; `ambiguous` and `nonexistent` (dftu_tz_ambiguous and
+ * dftu_tz_nonexistent) say what a wall time that happens twice or never
+ * becomes, and `shift` (ticks of the column's unit) is the shift of
+ * DFTU_TZ_NONEXISTENT_SHIFT. A column with a timezone and an empty `tz` becomes
+ * the naive column of its wall times. A naive column with an empty `tz`
+ * comes back as it is. NULL for a column that is not a Timestamp, a column with
+ * a timezone and a non-empty `tz`, a bad code, a zone that is not in the
+ * database, a wall time that the options refuse, or a wall time whose instant
+ * does not fit Int64 (see dftu_tz_take_error). The caller frees the result. */
+DFTU_EXPORT dftu_series* dftu_series_tz_localize(const dftu_series* v,
+                                                 const char* tz, int32_t tz_len,
+                                                 int32_t ambiguous,
+                                                 int32_t nonexistent,
+                                                 int64_t shift);
+/** dftu_series_tz_localize with its options in one Int64, for the column op
+ * table: `options` is `ambiguous | nonexistent << 8 | shift_ns << 16`, the
+ * shift in nanoseconds, so it must lie within +-2^47 ns (about 39 hours); the
+ * caller that packs it checks that. NULL, with a DFTU_TZ_ERROR_OTHER failure,
+ * for a shift that is not a whole number of the column's ticks. */
+DFTU_EXPORT dftu_series* dftu_series_tz_localize_opts(const dftu_series* v,
+                                                      const char* tz,
+                                                      int32_t tz_len,
+                                                      int64_t options);
+/** The kinds of failure dftu_tz_take_error reports. */
+typedef int32_t dftu_tz_error_kind;
+enum {
+    DFTU_TZ_ERROR_NONE = 0,
+    /** The zone name is well formed and in no directory searched. */
+    DFTU_TZ_ERROR_UNKNOWN_ZONE = 1,
+    /** The zone name is malformed. */
+    DFTU_TZ_ERROR_INVALID_ZONE = 2,
+    DFTU_TZ_ERROR_AMBIGUOUS = 3,
+    DFTU_TZ_ERROR_NONEXISTENT = 4,
+    DFTU_TZ_ERROR_OUT_OF_RANGE = 5,
+    DFTU_TZ_ERROR_OTHER = 6
+};
+/** The last time zone failure of the calling thread, then cleared: a kind
+ * (dftu_tz_error_kind, DFTU_TZ_ERROR_NONE when the last time zone call on this
+ * thread did not fail) and, when `message` is not NULL, a NUL-terminated text
+ * in `*message` that stays valid until the next time zone call on this thread.
+ * The calls that report a failure through a NULL result are the time zone
+ * calls of this header and the calendar kernels of a zone-aware column. */
+DFTU_EXPORT int32_t dftu_tz_take_error(const char** message);
 /** Each row's List<String> joined with `sep` into one String; a null list
  * stays null. NULL unless `v` is a FLAT List of strings. */
 DFTU_EXPORT dftu_series* dftu_series_list_join(const dftu_series* v,
@@ -909,17 +1067,60 @@ DFTU_EXPORT dftu_series* dftu_series_take_i32(const dftu_series* v,
  * directions. The caller owns the returned column. */
 DFTU_EXPORT dftu_series* dftu_series_argsort(const dftu_series* v,
                                              int32_t descending);
+/** The same with the nulls placed by `nulls_last`: last when nonzero, first
+ * otherwise. Ties and nulls keep input order in every mode. The caller frees
+ * the Int64 result with dftu_series_free. NULL if `v` is NULL or has a nested
+ * type (no order). */
+DFTU_EXPORT dftu_series* dftu_series_argsort_nulls(const dftu_series* v,
+                                                   int32_t descending,
+                                                   int32_t nulls_last);
 
 /** Summary statistics over the non-null values of a FLAT column. Moment stats
- * are numeric-only; quantile sorts (SIMD); nunique/unique work for any type. */
+ * are numeric-only; quantile sorts (SIMD); nunique/unique work for any type.
+ * `sample` nonzero divides by n - 1. variance and stddev give NaN for no valid
+ * value and, for the sample form, for one; 0.0 for a NULL `v` or a type with no
+ * numeric value. */
 DFTU_EXPORT double dftu_series_variance(const dftu_series* v, int32_t sample);
 DFTU_EXPORT double dftu_series_stddev(const dftu_series* v, int32_t sample);
 DFTU_EXPORT double dftu_series_skewness(const dftu_series* v);
 DFTU_EXPORT double dftu_series_kurtosis(const dftu_series* v);
+/** The pandas sample skewness G1 (NaN below three values) and sample excess
+ * kurtosis G2 (NaN below four values); NaN for a column with no spread. 0.0 if
+ * `v` is NULL or not numeric. Nothing is allocated for the caller. */
+DFTU_EXPORT double dftu_series_skewness_unbiased(const dftu_series* v);
+DFTU_EXPORT double dftu_series_kurtosis_unbiased(const dftu_series* v);
+/** How dftu_series_quantile_interp picks a quantile between two ranked values.
+ */
+typedef int32_t dftu_interpolation;
+enum {
+    DFTU_INTERP_LINEAR = 0,
+    DFTU_INTERP_NEAREST = 1,
+    DFTU_INTERP_LOWER = 2,
+    DFTU_INTERP_HIGHER = 3,
+    DFTU_INTERP_MIDPOINT = 4
+};
+
+/** The exact `q` quantile (q clamped to [0, 1]) of the non-null values with
+ * linear interpolation; NaN when there is no value or `q` is NaN. A NaN value
+ * ranks above every number. Returns 0.0 when `v` is NULL. Nothing is allocated
+ * for the caller. */
 DFTU_EXPORT double dftu_series_quantile(const dftu_series* v, double q);
+/** Like dftu_series_quantile, with `interp` (a dftu_interpolation) choosing the
+ * result when `q * (n - 1)` falls between two ranks: LINEAR blends them,
+ * NEAREST rounds the rank half away from zero, LOWER and HIGHER take the rank
+ * below or above, MIDPOINT their mean. An unknown `interp` or a NaN `q` gives
+ * NaN; a NULL `v` gives 0.0. */
+DFTU_EXPORT double dftu_series_quantile_interp(const dftu_series* v, double q,
+                                               dftu_interpolation interp);
 DFTU_EXPORT int64_t dftu_series_nunique(const dftu_series* v);
 /** The distinct non-null values, ascending. Caller owns the column. */
 DFTU_EXPORT dftu_series* dftu_series_unique(const dftu_series* v);
+/** The distinct values, a null kept once: in first-occurrence order when
+ * `maintain_order` is nonzero, otherwise ascending with the null first. The
+ * caller frees the result with dftu_series_free. NULL if `v` is NULL or has a
+ * nested type. */
+DFTU_EXPORT dftu_series* dftu_series_unique_nulls(const dftu_series* v,
+                                                  int32_t maintain_order);
 
 /** Elementwise transforms -> a new FLAT column (caller owns). abs/clip/round
  * are SIMD; fillna clears nulls; cumsum is a running sum. */
@@ -955,6 +1156,59 @@ DFTU_EXPORT dftu_series* dftu_series_pct_change(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_sqrt(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_exp(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_log(const dftu_series* v);
+/** log(1 + x) and exp(x) - 1 over the values, as a Float64 column that keeps
+ * the input's validity: exact for a tiny x where log(1 + x) and exp(x) - 1
+ * lose every digit. NULL for a nested, string or Bool column. Caller owns the
+ * result. */
+DFTU_EXPORT dftu_series* dftu_series_log1p(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_expm1(const dftu_series* v);
+
+/** Elementwise math over the values: sin, cos, tan, cot (1 / tan), arcsin,
+ * arccos, arctan, sinh, cosh, tanh, arcsinh, arccosh, arctanh, cbrt, log10, erf
+ * and erfc. A Float32 column gives Float32, any other numeric column gives
+ * Float64. Each value keeps its validity bit; a value outside the domain
+ * (arcsin of 2) is NaN, as libm gives. NULL for a nested, string, Bool or
+ * temporal column. Caller owns the result. */
+DFTU_EXPORT dftu_series* dftu_series_sin(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_cos(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_tan(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_cot(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_arcsin(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_arccos(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_arctan(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_sinh(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_cosh(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_tanh(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_arcsinh(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_arccosh(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_arctanh(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_cbrt(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_log10(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_erf(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_erfc(const dftu_series* v);
+
+/** Bit counts of an integer or Bool column, as a Uint32 column that keeps the
+ * input's validity: the set bits, the clear bits, the run of set or clear bits
+ * from the top, and the run from the bottom, within the column's own width
+ * (a Bool is one bit; a signed value is its two's complement bits). NULL for
+ * any other column. Caller owns the result. */
+DFTU_EXPORT dftu_series* dftu_series_bitwise_count_ones(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_bitwise_count_zeros(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_bitwise_leading_ones(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_bitwise_leading_zeros(
+    const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_bitwise_trailing_ones(
+    const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_bitwise_trailing_zeros(
+    const dftu_series* v);
+
+/** The bitwise AND, OR and XOR of the non-null values of an integer or Bool
+ * column: an I64 scalar for a signed integer or a Bool (0 or 1), a U64 scalar
+ * for an unsigned one, a NULL scalar for a column with no non-null value, an
+ * ERR scalar for any other column. */
+DFTU_EXPORT dftu_scalar dftu_series_bitwise_and(const dftu_series* v);
+DFTU_EXPORT dftu_scalar dftu_series_bitwise_or(const dftu_series* v);
+DFTU_EXPORT dftu_scalar dftu_series_bitwise_xor(const dftu_series* v);
 
 /** Predicate masks over a column, each a bit-packed Bool column that keeps
  * the input's validity (a null value has a null answer).
@@ -977,6 +1231,12 @@ DFTU_EXPORT dftu_series* dftu_series_valid_mask(const dftu_series* v);
  * group. */
 DFTU_EXPORT dftu_series* dftu_series_is_unique(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_is_duplicated(const dftu_series* v);
+/** A Bool mask of the repeats of a value: `keep` 0 leaves the first row of each
+ * value unmarked, 1 the last, any other value marks every row of a repeated
+ * value (is_duplicated). A null is one value. The caller frees the result with
+ * dftu_series_free. NULL if `v` is NULL or has a nested type. */
+DFTU_EXPORT dftu_series* dftu_series_duplicated(const dftu_series* v,
+                                                int32_t keep);
 
 /** Whether `v` is sorted ascending (or descending when `descending` is
  * nonzero); a single scan. An empty or single-row column is sorted. */
@@ -996,6 +1256,12 @@ DFTU_EXPORT dftu_series* dftu_series_is_in(const dftu_series* v,
  * take(argsort(v, descending)). */
 DFTU_EXPORT dftu_series* dftu_series_sort(const dftu_series* v,
                                           int32_t descending);
+/** The same with the nulls placed by `nulls_last`, as argsort_nulls. The
+ * caller frees the result with dftu_series_free. NULL if `v` is NULL or has a
+ * nested type. */
+DFTU_EXPORT dftu_series* dftu_series_sort_nulls(const dftu_series* v,
+                                                int32_t descending,
+                                                int32_t nulls_last);
 
 /** First / last `n` rows (n clamped to [0, length]) as a new FLAT column. */
 DFTU_EXPORT dftu_series* dftu_series_head(const dftu_series* v, int64_t n);
@@ -1185,6 +1451,11 @@ DFTU_EXPORT dftu_series* dftu_series_qcut(const dftu_series* v, int32_t q);
  * length values length. */
 DFTU_EXPORT dftu_series* dftu_series_search_sorted(const dftu_series* v,
                                                    const dftu_series* values);
+/** The same, inserting after the equal values when `right` is nonzero. The
+ * caller frees the Int64 result with dftu_series_free. NULL if `v` or `values`
+ * is NULL or either is not numeric. */
+DFTU_EXPORT dftu_series* dftu_series_search_sorted_side(
+    const dftu_series* v, const dftu_series* values, int32_t right);
 
 /** Linearly interpolate null interior values between their nearest non-null
  * neighbors (by row index); leading/trailing nulls stay null. Returns
@@ -1268,6 +1539,46 @@ DFTU_EXPORT dftu_series* dftu_dataframe_column(const dftu_dataframe* df,
 DFTU_EXPORT const dftu_series* dftu_dataframe_column_at(
     const dftu_dataframe* df, int32_t i);
 
+/* The row index: the ordered columns that label the rows. The columns are
+ * ordinary columns of the frame; an empty index is the positional RangeIndex.
+ * A frame carries its index through the frame ops by the rules in
+ * frame_op_index_rules.def, and through Arrow as schema metadata. */
+
+/** Status codes of dftu_frame_with_index. */
+enum {
+    DFTU_FRAME_INDEX_OK = 0,
+    /** `frame`, `out`, or `names` or `lens` with `n` > 0 is NULL, or `n` is
+     * negative. */
+    DFTU_FRAME_INDEX_BAD_ARGUMENT = 1,
+    /** A name is no column of the frame. */
+    DFTU_FRAME_INDEX_NOT_FOUND = 2,
+    /** A name repeats, or names a column whose type has no hash and equality
+     * (list, struct). */
+    DFTU_FRAME_INDEX_INVALID = 3
+};
+
+/** The number of index columns of `frame`: 0 when it has no index or `frame`
+ * is NULL. */
+DFTU_EXPORT int32_t dftu_frame_index_count(const dftu_dataframe* frame);
+/** Index column `i` of `frame`: stores its name in `*ptr` (NUL-terminated, not
+ * owned) and its byte length in `*len` (`len` may be NULL). The text stays
+ * valid for the lifetime of `frame`, which is never modified. Returns 0, or -1
+ * and leaves `*ptr` and `*len` untouched when `frame` or `ptr` is NULL or `i`
+ * is out of range. */
+DFTU_EXPORT int32_t dftu_frame_index_name(const dftu_dataframe* frame,
+                                          int32_t i, const char** ptr,
+                                          size_t* len);
+/** A zero-copy copy of `frame` whose index is the `n` columns named by `names`
+ * (each `lens[i]` bytes, not necessarily NUL-terminated); `n` == 0 drops the
+ * index. On DFTU_FRAME_INDEX_OK stores an owned frame in `*out`, which the
+ * caller frees with dftu_dataframe_free; `frame` is not consumed and may be
+ * freed independently. On any other status `*out` is set to NULL (when `out` is
+ * not NULL) and nothing is allocated. */
+DFTU_EXPORT int32_t dftu_frame_with_index(const dftu_dataframe* frame,
+                                          const char* const* names,
+                                          const size_t* lens, int32_t n,
+                                          dftu_dataframe** out);
+
 /* Row ops (return a new frame). */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_take(const dftu_dataframe* df,
                                                 const int64_t* idx, int64_t n);
@@ -1284,6 +1595,14 @@ DFTU_EXPORT dftu_dataframe* dftu_dataframe_head(const dftu_dataframe* df,
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_sort_by(const dftu_dataframe* df,
                                                    const char* name,
                                                    int32_t descending);
+/** Order every row by the column `name`, ascending unless `descending`; null
+ * keys go last when `nulls_last` is nonzero, first otherwise. Stable: rows
+ * that tie, nulls included, keep their input order. Returns a new frame that
+ * the caller frees with dftu_dataframe_free, or NULL if `df` or `name` is NULL
+ * or `name` is absent or has no order (a nested type). */
+DFTU_EXPORT dftu_dataframe* dftu_dataframe_sort_by_nulls(
+    const dftu_dataframe* df, const char* name, int32_t descending,
+    int32_t nulls_last);
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_topk(const dftu_dataframe* df,
                                                 const char* name, int64_t k,
                                                 int32_t largest);
@@ -1320,11 +1639,29 @@ DFTU_EXPORT dftu_dataframe* dftu_dataframe_unique_by(const dftu_dataframe* df,
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_sort_by_multi(
     const dftu_dataframe* df, const char* const* names, int32_t n,
     int32_t descending);
+/** The same with the nulls placed by `nulls_last` (last when nonzero). The
+ * caller frees the new frame with dftu_dataframe_free. NULL if `df` is NULL,
+ * `n` is negative, `names` is NULL while `n` is above 0, or a name is absent
+ * or has no order. */
+DFTU_EXPORT dftu_dataframe* dftu_dataframe_sort_by_multi_nulls(
+    const dftu_dataframe* df, const char* const* names, int32_t n,
+    int32_t descending, int32_t nulls_last);
 /** Per-column direction form: `descending[i]` (0/1) applies to `names[i]`.
  * `descending_n` must be 1 (broadcast to every key) or equal `n`. */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_sort_by_multi_per_col(
     const dftu_dataframe* df, const char* const* names, int32_t n,
     const int32_t* descending, int32_t descending_n);
+/** Per-column form: `descending[i]` and `nulls_last[i]` (0/1) apply to
+ * `names[i]`. `descending_n` and `nulls_last_n` must each be 1 (broadcast to
+ * every key) or equal `n`. Returns a new frame that the caller frees with
+ * dftu_dataframe_free. NULL if `df` is NULL, a count is negative, `names`,
+ * `descending` or `nulls_last` is NULL while its count is above 0, a size is
+ * neither 1 nor `n`, or a name is absent or has no order. The arrays are only
+ * read during the call. */
+DFTU_EXPORT dftu_dataframe* dftu_dataframe_sort_by_multi_per_col_nulls(
+    const dftu_dataframe* df, const char* const* names, int32_t n,
+    const int32_t* descending, int32_t descending_n, const int32_t* nulls_last,
+    int32_t nulls_last_n);
 /** The last `n` rows (clamped). */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_tail(const dftu_dataframe* df,
                                                 int64_t n);
@@ -1808,14 +2145,21 @@ DFTU_EXPORT void dftu_lazyframe_free(dftu_lazyframe* lf);
 
 /** A plan over the file at `path`, opened by the plugin file format that
  * claims it (dftu_file_format_vt, registered through
- * dftu_svc_file_formats). `path` is borrowed for the call. Writes a new
+ * dftu_svc_file_formats). `path` is a NUL-terminated string borrowed for the
+ * call. `index_dir` is the index directory the scan reads to skip the chunks
+ * an index built by the Indexer proves hold no matching row: `index_dir_len`
+ * bytes, borrowed for the call and copied, not NUL-terminated; NULL (with
+ * `index_dir_len` 0) means the index beside the file. A file with no index, or
+ * one that changed since it was indexed, is read whole. Writes a new
  * caller-owned handle to `*out` and returns 0; the caller frees it with
  * dftu_lazyframe_free. A file no format claims, two formats that tie for it, or
  * a failing plugin all produce a plan whose dftu_lazyframe_collect returns
  * NULL, exactly as they do in C++; to tell them apart, read the reason from the
  * C++ LazyFrame::status(). Returns non-zero and writes nothing when `path` or
- * `out` is NULL. */
+ * `out` is NULL, or `index_dir` is NULL and `index_dir_len` is not 0. */
 DFTU_EXPORT int dftu_lazyframe_scan_file(const char* path,
+                                         const char* index_dir,
+                                         size_t index_dir_len,
                                          dftu_lazyframe** out);
 
 /** Remove the file format registered as `name`. Only the name is removed: a
@@ -1834,6 +2178,15 @@ DFTU_EXPORT char* dftu_lazyframe_schema(const dftu_lazyframe* lf);
  * malloc'd C string the caller frees with dftu_duql_string_free. NULL on
  * error. */
 DFTU_EXPORT char* dftu_lazyframe_explain(const dftu_lazyframe* lf);
+
+/** Run the plan to its end, dropping the rows, and return the plan as
+ * dftu_lazyframe_explain does with the rows, time and filter votes each stage
+ * measured and the counters plugins added during the run. `batch_size` is the
+ * scan chunk size, as for dftu_lazyframe_collect. Does NOT consume `lf`. A new
+ * malloc'd C string the caller frees with dftu_duql_string_free. NULL on error,
+ * including a run that fails and a second analysis started while one runs. */
+DFTU_EXPORT char* dftu_lazyframe_explain_analyze(const dftu_lazyframe* lf,
+                                                 int64_t batch_size);
 
 /** Keep rows where `pred` (a dftu_expr over the frame's columns by position) is
  * true. `pred` is borrowed. NULL on error. */
@@ -1864,6 +2217,12 @@ DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_group_by(const dftu_lazyframe* lf,
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_sort_by(const dftu_lazyframe* lf,
                                                    const char* name,
                                                    int32_t descending);
+/** The same with the null keys last when `nulls_last` is nonzero, first
+ * otherwise. The caller frees the new plan with dftu_lazyframe_free. NULL if
+ * `lf` or `name` is NULL. */
+DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_sort_by_nulls(
+    const dftu_lazyframe* lf, const char* name, int32_t descending,
+    int32_t nulls_last);
 
 /** First / last `n` rows (head is the row-limit form). */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_head(const dftu_lazyframe* lf,
@@ -2047,11 +2406,16 @@ DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_take(const dftu_lazyframe* lf,
                                                 const int64_t* idx, int32_t n);
 
 /** Stable lexicographic sort by the `n` key columns named by `by`, ascending
- * unless `descending` (nulls last in both directions), as
- * DataFrame::sort_by_multi. */
+ * unless `descending`, as DataFrame::sort_by_multi. */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_sort_by_multi(
     const dftu_lazyframe* lf, const char* const* by, int32_t n,
     int32_t descending);
+/** The same with the null keys last when `nulls_last` is nonzero, first
+ * otherwise. The caller frees the new plan with dftu_lazyframe_free. NULL if
+ * `lf` is NULL, `n` is negative, or `by` is NULL while `n` is above 0. */
+DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_sort_by_multi_nulls(
+    const dftu_lazyframe* lf, const char* const* by, int32_t n,
+    int32_t descending, int32_t nulls_last);
 
 /** Join `lf` (left) with `other` (right), as dftu_dataframe_join. The right
  * plan is collected in full when the joined plan runs (the hash build side);

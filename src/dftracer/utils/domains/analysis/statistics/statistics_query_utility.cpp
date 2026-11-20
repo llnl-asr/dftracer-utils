@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/domains/analysis/statistics/statistics_query_utility.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -150,16 +151,14 @@ dstd::String StatisticsQueryOutput::to_json() const {
 
     if (!results.empty()) {
         ss += ",\"results\":[";
-        bool first = true;
-        for (const auto& [name, count] : results) {
-            if (!first) ss += ',';
-            first = false;
-            ss += "{\"name\":\"";
-            trace::internal::append_value(ss, name);
-            ss += "\",\"count\":";
-            trace::internal::append_value(ss, count);
-            ss += '}';
-        }
+        dstd::fmt_append_join<",">(
+            ss, results, [](dstd::String& o, const auto& r) {
+                o += "{\"name\":\"";
+                trace::internal::append_value(o, r.first);
+                o += "\",\"count\":";
+                trace::internal::append_value(o, r.second);
+                o += '}';
+            });
         ss += ']';
     }
 

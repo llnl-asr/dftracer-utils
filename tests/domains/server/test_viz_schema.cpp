@@ -7,6 +7,7 @@
 #include <dftracer/utils/domains/server/trace_api.h>
 #include <dftracer/utils/domains/server/trace_index.h>
 #include <dftracer/utils/domains/server/viz_api.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -71,7 +72,7 @@ void register_schemas() {
             trace::index::register_schema(spec, "test_viz_schema"));
 }
 
-void write_gz(const dstd::Path& path, const dstd::String& content) {
+void write_gz(const dstd::Path& path, dstd::StringView content) {
     fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
@@ -81,7 +82,7 @@ void write_gz(const dstd::Path& path, const dstd::String& content) {
 }
 
 struct Served {
-    explicit Served(const dstd::String& name) : dir(name) {}
+    explicit Served(dstd::StringView name) : dir(dstd::String(name)) {}
     dftu_utils_test::ScopedTestDir dir;
     dstd::UniquePtr<TraceIndex> index;
     Router router;
@@ -89,8 +90,7 @@ struct Served {
 
 // A server over `content`, written as the one trace file of a fresh
 // directory. Discovery lists .pfw.gz files only.
-dstd::UniquePtr<Served> serve(const dstd::String& name,
-                              const dstd::String& content) {
+dstd::UniquePtr<Served> serve(dstd::StringView name, dstd::StringView content) {
     auto s = dstd::make_unique<Served>(name);
     write_gz(s->dir.path() / "trace.pfw.gz", content);
     s->index = dstd::make_unique<TraceIndex>(dstd::String(s->dir.str()),
@@ -108,7 +108,7 @@ dstd::UniquePtr<Served> serve(const dstd::String& name,
     return s;
 }
 
-dstd::String get(Served& s, const dstd::String& target) {
+dstd::String get(Served& s, dstd::StringView target) {
     HttpRequest req;
     req.method = "GET";
     req.path = target;
@@ -155,12 +155,12 @@ constexpr std::int64_t OTEL_T0 = 1700000000000000000;
 
 dstd::String otel() {
     dstd::String out;
-    auto span = [&](const char* name, const char* service, std::int64_t start,
-                    std::int64_t dur) {
+    auto span = [&](dstd::StringView name, dstd::CStringView service,
+                    std::int64_t start, std::int64_t dur) {
         out += R"({"name":")" + dstd::String(name) +
                R"(","span":{"start_ns":)" + dstd::to_string(start) +
                R"(,"dur_ns":)" + dstd::to_string(dur) +
-               R"(},"resource":{"service":")" + service + "\"}}\n";
+               R"(},"resource":{"service":")" + service.c_str() + "\"}}\n";
     };
     for (int i = 0; i < OTEL_REQUESTS; ++i) {
         const std::int64_t t = OTEL_T0 + i * 20'000'000LL;
@@ -219,7 +219,7 @@ struct DensityTotals {
     double total = 0;
 };
 
-DensityTotals density_totals(const dstd::String& body) {
+DensityTotals density_totals(dstd::StringView body) {
     simdjson::dom::parser p;
     auto root = p.parse(simdjson::padded_string(body)).value();
     DensityTotals t;
@@ -236,7 +236,7 @@ DensityTotals density_totals(const dstd::String& body) {
 
 // name -> (count, total) of a stats body.
 dstd::Map<dstd::String, dstd::Pair<std::uint64_t, double>> stat_rows(
-    const dstd::String& body) {
+    dstd::StringView body) {
     simdjson::dom::parser p;
     auto root = p.parse(simdjson::padded_string(body)).value();
     dstd::Map<dstd::String, dstd::Pair<std::uint64_t, double>> out;

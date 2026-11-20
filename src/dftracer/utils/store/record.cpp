@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/extent_codec.h>
@@ -36,20 +37,20 @@ void append_magic(dstd::Vector<std::uint8_t>& out, dstd::StringView magic) {
 }
 
 void append_byte_string(dstd::Vector<std::uint8_t>& out,
-                        const dstd::String& value) {
+                        dstd::StringView value) {
     encode_varint(out, value.size());
     const auto* begin = reinterpret_cast<const std::uint8_t*>(value.data());
     out.insert(out.end(), begin, begin + value.size());
 }
 
 void append_byte_vector(dstd::Vector<std::uint8_t>& out,
-                        const dstd::Vector<std::uint8_t>& value) {
+                        dstd::Span<const std::uint8_t> value) {
     encode_varint(out, value.size());
     out.insert(out.end(), value.begin(), value.end());
 }
 
 void append_item(dstd::Vector<std::uint8_t>& out, std::uint64_t tag,
-                 const dstd::Vector<std::uint8_t>& payload) {
+                 dstd::Span<const std::uint8_t> payload) {
     encode_varint(out, tag);
     encode_varint(out, payload.size());
     out.insert(out.end(), payload.begin(), payload.end());

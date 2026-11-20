@@ -22,10 +22,10 @@ AggSchema make_agg_schema(const ViewPlan& plan) {
     s.spec_field.assign(plan.agg.size(), -1);
     s.spec_argmax.assign(plan.agg.size(), -1);
     s.spec_set.assign(plan.agg.size(), -1);
-    auto field_index = [&](const dstd::String& f) -> int {
+    auto field_index = [&](dstd::StringView f) -> int {
         for (std::size_t i = 0; i < s.fields.size(); ++i)
             if (s.fields[i] == f) return static_cast<int>(i);
-        s.fields.push_back(f);
+        s.fields.emplace_back(f);
         return static_cast<int>(s.fields.size() - 1);
     };
     for (std::size_t i = 0; i < plan.agg.size(); ++i) {
@@ -123,9 +123,9 @@ const dftracer::utils::trace::index::plan::GroupResolver* ensure_resolver(
 
 dstd::String resolve_group_value(
     const dftracer::utils::trace::index::plan::GroupResolver& r,
-    const GroupKey& gk, const dstd::String& hash) {
+    const GroupKey& gk, dstd::StringView hash) {
     const GroupKey::Kind kind = gk.kind;
-    auto text = [](const dstd::String& v) {
+    auto text = [](dstd::StringView v) {
         return dstd::String(v.data(), v.size());
     };
     if (kind == GroupKey::Kind::FilePath) return text(r.value(FILE_PATH, hash));
@@ -138,7 +138,7 @@ dstd::String resolve_group_value(
     }
     if (kind == GroupKey::Kind::HostName) return text(r.value(HOST_NAME, hash));
     if (kind == GroupKey::Kind::Rank) return text(r.value(RANK, hash));
-    return hash;
+    return dstd::String(hash);
 }
 
 dstd::String apply_group_transform(const GroupKey& gk, dstd::String v) {
@@ -204,35 +204,35 @@ dstd::String group_col_name(const GroupKey& gk) {
 // convention (sum_field). The legacy mean path keeps the bare arg name. Pct
 // uses the spec's out_name prefix (e.g. "p90_" from the pNN shorthand) so the
 // quantile is legible; otherwise it falls back to "pct_".
-dstd::String dyn_col_name(const AggSpec& spec, const dstd::String& key) {
+dstd::String dyn_col_name(const AggSpec& spec, dstd::StringView key) {
     switch (spec.op) {
         case AggOp::Count:
-            return "count_" + key;
+            return dstd::fmt<"count_{}">(key);
         case AggOp::Sum:
-            return "sum_" + key;
+            return dstd::fmt<"sum_{}">(key);
         case AggOp::Min:
-            return "min_" + key;
+            return dstd::fmt<"min_{}">(key);
         case AggOp::Max:
-            return "max_" + key;
+            return dstd::fmt<"max_{}">(key);
         case AggOp::SumSq:
-            return "sumsq_" + key;
+            return dstd::fmt<"sumsq_{}">(key);
         case AggOp::Mean:
-            return "mean_" + key;
+            return dstd::fmt<"mean_{}">(key);
         case AggOp::Var:
-            return "var_" + key;
+            return dstd::fmt<"var_{}">(key);
         case AggOp::Std:
-            return "std_" + key;
+            return dstd::fmt<"std_{}">(key);
         case AggOp::Skew:
-            return "skew_" + key;
+            return dstd::fmt<"skew_{}">(key);
         case AggOp::Kurt:
-            return "kurt_" + key;
+            return dstd::fmt<"kurt_{}">(key);
         case AggOp::Pct: {
             dstd::String pfx = spec.out_name.empty() ? "pct_" : spec.out_name;
             if (pfx.back() != '_') pfx += '_';
-            return pfx + key;
+            return dstd::fmt<"{}{}">(pfx, key);
         }
         default:
-            return key;
+            return dstd::String(key);
     }
 }
 
@@ -280,7 +280,7 @@ dstd::String agg_col_name(const AggSpec& spec) {
 }
 
 void project_columns(dftracer::utils::dataframe::DataFrame& batch,
-                     const dstd::Vector<dstd::String>& select) {
+                     dstd::Span<const dstd::String> select) {
     if (select.empty()) return;
     const dstd::HashSet<dstd::String> keep(select.begin(), select.end());
     dstd::Vector<dstd::SharedString> names;

@@ -78,11 +78,13 @@ class Query {
     bool has_expressions_ = false;
 };
 
+/// @cond INTERNAL
 namespace detail {
 
 inline const QueryNode& QueryAccess::root(const Query& q) { return *q.root_; }
 
 }  // namespace detail
+/// @endcond
 
 /// `a and b`, sharing the expression terms of both.
 Query conjoin(const Query& a, const Query& b);

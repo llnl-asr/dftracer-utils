@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -34,12 +35,13 @@ namespace {
 
 constexpr std::size_t STRIPE = 1 * 1024 * 1024;  // 1 MB stripe for the test
 
-dstd::String tmp_path(const char* name) {
-    return dstd::String(dftu_utils_test::make_unique_test_path(name).str());
+dstd::String tmp_path(dstd::StringView name) {
+    return dstd::String(
+        dftu_utils_test::make_unique_test_path(dstd::String(name)).str());
 }
 
 // Compress `data` into a standalone gzip member with zlib.
-dstd::Vector<std::uint8_t> gzip_member(const dstd::String& data) {
+dstd::Vector<std::uint8_t> gzip_member(dstd::StringView data) {
     uLongf bound = compressBound(data.size()) + 64;
     dstd::Vector<std::uint8_t> out(bound);
     z_stream s{};
@@ -55,13 +57,13 @@ dstd::Vector<std::uint8_t> gzip_member(const dstd::String& data) {
     return out;
 }
 
-dstd::ByteView as_bv(const dstd::Vector<std::uint8_t>& v) {
+dstd::ByteView as_bv(dstd::Span<const std::uint8_t> v) {
     return dstd::ByteView(reinterpret_cast<const std::byte*>(v.data()),
                           v.size());
 }
 
 // Decompress the whole file via gzread (spans concatenated members natively).
-dstd::String gunzip_all(const dstd::String& path) {
+dstd::String gunzip_all(dstd::CStringView path) {
     gzFile g = gzopen(path.c_str(), "rb");
     REQUIRE(g != nullptr);
     dstd::String out;
@@ -362,7 +364,7 @@ namespace {
 // A gzip member of exactly `total` bytes: `head`, then `fill` up to the size
 // that stored deflate blocks of 65535 bytes leave, and an FEXTRA field of a
 // few bytes for the rest. The decoded bytes go to `payload`.
-dstd::Vector<std::uint8_t> exact_member(const dstd::String& head, char fill,
+dstd::Vector<std::uint8_t> exact_member(dstd::StringView head, char fill,
                                         std::size_t total,
                                         dstd::String& payload) {
     std::size_t blocks = (total - 20 + 65539) / 65540;

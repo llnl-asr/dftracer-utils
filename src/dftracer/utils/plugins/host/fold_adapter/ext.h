@@ -57,6 +57,12 @@ const void* providers_ext_vtable();
 const void* file_formats_ext_vtable();
 const void* nodes_ext_vtable();
 const void* index_ext_vtable();
+/// The hash fields of dftu_svc_index, shared by the scan-time and the
+/// build-phase tables.
+std::uint32_t index_hash_version();
+std::uint64_t index_hash_value(const ::dftu_value* v);
+dftu_status index_hash_series(const ::dftu_series* column, std::uint64_t* out,
+                              std::uint64_t n);
 const void* task_ext_vtable();
 /// The dftu.svc.ports table of a fold's host.
 const void* ports_ext_vtable();
@@ -77,11 +83,11 @@ const void* cursor_memory_ext_vtable();
 /// The table of a service that keeps no state in a fold (io, sketch, ops,
 /// providers, nodes, index, fs, json, yaml and file formats), shared by the
 /// host of a fold and the host of a cursor; null for any other id.
-const void* stateless_service(const char* ext_id);
+const void* stateless_service(dstd::StringView ext_id);
 
 /// Logs a plugin's line at `level` (a dftu_log_level) tagged with its name.
-void log_plugin_line(dstd::StringView plugin, std::uint8_t level, const char* s,
-                     std::uint32_t n);
+void log_plugin_line(dstd::StringView plugin, std::uint8_t level,
+                     dstd::StringView msg);
 
 /// dftu_svc_ops::register_op with the plugin-name gate applied. Shared with
 /// the build-phase host, whose op registration is the same call. The record
@@ -118,14 +124,14 @@ void task_release(void* h, ::dftu_task* t);
 /// registration is the same call. `plugin` is the name the plugin declares in
 /// its dftu_plugin_info.
 dftu_status register_plugin_provider(::dftu_ctx* ctx, dstd::StringView plugin,
-                                     const char* name,
+                                     dstd::StringView name,
                                      const ::dftu_source_vt* vt, void* self,
                                      dstd::SharedPtr<PluginLibrary> library,
                                      dstd::SharedPtr<PluginMemory> memory);
 
 /// dftu_svc_nodes::register_node with the same plugin-name gate, forwarding
 /// into the process-lifetime node registry.
-dftu_status register_plugin_node(::dftu_ctx* ctx, const char* name,
+dftu_status register_plugin_node(::dftu_ctx* ctx, dstd::StringView name,
                                  const ::dftu_node_vt* vt, void* self,
                                  dstd::SharedPtr<PluginLibrary> library,
                                  dstd::SharedPtr<PluginMemory> memory);
@@ -133,7 +139,7 @@ dftu_status register_plugin_node(::dftu_ctx* ctx, const char* name,
 /// dftu_svc_index::register_extension with the same plugin-name gate,
 /// forwarding into the process index extension registry.
 dftu_status register_plugin_index_extension(
-    ::dftu_ctx* ctx, const char* name, const ::dftu_index_extension* vt,
+    ::dftu_ctx* ctx, dstd::StringView name, const ::dftu_index_extension* vt,
     void* self, dstd::SharedPtr<PluginLibrary> library);
 
 /// dftu_svc_file_formats::register_format behind the plugin-namespace gate,
@@ -141,7 +147,7 @@ dftu_status register_plugin_index_extension(
 /// `library` alive, so a plan over a file it opened keeps the plugin mapped.
 dftu_status register_plugin_file_format(::dftu_ctx* ctx,
                                         dstd::StringView plugin,
-                                        const char* name,
+                                        dstd::StringView name,
                                         const ::dftu_file_format_vt* vt,
                                         void* self,
                                         dstd::SharedPtr<PluginLibrary> library,
@@ -150,8 +156,8 @@ dftu_status register_plugin_file_format(::dftu_ctx* ctx,
 /// dftu_svc_file_formats::register_sink behind the plugin-namespace gate,
 /// forwarding into the process-lifetime sink registry.
 dftu_status register_plugin_sink(::dftu_ctx* ctx, dstd::StringView plugin,
-                                 const char* name, const ::dftu_sink_vt* vt,
-                                 void* self,
+                                 dstd::StringView name,
+                                 const ::dftu_sink_vt* vt, void* self,
                                  dstd::SharedPtr<PluginLibrary> library);
 
 }  // namespace detail

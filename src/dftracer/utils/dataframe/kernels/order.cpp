@@ -168,7 +168,7 @@ int ColumnReader::compare(std::int64_t a, const ColumnReader& other,
     }
 }
 
-dstd::Vector<std::int64_t> order_rows(const dstd::Vector<ColumnReader>& keys,
+dstd::Vector<std::int64_t> order_rows(dstd::Span<const ColumnReader> keys,
                                       std::int64_t n) {
     dstd::Vector<std::int64_t> order(static_cast<std::size_t>(n));
     std::iota(order.begin(), order.end(), 0);
@@ -189,7 +189,7 @@ dstd::Vector<std::int64_t> order_rows(const dstd::Vector<ColumnReader>& keys,
     return order;
 }
 
-bool same_keys(const dstd::Vector<ColumnReader>& keys, std::int64_t a,
+bool same_keys(dstd::Span<const ColumnReader> keys, std::int64_t a,
                std::int64_t b) {
     for (const ColumnReader& k : keys) {
         const bool na = k.is_null(a);
@@ -200,9 +200,8 @@ bool same_keys(const dstd::Vector<ColumnReader>& keys, std::int64_t a,
     return true;
 }
 
-std::int64_t run_end(const dstd::Vector<ColumnReader>& keys,
-                     const dstd::Vector<std::int64_t>& order,
-                     std::int64_t begin) {
+std::int64_t run_end(dstd::Span<const ColumnReader> keys,
+                     dstd::Span<const std::int64_t> order, std::int64_t begin) {
     const auto n = static_cast<std::int64_t>(order.size());
     const std::int64_t rep = order[static_cast<std::size_t>(begin)];
     std::int64_t end = begin + 1;

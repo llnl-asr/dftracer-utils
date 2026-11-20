@@ -1,0 +1,247 @@
+# Cases whose result differs from Polars today, one line per case:
+#   kind.method#N[input] | tag | reason
+# kind: series, frame, lazy, groupby, expr, str (the table the case sits in).
+# tag: keyword (a Polars keyword is not accepted), missing (the method is not
+# there), shape (another result type or layout), semantics (another value,
+# dtype or error rule), engine (the engine refuses the input).
+# test_polars_parity.py marks every listed case as a strict expected failure:
+# a listed case must fail and an unlisted case must pass, so a fixed case
+# fails the run until its line is deleted.
+series.skew#1[I] | semantics | [values] -1.8814382337850113 vs -1.2621071358631282
+series.n_unique#1[I] | semantics | [values] 4 vs 5
+series.n_unique#1[F] | semantics | [values] 5 vs 6
+series.n_unique#1[S] | semantics | [values] 3 vs 4
+series.null_count#1[I] | engine | [error] ours raised TypeError: 'int' object is not callable
+series.null_count#1[F] | engine | [error] ours raised TypeError: 'int' object is not callable
+series.null_count#1[S] | engine | [error] ours raised TypeError: 'int' object is not callable
+series.null_count#1[E] | engine | [error] ours raised TypeError: 'int' object is not callable
+series.describe#1[I] | shape | [shape] rows 8 vs 9
+series.describe#1[F] | shape | [shape] rows 8 vs 9
+series.dot#1[I] | semantics | [values] 36.0 vs 36
+series.round#1[Z] | semantics | [values] [0.0, -1.0, inf, -inf, nan, None, inf, 2.0, 710.0, -800.0, 0.0] vs [0.0, -1.0, inf, -inf, nan, None, 1e+308, 2.0, 710.0, -800.0, 0.0]
+series.cum_sum#2[I] | keyword | [error] ours raised TypeError: Series.cum_sum() takes no keyword arguments
+series.cum_sum#2[F] | keyword | [error] ours raised TypeError: Series.cum_sum() takes no keyword arguments
+series.cum_count#1[I] | semantics | [dtype] int64 vs uint32
+series.cum_count#1[F] | semantics | [dtype] int64 vs uint32
+series.diff#3[I] | keyword | [error] ours raised TypeError: Series.diff() got an unexpected keyword argument 'null_behavior'
+series.diff#3[F] | keyword | [error] ours raised TypeError: Series.diff() got an unexpected keyword argument 'null_behavior'
+series.shift#3[I] | keyword | [error] ours raised TypeError: Series.shift() got an unexpected keyword argument 'fill_value'
+series.shift#3[F] | keyword | [error] ours raised TypeError: Series.shift() got an unexpected keyword argument 'fill_value'
+series.rank#1[F] | semantics | [values] [3.0, None, None, 1.0, 4.0, 2.0] vs [3.0, None, 5.0, 1.0, 4.0, 2.0]
+series.rank#2[I] | semantics | [dtype] float64 vs uint32
+series.rank#2[F] | semantics | [dtype] float64 vs uint32
+series.rank#3[I] | semantics | [dtype] float64 vs uint32
+series.rank#3[F] | semantics | [dtype] float64 vs uint32
+series.rank#4[I] | semantics | [dtype] float64 vs uint32
+series.rank#4[F] | semantics | [dtype] float64 vs uint32
+series.fill_null#1[S] | engine | [error] ours raised DFTUtilsValueError: dataframe kernel produced a null column
+series.fill_null#3[I] | engine | [error] ours raised TypeError: fill_null() got an unexpected keyword argument 'strategy'
+series.fill_null#3[F] | engine | [error] ours raised TypeError: fill_null() got an unexpected keyword argument 'strategy'
+series.fill_null#4[I] | engine | [error] ours raised TypeError: fill_null() got an unexpected keyword argument 'strategy'
+series.fill_null#4[F] | engine | [error] ours raised TypeError: fill_null() got an unexpected keyword argument 'strategy'
+series.fill_null#5[I] | engine | [error] ours raised TypeError: fill_null() got an unexpected keyword argument 'strategy'
+series.fill_null#5[F] | engine | [error] ours raised TypeError: fill_null() got an unexpected keyword argument 'strategy'
+series.forward_fill#2[I] | keyword | [error] ours raised TypeError: Series.forward_fill() takes no keyword arguments
+series.forward_fill#2[F] | keyword | [error] ours raised TypeError: Series.forward_fill() takes no keyword arguments
+series.is_in#1[I] | semantics | [values] [True, False, False, True, True, False, False] vs [True, None, False, True, True, None, False]
+series.is_in#1[S] | semantics | [raises] polars raised InvalidOperationError, ours returned
+series.is_in#2[S] | semantics | [values] [True, True, False, False, True] vs [True, True, None, False, True]
+series.is_between#2[I] | keyword | [error] ours raised TypeError: is_between() got an unexpected keyword argument 'closed'
+series.is_between#2[F] | keyword | [error] ours raised TypeError: is_between() got an unexpected keyword argument 'closed'
+series.is_between#3[I] | keyword | [error] ours raised TypeError: is_between() got an unexpected keyword argument 'closed'
+series.is_between#3[F] | keyword | [error] ours raised TypeError: is_between() got an unexpected keyword argument 'closed'
+series.filter#1[F] | shape | [shape] length 2 vs 3
+series.cast#2[I] | keyword | [error] ours raised TypeError: Series.cast() got an unexpected keyword argument 'strict'
+series.cast#2[F] | keyword | [error] ours raised TypeError: Series.cast() got an unexpected keyword argument 'strict'
+series.is_unique#1[I] | engine | [error] ours raised TypeError: 'bool' object is not callable
+series.is_unique#1[F] | engine | [error] ours raised TypeError: 'bool' object is not callable
+series.is_unique#1[S] | engine | [error] ours raised TypeError: 'bool' object is not callable
+series.is_unique#1[W] | engine | [error] ours raised TypeError: 'bool' object is not callable
+series.value_counts#1[I] | shape | [type] ours Series (series), library DataFrame (frame)
+series.value_counts#1[F] | shape | [type] ours Series (series), library DataFrame (frame)
+series.value_counts#1[S] | shape | [type] ours Series (series), library DataFrame (frame)
+series.value_counts#2[I] | shape | [type] ours Series (series), library DataFrame (frame)
+series.value_counts#2[F] | shape | [type] ours Series (series), library DataFrame (frame)
+series.value_counts#2[S] | shape | [type] ours Series (series), library DataFrame (frame)
+series.value_counts#3[I] | shape | [type] ours Series (series), library DataFrame (frame)
+series.value_counts#3[F] | shape | [type] ours Series (series), library DataFrame (frame)
+series.value_counts#3[S] | shape | [type] ours Series (series), library DataFrame (frame)
+series.mode#1[I] | shape | [shape] length 1 vs 2
+series.mode#1[F] | shape | [shape] length 1 vs 6
+series.mode#1[S] | shape | [dtype] int64 vs str
+series.arg_sort#1[I] | semantics | [dtype] int64 vs uint32
+series.arg_sort#1[F] | semantics | [dtype] int64 vs uint32
+series.arg_sort#2[I] | semantics | [dtype] int64 vs uint32
+series.arg_sort#2[F] | semantics | [dtype] int64 vs uint32
+series.head#2[I] | shape | [shape] length 5 vs 7
+series.head#2[F] | shape | [shape] length 5 vs 6
+series.slice#2[I] | keyword | [error] ours raised TypeError: function takes exactly 2 arguments (1 given)
+series.slice#2[F] | keyword | [error] ours raised TypeError: function takes exactly 2 arguments (1 given)
+series.slice#2[S] | keyword | [error] ours raised TypeError: function takes exactly 2 arguments (1 given)
+series.search_sorted#1[F] | semantics | [values] 6 vs 4
+series.sample#1[I] | semantics | [values] [3, 2, -4] vs [None, 2, 1]
+series.sample#1[F] | semantics | [values] [nan, -2.5, 3.0] vs [3.0, -2.5, 1.5]
+series.explode#1[I] | engine | [error] ours raised DFTUtilsValueError: explode: v is not a List column
+series.explode#1[F] | engine | [error] ours raised DFTUtilsValueError: explode: v is not a List column
+series.explode#1[S] | engine | [error] ours raised DFTUtilsValueError: explode: v is not a List column
+series.pipe#1[I] | semantics | [raises] polars raised AttributeError, ours returned
+series.pipe#1[F] | semantics | [raises] polars raised AttributeError, ours returned
+series.map#1[I] | semantics | [raises] polars raised TypeError, ours returned
+series.map#1[F] | semantics | [raises] polars raised TypeError, ours returned
+series.truncate#1[I] | shape | [shape] length 5 vs 7
+series.truncate#1[F] | shape | [shape] length 4 vs 6
+series.ewm_mean#1[F] | semantics | [values] [1.5, 1.5, nan, nan, nan, nan] vs [1.5, None, nan, nan, nan, nan]
+series.rolling_sum#1[I] | semantics | [dtype] float64 vs int64
+series.rolling_sum#1[F] | semantics | [values] [None, None, None, nan, nan, nan] vs [None, None, None, nan, 0.5, 3.0]
+series.rolling_mean#1[F] | semantics | [values] [None, None, None, nan, nan, nan] vs [None, None, None, nan, 0.25, 1.5]
+series.rolling_min#1[I] | semantics | [dtype] float64 vs int64
+series.rolling_max#1[I] | semantics | [dtype] float64 vs int64
+series.rolling_quantile#1[F] | keyword | [error] ours raised TypeError: function takes at most 2 arguments (3 given)
+series.rolling_sum#2[I] | semantics | [error] ours raised TypeError: rolling_sum() got an unexpected keyword argument 'window_size'
+series.rolling_sum#2[F] | semantics | [error] ours raised TypeError: rolling_sum() got an unexpected keyword argument 'window_size'
+series.rolling_mean#2[I] | semantics | [error] ours raised TypeError: rolling_mean() got an unexpected keyword argument 'window_size'
+series.rolling_mean#2[F] | semantics | [error] ours raised TypeError: rolling_mean() got an unexpected keyword argument 'window_size'
+series.rolling_mean#3[I] | semantics | [error] ours raised TypeError: rolling_mean() got an unexpected keyword argument 'window_size'
+series.rolling_mean#3[F] | semantics | [error] ours raised TypeError: rolling_mean() got an unexpected keyword argument 'window_size'
+series.ge#1[F] | semantics | [values] [False, None, False, False, False, False] vs [False, None, True, False, False, False]
+series.gt#1[F] | semantics | [values] [False, None, False, False, False, False] vs [False, None, True, False, False, False]
+series.ge#2[F] | semantics | [values] [False, None, False, False, True, False] vs [False, None, True, False, True, False]
+series.gt#2[F] | semantics | [values] [False, None, False, False, True, False] vs [False, None, True, False, True, False]
+frame.median#1[E] | semantics | [dtype] a: str vs float64
+frame.null_count#1[N] | semantics | [dtype] a: int64 vs uint32
+frame.null_count#1[E] | semantics | [dtype] a: int64 vs uint32
+frame.std#2[N] | shape | [error] ours raised TypeError: DataFrame.std() got an unexpected keyword argument 'ddof'
+frame.quantile#1[N] | semantics | [values] b: [2.25] vs [3.0]
+frame.count#1[N] | semantics | [dtype] a: int64 vs uint32
+frame.count#1[M] | semantics | [dtype] a: int64 vs uint32
+frame.describe#1[N] | shape | [shape] rows 6 vs 9
+frame.corr#1[N] | shape | [shape] columns ['column', 'a', 'b'] vs ['a', 'b']
+frame.sum_horizontal#1[N] | semantics | [values] [2.5, None, nan, -0.5, 5.0] vs [2.5, 0.0, nan, -0.5, 5.0]
+frame.fill_null#3[N] | keyword | [error] ours raised TypeError: DataFrame.fill_null() got an unexpected keyword argument 'strategy'
+frame.fill_nan#1[N] | semantics | [dtype] a: float64 vs int64
+frame.drop_nulls#2[M] | keyword | [error] ours raised TypeError: DataFrame.drop_nulls() takes 1 positional argument but 2 were given
+frame.drop_nulls#3[M] | keyword | [error] ours raised TypeError: DataFrame.drop_nulls() got an unexpected keyword argument 'subset'
+frame.drop_nans#1[N] | shape | [shape] rows 3 vs 4
+frame.shift#3[N] | keyword | [error] ours raised TypeError: _FramePandasMixin.shift() got an unexpected keyword argument 'fill_value'
+frame.filter#2[M] | semantics | [raises] polars raised ColumnNotFoundError, ours returned
+frame.remove#1[N] | shape | [shape] rows 4 vs 3
+frame.select#2[M] | engine | [error] ours raised TypeError: select: takes names or expressions, got Series
+frame.with_columns#2[N] | engine | [error] ours raised TypeError: with_columns: a positional item must be expr.alias(name)
+frame.with_row_index#1[M] | keyword | [dtype] index: int64 vs uint32
+frame.with_row_index#2[M] | keyword | [error] ours raised TypeError: DataFrame.with_row_index() got an unexpected keyword argument 'offset'
+frame.unique#1[M] | keyword | [error] ours raised TypeError: DataFrame.unique() got an unexpected keyword argument 'maintain_order'
+frame.unique#2[M] | keyword | [error] ours raised TypeError: DataFrame.unique() got an unexpected keyword argument 'keep'
+frame.sample#1[N] | semantics | [values] a: [3, 2] vs [2, 2]
+frame.explode#1[M] | semantics | [raises] polars raised InvalidOperationError, ours DFTUtilsValueError: explode: c is not a List column
+frame.unpivot#1[N] | keyword | [error] ours raised TypeError: unpivot() needs value_vars (polars: on=)
+frame.unpivot#2[N] | keyword | [error] ours raised TypeError: DataFrame.unpivot() got an unexpected keyword argument 'variable_name'
+frame.pivot#1[G] | engine | [error] ours raised TypeError: argument 1 must be str, not None
+frame.transpose#1[N] | shape | [shape] columns ['column', '0', '1', '2', '3', '4'] vs ['column_0', 'column_1', 'column_2', 'column_3', 'column_4']
+frame.transpose#2[N] | shape | [error] ours raised TypeError: _FramePandasMixin.transpose() got an unexpected keyword argument 'include_header'
+frame.to_dummies#1[M] | shape | [shape] columns ['a', 'b', 'c_x', 'c_y', 'd'] vs ['a', 'b', 'c_null', 'c_x', 'c_y', 'd']
+frame.to_dict#1[N] | semantics | [values] {'a': [1, None, 3, 2, 2], 'b': [1.5, None, nan, -2.5, 3.0]} vs {'a': shape: (5,) Series: 'a' [i64] [ 	1 	null 	3 	2 	2 ], 'b': shape: (5,) Series: 'b' [f64] [ 	1.5 	null 	NaN 	-2.5 	3.0 ]}
+frame.to_dict#2[N] | semantics | [error] ours raised TypeError: DataFrame.to_dict() got an unexpected keyword argument 'as_series'
+frame.to_dicts#1[N] | semantics | [values] [{'a': 1, 'b': 1.5}, {'a': None, 'b': None}, {'a': 3, 'b': nan}, {'a': 2, 'b': -2.5}, {'a': 2, 'b': 3.0}] vs [{'a': 1, 'b': 1.5}, {'a': None, 'b': None}, {'a': 3, 'b': nan}, {'a': 2, 'b': -2.
+frame.get_columns#1[M] | semantics | [values] [[1, None, 3, 2, 2], [1.5, None, nan, -2.5, 3.0], ['x', None, 'y', 'x', 'y'], [True, False, True, True, False]] vs [shape: (5,) Series: 'a' [i64] [ 	1 	null 	3 	2 	2 ], shape: (5,) Series: 'b
+frame.hstack#1[N] | shape | [shape] columns ['a', 'b', 'column_0'] vs ['a', 'b', 'z']
+frame.update#1[N] | shape | [type] ours NoneType (scalar), library DataFrame (frame)
+frame.partition_by#1[M] | semantics | [values] [   a     b  c     d 0  1   1.5  x  True 1  2  -2.5  x  True,       a    b     c      d 0  None  NaN  None  False,    a    b  c      d 0  3  NaN  y   True 1  2  3.0  y  False] vs [shape: (2, 
+frame.join#5[G] | semantics | [error] ours raised TypeError: DataFrame.join() got an unexpected keyword argument 'coalesce'
+frame.rolling#1[N] | keyword | [error] ours raised TypeError: _FramePandasMixin.rolling() got an unexpected keyword argument 'index_column'
+frame.dtypes#1[M] | semantics | [values] [<DType.INT64: 5>, <DType.FLOAT64: 11>, <DType.STRING: 12>, <DType.BOOL: 1>] vs [Int64, Float64, String, Boolean]
+frame.dtypes#1[N] | semantics | [values] [<DType.INT64: 5>, <DType.FLOAT64: 11>] vs [Int64, Float64]
+frame.dtypes#1[E] | semantics | [values] [<DType.INT64: 5>, <DType.FLOAT64: 11>] vs [Int64, Float64]
+frame.schema#1[M] | semantics | [values] {'a': <DType.INT64: 5>, 'b': <DType.FLOAT64: 11>, 'c': <DType.STRING: 12>, 'd': <DType.BOOL: 1>} vs {'a': Int64, 'b': Float64, 'c': String, 'd': Boolean}
+frame.schema#1[N] | semantics | [values] {'a': <DType.INT64: 5>, 'b': <DType.FLOAT64: 11>} vs {'a': Int64, 'b': Float64}
+frame.schema#1[E] | semantics | [values] {'a': <DType.INT64: 5>, 'b': <DType.FLOAT64: 11>} vs {'a': Int64, 'b': Float64}
+lazy.null_count#1[N] | semantics | [dtype] a: int64 vs uint32
+lazy.count#1[N] | semantics | [dtype] a: int64 vs uint32
+lazy.fill_null#2[N] | keyword | [error] ours raised TypeError: LazyFrame.fill_null() got an unexpected keyword argument 'strategy'
+lazy.drop_nulls#2[M] | keyword | [error] ours raised TypeError: LazyFrame.drop_nulls() got an unexpected keyword argument 'subset'
+lazy.remove#1[N] | shape | [shape] rows 4 vs 3
+lazy.with_row_index#1[M] | semantics | [dtype] index: int64 vs uint32
+lazy.unique#1[M] | keyword | [error] ours raised TypeError: LazyFrame.unique() got an unexpected keyword argument 'maintain_order'
+lazy.explode#1[M] | engine | `explode` operation not supported for dtype `str`
+lazy.unpivot#1[N] | keyword | [error] ours raised TypeError: LazyFrame.unpivot() got an unexpected keyword argument 'index'
+lazy.describe#1[N] | shape | [shape] rows 6 vs 9
+lazy.collect_schema#1[M] | semantics | [values] {'a': <DType.INT64: 5>, 'b': <DType.FLOAT64: 11>, 'c': <DType.STRING: 12>, 'd': <DType.BOOL: 1>} vs {'a': Int64, 'b': Float64, 'c': String, 'd': Boolean}
+groupby.sum#1[G] | keyword | [error] ours raised TypeError: DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.mean#1[G] | keyword | [error] ours raised TypeError: DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.median#1[G] | keyword | [error] ours raised TypeError: DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.min#1[G] | keyword | [error] ours raised TypeError: DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.max#1[G] | keyword | [error] ours raised TypeError: DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.first#1[G] | keyword | [error] ours raised TypeError: DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.last#1[G] | keyword | [error] ours raised TypeError: DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.len#1[G] | keyword | [error] ours raised TypeError: DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.n_unique#1[G] | keyword | [error] ours raised TypeError: DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.quantile#1[G] | keyword | [error] ours raised TypeError: DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.head#1[G] | keyword | [error] ours raised TypeError: DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.tail#1[G] | keyword | [error] ours raised TypeError: DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+groupby.all#1[G] | keyword | [error] ours raised TypeError: DataFrame.group_by() got an unexpected keyword argument 'maintain_order'
+expr.len#1[I] | semantics | [dtype] r: int64 vs uint32
+expr.len#1[F] | semantics | [dtype] r: int64 vs uint32
+expr.len#1[S] | semantics | [dtype] r: int64 vs uint32
+expr.n_unique#1[I] | semantics | [dtype] r: int64 vs uint32
+expr.n_unique#1[F] | semantics | [dtype] r: int64 vs uint32
+expr.n_unique#1[S] | semantics | [dtype] r: int64 vs uint32
+expr.null_count#1[I] | semantics | [dtype] r: int64 vs uint32
+expr.null_count#1[F] | semantics | [dtype] r: int64 vs uint32
+expr.null_count#1[S] | semantics | [dtype] r: int64 vs uint32
+expr.round#1[F] | keyword | [error] ours raised TypeError: Expr.__getattr__.<locals>.<lambda>() takes 0 positional arguments but 1 was given
+expr.round#1[Z] | keyword | [error] ours raised TypeError: Expr.__getattr__.<locals>.<lambda>() takes 0 positional arguments but 1 was given
+expr.var#1[I] | keyword | [error] ours raised TypeError: _make_agg_method.<locals>.method() got an unexpected keyword argument 'ddof'
+expr.var#1[F] | keyword | [error] ours raised TypeError: _make_agg_method.<locals>.method() got an unexpected keyword argument 'ddof'
+expr.arg_max#1[I] | semantics | [dtype] r: int64 vs uint32
+expr.arg_max#1[F] | semantics | [dtype] r: int64 vs uint32
+expr.arg_min#1[I] | semantics | [dtype] r: int64 vs uint32
+expr.arg_min#1[F] | semantics | [dtype] r: int64 vs uint32
+expr.count#1[I] | semantics | [dtype] r: int64 vs uint32
+expr.count#1[F] | semantics | [dtype] r: int64 vs uint32
+expr.count#1[S] | semantics | [dtype] r: int64 vs uint32
+expr.cum_count#1[I] | semantics | [dtype] r: int64 vs uint32
+expr.cum_count#1[F] | semantics | [dtype] r: int64 vs uint32
+expr.rank#1[F] | semantics | [values] r: [3.0, None, None, 1.0, 4.0, 2.0] vs [3.0, None, 5.0, 1.0, 4.0, 2.0]
+expr.rank#2[I] | semantics | [dtype] r: float64 vs uint32
+expr.rank#2[F] | semantics | [dtype] r: float64 vs uint32
+expr.fill_null#1[S] | engine | [error] ours raised DFTUtilsValueError: expr: an operation does not take its input column type
+expr.fill_null#2[I] | engine | [error] ours raised TypeError: Expr.fill_null() got an unexpected keyword argument 'strategy'
+expr.fill_null#2[F] | engine | [error] ours raised TypeError: Expr.fill_null() got an unexpected keyword argument 'strategy'
+expr.is_in#1[I] | semantics | [values] r: [True, False, False, True, True, False, False] vs [True, None, False, True, True, None, False]
+expr.is_in#1[S] | semantics | [raises] polars raised InvalidOperationError, ours DFTUtilsValueError: expr: is_in over a string column needs string values, got int64
+expr.cast#1[I] | engine | [error] ours raised KeyError: Float64
+expr.cast#1[F] | engine | [error] ours raised KeyError: Float64
+expr.alias#1[I] | missing | [error] ours raised AttributeError: 'Named' object has no attribute 'alias'
+expr.alias#1[F] | missing | [error] ours raised AttributeError: 'Named' object has no attribute 'alias'
+expr.alias#1[S] | missing | [error] ours raised AttributeError: 'Named' object has no attribute 'alias'
+expr.arg_sort#1[I] | semantics | [dtype] r: int64 vs uint32
+expr.arg_sort#1[F] | semantics | [dtype] r: int64 vs uint32
+expr.replace#1[I] | engine | [error] ours raised TypeError: bad argument type for built-in operation
+expr.replace#1[F] | engine | [error] ours raised TypeError: bad argument type for built-in operation
+expr.hash#1[I] | engine | [error] ours raised DFTUtilsValueError: op 'dftu.hash.fnv1a' failed
+expr.hash#1[S] | engine | [values] r: [12638190499090526629, 12638187200555641996, None, 620445648566982762, 12638187200555641996] vs [5778980934867435740, 12015426485309150842, 13563011841600061251, 13541189028907135076, 1201
+expr.slice#1[I] | engine | [error] ours raised DFTUtilsValueError: expr: string slice needs a String column, got int64
+expr.slice#1[F] | engine | [error] ours raised DFTUtilsValueError: expr: string slice needs a String column, got float64
+expr.slice#1[S] | engine | [shape] rows 5 vs 2
+expr.get#1[I] | engine | [error] ours raised DFTUtilsValueError: expr: string method needs a String column, got int64
+expr.get#1[F] | engine | [error] ours raised DFTUtilsValueError: expr: string method needs a String column, got float64
+expr.get#1[S] | engine | [shape] rows 5 vs 1
+expr.ewm_mean#1[F] | semantics | [values] r: [1.5, 1.5, nan, nan, nan, nan] vs [1.5, None, nan, nan, nan, nan]
+expr.rolling_sum#1[I] | semantics | [dtype] r: float64 vs int64
+expr.rolling_sum#1[F] | semantics | [values] r: [None, None, None, nan, nan, nan] vs [None, None, None, nan, 0.5, 3.0]
+expr.rolling_mean#1[F] | semantics | [values] r: [None, None, None, nan, nan, nan] vs [None, None, None, nan, 0.25, 1.5]
+expr.rolling_min#1[I] | semantics | [dtype] r: float64 vs int64
+expr.rolling_max#1[I] | semantics | [dtype] r: float64 vs int64
+expr.rolling_quantile#1[F] | keyword | [error] ours raised TypeError: Expr.rolling_quantile() takes 3 positional arguments but 4 were given
+expr.sample#1[I] | keyword | [error] ours raised TypeError: Expr.sample() got an unexpected keyword argument 'n'
+expr.sample#1[F] | keyword | [error] ours raised TypeError: Expr.sample() got an unexpected keyword argument 'n'
+expr.hist#1[F] | shape | [shape] rows 1 vs 10
+str.len_chars#1[S] | semantics | [dtype] int64 vs uint32
+str.len_bytes#1[S] | semantics | [dtype] int64 vs uint32
+str.strip_chars#2[S] | keyword | [error] ours raised TypeError: _StrAccessor.strip_chars() takes no arguments (1 given)
+str.strip_chars_start#1[S] | keyword | [error] ours raised TypeError: _StrAccessor.strip_chars_start() takes no arguments (1 given)
+str.strip_chars_end#1[S] | keyword | [error] ours raised TypeError: _StrAccessor.strip_chars_end() takes no arguments (1 given)
+str.find#1[S] | semantics | [dtype] int64 vs uint32
+str.count_matches#1[S] | semantics | [dtype] int64 vs uint32
+str.join#1[S] | engine | [error] ours raised DFTUtilsValueError: list_join: not a List column of strings
+str.encode#1[S] | engine | [error] ours raised ValueError: encode: only utf-8 is supported, not 'hex'
+dt.total_seconds#1[D] | semantics | [dtype] float64 vs int64

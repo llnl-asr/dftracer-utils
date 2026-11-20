@@ -90,8 +90,8 @@ Built stepped(const dstd::SharedPtr<dstd::StringIntern>& intern,
 }
 
 dstd::Vector<views::detail::FoldEvent> copy_events(
-    const dstd::Vector<views::detail::FoldEvent>& events) {
-    return events;
+    dstd::Span<const views::detail::FoldEvent> events) {
+    return dstd::Vector<views::detail::FoldEvent>(events.begin(), events.end());
 }
 
 void check_equal(const Built& got, const dataframe::DataFrame& want) {
@@ -128,7 +128,8 @@ TEST_SUITE("RowBuild") {
         auto intern = dstd::make_shared<dstd::StringIntern>();
         const auto events = make_events(*intern);
         const dataframe::DataFrame want = views::detail::build_row_frame(
-            copy_events(events), *intern, {}, 1.0, /*by_path=*/true);
+            dstd::Span<const views::detail::FoldEvent>(copy_events(events)),
+            *intern, {}, 1.0, /*by_path=*/true);
         REQUIRE(want.columns.size() == 4);
         check_equal(stepped(intern, copy_events(events)), want);
     }
@@ -145,7 +146,8 @@ TEST_SUITE("RowBuild") {
             }
         }
         const dataframe::DataFrame want = views::detail::build_row_frame(
-            kept, *intern, {}, 1.0, /*by_path=*/true);
+            dstd::Span<const views::detail::FoldEvent>(kept), *intern, {}, 1.0,
+            /*by_path=*/true);
         const Built got = stepped(intern, std::move(events));
         REQUIRE(!got.columns.empty());
         CHECK(got.columns.front().length() ==

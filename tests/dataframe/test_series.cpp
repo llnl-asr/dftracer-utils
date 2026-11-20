@@ -18,6 +18,7 @@
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/kernels/stats.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/span.h>
@@ -26,8 +27,10 @@
 #include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
+#include <span_list.h>
 #include <task_result.h>
 
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -235,8 +238,10 @@ TEST_SUITE("vec") {
         CHECK(fm.data<double>()[1] == doctest::Approx(0.5));
         CHECK(dftu_series_floordiv(a.handle(), f.handle()) ==
               nullptr);  // length
-        CHECK(Series::strings({"x"}).floordiv(Series::strings({"y"})).valid() ==
-              false);
+        CHECK(Series::strings(dftu_utils_test::span_of<dstd::StringView>({"x"}))
+                  .floordiv(Series::strings(
+                      dftu_utils_test::span_of<dstd::StringView>({"y"})))
+                  .valid() == false);
 
         Series ff = a.ffill();
         CHECK(ff.null_count() == 0);
@@ -248,7 +253,9 @@ TEST_SUITE("vec") {
         CHECK(l.ffill().null_count() == 2);
         CHECK(l.bfill().null_count() == 0);
         CHECK(l.bfill().data<std::int64_t>()[0] == 0);
-        Series sf = Series::strings({"a", "b"}).ffill();
+        Series sf = Series::strings(
+                        dftu_utils_test::span_of<dstd::StringView>({"a", "b"}))
+                        .ffill();
         CHECK(sf.string_at(1) == "b");
 
         Series cs = a.cumsum();
@@ -259,17 +266,21 @@ TEST_SUITE("vec") {
         CHECK(a.cum_prod().is_null(2));
 
         Series parsed =
-            Series::strings({"12", " 3 ", "x", "4.5"}).cast(TypeId::Int64);
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                                {"12", " 3 ", "x", "4.5"}))
+                .cast(TypeId::Int64);
         REQUIRE(parsed.valid());
         CHECK(parsed.data<std::int64_t>()[0] == 12);
         CHECK(parsed.data<std::int64_t>()[1] == 3);
         CHECK(parsed.is_null(2));
         CHECK(parsed.is_null(3));
         Series parsed_f =
-            Series::strings({"12", "4.5", "x"}).cast(TypeId::Float64);
+            Series::strings(
+                dftu_utils_test::span_of<dstd::StringView>({"12", "4.5", "x"}))
+                .cast(TypeId::Float64);
         CHECK(parsed_f.data<double>()[1] == doctest::Approx(4.5));
         CHECK(parsed_f.is_null(2));
-        CHECK(Series::strings({"7"})
+        CHECK(Series::strings(dftu_utils_test::span_of<dstd::StringView>({"7"}))
                   .cast(TypeId::Int32)
                   .data<std::int32_t>()[0] == 7);
     }
@@ -277,8 +288,8 @@ TEST_SUITE("vec") {
     TEST_CASE(
         "the .str batch: case forms, classes, count, rfind, prefix, "
         "suffix, repeat, center, cat, findall, partition, list_join") {
-        Series s =
-            Series::strings({"hello world", "Foo Bar", "ab1", "", "a-b-a"});
+        Series s = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"hello world", "Foo Bar", "ab1", "", "a-b-a"}));
         CHECK(s.str_case(DFTU_STR_CAPITALIZE).string_at(1) == "Foo bar");
         CHECK(s.str_case(DFTU_STR_TITLE_CASE).string_at(0) == "Hello World");
         CHECK(s.str_case(DFTU_STR_SWAPCASE).string_at(1) == "fOO bAR");
@@ -307,9 +318,14 @@ TEST_SUITE("vec") {
         CHECK(s.str_center(7, '*').string_at(2) == "**ab1**");
         CHECK(s.str_center(6, '*').string_at(2) == "*ab1**");
         CHECK(s.str_center(2, '*').string_at(0) == "hello world");
-        Series cat = s.str_cat(Series::strings({"!", "!", "!", "!", "!"}));
+        Series cat = s.str_cat(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"!", "!", "!", "!", "!"})));
         CHECK(cat.string_at(0) == "hello world!");
-        CHECK_FALSE(s.str_cat(Series::strings({"x"})).valid());
+        CHECK_FALSE(
+            s.str_cat(Series::strings(
+                          dftu_utils_test::span_of<dstd::StringView>({"x"})))
+                .valid());
         Series found = s.str_findall("[a-z]+");
         REQUIRE(found.valid());
         CHECK(found.type() == TypeId::List);
@@ -386,12 +402,13 @@ TEST_SUITE("vec") {
 
     TEST_CASE(
         "str_translate: deletes, replacements, non-ASCII keys, bad tables") {
-        Series s = Series::strings(
-            {"hello world", "caf\xC3\xA9 \xE2\x82\xAC", "", "x"});
+        Series s = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"hello world", "caf\xC3\xA9 \xE2\x82\xAC", "", "x"}));
         // l deleted, o -> 0 (a letter and a digit), e-acute -> "e" and the
         // euro sign -> "EUR", w -> two codepoints.
         Series from =
-            Series::strings({"l", "o", "\xC3\xA9", "\xE2\x82\xAC", "w"});
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"l", "o", "\xC3\xA9", "\xE2\x82\xAC", "w"}));
         const dstd::Vector<dstd::StringView> to_rows{"", "0", "e", "EUR", "vv"};
         const std::uint8_t to_valid[1] = {0x1E};  // row 0 (l) is null: delete
         Series to = Series::strings(to_rows, to_valid);
@@ -402,8 +419,9 @@ TEST_SUITE("vec") {
         CHECK(out.string_at(2) == "");
         CHECK(out.string_at(3) == "x");
         // An empty replacement deletes as well; an empty table keeps every row.
-        Series del =
-            s.str_translate(Series::strings({"x"}), Series::strings({""}));
+        Series del = s.str_translate(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>({"x"})),
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>({""})));
         CHECK(del.string_at(3) == "");
         const dstd::Vector<dstd::String> no_keys;
         Series same =
@@ -415,40 +433,65 @@ TEST_SUITE("vec") {
         const std::uint8_t valid[1] = {0x05};
         Series n =
             Series::strings(rows, valid)
-                .str_translate(Series::strings({"a"}), Series::strings({"A"}));
+                .str_translate(
+                    Series::strings(
+                        dftu_utils_test::span_of<dstd::StringView>({"a"})),
+                    Series::strings(
+                        dftu_utils_test::span_of<dstd::StringView>({"A"})));
         REQUIRE(n.valid());
         CHECK(n.string_at(0) == "Abc");
         CHECK(n.is_null(1));
         CHECK(n.is_null(2));
         // Invalid tables: a duplicate key, a key of two codepoints, an empty
         // key, a null key, a length mismatch, a bad replacement.
-        CHECK_FALSE(s.str_translate(Series::strings({"a", "a"}),
-                                    Series::strings({"b", "c"}))
+        CHECK_FALSE(
+            s.str_translate(
+                 Series::strings(
+                     dftu_utils_test::span_of<dstd::StringView>({"a", "a"})),
+                 Series::strings(
+                     dftu_utils_test::span_of<dstd::StringView>({"b", "c"})))
+                .valid());
+        CHECK_FALSE(
+            s.str_translate(
+                 Series::strings(
+                     dftu_utils_test::span_of<dstd::StringView>({"ab"})),
+                 Series::strings(
+                     dftu_utils_test::span_of<dstd::StringView>({"c"})))
+                .valid());
+        CHECK_FALSE(s.str_translate(
+                         Series::strings(
+                             dftu_utils_test::span_of<dstd::StringView>({""})),
+                         Series::strings(
+                             dftu_utils_test::span_of<dstd::StringView>({"c"})))
                         .valid());
-        CHECK_FALSE(
-            s.str_translate(Series::strings({"ab"}), Series::strings({"c"}))
-                .valid());
-        CHECK_FALSE(
-            s.str_translate(Series::strings({""}), Series::strings({"c"}))
-                .valid());
         const std::uint8_t none[1] = {0};
         const dstd::Vector<dstd::StringView> one{"a"};
+        CHECK_FALSE(s.str_translate(
+                         Series::strings(one, none),
+                         Series::strings(
+                             dftu_utils_test::span_of<dstd::StringView>({"c"})))
+                        .valid());
         CHECK_FALSE(
-            s.str_translate(Series::strings(one, none), Series::strings({"c"}))
+            s.str_translate(
+                 Series::strings(
+                     dftu_utils_test::span_of<dstd::StringView>({"a", "b"})),
+                 Series::strings(
+                     dftu_utils_test::span_of<dstd::StringView>({"c"})))
                 .valid());
         CHECK_FALSE(
-            s.str_translate(Series::strings({"a", "b"}), Series::strings({"c"}))
-                .valid());
-        CHECK_FALSE(
-            s.str_translate(Series::strings({"a"}), Series::strings({"\xFF"}))
+            s.str_translate(
+                 Series::strings(
+                     dftu_utils_test::span_of<dstd::StringView>({"a"})),
+                 Series::strings(
+                     dftu_utils_test::span_of<dstd::StringView>({"\xFF"})))
                 .valid());
     }
 
     TEST_CASE("str_wrap: textwrap.wrap lines joined by newlines") {
-        Series s =
-            Series::strings({"The quick brown fox jumps over the lazy dog", "",
-                             "   ", "a-very-long-hyphenated-word and more",
-                             "tab\there  x", "supercalifragilistic"});
+        Series s = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"The quick brown fox jumps over the lazy dog", "", "   ",
+             "a-very-long-hyphenated-word and more", "tab\there  x",
+             "supercalifragilistic"}));
         Series w = s.str_wrap(
             10, DFTU_WRAP_EXPAND_TABS | DFTU_WRAP_REPLACE_WHITESPACE |
                     DFTU_WRAP_DROP_WHITESPACE | DFTU_WRAP_BREAK_LONG_WORDS |
@@ -467,8 +510,10 @@ TEST_SUITE("vec") {
                                       DFTU_WRAP_REPLACE_WHITESPACE |
                                       DFTU_WRAP_DROP_WHITESPACE);
         CHECK(k.string_at(5) == "supercalifragilistic");
-        Series keep = Series::strings({"aaa bbb ccc"})
-                          .str_wrap(4, DFTU_WRAP_BREAK_LONG_WORDS);
+        Series keep =
+            Series::strings(
+                dftu_utils_test::span_of<dstd::StringView>({"aaa bbb ccc"}))
+                .str_wrap(4, DFTU_WRAP_BREAK_LONG_WORDS);
         CHECK(keep.string_at(0) == "aaa \nbbb \nccc");
         const dstd::Vector<dstd::StringView> rows{"ab cd", "", "a\xFF"};
         const std::uint8_t valid[1] = {0x05};
@@ -482,7 +527,8 @@ TEST_SUITE("vec") {
     }
 
     TEST_CASE("str_wrap: a full line moves a long word on, as CPython does") {
-        Series s = Series::strings({" abc", "ab cdefgh"});
+        Series s = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({" abc", "ab cdefgh"}));
         CHECK(s.str_wrap(1, 31).string_at(0) == "a\nb\nc");
         CHECK(s.str_wrap(3, 31 & ~DFTU_WRAP_BREAK_ON_HYPHENS).string_at(1) ==
               "ab\ncde\nfgh");
@@ -525,7 +571,10 @@ TEST_SUITE("vec") {
         CHECK(in_s.dt_part(DFTU_DT_HOUR, DFTU_TIME_UNIT_SECOND)
                   .data<std::int64_t>()[0] == 22);
         CHECK_FALSE(s.dt_part(99, DFTU_TIME_UNIT_MICRO).valid());
-        CHECK_FALSE(Series::strings({"x"}).dt_part(0, 2).valid());
+        CHECK_FALSE(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>({"x"}))
+                .dt_part(0, 2)
+                .valid());
 
         const std::int64_t hour = 3'600'000'000;
         Series fl = s.dt_round(hour, DFTU_DT_FLOOR);
@@ -542,6 +591,109 @@ TEST_SUITE("vec") {
         CHECK(ro.data<std::int64_t>()[2] == 10'000'000);
         CHECK_FALSE(s.dt_round(0, DFTU_DT_FLOOR).valid());
         CHECK_FALSE(s.dt_round(hour, 7).valid());
+    }
+
+    TEST_CASE("dt_as_unit: units keep the instant, floor and refuse overflow") {
+        // Row 2 is null with garbage under it, which must not count as an
+        // overflow.
+        const std::int64_t us[5] = {1'700'000'000'123'456, -1'500,
+                                    std::numeric_limits<std::int64_t>::max(),
+                                    1'500, -1};
+        const std::uint8_t valid = 0b11011;
+        auto stamp = [&](TimeUnit unit, TypeId type) {
+            Series s = Series::flat(TypeId::Int64, us, 5, &valid);
+            s.handle()->type = type;
+            s.handle()->set_time_unit(unit);
+            if (type == TypeId::Timestamp) s.handle()->set_timezone("UTC");
+            return s;
+        };
+        Series ts = stamp(TimeUnit::Micro, TypeId::Timestamp);
+        Series ms = ts.dt_as_unit(TimeUnit::Milli);
+        REQUIRE(ms.valid());
+        CHECK(ms.type() == TypeId::Timestamp);
+        CHECK(ms.handle()->time_unit() == TimeUnit::Milli);
+        CHECK(ms.handle()->timezone() == "UTC");
+        CHECK(ms.is_null(2));
+        CHECK(ms.data<std::int64_t>()[0] == 1'700'000'000'123);
+        CHECK(ms.data<std::int64_t>()[1] == -2);  // floors, not truncates
+        CHECK(ms.data<std::int64_t>()[3] == 1);
+        CHECK(ms.data<std::int64_t>()[4] == -1);
+        Series sec = ts.dt_as_unit(TimeUnit::Second);
+        CHECK(sec.data<std::int64_t>()[0] == 1'700'000'000);
+        CHECK(sec.data<std::int64_t>()[4] == -1);
+        Series ns = ts.dt_as_unit(TimeUnit::Nano);
+        REQUIRE(ns.valid());  // the null row's garbage is not scaled
+        CHECK(ns.data<std::int64_t>()[0] == 1'700'000'000'123'456'000);
+        CHECK(ns.data<std::int64_t>()[1] == -1'500'000);
+        Series all_valid = Series::flat(TypeId::Int64, us, 5);
+        all_valid.handle()->type = TypeId::Timestamp;
+        all_valid.handle()->set_time_unit(TimeUnit::Micro);
+        CHECK_FALSE(all_valid.dt_as_unit(TimeUnit::Nano).valid());
+        const std::int64_t small[2] = {-1'500, 7};
+        Series sm = Series::flat(TypeId::Int64, small, 2);
+        sm.handle()->type = TypeId::Timestamp;
+        sm.handle()->set_time_unit(TimeUnit::Micro);
+        Series sn = sm.dt_as_unit(TimeUnit::Nano);
+        REQUIRE(sn.valid());
+        CHECK(sn.data<std::int64_t>()[0] == -1'500'000);
+        CHECK(sm.dt_as_unit(TimeUnit::Micro).data<std::int64_t>()[1] == 7);
+        // A Duration floors by default and truncates in polars mode.
+        Series du = stamp(TimeUnit::Micro, TypeId::Duration);
+        CHECK(du.dt_as_unit(TimeUnit::Milli).data<std::int64_t>()[1] == -2);
+        Series tr = du.dt_as_unit(TimeUnit::Milli, DFTU_DT_UNIT_POLARS);
+        CHECK(tr.data<std::int64_t>()[1] == -1);
+        CHECK(tr.data<std::int64_t>()[4] == 0);
+        Series tp = ts.dt_as_unit(TimeUnit::Milli, DFTU_DT_UNIT_POLARS);
+        CHECK(tp.data<std::int64_t>()[1] == -2);  // a Timestamp still floors
+        CHECK_FALSE(ts.dt_as_unit(TimeUnit::Milli, 9).valid());
+        CHECK_FALSE(
+            Series::flat_i64(small, 2).dt_as_unit(TimeUnit::Milli).valid());
+    }
+
+    TEST_CASE("dt_date and dt_time: the UTC day and the time of day") {
+        // 2023-11-14 22:13:20.123456, one microsecond before the epoch, a
+        // null, the epoch.
+        const std::int64_t us[4] = {1'700'000'000'123'456, -1, 0, 0};
+        const std::uint8_t valid = 0b1011;
+        Series ts = Series::flat(TypeId::Int64, us, 4, &valid);
+        ts.handle()->type = TypeId::Timestamp;
+        ts.handle()->set_time_unit(TimeUnit::Micro);
+        Series d = ts.dt_date();
+        REQUIRE(d.valid());
+        CHECK(d.type() == TypeId::Date32);
+        CHECK(d.is_null(2));
+        CHECK(d.data<std::int32_t>()[0] == 19675);
+        CHECK(d.data<std::int32_t>()[1] == -1);  // floors before the epoch
+        CHECK(d.data<std::int32_t>()[3] == 0);
+        Series t = ts.dt_time();
+        REQUIRE(t.valid());
+        CHECK(t.type() == TypeId::Time64);
+        CHECK(t.handle()->time_unit() == TimeUnit::Micro);
+        CHECK(t.is_null(2));
+        CHECK(t.data<std::int64_t>()[0] == 80'000'123'456);
+        CHECK(t.data<std::int64_t>()[1] == 86'399'999'999);
+        // Seconds and milliseconds give the 32-bit Time32.
+        Series ms = ts.dt_as_unit(TimeUnit::Milli).dt_time();
+        REQUIRE(ms.valid());
+        CHECK(ms.type() == TypeId::Time32);
+        CHECK(ms.handle()->time_unit() == TimeUnit::Milli);
+        CHECK(ms.data<std::int32_t>()[0] == 80'000'123);
+        CHECK(ms.data<std::int32_t>()[1] == 86'399'999);
+        // A Date64 has a day, and no time of day; other columns have neither.
+        const std::int64_t ms64[2] = {86'400'000 * 3 + 5, -1};
+        Series d64 = Series::flat(TypeId::Int64, ms64, 2);
+        d64.handle()->type = TypeId::Date64;
+        CHECK(d64.dt_date().data<std::int32_t>()[0] == 3);
+        CHECK(d64.dt_date().data<std::int32_t>()[1] == -1);
+        CHECK_FALSE(d64.dt_time().valid());
+        CHECK_FALSE(Series::flat_i64(ms64, 2).dt_date().valid());
+        // A day outside Int32 is an error, not a wrap.
+        const std::int64_t far[1] = {std::numeric_limits<std::int64_t>::max()};
+        Series big = Series::flat(TypeId::Int64, far, 1);
+        big.handle()->type = TypeId::Timestamp;
+        big.handle()->set_time_unit(TimeUnit::Second);
+        CHECK_FALSE(big.dt_date().valid());
+        CHECK(big.dt_time().valid());
     }
 
     TEST_CASE("dt_format: every directive on fixed instants") {
@@ -600,7 +752,10 @@ TEST_SUITE("vec") {
         CHECK_FALSE(s.dt_format("%Q").valid());
         CHECK_FALSE(s.dt_format("%Y-%").valid());
         CHECK_FALSE(s.dt_format("%").valid());
-        CHECK_FALSE(Series::strings({"x"}).dt_format("%Y").valid());
+        CHECK_FALSE(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>({"x"}))
+                .dt_format("%Y")
+                .valid());
     }
 
     TEST_CASE("dt_format keeps nulls null") {
@@ -885,7 +1040,8 @@ TEST_SUITE("vec") {
 
     TEST_CASE("group_by aggregates values by a string key") {
         Series names =
-            Series::strings({"read", "write", "read", "read", "write"});
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"read", "write", "read", "read", "write"}));
         dstd::Vector<std::int64_t> durs{10, 5, 20, 30, 15};
         Series dur = Series::flat_i64(durs.data(), 5);
 
@@ -976,7 +1132,8 @@ TEST_SUITE("vec") {
     }
 
     TEST_CASE("string column build and read") {
-        Series s = Series::strings({"alpha", "", "gamma"});
+        Series s = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"alpha", "", "gamma"}));
         REQUIRE(s.valid());
         CHECK(s.type() == TypeId::String);
         REQUIRE(s.length() == 3);
@@ -986,7 +1143,8 @@ TEST_SUITE("vec") {
     }
 
     TEST_CASE("str_eq on flat and dictionary string columns") {
-        Series s = Series::strings({"read", "write", "read", "open"});
+        Series s = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"read", "write", "read", "open"}));
         Series m = str_eq(s, "read");  // 1,0,1,0
         REQUIRE(m.valid());
         CHECK(m.type() == TypeId::Bool);
@@ -1013,7 +1171,8 @@ TEST_SUITE("vec") {
     }
 
     TEST_CASE("str_contains and str_starts_with (with dict pushdown)") {
-        Series p = Series::strings({"/data/a.h5", "/tmp/b", "/data/c.h5"});
+        Series p = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"/data/a.h5", "/tmp/b", "/data/c.h5"}));
         Series has = str_contains(p, "/data/");  // 1,0,1
         REQUIRE(has.valid());
         const std::uint8_t* hb = has.data<std::uint8_t>();
@@ -1028,10 +1187,10 @@ TEST_SUITE("vec") {
     TEST_CASE("SIMD substring search matches the scalar find (contains/find)") {
         // Rows long enough to cross a vector block, plus a null, plus needles
         // at varied offsets (start, middle, end, absent, empty).
-        Series s = Series::strings(
+        Series s = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
             {"the quick brown fox jumps over the lazy dog",  // 0
              "brownies for everyone in the room today okay", "no match here",
-             "xxbrownxx", "", "brown"});
+             "xxbrownxx", "", "brown"}));
         auto bit = [](const Series& m, std::int64_t i) {
             return (m.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1;
         };
@@ -1066,8 +1225,9 @@ TEST_SUITE("vec") {
         auto bit = [](const Series& m, std::int64_t i) {
             return (m.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1;
         };
-        Series s = Series::strings({"apple", "apricot", "banana", "grape",
-                                    "pineapple", "50%_off", "a"});
+        Series s = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"apple", "apricot", "banana", "grape", "pineapple", "50%_off",
+             "a"}));
 
         // exact (no wildcards, with an escaped literal)
         Series ex = s.str_like("apple");
@@ -1113,7 +1273,10 @@ TEST_SUITE("vec") {
         for (std::int64_t i = 0; i < s.length(); ++i) CHECK(bit(all, i) == 1);
 
         // null rows stay null in the mask
-        Series withnull = Series::strings({"apple", "x"}).str_like("apple");
+        Series withnull =
+            Series::strings(
+                dftu_utils_test::span_of<dstd::StringView>({"apple", "x"}))
+                .str_like("apple");
         REQUIRE(withnull.valid());
         CHECK(bit(withnull, 0) == 1);
         CHECK(bit(withnull, 1) == 0);
@@ -1124,7 +1287,8 @@ TEST_SUITE("vec") {
             return (m.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1;
         };
 
-        Series s = Series::strings({"Read", "reader", "WRITE", "op"});
+        Series s = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"Read", "reader", "WRITE", "op"}));
 
         // predicates
         Series ends =
@@ -1132,12 +1296,15 @@ TEST_SUITE("vec") {
         REQUIRE(ends.valid());
         CHECK(mbit(ends, 0) == 0);
         Series ends2 =
-            Series::strings({"cat.h5", "dog.txt", "x.h5"}).str_ends_with(".h5");
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                                {"cat.h5", "dog.txt", "x.h5"}))
+                .str_ends_with(".h5");
         CHECK(mbit(ends2, 0) == 1);
         CHECK(mbit(ends2, 1) == 0);
         CHECK(mbit(ends2, 2) == 1);
 
-        Series rgx = Series::strings({"abc123", "abc", "abc123x"})
+        Series rgx = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                                         {"abc123", "abc", "abc123x"}))
                          .str_matches("[a-z]+[0-9]+");
         REQUIRE(rgx.valid());
         CHECK(mbit(rgx, 0) == 1);  // full match
@@ -1145,9 +1312,10 @@ TEST_SUITE("vec") {
         CHECK(mbit(rgx, 2) == 0);  // trailing letter breaks the full match
 
         // numeric: len_bytes exercises the SIMD path with > lane-count rows
-        Series lens =
-            Series::strings({"a", "bb", "ccc", "", "de", "fghi", "j", "kk"})
-                .str_len_bytes();
+        Series lens = Series::strings(
+                          dftu_utils_test::span_of<dstd::StringView>(
+                              {"a", "bb", "ccc", "", "de", "fghi", "j", "kk"}))
+                          .str_len_bytes();
         REQUIRE(lens.valid());
         CHECK(lens.type() == TypeId::Int64);
         const std::int64_t* lp = lens.data<std::int64_t>();
@@ -1158,8 +1326,10 @@ TEST_SUITE("vec") {
         CHECK(lp[5] == 4);
         CHECK(lp[7] == 2);
 
-        Series chars = Series::strings({"abc", "\xC3\xA9\x63"})
-                           .str_len_chars();        // "abc","ec"
+        Series chars =
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                                {"abc", "\xC3\xA9\x63"}))
+                .str_len_chars();                   // "abc","ec"
         CHECK(chars.data<std::int64_t>()[0] == 3);
         CHECK(chars.data<std::int64_t>()[1] == 2);  // 3 bytes, 2 codepoints
 
@@ -1167,7 +1337,9 @@ TEST_SUITE("vec") {
         // body: 40 ASCII 'a' + 10 x 2-byte 'e-acute' = 80 bytes, 50 codepoints.
         dstd::String longs(40, 'a');
         for (int k = 0; k < 10; ++k) longs += "\xC3\xA9";
-        Series lc = Series::strings({longs}).str_len_chars();
+        Series lc =
+            Series::strings(dftu_utils_test::span_of<dstd::String>({longs}))
+                .str_len_chars();
         CHECK(lc.data<std::int64_t>()[0] == 50);
 
         // Many short rows: each is counted with one masked vector while the
@@ -1187,20 +1359,28 @@ TEST_SUITE("vec") {
             CHECK(many.data<std::int64_t>()[r] == want);
         }
 
-        Series find = Series::strings({"hello/world", "nope"}).str_find("/");
+        Series find =
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                                {"hello/world", "nope"}))
+                .str_find("/");
         CHECK(find.data<std::int64_t>()[0] == 5);
         CHECK(find.data<std::int64_t>()[1] == -1);
 
-        Series hashed = Series::strings({"POSIX", "read"}).fnv1a();
+        Series hashed =
+            Series::strings(
+                dftu_utils_test::span_of<dstd::StringView>({"POSIX", "read"}))
+                .fnv1a();
         CHECK(hashed.type() == TypeId::Uint64);
         CHECK(hashed.data<std::uint64_t>()[0] ==
               dstd::hash::fnv1a_hash(dstd::StringView{"POSIX"}));
         CHECK(hashed.data<std::uint64_t>()[1] ==
               dstd::hash::fnv1a_hash(dstd::StringView{"read"}));
 
-        Series parsed = Series::strings({"00000000000000ff", "00000000deadbeef",
-                                         "deadbeef"})
-                            .hex64_parse();
+        Series parsed =
+            Series::strings(
+                dftu_utils_test::span_of<dstd::StringView>(
+                    {"00000000000000ff", "00000000deadbeef", "deadbeef"}))
+                .hex64_parse();
         CHECK(parsed.type() == TypeId::Uint64);
         CHECK(parsed.data<std::uint64_t>()[0] == 0xffull);
         CHECK(parsed.data<std::uint64_t>()[1] == 0xdeadbeefull);
@@ -1213,7 +1393,8 @@ TEST_SUITE("vec") {
         CHECK(formatted.is_null(2));
         CHECK(formatted.hex64_parse().data<std::uint64_t>()[1] ==
               0xdeadbeefull);
-        CHECK(Series::strings({"f07c4ebf132e3799"})
+        CHECK(Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                                  {"f07c4ebf132e3799"}))
                   .hex64_parse()
                   .hex64_format()
                   .string_at(0) == "f07c4ebf132e3799");
@@ -1226,36 +1407,57 @@ TEST_SUITE("vec") {
         CHECK(up.string_at(1) == "READER");
 
         Series trimmed =
-            Series::strings({"  hi  ", "\tx\n", "none"}).str_strip();
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                                {"  hi  ", "\tx\n", "none"}))
+                .str_strip();
         CHECK(trimmed.string_at(0) == "hi");
         CHECK(trimmed.string_at(1) == "x");
-        Series ltr = Series::strings({"  hi  "}).str_lstrip();
+        Series ltr = Series::strings(
+                         dftu_utils_test::span_of<dstd::StringView>({"  hi  "}))
+                         .str_lstrip();
         CHECK(ltr.string_at(0) == "hi  ");
-        Series rtr = Series::strings({"  hi  "}).str_rstrip();
+        Series rtr = Series::strings(
+                         dftu_utils_test::span_of<dstd::StringView>({"  hi  "}))
+                         .str_rstrip();
         CHECK(rtr.string_at(0) == "  hi");
 
-        Series rep = Series::strings({"a.b.c"}).str_replace(".", "-");
+        Series rep = Series::strings(
+                         dftu_utils_test::span_of<dstd::StringView>({"a.b.c"}))
+                         .str_replace(".", "-");
         CHECK(rep.string_at(0) == "a-b.c");
-        Series repa = Series::strings({"a.b.c"}).str_replace_all(".", "-");
+        Series repa = Series::strings(
+                          dftu_utils_test::span_of<dstd::StringView>({"a.b.c"}))
+                          .str_replace_all(".", "-");
         CHECK(repa.string_at(0) == "a-b-c");
 
-        Series sl = Series::strings({"hello"}).str_slice(1, 3);
+        Series sl = Series::strings(
+                        dftu_utils_test::span_of<dstd::StringView>({"hello"}))
+                        .str_slice(1, 3);
         CHECK(sl.string_at(0) == "ell");
-        Series sln =
-            Series::strings({"hello"}).str_slice(-2, -1);  // from end to end
+        Series sln = Series::strings(
+                         dftu_utils_test::span_of<dstd::StringView>({"hello"}))
+                         .str_slice(-2, -1);  // from end to end
         CHECK(sln.string_at(0) == "lo");
 
-        Series ps = Series::strings({"7", "abcd"}).str_pad_start(3, '*');
+        Series ps = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                                        {"7", "abcd"}))
+                        .str_pad_start(3, '*');
         CHECK(ps.string_at(0) == "**7");
         CHECK(ps.string_at(1) == "abcd");  // already >= width
-        Series pe = Series::strings({"7"}).str_pad_end(3, '*');
+        Series pe =
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>({"7"}))
+                .str_pad_end(3, '*');
         CHECK(pe.string_at(0) == "7**");
-        Series zf = Series::strings({"42", "-5"}).str_zfill(4);
+        Series zf = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                                        {"42", "-5"}))
+                        .str_zfill(4);
         CHECK(zf.string_at(0) == "0042");
         CHECK(zf.string_at(1) == "-005");  // sign preserved
 
         // list: split
-        Series sp = Series::strings({"a/b/c", "x"}).str_split("/");
+        Series sp = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                                        {"a/b/c", "x"}))
+                        .str_split("/");
         REQUIRE(sp.valid());
         CHECK(sp.type() == TypeId::List);
         const std::int32_t* lo2 = sp.offsets();
@@ -1282,29 +1484,43 @@ TEST_SUITE("vec") {
         CHECK(gl.string_at(1) == "x");
 
         // regex capture group, null where there is no match
-        Series ex =
-            Series::strings({"a-b", "no", "c-d"}).str_extract("(\\w)-(\\w)", 2);
+        Series ex = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                                        {"a-b", "no", "c-d"}))
+                        .str_extract("(\\w)-(\\w)", 2);
         REQUIRE(ex.valid());
         CHECK(ex.string_at(0) == "b");
         CHECK(ex.is_null(1));
         CHECK(ex.string_at(2) == "d");
         CHECK(ex.null_count() == 1);
-        Series ex0 = Series::strings({"a-b"}).str_extract("(\\w)-(\\w)", 0);
+        Series ex0 =
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>({"a-b"}))
+                .str_extract("(\\w)-(\\w)", 0);
         CHECK(ex0.string_at(0) == "a-b");
 
         Series rr =
-            Series::strings({"open64_17", "none"})
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                                {"open64_17", "none"}))
                 .str_regex_replace(R"re((?<op>[a-z]+)64_(\d+))re", "${op}#$2");
         REQUIRE(rr.valid());
         CHECK(rr.string_at(0) == "open#17");
         CHECK(rr.string_at(1) == "none");
         Series slash =
-            Series::strings({"/a//b///c"}).str_regex_replace("/+", "/");
+            Series::strings(
+                dftu_utils_test::span_of<dstd::StringView>({"/a//b///c"}))
+                .str_regex_replace("/+", "/");
         CHECK(slash.string_at(0) == "/a/b/c");
-        CHECK_FALSE(Series::strings({"a"}).str_regex_replace("(", "x").valid());
-        CHECK_FALSE(Series::strings({"a"}).str_regex_replace("a", "$").valid());
         CHECK_FALSE(
-            Series::strings({"a"}).str_regex_replace("a", "$1").valid());
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>({"a"}))
+                .str_regex_replace("(", "x")
+                .valid());
+        CHECK_FALSE(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>({"a"}))
+                .str_regex_replace("a", "$")
+                .valid());
+        CHECK_FALSE(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>({"a"}))
+                .str_regex_replace("a", "$1")
+                .valid());
     }
 
     TEST_CASE("nested list<struct> column (histogram shape)") {
@@ -1331,7 +1547,8 @@ TEST_SUITE("vec") {
     TEST_CASE("take gathers rows of any column type") {
         // Flat reorder with repeats.
         dstd::Vector<std::int64_t> v{10, 20, 30};
-        Series g = take(Series::flat_i64(v.data(), 3), {2, 0, 0});
+        Series g = take(Series::flat_i64(v.data(), 3),
+                        dftu_utils_test::span_of<std::int64_t>({2, 0, 0}));
         REQUIRE(g.valid());
         REQUIRE(g.length() == 3);
         CHECK(g.data<std::int64_t>()[0] == 30);
@@ -1341,21 +1558,26 @@ TEST_SUITE("vec") {
         // Validity is gathered: pick a valid then a null row.
         dstd::Vector<std::int64_t> w{1, 2, 3, 4};
         std::uint8_t bitmap = 0b0000'0101;  // rows 0, 2 valid
-        Series gn = take(Series::flat_i64(w.data(), 4, &bitmap), {2, 1});
+        Series gn = take(Series::flat_i64(w.data(), 4, &bitmap),
+                         dftu_utils_test::span_of<std::int64_t>({2, 1}));
         REQUIRE(gn.valid());
         REQUIRE(gn.length() == 2);
         CHECK(gn.data<std::int64_t>()[0] == 3);
         CHECK(gn.null_count() == 1);  // gathered row 1 was invalid
 
         // Strings.
-        Series gs = take(Series::strings({"a", "b", "c"}), {1, 1, 0});
+        Series gs = take(
+            Series::strings(
+                dftu_utils_test::span_of<dstd::StringView>({"a", "b", "c"})),
+            dftu_utils_test::span_of<std::int64_t>({1, 1, 0}));
         REQUIRE(gs.valid());
         CHECK(gs.string_at(0) == "b");
         CHECK(gs.string_at(2) == "a");
     }
 
     TEST_CASE("agg engine: fused multi-agg + mergeable partials") {
-        Series key = Series::strings({"io", "cpu", "io", "cpu", "io"});
+        Series key = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"io", "cpu", "io", "cpu", "io"}));
         dstd::Vector<std::int64_t> durv{10, 5, 20, 15, 30};
         Series dur = Series::flat_i64(durv.data(), 5);
         dstd::Vector<const Series*> vals{&dur};
@@ -1383,10 +1605,12 @@ TEST_SUITE("vec") {
 
         // Mergeable partials: split the rows, accumulate two states, merge -
         // must equal the one-shot result (this is the spill/distributed path).
-        Series k1 = Series::strings({"io", "cpu"});
+        Series k1 = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"io", "cpu"}));
         dstd::Vector<std::int64_t> d1{10, 5};
         Series c1 = Series::flat_i64(d1.data(), 2);
-        Series k2 = Series::strings({"io", "cpu", "io"});
+        Series k2 = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"io", "cpu", "io"}));
         dstd::Vector<std::int64_t> d2{20, 15, 30};
         Series c2 = Series::flat_i64(d2.data(), 3);
 
@@ -1418,7 +1642,8 @@ TEST_SUITE("vec") {
     TEST_CASE("agg engine: native multi-key group_by (composite key, typed)") {
         // Two key columns of different types: String "cat" and Int64 "pid".
         // (cat, pid) = (io, 1), (cpu, 1), (io, 2), (cpu, 1), (io, 1)
-        Series cat = Series::strings({"io", "cpu", "io", "cpu", "io"});
+        Series cat = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"io", "cpu", "io", "cpu", "io"}));
         dstd::Vector<std::int64_t> pidv{1, 1, 2, 1, 1};
         Series pid = Series::flat_i64(pidv.data(), 5);
         dstd::Vector<std::int64_t> durv{10, 5, 20, 15, 30};
@@ -1429,15 +1654,16 @@ TEST_SUITE("vec") {
             {dataframe::AggOp::Count, -1, "n"},
             {dataframe::AggOp::Sum, 0, "sum_dur"}};
 
-        DataFrame g = dftu_utils_test::ok(
-            dataframe::group_agg(keys, vals, specs, {"cat", "pid"}));
+        DataFrame g = dftu_utils_test::ok(dataframe::group_agg(
+            keys, vals, specs,
+            dftu_utils_test::span_of<dstd::String>({"cat", "pid"})));
         REQUIRE(g.num_rows() == 3);  // (io,1) (cpu,1) (io,2) - first-seen order
         REQUIRE(dstd::to_strings(g.names) ==
                 dstd::Vector<dstd::String>{"cat", "pid", "n", "sum_dur"});
         CHECK(g.columns[0].type() == TypeId::String);
         CHECK(g.columns[1].type() == TypeId::Int64);
 
-        auto find = [&](const dstd::String& c, std::int64_t p) -> std::int64_t {
+        auto find = [&](dstd::StringView c, std::int64_t p) -> std::int64_t {
             for (std::int64_t i = 0; i < g.num_rows(); ++i)
                 if (g.columns[0].string_at(i) == c &&
                     g.columns[1].data<std::int64_t>()[i] == p)
@@ -1456,12 +1682,14 @@ TEST_SUITE("vec") {
 
         // Mergeable partials + serialize round-trip, split across the same
         // composite key.
-        Series ck1 = Series::strings({"io", "cpu"});
+        Series ck1 = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"io", "cpu"}));
         dstd::Vector<std::int64_t> pk1{1, 1};
         Series pid1 = Series::flat_i64(pk1.data(), 2);
         dstd::Vector<std::int64_t> d1{10, 5};
         Series c1 = Series::flat_i64(d1.data(), 2);
-        Series ck2 = Series::strings({"io", "cpu", "io"});
+        Series ck2 = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"io", "cpu", "io"}));
         dstd::Vector<std::int64_t> pk2{2, 1, 1};
         Series pid2 = Series::flat_i64(pk2.data(), 3);
         dstd::Vector<std::int64_t> d2{20, 15, 30};
@@ -1493,7 +1721,8 @@ TEST_SUITE("vec") {
 
     TEST_CASE("agg engine: moment aggregates match the stats kernels") {
         // Two groups; enough spread per group for skew/kurt to be meaningful.
-        Series key = Series::strings({"a", "b", "a", "b", "a", "b", "a", "b"});
+        Series key = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"a", "b", "a", "b", "a", "b", "a", "b"}));
         dstd::Vector<double> xv{2, 100, 4, 50, 8, 25, 16, 200};
         Series x = Series::flat_f64(xv.data(), 8);
         dstd::Vector<const Series*> vals{&x};
@@ -1520,10 +1749,12 @@ TEST_SUITE("vec") {
               doctest::Approx(dataframe::kurtosis(ca)));
 
         // Mergeable across a split: partials must equal the one-shot moments.
-        Series k1 = Series::strings({"a", "b", "a", "b"});
+        Series k1 = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"a", "b", "a", "b"}));
         dstd::Vector<double> d1{2, 100, 4, 50};
         Series c1 = Series::flat_f64(d1.data(), 4);
-        Series k2 = Series::strings({"a", "b", "a", "b"});
+        Series k2 = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"a", "b", "a", "b"}));
         dstd::Vector<double> d2{8, 25, 16, 200};
         Series c2 = Series::flat_f64(d2.data(), 4);
         auto s1 = dataframe::agg_new(specs);
@@ -1558,8 +1789,10 @@ TEST_SUITE("vec") {
             dataframe::expr_binary(dataframe::BinaryOp::Mul, sum_ab,
                                    dataframe::expr_lit(std::int64_t{2}));
         // Two outputs sharing `a+b`; the shared node is computed once (CSE).
-        dstd::Vector<dataframe::Series> outs =
-            dftu_utils_test::eval_many_ok({sum_ab, twice}, in);
+        dstd::Vector<dataframe::Series> outs = dftu_utils_test::eval_many_ok(
+            dftu_utils_test::span_of<dftracer::utils::dataframe::Expr>(
+                {sum_ab, twice}),
+            in);
         REQUIRE(outs.size() == 2);
         REQUIRE(outs[0].length() == 4);
         CHECK(outs[0].data<std::int64_t>()[0] == 11);
@@ -1569,7 +1802,8 @@ TEST_SUITE("vec") {
     }
 
     TEST_CASE("group_agg_expr: aggregates over expressions with shared CSE") {
-        Series key = Series::strings({"x", "y", "x", "y", "x"});
+        Series key = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"x", "y", "x", "y", "x"}));
         dstd::Vector<std::int64_t> a{1, 2, 3, 4, 5};
         dstd::Vector<std::int64_t> b{10, 20, 30, 40, 50};
         Series ca = Series::flat_i64(a.data(), 5);
@@ -1602,7 +1836,8 @@ TEST_SUITE("vec") {
 
     TEST_CASE(
         "group_agg_expr C ABI: builders + dftu_dataframe_group_agg_expr") {
-        Series key = Series::strings({"x", "y", "x"});
+        Series key = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"x", "y", "x"}));
         dstd::Vector<std::int64_t> a{1, 2, 3};
         dstd::Vector<std::int64_t> b{10, 20, 30};
         Series ca = Series::flat_i64(a.data(), 3);
@@ -1618,7 +1853,7 @@ TEST_SUITE("vec") {
 
         dftu_series* outk = nullptr;
         dftu_series* outv[2] = {nullptr, nullptr};
-        int32_t w =
+        std::int32_t w =
             dftu_dataframe_group_agg_expr(kexpr, specs, 2, in, 3, &outk, outv);
         REQUIRE(w == 2);
         Series rk{outk};
@@ -1781,11 +2016,12 @@ TEST_SUITE("vec") {
     TEST_CASE("batch take/filter/slice apply across every column") {
         DataFrame b;
         b.names = dstd::make_shared_strings({"name", "count"});
-        b.columns.push_back(Series::strings({"a", "b", "c", "d"}));
+        b.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"a", "b", "c", "d"})));
         dstd::Vector<std::int64_t> cnt{10, 20, 30, 40};
         b.columns.push_back(Series::flat_i64(cnt.data(), 4));
 
-        DataFrame t = take(b, {3, 1});
+        DataFrame t = take(b, dftu_utils_test::span_of<std::int64_t>({3, 1}));
         REQUIRE(t.num_rows() == 2);
         CHECK(t.columns[0].string_at(0) == "d");
         CHECK(t.columns[1].data<std::int64_t>()[1] == 20);
@@ -1806,18 +2042,21 @@ TEST_SUITE("vec") {
         "frame ops: select/rename/with_column zero-copy, argsort/sort_by") {
         DataFrame b;
         b.names = dstd::make_shared_strings({"name", "count"});
-        b.columns.push_back(Series::strings({"a", "b", "c"}));
+        b.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"a", "b", "c"})));
         dstd::Vector<std::int64_t> cnt{30, 10, 20};
         b.columns.push_back(Series::flat_i64(cnt.data(), 3));
 
         // select projects, sharing the underlying buffers (no copy).
-        DataFrame proj = dftu_utils_test::ok(select(b, {"count"}));
+        DataFrame proj = dftu_utils_test::ok(
+            select(b, dftu_utils_test::span_of<dstd::String>({"count"})));
         REQUIRE(proj.num_columns() == 1);
         CHECK(proj.names[0] == "count");
         CHECK(proj.columns[0].data<std::int64_t>() ==
               b.columns[1].data<std::int64_t>());  // same buffer pointer
 
-        DataFrame rn = dftu_utils_test::ok(rename(b, {"key", "n"}));
+        DataFrame rn = dftu_utils_test::ok(
+            rename(b, dftu_utils_test::span_of<dstd::String>({"key", "n"})));
         CHECK(rn.names[0] == "key");
         CHECK(rn.names[1] == "n");
         CHECK(rn.num_rows() == 3);
@@ -1870,7 +2109,9 @@ TEST_SUITE("vec") {
 
         // String falls back to the scalar path.
         Series so =
-            argsort(Series::strings({"banana", "apple", "cherry"}), false);
+            argsort(Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                        {"banana", "apple", "cherry"})),
+                    false);
         const std::int64_t* s = so.data<std::int64_t>();
         CHECK(s[0] == 1);  // apple
         CHECK(s[1] == 0);  // banana
@@ -1978,6 +2219,219 @@ TEST_SUITE("vec") {
         CHECK(u.data<std::int64_t>()[0] == 1);
         CHECK(u.data<std::int64_t>()[1] == 2);
         CHECK(u.data<std::int64_t>()[2] == 3);
+    }
+
+    TEST_CASE("quantile: interpolation keywords and NaN above every number") {
+        dstd::Vector<std::int64_t> v{1, 2, 3, 4};
+        Series c = Series::flat_i64(v.data(), 4);
+        CHECK(dataframe::quantile(c, 0.4, Interpolation::Linear) ==
+              doctest::Approx(2.2));
+        CHECK(dataframe::quantile(c, 0.4, Interpolation::Nearest) == 2.0);
+        CHECK(dataframe::quantile(c, 0.4, Interpolation::Lower) == 2.0);
+        CHECK(dataframe::quantile(c, 0.4, Interpolation::Higher) == 3.0);
+        CHECK(dataframe::quantile(c, 0.4, Interpolation::Midpoint) == 2.5);
+
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        dstd::Vector<double> f{1.5, nan, -2.5};
+        Series fc = Series::flat_f64(f.data(), 3);
+        CHECK(dataframe::quantile(fc, 0.5) == 1.5);
+        CHECK(std::isnan(dataframe::quantile(fc, 1.0)));
+        CHECK(dataframe::quantile(fc, 0.0) == -2.5);
+    }
+
+    TEST_CASE("exp/log/sign/clip follow IEEE on zero, negatives, inf and NaN") {
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        const double inf = std::numeric_limits<double>::infinity();
+        // Wide enough that vector lanes and the scalar tail both see specials.
+        dstd::Vector<double> x{0.0,   -1.0,   inf, -inf,  nan,
+                               710.0, -800.0, 2.0, 1e308, 1e-320};
+        const auto n = static_cast<std::int64_t>(x.size());
+        Series c = Series::flat_f64(x.data(), n);
+        Series lg = dataframe::log(c);
+        Series ex = dataframe::exp(c);
+        Series sg = dataframe::sign(c);
+        const double* l = lg.data<double>();
+        const double* e = ex.data<double>();
+        const double* g = sg.data<double>();
+        CHECK(l[0] == -inf);
+        CHECK(std::isnan(l[1]));
+        CHECK(l[2] == inf);
+        CHECK(std::isnan(l[3]));
+        CHECK(std::isnan(l[4]));
+        CHECK(l[7] == doctest::Approx(std::log(2.0)));
+        CHECK(l[9] == doctest::Approx(std::log(1e-320)));
+        CHECK(e[0] == 1.0);
+        CHECK(e[2] == inf);
+        CHECK(e[3] == 0.0);
+        CHECK(std::isnan(e[4]));
+        CHECK(e[5] == inf);
+        CHECK(e[6] == 0.0);
+        CHECK(g[0] == 0.0);
+        CHECK(g[1] == -1.0);
+        CHECK(g[2] == 1.0);
+        CHECK(g[3] == -1.0);
+        CHECK(std::isnan(g[4]));
+
+        dstd::Vector<double> k{1.5, nan, -2.5, 3.0};
+        Series kc = Series::flat_f64(k.data(), 4);
+        const dftu_scalar lo = to_scalar(-1.0);
+        const dftu_scalar hi = to_scalar(2.0);
+        Series clipped = dataframe::clip(kc, lo, hi);
+        const double* p = clipped.data<double>();
+        CHECK(p[0] == 1.5);
+        CHECK(std::isnan(p[1]));
+        CHECK(p[2] == -1.0);
+        CHECK(p[3] == 2.0);
+        Series ignored = dataframe::clip(kc, to_scalar(nan), hi);
+        CHECK(ignored.data<double>()[2] == -2.5);
+        CHECK(ignored.data<double>()[3] == 2.0);
+    }
+
+    TEST_CASE("quantile: the selection path ranks a NaN of either sign last") {
+        dataframe::install_runtime_parallel_backend();
+        constexpr std::int64_t N = 300000;
+        dstd::Vector<double> f(static_cast<std::size_t>(N));
+        for (std::int64_t i = 0; i < N; ++i)
+            f[static_cast<std::size_t>(i)] = static_cast<double>(i);
+        f[5] = std::bit_cast<double>(std::uint64_t{0xFFF8000000000000ULL});
+        Series fc = Series::flat_f64(f.data(), N);
+        CHECK(dataframe::median(fc) == 150000.5);
+        f[5] = std::numeric_limits<double>::quiet_NaN();
+        CHECK(dataframe::median(Series::flat_f64(f.data(), N)) == 150000.5);
+        CHECK(std::isnan(dataframe::quantile(fc, 1.0)));
+        CHECK(dataframe::quantile(fc, 0.0) == 0.0);
+
+        // Another width reaches the selection through the double copy.
+        dstd::Vector<std::int32_t> w(static_cast<std::size_t>(N));
+        for (std::int64_t i = 0; i < N; ++i)
+            w[static_cast<std::size_t>(i)] =
+                static_cast<std::int32_t>((i * 7919) % N);
+        Series wc = Series::flat(TypeId::Int32, w.data(), N);
+        CHECK(dataframe::median(wc) == 149999.5);
+        CHECK(dataframe::quantile(wc, 0.25) == doctest::Approx(74999.75));
+    }
+
+    TEST_CASE("quantile: NaN q gives NaN") {
+        dstd::Vector<std::int64_t> v{1, 2, 3, 4};
+        Series c = Series::flat_i64(v.data(), 4);
+        CHECK(std::isnan(
+            dataframe::quantile(c, std::numeric_limits<double>::quiet_NaN())));
+        CHECK(std::isnan(
+            dataframe::quantile(c, std::numeric_limits<double>::quiet_NaN(),
+                                Interpolation::Nearest)));
+    }
+
+    TEST_CASE("exp/log: one bad value in any position and any length is IEEE") {
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        const double inf = std::numeric_limits<double>::infinity();
+        const double specials[] = {0.0, -1.0, inf, -inf, nan, 710.0, -800.0};
+        auto same = [](double got, double want) {
+            if (std::isnan(want)) return std::isnan(got);
+            if (std::isinf(want) || want == 0.0) return got == want;
+            return std::fabs(got - want) <= 1e-13 * std::fabs(want);
+        };
+        // Lengths below one group of four vectors, a whole group and a group
+        // plus a tail, for any vector width.
+        for (std::int64_t n = 1; n <= 130; ++n) {
+            for (std::int64_t at = 0; at < n; ++at) {
+                for (const double bad : specials) {
+                    dstd::Vector<double> x(static_cast<std::size_t>(n));
+                    for (std::int64_t i = 0; i < n; ++i)
+                        x[static_cast<std::size_t>(i)] =
+                            0.25 + 0.01 * static_cast<double>(i);
+                    x[static_cast<std::size_t>(at)] = bad;
+                    Series c = Series::flat_f64(x.data(), n);
+                    Series ex = dataframe::exp(c);
+                    Series lg = dataframe::log(c);
+                    std::int64_t wrong = -1;
+                    for (std::int64_t i = 0; i < n && wrong < 0; ++i) {
+                        const double v = x[static_cast<std::size_t>(i)];
+                        if (!same(ex.data<double>()[i], std::exp(v)) ||
+                            !same(lg.data<double>()[i], std::log(v)))
+                            wrong = i;
+                    }
+                    CAPTURE(n);
+                    CAPTURE(at);
+                    CAPTURE(bad);
+                    CHECK(wrong == -1);
+                }
+            }
+        }
+    }
+
+    TEST_CASE("clip: an infinite or out-of-range bound saturates on integers") {
+        const double inf = std::numeric_limits<double>::infinity();
+        const std::int64_t i64min = std::numeric_limits<std::int64_t>::min();
+        const std::int64_t i64max = std::numeric_limits<std::int64_t>::max();
+        dstd::Vector<std::int64_t> v{-5, 0, 7, i64min, i64max};
+        Series c = Series::flat_i64(v.data(), 5);
+        Series lower_only = dataframe::clip(c, to_scalar(2.0), to_scalar(inf));
+        const std::int64_t* a = lower_only.data<std::int64_t>();
+        CHECK(a[0] == 2);
+        CHECK(a[2] == 7);
+        CHECK(a[3] == 2);
+        CHECK(a[4] == i64max);
+        Series upper_only = dataframe::clip(c, to_scalar(-inf), to_scalar(1.0));
+        const std::int64_t* b = upper_only.data<std::int64_t>();
+        CHECK(b[0] == -5);
+        CHECK(b[2] == 1);
+        CHECK(b[3] == i64min);
+        CHECK(b[4] == 1);
+        Series both = dataframe::clip(c, to_scalar(-inf), to_scalar(inf));
+        CHECK(both.data<std::int64_t>()[3] == i64min);
+        CHECK(both.data<std::int64_t>()[4] == i64max);
+
+        dstd::Vector<std::int32_t> w{-5, 0, 7};
+        Series wc = Series::flat(TypeId::Int32, w.data(), 3);
+        Series w_lower = dataframe::clip(wc, to_scalar(1.0), to_scalar(inf));
+        CHECK(w_lower.data<std::int32_t>()[0] == 1);
+        CHECK(w_lower.data<std::int32_t>()[2] == 7);
+        Series w_wide = dataframe::clip(wc, to_scalar(-1e30), to_scalar(1e30));
+        CHECK(w_wide.data<std::int32_t>()[0] == -5);
+        CHECK(w_wide.data<std::int32_t>()[2] == 7);
+
+        const std::uint64_t u64max = std::numeric_limits<std::uint64_t>::max();
+        dstd::Vector<std::uint64_t> u{0, 5, u64max};
+        Series uc = Series::flat(TypeId::Uint64, u.data(), 3);
+        Series u_lower = dataframe::clip(uc, to_scalar(3.0), to_scalar(inf));
+        CHECK(u_lower.data<std::uint64_t>()[0] == 3);
+        CHECK(u_lower.data<std::uint64_t>()[2] == u64max);
+        Series u_upper = dataframe::clip(uc, to_scalar(-inf), to_scalar(4.0));
+        CHECK(u_upper.data<std::uint64_t>()[1] == 4);
+        CHECK(u_upper.data<std::uint64_t>()[0] == 0);
+        Series u_both = dataframe::clip(uc, to_scalar(-inf), to_scalar(inf));
+        CHECK(u_both.data<std::uint64_t>()[2] == u64max);
+    }
+
+    TEST_CASE("an empty column has no min or max and a NaN mean and spread") {
+        dstd::Vector<std::int64_t> nothing;
+        Series empty = Series::flat_i64(nothing.data(), 0);
+        CHECK(dftu_utils_test::ok(empty.min()).tag() == DFTU_SCALAR_TAG_NULL);
+        CHECK(dftu_utils_test::ok(empty.max()).tag() == DFTU_SCALAR_TAG_NULL);
+        CHECK(scalar_value<std::int64_t>(dftu_utils_test::ok(empty.sum())) ==
+              0);
+        CHECK(std::isnan(dftu_utils_test::ok(empty.mean())));
+        CHECK(std::isnan(empty.median()));
+        CHECK(std::isnan(empty.variance(true)));
+        CHECK(std::isnan(empty.variance(false)));
+        CHECK(std::isnan(empty.stddev(true)));
+
+        // All null: no valid row either.
+        dstd::Vector<std::int64_t> v{1, 2};
+        const std::uint8_t none = 0;
+        Series nulls = Series::flat_i64(v.data(), 2, &none);
+        CHECK(dftu_utils_test::ok(nulls.min()).tag() == DFTU_SCALAR_TAG_NULL);
+
+        dstd::Vector<std::int64_t> one{4};
+        Series single = Series::flat_i64(one.data(), 1);
+        CHECK(std::isnan(single.variance(true)));
+        CHECK(single.variance(false) == 0.0);
+        CHECK(dftu_utils_test::ok(single.min()).tag() == DFTU_SCALAR_TAG_I64);
+
+        // The refusal of a type comes before the empty check.
+        dstd::Vector<dstd::String> none_s;
+        Series strs = Series::strings(none_s);
+        CHECK(!strs.mean());
     }
 
     TEST_CASE("D1 windowed stats: rolling_var/std/median/quantile") {
@@ -2108,14 +2562,17 @@ TEST_SUITE("vec") {
     TEST_CASE("batch group_by re-aggregates a materialized batch") {
         DataFrame b;
         b.names = dstd::make_shared_strings({"cat", "dur"});
-        b.columns.push_back(Series::strings({"io", "io", "cpu", "io", "cpu"}));
+        b.columns.push_back(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"io", "io", "cpu", "io", "cpu"})));
         dstd::Vector<std::int64_t> dur{10, 20, 5, 30, 15};
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
 
-        DataFrame g = dftu_utils_test::ok(
-            dataframe::group_by(b, "cat",
-                                {{dataframe::Agg::Count, "", "count"},
-                                 {dataframe::Agg::Sum, "dur", "sum_dur"}}));
+        DataFrame g = dftu_utils_test::ok(dataframe::group_by(
+            b, "cat",
+            dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                {{dataframe::Agg::Count, "", "count"},
+                 {dataframe::Agg::Sum, "dur", "sum_dur"}})));
         REQUIRE(g.num_rows() == 2);
         REQUIRE(g.num_columns() == 3);
         CHECK(g.names[0] == "cat");
@@ -2133,12 +2590,14 @@ TEST_SUITE("vec") {
         DataFrame b;
         b.names = dstd::make_shared_strings({"cat", "dur"});
         b.columns.push_back(
-            Series::strings({"io", "cpu", "io", "net", "cpu", "io"}));
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"io", "cpu", "io", "net", "cpu", "io"})));
         dstd::Vector<std::int64_t> dur{1, 2, 3, 4, 5, 6};
         b.columns.push_back(Series::flat_i64(dur.data(), 6));
 
         dstd::Vector<DataFrame> parts =
-            dftu_utils_test::ok(dataframe::hash_partition(b, {"cat"}, 4));
+            dftu_utils_test::ok(dataframe::hash_partition(
+                b, dftu_utils_test::span_of<dstd::String>({"cat"}), 4));
         REQUIRE(parts.size() == 4);
 
         std::int64_t total = 0;
@@ -2161,8 +2620,8 @@ TEST_SUITE("vec") {
 
         // partition_id is the per-row part each row of hash_partition landed
         // in, and it is a registry op.
-        Series ids =
-            dftu_utils_test::ok(dataframe::partition_id(b, {"cat"}, 4));
+        Series ids = dftu_utils_test::ok(dataframe::partition_id(
+            b, dftu_utils_test::span_of<dstd::String>({"cat"}), 4));
         REQUIRE(ids.type() == TypeId::Int32);
         REQUIRE(ids.length() == 6);
         const std::int32_t* id = ids.data<std::int32_t>();
@@ -2176,10 +2635,12 @@ TEST_SUITE("vec") {
             dataframe::partition_id(b, {}, 4),
             dftracer::utils::common::ErrorCode::InvalidArgument);
         dftu_utils_test::expect_error(
-            dataframe::partition_id(b, {"cat"}, 0),
+            dataframe::partition_id(
+                b, dftu_utils_test::span_of<dstd::String>({"cat"}), 0),
             dftracer::utils::common::ErrorCode::InvalidArgument);
         dftu_utils_test::expect_error(
-            dataframe::partition_id(b, {"nope"}, 4),
+            dataframe::partition_id(
+                b, dftu_utils_test::span_of<dstd::String>({"nope"}), 4),
             dftracer::utils::common::ErrorCode::NotFound);
         const char* keys[1] = {"cat"};
         const dftu_dataframe* h = dftu_dataframe_new(
@@ -2192,12 +2653,12 @@ TEST_SUITE("vec") {
         const dftu_op_desc* op = dftu_op_find("dftu.frame.partition_id");
         REQUIRE(op);
         dataframe::OpArgs arg;
-        arg.frame(0, h).strlist(1, keys, 1).i64(2, 4);
+        arg.frame(0, h).strlist(1, {keys, 1}).i64(2, 4);
         dftu_series* via_op = dftu_op_run(op, nullptr, 0, arg);
         REQUIRE(via_op);
         CHECK(dftu_series_length(via_op) == 6);
-        CHECK(std::memcmp(dftu_series_data(via_op), id, 6 * sizeof(int32_t)) ==
-              0);
+        CHECK(std::memcmp(dftu_series_data(via_op), id,
+                          6 * sizeof(std::int32_t)) == 0);
         dftu_series_free(via_op);
         dftu_dataframe_free(const_cast<dftu_dataframe*>(h));
     }
@@ -2205,7 +2666,9 @@ TEST_SUITE("vec") {
     TEST_CASE("topk: k largest/smallest via partial sort") {
         DataFrame b;
         b.names = dstd::make_shared_strings({"name", "dur"});
-        b.columns.push_back(Series::strings({"a", "b", "c", "d", "e"}));
+        b.columns.push_back(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"a", "b", "c", "d", "e"})));
         dstd::Vector<std::int64_t> dur{50, 10, 90, 30, 70};
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
 
@@ -2225,16 +2688,20 @@ TEST_SUITE("vec") {
     TEST_CASE("concat vertically merges batches (numeric + string)") {
         DataFrame a;
         a.names = dstd::make_shared_strings({"k", "n"});
-        a.columns.push_back(Series::strings({"x", "y"}));
+        a.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"x", "y"})));
         dstd::Vector<std::int64_t> an{1, 2};
         a.columns.push_back(Series::flat_i64(an.data(), 2));
         DataFrame b;
         b.names = dstd::make_shared_strings({"k", "n"});
-        b.columns.push_back(Series::strings({"z"}));
+        b.columns.push_back(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>({"z"})));
         dstd::Vector<std::int64_t> bn{3};
         b.columns.push_back(Series::flat_i64(bn.data(), 1));
 
-        DataFrame m = dftu_utils_test::ok(dataframe::concat({&a, &b}));
+        DataFrame m = dftu_utils_test::ok(dataframe::concat(
+            dftu_utils_test::span_of<
+                const dftracer::utils::dataframe::DataFrame*>({&a, &b})));
         REQUIRE(m.num_rows() == 3);
         CHECK(m.columns[0].string_at(2) == "z");
         CHECK(m.columns[1].data<std::int64_t>()[2] == 3);
@@ -2245,21 +2712,25 @@ TEST_SUITE("vec") {
         // plus a shared numeric column m that is i64 in a and f64 in b.
         DataFrame a;
         a.names = dstd::make_shared_strings({"k", "n", "m"});
-        a.columns.push_back(Series::strings({"x", "y"}));
+        a.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"x", "y"})));
         dstd::Vector<std::int64_t> an{1, 2};
         a.columns.push_back(Series::flat_i64(an.data(), 2));
         dstd::Vector<std::int64_t> am{10, 20};
         a.columns.push_back(Series::flat_i64(am.data(), 2));
         DataFrame b;
         b.names = dstd::make_shared_strings({"k", "r", "m"});
-        b.columns.push_back(Series::strings({"z"}));
+        b.columns.push_back(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>({"z"})));
         dstd::Vector<double> br{2.5};
         b.columns.push_back(Series::flat_f64(br.data(), 1));
         dstd::Vector<double> bm{30.5};
         b.columns.push_back(Series::flat_f64(bm.data(), 1));
 
-        DataFrame m = dftu_utils_test::ok(
-            dataframe::concat({&a, &b}, dataframe::ConcatHow::Diagonal));
+        DataFrame m = dftu_utils_test::ok(dataframe::concat(
+            dftu_utils_test::span_of<
+                const dftracer::utils::dataframe::DataFrame*>({&a, &b}),
+            dataframe::ConcatHow::Diagonal));
         REQUIRE(m.num_rows() == 3);
         // Column order = first appearance: k, n, m, r.
         REQUIRE(dstd::to_strings(m.names) ==
@@ -2291,7 +2762,8 @@ TEST_SUITE("vec") {
         // value's JSON type, so the text "1" and the number 1 stay apart.
         DataFrame a;
         a.names = dstd::make_shared_strings({"v"});
-        a.columns.push_back(Series::strings({"1"}));
+        a.columns.push_back(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>({"1"})));
         DataFrame b;
         b.names = dstd::make_shared_strings({"v"});
         dstd::Vector<std::int64_t> bn{1};
@@ -2300,8 +2772,10 @@ TEST_SUITE("vec") {
         c.names = dstd::make_shared_strings({"v"});
         dstd::Vector<double> cn{2.5};
         c.columns.push_back(Series::flat_f64(cn.data(), 1));
-        DataFrame m = dftu_utils_test::ok(
-            dataframe::concat({&a, &b, &c}, dataframe::ConcatHow::Diagonal));
+        DataFrame m = dftu_utils_test::ok(dataframe::concat(
+            dftu_utils_test::span_of<
+                const dftracer::utils::dataframe::DataFrame*>({&a, &b, &c}),
+            dataframe::ConcatHow::Diagonal));
         REQUIRE(m.columns.size() == 1);
         CHECK(m.columns[0].type() ==
               dftracer::utils::dataframe::TypeId::String);
@@ -2313,7 +2787,9 @@ TEST_SUITE("vec") {
         CHECK(m.columns[0].string_at(2) == "2.5");
         // Row ops keep the JSON mark.
         CHECK(m.columns[0].take(dstd::Vector<std::int64_t>{2, 0}).is_json());
-        CHECK_FALSE(Series::strings({"x"}).is_json());
+        CHECK_FALSE(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>({"x"}))
+                .is_json());
     }
 
     TEST_CASE("concat diagonal throws on a nested/scalar type clash") {
@@ -2329,7 +2805,10 @@ TEST_SUITE("vec") {
         dstd::Vector<std::int64_t> bn{1};
         b.columns.push_back(Series::flat_i64(bn.data(), 1));
         dftu_utils_test::expect_error(
-            dataframe::concat({&a, &b}, dataframe::ConcatHow::Diagonal),
+            dataframe::concat(
+                dftu_utils_test::span_of<
+                    const dftracer::utils::dataframe::DataFrame*>({&a, &b}),
+                dataframe::ConcatHow::Diagonal),
             dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 
@@ -2357,13 +2836,17 @@ TEST_SUITE("vec") {
 
     TEST_CASE("take with a negative index gathers a null (join OUTER fill)") {
         dstd::Vector<std::int64_t> v{10, 20, 30};
-        Series g = take(Series::flat_i64(v.data(), 3), {1, -1, 0});
+        Series g = take(Series::flat_i64(v.data(), 3),
+                        dftu_utils_test::span_of<std::int64_t>({1, -1, 0}));
         REQUIRE(g.length() == 3);
         CHECK(g.data<std::int64_t>()[0] == 20);
         CHECK(g.data<std::int64_t>()[2] == 10);
         CHECK(g.null_count() == 1);  // row 1 (index -1) is null
 
-        Series gs = take(Series::strings({"a", "b"}), {-1, 1, 0});
+        Series gs =
+            take(Series::strings(
+                     dftu_utils_test::span_of<dstd::StringView>({"a", "b"})),
+                 dftu_utils_test::span_of<std::int64_t>({-1, 1, 0}));
         REQUIRE(gs.length() == 3);
         CHECK(gs.null_count() == 1);
         CHECK(gs.string_at(1) == "b");
@@ -2384,15 +2867,16 @@ TEST_SUITE("vec") {
         Series hist = Series::list(offsets, std::move(st));
 
         // Gather row 1 (1 bin) then row 0 (2 bins).
-        Series g = take(hist, {1, 0});
+        Series g = take(hist, dftu_utils_test::span_of<std::int64_t>({1, 0}));
         REQUIRE(g.valid());
         CHECK(g.type() == TypeId::List);
         REQUIRE(g.length() == 2);
     }
 
     TEST_CASE("dictionary_encode dedups strings and materializes back") {
-        Series d =
-            dictionary_encode(Series::strings({"a", "b", "a", "a", "b"}));
+        Series d = dictionary_encode(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"a", "b", "a", "a", "b"})));
         REQUIRE(d.valid());
         CHECK(d.encoding() == Encoding::Dictionary);
         REQUIRE(d.length() == 5);
@@ -2989,7 +3473,8 @@ TEST_CASE("Series::data_type() round-trips a Struct{a:Int64,b:String}") {
     dstd::Vector<std::int64_t> a{1, 2, 3};
     dstd::Vector<Series> fields;
     fields.push_back(dataframe::Series::flat_i64(a.data(), 3));
-    fields.push_back(dataframe::Series::strings({"x", "y", "z"}));
+    fields.push_back(dataframe::Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"x", "y", "z"})));
     dataframe::Series st =
         dataframe::Series::structs({"a", "b"}, std::move(fields));
     REQUIRE(st.valid());
@@ -3009,7 +3494,8 @@ TEST_CASE("List<Int64> and List<String> report different DataTypes") {
     dataframe::Series int_list = dataframe::Series::list(
         offsets, dataframe::Series::flat_i64(ints.data(), 2));
     dataframe::Series str_list = dataframe::Series::list(
-        offsets, dataframe::Series::strings({"a", "b"}));
+        offsets, dataframe::Series::strings(
+                     dftu_utils_test::span_of<dstd::StringView>({"a", "b"})));
 
     CHECK(int_list.data_type() != str_list.data_type());
     CHECK(int_list.data_type() ==
@@ -3257,7 +3743,8 @@ TEST_CASE("the name survives the native byte form") {
 }
 
 TEST_CASE("string_at reads a SELECTION column from filter") {
-    Series s = Series::strings({"alpha", "beta", "gamma"});
+    Series s = Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"alpha", "beta", "gamma"}));
     // Bool is bit-packed: keep rows 0 and 2.
     dstd::Vector<std::uint8_t> keep{0b0000'0101};
     Series mask = Series::flat(TypeId::Bool, keep.data(), 3);
@@ -3273,4 +3760,24 @@ TEST_CASE("string_at reads a SELECTION column from filter") {
     REQUIRE(flat.length() == 2);
     CHECK(flat.string_at(0) == "alpha");
     CHECK(flat.string_at(1) == "gamma");
+}
+
+TEST_CASE(
+    "a null entry of a filter mask selects no row, whatever its data bit") {
+    Series s = Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"a", "b", "c", "d", "e"}));
+    // Rows 0, 2 and 4 are true by data; row 2 is null, so it is not kept.
+    dstd::Vector<std::uint8_t> bits{0b0001'0101};
+    dstd::Vector<std::uint8_t> valid{0b0001'1011};
+    Series mask = Series::flat(TypeId::Bool, bits.data(), 5, valid.data());
+    Series kept = s.filter(mask).materialize();
+    REQUIRE(kept.length() == 2);
+    CHECK(kept.string_at(0) == "a");
+    CHECK(kept.string_at(1) == "e");
+
+    DataFrame df;
+    df.names = dstd::make_shared_strings({"s"});
+    df.columns.push_back(s.share());
+    DataFrame out = df.filter(mask);
+    REQUIRE(out.num_rows() == 2);
 }

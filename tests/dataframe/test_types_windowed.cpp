@@ -14,6 +14,7 @@
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <span_list.h>
 
 using namespace dftracer::utils;
 
@@ -36,21 +37,40 @@ struct TypeRow {
     Support support;
 };
 
-Series build_float16() { return make_float16({3.0f, 1.0f, 2.0f, 1.0f}); }
-Series build_decimal128() { return make_decimal128({300, 100, 200, 100}); }
-Series build_decimal256() { return make_decimal256({300, 100, 200, 100}); }
+Series build_float16() {
+    return make_float16(
+        dftu_utils_test::span_of<float>({3.0f, 1.0f, 2.0f, 1.0f}));
+}
+Series build_decimal128() {
+    return make_decimal128(
+        dftu_utils_test::span_of<std::int64_t>({300, 100, 200, 100}));
+}
+Series build_decimal256() {
+    return make_decimal256(
+        dftu_utils_test::span_of<std::int64_t>({300, 100, 200, 100}));
+}
 Series build_fixed_size_binary() {
-    return make_fixed_size_binary({"cccc", "aaaa", "bbbb", "aaaa"}, 4);
+    return make_fixed_size_binary(dftu_utils_test::span_of<dstd::String>(
+                                      {"cccc", "aaaa", "bbbb", "aaaa"}),
+                                  4);
 }
 Series build_large_string() { return make_large_utf8({"c", "a", "b", "a"}); }
 Series build_large_binary() { return make_large_binary({"c", "a", "b", "a"}); }
-Series build_large_list() { return make_large_list_i64({{3}, {1}, {2}, {1}}); }
+Series build_large_list() {
+    return make_large_list_i64(
+        dftu_utils_test::span_of<dstd::Vector<std::int64_t>>(
+            {{3}, {1}, {2}, {1}}));
+}
 Series build_fixed_size_list() {
-    return make_fixed_size_list_i64({{3, 3}, {1, 1}, {2, 2}, {1, 1}});
+    return make_fixed_size_list_i64(
+        dftu_utils_test::span_of<dstd::Vector<std::int64_t>>(
+            {{3, 3}, {1, 1}, {2, 2}, {1, 1}}));
 }
 Series build_map() {
     return make_map_string_i64(
-        {{{"c", 3}}, {{"a", 1}}, {{"b", 2}}, {{"a", 1}}});
+        dftu_utils_test::span_of<
+            dstd::Vector<dstd::Pair<dstd::String, std::int64_t>>>(
+            {{{"c", 3}}, {{"a", 1}}, {{"b", 2}}, {{"a", 1}}}));
 }
 
 // Decimal128/256 use scale 0, so their stored values are {300,100,200,100},

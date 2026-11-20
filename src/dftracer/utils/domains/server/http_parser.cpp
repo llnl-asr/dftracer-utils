@@ -71,13 +71,13 @@ struct Cursor {
 
 // Read a token (method, header name) up to a delimiter.
 // Returns false on EOF or bad character.
-static bool read_token(Cursor& c, const char*& start, std::size_t& len,
-                       char delim) {
-    start = c.buf;
+static bool read_token(Cursor& c, dstd::StringView& token, char delim) {
+    const char* start = c.buf;
     while (!c.eof()) {
         if (c.peek() == delim) {
-            len = static_cast<std::size_t>(c.buf - start);
-            return len > 0;
+            token = dstd::StringView(start,
+                                     static_cast<std::size_t>(c.buf - start));
+            return !token.empty();
         }
         if (!is_token_char(static_cast<unsigned char>(c.peek()))) return false;
         c.advance();
@@ -86,13 +86,13 @@ static bool read_token(Cursor& c, const char*& start, std::size_t& len,
 }
 
 // Read the request-target (path) up to a space.
-static bool read_request_target(Cursor& c, const char*& start,
-                                std::size_t& len) {
-    start = c.buf;
+static bool read_request_target(Cursor& c, dstd::StringView& target) {
+    const char* start = c.buf;
     while (!c.eof()) {
         if (c.peek() == ' ') {
-            len = static_cast<std::size_t>(c.buf - start);
-            return len > 0;
+            target = dstd::StringView(start,
+                                      static_cast<std::size_t>(c.buf - start));
+            return !target.empty();
         }
         auto ch = static_cast<unsigned char>(c.peek());
         if (ch < 0x21 || ch == 0x7F) return false;
@@ -102,9 +102,10 @@ static bool read_request_target(Cursor& c, const char*& start,
 }
 
 // Read a header value up to CRLF or LF.
-// Returns false on EOF, sets start/len.
-static bool read_header_value(Cursor& c, const char*& start, std::size_t& len) {
-    start = c.buf;
+// Returns false on EOF, sets value.
+static bool read_header_value(Cursor& c, dstd::StringView& value) {
+    const char* start = c.buf;
+    std::size_t len = 0;
     while (!c.eof()) {
         auto ch = static_cast<unsigned char>(c.peek());
         if (ch == '\r') {
@@ -115,6 +116,7 @@ static bool read_header_value(Cursor& c, const char*& start, std::size_t& len) {
             // Trim trailing whitespace
             while (len > 0 && (start[len - 1] == ' ' || start[len - 1] == '\t'))
                 --len;
+            value = dstd::StringView(start, len);
             return true;
         }
         if (ch == '\n') {
@@ -122,6 +124,7 @@ static bool read_header_value(Cursor& c, const char*& start, std::size_t& len) {
             c.advance();
             while (len > 0 && (start[len - 1] == ' ' || start[len - 1] == '\t'))
                 --len;
+            value = dstd::StringView(start, len);
             return true;
         }
         // Allow printable ASCII + HT (0x09)
@@ -148,7 +151,8 @@ static bool consume_eol(Cursor& c) {
 }
 
 // Check whether the buffer contains a complete request (double CRLF).
-static bool has_complete_request(const char* buf, std::size_t len) {
+static bool has_complete_request(dstd::StringView buf) {
+    const std::size_t len = buf.size();
     if (len < 4) return false;
     // Scan for \r\n\r\n or \n\n
     for (std::size_t i = 0; i + 1 < len; ++i) {
@@ -163,11 +167,11 @@ static bool has_complete_request(const char* buf, std::size_t len) {
 
 }  // namespace
 
-int parse_request(const char* buf, std::size_t len, ParsedRequest& out) {
+int parse_request(dstd::StringView buf, ParsedRequest& out) {
     // Quick completeness check to avoid partial parsing work.
-    if (!has_complete_request(buf, len)) return -2;
+    if (!has_complete_request(buf)) return -2;
 
-    Cursor c{buf, buf + len};
+    Cursor c{buf.data(), buf.data() + buf.size()};
 
     // Skip optional leading CRLF (some clients send it after POST body).
     if (!c.eof() && c.peek() == '\r') {
@@ -179,16 +183,14 @@ int parse_request(const char* buf, std::size_t len, ParsedRequest& out) {
     }
 
     // Method
-    const char* method_start = nullptr;
-    std::size_t method_size = 0;
-    if (!read_token(c, method_start, method_size, ' ')) return -1;
+    dstd::StringView method;
+    if (!read_token(c, method, ' ')) return -1;
     c.advance();  // consume space
     c.skip_spaces();
 
     // Request-target (path)
-    const char* path_start = nullptr;
-    std::size_t path_size = 0;
-    if (!read_request_target(c, path_start, path_size)) return -1;
+    dstd::StringView path;
+    if (!read_request_target(c, path)) return -1;
     c.advance();  // consume space
     c.skip_spaces();
 
@@ -206,8 +208,8 @@ int parse_request(const char* buf, std::size_t len, ParsedRequest& out) {
     if (!consume_eol(c)) return -1;
 
     // Headers
-    out.method = dstd::StringView(method_start, method_size);
-    out.path = dstd::StringView(path_start, path_size);
+    out.method = method;
+    out.path = path;
     out.minor_version = minor_ver;
     out.headers.clear();
 
@@ -223,24 +225,21 @@ int parse_request(const char* buf, std::size_t len, ParsedRequest& out) {
         if (out.headers.size() >= MAX_HEADERS) return -1;
 
         // Header name
-        const char* name_start = nullptr;
-        std::size_t name_size = 0;
-        if (!read_token(c, name_start, name_size, ':')) return -1;
+        dstd::StringView name;
+        if (!read_token(c, name, ':')) return -1;
         c.advance();  // consume ':'
 
         // Skip OWS after colon
         while (!c.eof() && (c.peek() == ' ' || c.peek() == '\t')) c.advance();
 
         // Header value
-        const char* val_start = nullptr;
-        std::size_t val_size = 0;
-        if (!read_header_value(c, val_start, val_size)) return -1;
+        dstd::StringView value;
+        if (!read_header_value(c, value)) return -1;
 
-        out.headers.push_back({dstd::StringView(name_start, name_size),
-                               dstd::StringView(val_start, val_size)});
+        out.headers.push_back({name, value});
     }
 
-    return static_cast<int>(c.buf - buf);
+    return static_cast<int>(c.buf - buf.data());
 }
 
 }  // namespace dftracer::utils::domains::server::parser

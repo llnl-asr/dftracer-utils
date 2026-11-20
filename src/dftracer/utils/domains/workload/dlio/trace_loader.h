@@ -6,6 +6,7 @@
 #include <dftracer/utils/domains/workload/dlio/statistic.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
@@ -109,7 +110,7 @@ struct TraceLoaderOptions {
 /// is the index store of `files` and `config` the config it was built with.
 /// Blocks until the query ends. Returns an Io error when the query fails.
 dstd::Result<AggregatedTraces> load_aggregated_traces(
-    dstd::StringView index_path, const dstd::Vector<dstd::String>& files,
+    dstd::StringView index_path, dstd::Span<const dstd::String> files,
     const trace::index::schemas::dft::agg::AggregationConfig& config,
     const TraceLoaderOptions& options = {});
 

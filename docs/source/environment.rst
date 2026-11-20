@@ -25,14 +25,14 @@ Runtime and scheduler
      - Default
      - Effect
    * - ``DFTRACER_UTILS_THREADS``
-     - hardware concurrency
+     - usable CPUs (see ``DFTRACER_UTILS_HW_CONCURRENCY``)
      - Fixes the compute worker-thread count of the process runtime (e.g.
        ``1`` for a single-threaded async loop), also over every later
        request to change it. Any value ``> 0`` overrides the
        requested/detected count; non-positive or unparsable values are
        ignored.
    * - ``DFTRACER_UTILS_IO_THREADS``
-     - hardware concurrency
+     - one per compute worker
      - Fixes the I/O backend (io_uring/kqueue) thread-pool size independently
        of the compute pool. Same parsing rule as ``DFTRACER_UTILS_THREADS``.
    * - ``DFTRACER_UTILS_IO_URING_SQPOLL_IDLE_MS``
@@ -72,15 +72,63 @@ Runtime and scheduler
        payload goes in several messages. A value above 1 GiB is lowered to it, and
        one below 1 is raised to 1. Meant for tests.
    * - ``DFTRACER_UTILS_HW_CONCURRENCY``
-     - ``std::thread::hardware_concurrency()`` (or ``1`` if that is ``0``)
-     - Overrides the detected core count used to size thread pools when the
-       above are left at their defaults.
+     - the usable CPUs
+     - Overrides the usable CPU count that sizes the thread pools when the
+       variables above are left at their defaults. Unset, the count is the
+       smallest of the CPUs the machine reports, the CPU affinity mask (Linux)
+       and the CPU quota of the process's cgroup rounded up (Linux, cgroup v2
+       ``cpu.max`` or v1 ``cpu.cfs_quota_us``), and never ``0``. The quota is
+       read once per process.
    * - ``DFTRACER_UTILS_ELASTIC``
      - enabled
      - Set to ``0``, ``false``, or ``off`` to disable elastic (work-stealing,
        load-scaled) scheduling when the process runtime is made. A pipeline or
        ``Runtime`` that asks for eager or elastic changes it later. Any other
        value, or leaving it unset, keeps elastic scheduling on.
+
+Many worker processes on one host
+---------------------------------
+
+A process that sizes its runtime from the usable CPUs assumes it has the host
+to itself. Forty-eight worker processes that each start a runtime of every
+usable CPU, with an I/O thread for each, also each take a third of the
+available memory, and can run into the thread limit of the user
+(``RLIMIT_NPROC``) or of the cgroup (``pids.max``).
+
+Two things keep the default sizes in bounds. The usable CPU count honours the
+cgroup quota, so a container that holds 8 CPUs starts 8 workers whatever the
+host has. When the cgroup sets ``pids.max``, the default compute and I/O thread
+counts are lowered until the pools and about 8 fixed threads fit in the
+threads the group has left. A count you set (an argument or an environment
+variable) is kept as given. A limit on the user, ``RLIMIT_NPROC``, counts the
+threads of every process of the user and is not read.
+
+For workers that split a host, give each its share. ``worker_share(workers)``
+returns the share of one of ``workers`` processes: the usable CPUs divided by
+``workers`` for the compute threads and for the I/O threads, at least 1, and
+the memory budget this process would use (``DFTRACER_UTILS_MEM_BUDGET``, else a
+third of the available memory) divided by ``workers``, at least 64 MiB. Its
+``env`` field holds ``DFTRACER_UTILS_THREADS``, ``DFTRACER_UTILS_IO_THREADS``
+and ``DFTRACER_UTILS_MEM_BUDGET`` with those values, for a launcher that sets
+the environment of the processes it starts.
+
+``apply_worker_share(workers)`` takes the share inside a worker. It sets the
+three variables and applies them in place: the memory budget at once, and the
+thread counts of the process runtime when it already exists (the I/O pool only
+grows). Use it as the initializer of a ``ProcessPoolExecutor`` or a
+``multiprocessing.Pool`` (see :doc:`guides/runtime/performance`).
+
+Applying a share again in one process gives the same share for the same
+worker count, and the share of the new count for another, because each share is
+taken from the budget the process had before the first one.
+
+The Dask helpers of ``dftracer.utils.dask`` do this for you. Each time one of
+them uses a client, it compares the workers in ``client.scheduler_info()`` with
+the ones it has shared out. When the worker processes of a host changed, because
+workers joined (``scale``, ``adapt``), left, or were restarted by their nanny, it
+runs ``apply_worker_share`` with the new count on every worker process of that
+host. Workers that run inside the client's own process (a cluster of threads)
+and a client with no scheduler, such as the in-process client, are left alone.
 
 Memory and kernels
 -------------------
@@ -112,6 +160,14 @@ Memory and kernels
        stores them raw. ``auto``, unset or any other value compresses only
        when the spill file is on a network file system, where the bytes
        written cost more than the compression.
+   * - ``DFTRACER_UTILS_TZDIR``
+     - unset
+     - Directories, separated as in ``PATH`` (``:``, and ``;`` on Windows), searched for time zone files (TZif)
+       such as ``America/New_York``. They come after the directories the host
+       program set and before ``TZDIR`` and the system zoneinfo directories
+       (``/usr/share/zoneinfo``, ``/usr/lib/zoneinfo``,
+       ``/usr/share/lib/zoneinfo``, ``/etc/zoneinfo``). The first directory
+       that holds the zone wins.
    * - ``DFTRACER_UTILS_MEMORY_BACKEND``
      - the build option
      - ``page_heap`` or ``system``. Picks the allocator backend, read once
@@ -244,6 +300,13 @@ Index storage and indexing
    * - Variable
      - Default
      - Effect
+   * - ``DFTRACER_UTILS_DASK_WORKER_TIMEOUT``
+     - ``60``
+     - Seconds ``distributed_index``, the Dask viewer and ``DaskFrame`` wait for a
+       first Dask worker when the cluster has none. Then they raise
+       ``TimeoutError`` naming the scheduler. ``0`` does not wait: they raise at
+       once. A negative or non-numeric value means ``60``. Read by the Python
+       package only.
    * - ``DFTRACER_UTILS_INDEX_STORE_REFRESH_MS``
      - ``1000``
      - The shortest time in milliseconds between two looks for the data files
@@ -369,7 +432,7 @@ Monitor (coroutine/task instrumentation)
 Plugin and JIT build
 ----------------------
 
-Read by the Python compile backend (``python/dftracer/utils/_plugin_build.py``)
+Read by the Python compile backend (``python/dftracer/utils/_build.py``)
 shared by the ``@jit.plugin`` decorator and the ``dftracer_plugin``
 console-script.
 
@@ -390,6 +453,22 @@ console-script.
        ``shutil.which("c++")`` then ``shutil.which("clang++")`` then
        ``"c++"`` when unset; it always selects a C++ compiler regardless of
        what ``CXX`` names.
+   * - ``DFTRACER_UTILS_PLUGINS``
+     - unset
+     - Plugin shared libraries every dftracer tool, the Python extension and
+       the server load once, at the first call that reads a trace, separated by
+       ``:``. An empty item is skipped, a path named twice loads once, and a
+       path that does not load is an error that names it: the tool exits with
+       1 and Python raises at the first read. The load is not marked done by a
+       failure: the next call retries the paths that are not loaded yet, so a
+       missing file can be created and the process go on. Only the tools that
+       pick a reader (``dftracer_index``, ``dftracer_view``, ``dftracer_run``,
+       ``dftracer_server``) load it, after the arguments are parsed, so
+       ``--help`` and ``--version`` never depend on it. A plugin the variable
+       loaded can be named again by ``--plugin`` or ``Plugins(path)``; the
+       second load shares the first. The file formats, ops and index
+       extensions the plugins register are then available to every reader in
+       the process. See :ref:`Plugins for the whole process <plugins-global>`.
    * - ``DFTRACER_UTILS_JIT_CACHE``
      - ``~/.cache/dftracer-utils/jit``
      - Directory for content-hashed compiled plugin/JIT shared objects, so an

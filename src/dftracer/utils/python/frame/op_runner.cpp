@@ -7,6 +7,7 @@
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
+#include <dftracer/utils/plugins/host/plugins_internal.h>
 #include <dftracer/utils/plugins/task_abi.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/frame/op_runner.h>
@@ -55,6 +56,7 @@ PyObject* jit_run_op(PyObject*, PyObject* args) {
         return nullptr;
     }
 
+    dftracer::utils::plugins::host::expose_dataframe_abi();
     void* handle = dlopen(so_path, RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
         PyErr_Format(PyExc_RuntimeError, "cannot load op '%s': %s", so_path,

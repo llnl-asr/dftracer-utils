@@ -96,7 +96,7 @@ typedef struct dftu_indexer_file {
 DFTU_EXPORT void dftu_indexer_options_init(dftu_indexer_options* out);
 
 /** Open `n` trace files or directories (a directory contributes the trace
- * files, .pfw, .jsonl and .ndjson, plain or gzip, directly inside it).
+ * gzip files, *.gz, directly inside it).
  * `options` NULL = defaults; it is copied, so it and its strings may be freed
  * after the call. A `struct_size` that does not reach the first field after
  * it fails with DFTU_E_INVALID. On success `*out` is an indexer the caller

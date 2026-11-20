@@ -7,7 +7,7 @@ The C extension carries the full SIMD kernel surface on ``_Series``; the Python
 in the reference) rather than relying on attribute forwarding. These tests prove
 the wrappers dispatch correctly and return the right Python type: reductions
 return scalars, elementwise/ordering ops return a wrapped ``Series``, and
-``value_counts`` returns a ``DataFrame``.
+``value_counts`` returns a ``Series`` of counts.
 """
 
 import numpy as np
@@ -37,7 +37,7 @@ def test_moment_statistics():
     assert s.variance() == pytest.approx(2.5)
     assert s.stddev() == pytest.approx(2.5**0.5)
     # skewness of a symmetric sample is ~0.
-    assert abs(s.skewness()) < 1e-9
+    assert abs(s.skew()) < 1e-9
 
 
 def test_elementwise_return_series():
@@ -71,7 +71,7 @@ def test_boolean_masks():
     assert isinstance(s.is_between(2.0, 3.0), Series)
     assert s.is_between(2.0, 3.0).to_numpy().tolist() == [False, True, True, False]
     assert isinstance(s.is_nan(), Series)  # mask op
-    assert s.is_null(0) is False  # element-level null check
+    assert s.is_null_at(0) is False  # element-level null check
 
 
 def test_mask_operators():
@@ -91,11 +91,12 @@ def test_properties():
     assert s.encoding is not None
 
 
-def test_value_counts_returns_dataframe():
+def test_value_counts_is_a_series_of_counts_labelled_by_the_values():
     s = Series.from_numpy(np.array([1, 1, 2, 3, 3, 3], dtype=np.int64))
     vc = s.value_counts()
-    assert isinstance(vc, DataFrame)
-    assert vc.num_rows == 3
+    assert isinstance(vc, Series)
+    assert vc.to_list() == [3, 2, 1]
+    assert vc.index.to_list() == [3, 1, 2]
 
 
 def test_string_ops():

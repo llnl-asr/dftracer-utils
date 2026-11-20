@@ -37,8 +37,11 @@ PyObject *py_error_type_for(dftracer::utils::common::ErrorCode code);
 PyObject *py_error_type_for(const dftracer::utils::dstd::Error &error);
 
 // Set the current Python error from a caught C++ exception. PyErrorException
-// maps by its error, std::invalid_argument to DFTUtilsValueError and anything
-// else to the DFTUtilsError base, as run_blocking does for inline bindings.
+// maps by its error, std::invalid_argument to DFTUtilsValueError,
+// std::out_of_range to KeyError, std::bad_alloc to MemoryError and anything
+// else to the DFTUtilsError base. DFTUtilsValueError also derives from
+// ValueError and DFTUtilsNotFoundError from KeyError (with the plain message
+// as its str), so `except ValueError` and `except KeyError` keep catching them.
 void set_typed_py_error(const std::exception &e);
 
 // Set the current Python error from an error value, with the Python type

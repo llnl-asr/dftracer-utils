@@ -40,7 +40,7 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
     dstd::String ofs;
     for (int i = 0; i < NUM_EVENTS; ++i) {
         dstd::fmt_append<
-            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
             "\"tid\":1,\"ts\":{},\"dur\":{},\"args\":{\"x\":{}">(
             ofs, (1000 + i * 100), (10 + i), i);
         if (i == 0) ofs += R"(,"y":1)";
@@ -58,7 +58,7 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
     return test_plugin_common::index_trace(gz);
 }
 
-plugins::host::ConfigTree config_of(const dstd::String& json) {
+plugins::host::ConfigTree config_of(dstd::StringView json) {
     auto tree = plugins::host::ConfigTree::from_json_string(json);
     REQUIRE(tree.has_value());
     return std::move(*tree);

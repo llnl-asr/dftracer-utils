@@ -8,9 +8,11 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/python/core/call.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/method.h>
 #include <dftracer/utils/python/core/runtime_mixin.h>
+#include <dftracer/utils/python/core/seq_helpers.h>
 #include <dftracer/utils/python/core/type_helpers.h>
 #include <dftracer/utils/python/store/store.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -20,6 +22,10 @@
 #include <cstdint>
 #include <new>
 #include <utility>
+
+using dftracer::utils::python::core::guard;
+using dftracer::utils::python::core::parse_kw;
+using dftracer::utils::python::core::parse_seq;
 
 using dftracer::utils::store::Batch;
 using dftracer::utils::store::CopyInfo;
@@ -86,16 +92,10 @@ void check(const dstd::Expected<void, dstd::Error> &result) {
 
 template <class F>
 bool guarded(F &&body) {
-    try {
+    return guard([&] {
         body();
         return true;
-    } catch (const std::exception &e) {
-        dftracer::utils::python::core::set_typed_py_error(e);
-    } catch (...) {
-        PyErr_SetString(dftracer::utils::python::core::g_dft_error,
-                        "unknown C++ exception");
-    }
-    return false;
+    });
 }
 
 bool as_u64(PyObject *obj, std::uint64_t &out) {
@@ -167,25 +167,20 @@ bool parse_scope(PyObject *obj, ScopeKey &out) {
     }
     if (!PyErr_ExceptionMatches(PyExc_TypeError)) return false;
     PyErr_Clear();
-    PyObject *seq = PySequence_Fast(
-        obj, "scope must be None, a path or a sequence of paths");
-    if (!seq) return false;
-    const Py_ssize_t count = PySequence_Fast_GET_SIZE(seq);
-    if (count == 0) {
-        Py_DECREF(seq);
+    dstd::Vector<dstd::String> paths;
+    if (!parse_seq<dstd::String>(
+            obj, "scope must be None, a path or a sequence of paths", paths,
+            [](PyObject *item, dstd::Vector<dstd::String> &o) {
+                dstd::String text;
+                return path_text(item, text) &&
+                       guarded([&] { o.push_back(std::move(text)); });
+            }))
+        return false;
+    if (paths.empty()) {
         PyErr_SetString(PyExc_ValueError,
                         "a scope of several files needs at least one path");
         return false;
     }
-    dstd::Vector<dstd::String> paths;
-    bool ok = guarded([&] { paths.reserve(static_cast<std::size_t>(count)); });
-    for (Py_ssize_t i = 0; ok && i < count; ++i) {
-        dstd::String text;
-        ok = path_text(PySequence_Fast_GET_ITEM(seq, i), text) &&
-             guarded([&] { paths.push_back(std::move(text)); });
-    }
-    Py_DECREF(seq);
-    if (!ok) return false;
     return guarded([&] {
         dstd::Vector<dstd::StringView> views;
         views.reserve(paths.size());
@@ -199,27 +194,21 @@ bool parse_scope(PyObject *obj, ScopeKey &out) {
 
 bool parse_sources(PyObject *obj, dstd::Vector<SourceStat> &out) {
     if (obj == Py_None) return true;
-    PyObject *seq = PySequence_Fast(
-        obj, "sources must be a sequence of (mtime, size, hash)");
-    if (!seq) return false;
-    const Py_ssize_t count = PySequence_Fast_GET_SIZE(seq);
-    bool ok = true;
-    for (Py_ssize_t i = 0; ok && i < count; ++i) {
-        PyObject *item = PySequence_Fast_GET_ITEM(seq, i);
-        if (!PyTuple_Check(item) || PyTuple_GET_SIZE(item) != 3) {
-            PyErr_SetString(PyExc_TypeError,
-                            "a source must be an (mtime, size, hash) tuple");
-            ok = false;
-            break;
-        }
-        SourceStat stat;
-        ok = as_u64(PyTuple_GET_ITEM(item, 0), stat.mtime) &&
-             as_u64(PyTuple_GET_ITEM(item, 1), stat.size) &&
-             as_u64(PyTuple_GET_ITEM(item, 2), stat.hash) &&
-             guarded([&] { out.push_back(stat); });
-    }
-    Py_DECREF(seq);
-    return ok;
+    return parse_seq<SourceStat>(
+        obj, "sources must be a sequence of (mtime, size, hash)", out,
+        [](PyObject *item, dstd::Vector<SourceStat> &o) {
+            if (!PyTuple_Check(item) || PyTuple_GET_SIZE(item) != 3) {
+                PyErr_SetString(
+                    PyExc_TypeError,
+                    "a source must be an (mtime, size, hash) tuple");
+                return false;
+            }
+            SourceStat stat;
+            return as_u64(PyTuple_GET_ITEM(item, 0), stat.mtime) &&
+                   as_u64(PyTuple_GET_ITEM(item, 1), stat.size) &&
+                   as_u64(PyTuple_GET_ITEM(item, 2), stat.hash) &&
+                   guarded([&] { o.push_back(stat); });
+        });
 }
 
 PyObject *bytes_of(dstd::ByteView view) {
@@ -277,10 +266,8 @@ void Store_dealloc(StoreObject *self) {
 }
 
 int Store_init(StoreObject *self, PyObject *args, PyObject *kwds) {
-    static const char *kwlist[] = {"path", NULL};
     PyObject *path = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O",
-                                     const_cast<char **>(kwlist), &path)) {
+    if (!parse_kw<"O">(args, kwds, {"path"}, &path)) {
         return -1;
     }
     dstd::String dir;
@@ -301,16 +288,14 @@ int Store_init(StoreObject *self, PyObject *args, PyObject *kwds) {
 }
 
 PyObject *Store_namespace(StoreObject *self, PyObject *args, PyObject *kwds) {
-    static const char *kwlist[] = {"name",    "format_version", "fold",
-                                   "durable", "shared",         NULL};
     const char *name = NULL;
     PyObject *version_arg = NULL;
     int fold = 0;
     int durable = 0;
     int shared = 0;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|Oipp",
-                                     const_cast<char **>(kwlist), &name,
-                                     &version_arg, &fold, &durable, &shared)) {
+    if (!parse_kw<"s|Oipp">(
+            args, kwds, {"name", "format_version", "fold", "durable", "shared"},
+            &name, &version_arg, &fold, &durable, &shared)) {
         return NULL;
     }
     std::uint64_t format_version = 0;
@@ -345,15 +330,13 @@ PyObject *Store_namespace(StoreObject *self, PyObject *args, PyObject *kwds) {
 }
 
 PyObject *Store_batch(StoreObject *self, PyObject *args, PyObject *kwds) {
-    static const char *kwlist[] = {"ns", "scope", "params_hash", "sources",
-                                   NULL};
     PyObject *ns_arg = NULL;
     PyObject *scope_arg = NULL;
     PyObject *hash_arg = NULL;
     PyObject *sources_arg = Py_None;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OO|OO",
-                                     const_cast<char **>(kwlist), &ns_arg,
-                                     &scope_arg, &hash_arg, &sources_arg)) {
+    if (!parse_kw<"OO|OO">(args, kwds,
+                           {"ns", "scope", "params_hash", "sources"}, &ns_arg,
+                           &scope_arg, &hash_arg, &sources_arg)) {
         return NULL;
     }
     std::uint64_t params_hash = 0;
@@ -414,12 +397,9 @@ PyObject *Store_close(StoreObject *self, PyObject *) {
 }
 
 PyObject *Store_drop(StoreObject *self, PyObject *args, PyObject *kwds) {
-    static const char *kwlist[] = {"ns", "scope", NULL};
     PyObject *ns_arg = NULL;
     PyObject *scope_arg = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OO",
-                                     const_cast<char **>(kwlist), &ns_arg,
-                                     &scope_arg)) {
+    if (!parse_kw<"OO">(args, kwds, {"ns", "scope"}, &ns_arg, &scope_arg)) {
         return NULL;
     }
     Store *store = store_of(self);
@@ -433,14 +413,12 @@ PyObject *Store_drop(StoreObject *self, PyObject *args, PyObject *kwds) {
 }
 
 PyObject *Store_pack(StoreObject *self, PyObject *args, PyObject *kwds) {
-    static const char *kwlist[] = {"small_file_bytes", "dead_ratio",
-                                   "keep_seconds", NULL};
     PyObject *small_arg = Py_None;
     PyObject *ratio_arg = Py_None;
     PyObject *keep_arg = Py_None;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|OOO",
-                                     const_cast<char **>(kwlist), &small_arg,
-                                     &ratio_arg, &keep_arg)) {
+    if (!parse_kw<"|OOO">(args, kwds,
+                          {"small_file_bytes", "dead_ratio", "keep_seconds"},
+                          &small_arg, &ratio_arg, &keep_arg)) {
         return NULL;
     }
     Store *store = store_of(self);
@@ -669,13 +647,11 @@ void Snapshot_dealloc(SnapshotObject *self) {
 }
 
 PyObject *Snapshot_get(SnapshotObject *self, PyObject *args, PyObject *kwds) {
-    static const char *kwlist[] = {"ns", "scope", "key", NULL};
     PyObject *ns_arg = NULL;
     PyObject *scope_arg = NULL;
     PyObject *key_arg = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO",
-                                     const_cast<char **>(kwlist), &ns_arg,
-                                     &scope_arg, &key_arg)) {
+    if (!parse_kw<"OOO">(args, kwds, {"ns", "scope", "key"}, &ns_arg,
+                         &scope_arg, &key_arg)) {
         return NULL;
     }
     Snapshot *snapshot = snapshot_of(self);
@@ -698,13 +674,11 @@ PyObject *Snapshot_get(SnapshotObject *self, PyObject *args, PyObject *kwds) {
 
 PyObject *Snapshot_multi_get(SnapshotObject *self, PyObject *args,
                              PyObject *kwds) {
-    static const char *kwlist[] = {"ns", "scope", "keys", NULL};
     PyObject *ns_arg = NULL;
     PyObject *scope_arg = NULL;
     PyObject *keys_arg = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO",
-                                     const_cast<char **>(kwlist), &ns_arg,
-                                     &scope_arg, &keys_arg)) {
+    if (!parse_kw<"OOO">(args, kwds, {"ns", "scope", "keys"}, &ns_arg,
+                         &scope_arg, &keys_arg)) {
         return NULL;
     }
     Snapshot *snapshot = snapshot_of(self);
@@ -713,24 +687,18 @@ PyObject *Snapshot_multi_get(SnapshotObject *self, PyObject *args,
     if (!ns) return NULL;
     ScopeKey scope;
     if (!parse_scope(scope_arg, scope)) return NULL;
-    PyObject *seq =
-        PySequence_Fast(keys_arg, "keys must be a sequence of bytes-like");
-    if (!seq) return NULL;
-    const Py_ssize_t count = PySequence_Fast_GET_SIZE(seq);
     dstd::Vector<Bytes> held;
-    held.reserve(static_cast<std::size_t>(count));
+    if (!parse_seq<Bytes>(keys_arg, "keys must be a sequence of bytes-like",
+                          held, [](PyObject *item, dstd::Vector<Bytes> &o) {
+                              Bytes key;
+                              if (!key.acquire(item)) return false;
+                              o.push_back(std::move(key));
+                              return true;
+                          }))
+        return NULL;
     dstd::Vector<dstd::ByteView> views;
-    views.reserve(static_cast<std::size_t>(count));
-    for (Py_ssize_t i = 0; i < count; ++i) {
-        Bytes key;
-        if (!key.acquire(PySequence_Fast_GET_ITEM(seq, i))) {
-            Py_DECREF(seq);
-            return NULL;
-        }
-        views.push_back(key.view());
-        held.push_back(std::move(key));
-    }
-    Py_DECREF(seq);
+    views.reserve(held.size());
+    for (const Bytes &key : held) views.push_back(key.view());
     dstd::Vector<dstd::Optional<Value>> found;
     if (!run_blocking_r(
             [&] {
@@ -762,13 +730,11 @@ PyObject *Snapshot_multi_get(SnapshotObject *self, PyObject *args,
 }
 
 PyObject *Snapshot_scan(SnapshotObject *self, PyObject *args, PyObject *kwds) {
-    static const char *kwlist[] = {"ns", "scope", "prefix", NULL};
     PyObject *ns_arg = NULL;
     PyObject *scope_arg = NULL;
     PyObject *prefix_arg = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OO|O",
-                                     const_cast<char **>(kwlist), &ns_arg,
-                                     &scope_arg, &prefix_arg)) {
+    if (!parse_kw<"OO|O">(args, kwds, {"ns", "scope", "prefix"}, &ns_arg,
+                          &scope_arg, &prefix_arg)) {
         return NULL;
     }
     Snapshot *snapshot = snapshot_of(self);
@@ -799,12 +765,9 @@ PyObject *Snapshot_scan(SnapshotObject *self, PyObject *args, PyObject *kwds) {
 
 PyObject *Snapshot_copy_info(SnapshotObject *self, PyObject *args,
                              PyObject *kwds) {
-    static const char *kwlist[] = {"ns", "scope", NULL};
     PyObject *ns_arg = NULL;
     PyObject *scope_arg = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OO",
-                                     const_cast<char **>(kwlist), &ns_arg,
-                                     &scope_arg)) {
+    if (!parse_kw<"OO">(args, kwds, {"ns", "scope"}, &ns_arg, &scope_arg)) {
         return NULL;
     }
     Snapshot *snapshot = snapshot_of(self);

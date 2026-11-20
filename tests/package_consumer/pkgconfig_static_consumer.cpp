@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <string_view>
 
 extern "C" void dftu_register_host_ops(void);
 
@@ -20,7 +21,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-std::uint32_t crc32(const std::string& data) {
+std::uint32_t crc32(std::string_view data) {
     std::uint32_t crc = 0xFFFFFFFFu;
     for (unsigned char byte : data) {
         crc ^= byte;
@@ -36,7 +37,7 @@ void put_le(std::string& out, std::uint32_t value, int bytes) {
 }
 
 // One gzip member holding the text in a single stored deflate block.
-std::string gzip_stored(const std::string& text) {
+std::string gzip_stored(std::string_view text) {
     std::string out("\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff", 10);
     out.push_back('\x01');
     put_le(out, static_cast<std::uint32_t>(text.size()), 2);
@@ -51,9 +52,9 @@ int check_index(const std::filesystem::path& dir) {
     const std::string trace = (dir / "trace.pfw.gz").string();
     {
         const std::string text =
-            R"({"id":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":5,"ph":"X","args":{}})"
+            R"({"id":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":5,"ph":1,"args":{}})"
             "\n"
-            R"({"id":2,"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":9,"dur":7,"ph":"X","args":{}})"
+            R"({"id":2,"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":9,"dur":7,"ph":1,"args":{}})"
             "\n";
         std::ofstream out(trace, std::ios::binary);
         out << gzip_stored(text);

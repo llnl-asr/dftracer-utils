@@ -268,7 +268,7 @@ dstd::Result<dstd::Vector<CacheStore::Usage>> CacheStore::usage() const {
 
 dstd::Result<void> CacheStore::put(
     std::uint64_t sig,
-    const dstd::Vector<dstd::Pair<dstd::String, dstd::String>>& entries,
+    dstd::Span<const dstd::Pair<dstd::String, dstd::String>> entries,
     std::uint64_t bytes) {
     if (!writable_)
         return common::make_error(common::ErrorCode::InvalidArgument,

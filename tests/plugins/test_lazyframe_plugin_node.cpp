@@ -13,6 +13,7 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -28,6 +29,7 @@
 #include <dftracer/utils/plugins/task_abi.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -37,7 +39,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-dftu_status register_node(const char* name, const dftu_node_vt* vt,
+dftu_status register_node(dstd::StringView name, const dftu_node_vt* vt,
                           void* self) {
     auto registered = plugins::host::register_node_vtable(name, vt, self);
     return registered ? DFTU_OK
@@ -60,13 +62,13 @@ struct IntSource {
 };
 
 dftu_status src_schema(dftu_ctx*, void* self, const char* const** out_names,
-                       int32_t* out_count) {
+                       std::int32_t* out_count) {
     auto* s = static_cast<IntSource*>(self);
     static thread_local dstd::Vector<const char*> storage;
     storage.clear();
     for (const dstd::String& n : s->names) storage.push_back(n.c_str());
     *out_names = storage.data();
-    *out_count = static_cast<int32_t>(storage.size());
+    *out_count = static_cast<std::int32_t>(storage.size());
     return DFTU_OK;
 }
 
@@ -99,8 +101,8 @@ const dftu_cursor_vt SRC_CURSOR_VT = {sizeof(dftu_cursor_vt), src_cursor_next,
                                       src_cursor_destroy, nullptr};
 
 dftu_status src_scan(dftu_ctx*, void* self, const dftu_plugin_host*,
-                     const dftu_scan_request*, int32_t*, void** out_cursor_self,
-                     const dftu_cursor_vt** out_vt) {
+                     const dftu_scan_request*, std::int32_t*,
+                     void** out_cursor_self, const dftu_cursor_vt** out_vt) {
     auto* s = static_cast<IntSource*>(self);
     dftu_series* c = dftu_series_new_flat(
         DFTU_TYPE_INT64, s->col0.data(),
@@ -231,8 +233,8 @@ dftu_status double_node_open(dftu_ctx*, void*, const dftu_plugin_host*,
 // its declared type, including a parameterized one (Timestamp + timezone).
 dftu_status double_node_schema(dftu_ctx*, void*, const dftu_schema* in,
                                const dftu_op_arg*, dftu_schema* out) {
-    const int32_t n = dftu_schema_field_count(in);
-    for (int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
+    const std::int32_t n = dftu_schema_field_count(in);
+    for (std::int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
     return DFTU_OK;
 }
 
@@ -269,8 +271,8 @@ struct RecordingNode {
 
 dftu_status recording_node_schema(dftu_ctx*, void*, const dftu_schema* in,
                                   const dftu_op_arg*, dftu_schema* out) {
-    const int32_t n = dftu_schema_field_count(in);
-    for (int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
+    const std::int32_t n = dftu_schema_field_count(in);
+    for (std::int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
     return DFTU_OK;
 }
 
@@ -322,8 +324,8 @@ const dftu_cursor_vt PROBE_CURSOR_VT = {
 
 dftu_status probe_node_schema(dftu_ctx*, void*, const dftu_schema* in,
                               const dftu_op_arg*, dftu_schema* out) {
-    const int32_t n = dftu_schema_field_count(in);
-    for (int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
+    const std::int32_t n = dftu_schema_field_count(in);
+    for (std::int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
     return DFTU_OK;
 }
 
@@ -383,8 +385,10 @@ dftu_status narrow_cursor_narrow(dftu_ctx*, void* self,
     const dstd::Vector<std::int64_t>& v = cs->owner->src.col0;
     dataframe::Series column = dataframe::Series::flat_i64(
         v.data(), static_cast<std::int64_t>(v.size()));
-    dataframe::Series mask = dftu_utils_test::ok(
-        dataframe::eval(dataframe::expr_handle_unwrap(predicate), {&column}));
+    dataframe::Series mask = dftu_utils_test::ok(dataframe::eval(
+        dataframe::expr_handle_unwrap(predicate),
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&column})));
     dstd::Vector<bool> bits;
     for (std::int64_t i = 0; i < mask.length(); ++i)
         bits.push_back((mask.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1);
@@ -400,13 +404,13 @@ const dftu_cursor_vt NARROW_CURSOR_VT = {
 
 dftu_status narrow_src_schema(dftu_ctx* ctx, void* self,
                               const char* const** out_names,
-                              int32_t* out_count) {
+                              std::int32_t* out_count) {
     return src_schema(ctx, &static_cast<NarrowSource*>(self)->src, out_names,
                       out_count);
 }
 
 dftu_status narrow_src_scan(dftu_ctx*, void* self, const dftu_plugin_host*,
-                            const dftu_scan_request*, int32_t*,
+                            const dftu_scan_request*, std::int32_t*,
                             void** out_cursor_self,
                             const dftu_cursor_vt** out_vt) {
     auto* s = static_cast<NarrowSource*>(self);
@@ -470,8 +474,8 @@ const dftu_cursor_vt FORWARD_CURSOR_VT = {
 
 dftu_status forward_node_schema(dftu_ctx*, void*, const dftu_schema* in,
                                 const dftu_op_arg*, dftu_schema* out) {
-    const int32_t n = dftu_schema_field_count(in);
-    for (int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
+    const std::int32_t n = dftu_schema_field_count(in);
+    for (std::int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
     return DFTU_OK;
 }
 
@@ -595,7 +599,7 @@ struct ChunkCursor {
 };
 
 dftu_status chunk_schema(dftu_ctx*, void*, const char* const** out_names,
-                         int32_t* out_count) {
+                         std::int32_t* out_count) {
     static const char* const NAMES[1] = {"val"};
     *out_names = NAMES;
     *out_count = 1;
@@ -625,7 +629,7 @@ const dftu_cursor_vt CHUNK_CURSOR_VT = {
     sizeof(dftu_cursor_vt), chunk_cursor_next, chunk_cursor_destroy, nullptr};
 
 dftu_status chunk_scan(dftu_ctx* ctx, void* self, const dftu_plugin_host* host,
-                       const dftu_scan_request*, int32_t*,
+                       const dftu_scan_request*, std::int32_t*,
                        void** out_cursor_self, const dftu_cursor_vt** out_vt) {
     auto* fx = static_cast<ChunkSource*>(self);
     auto* cs = new ChunkCursor{{}, fx};
@@ -974,7 +978,7 @@ class SyncThenAsyncCursor : public dataframe::Cursor {
 // probe node. Exercises FilterCursor, SelectCursor and WithColumnCursor's
 // try_next in series over whatever source cursor is handed in.
 dataframe::LazyFrame build_probe_chain(dstd::SharedPtr<dataframe::Source> src,
-                                       const char* node_name) {
+                                       dstd::String node_name) {
     return dataframe::LazyFrame::scan(src)
         .filter(dataframe::col(0) > std::int64_t{0})
         .select({"val"})

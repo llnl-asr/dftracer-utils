@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/domains/analysis/comparator/comparison_result.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -17,10 +18,10 @@ dstd::Vector<MetricComparison> build_metadata_metrics(
     const TraceMetadata& baseline, const TraceMetadata& variant) {
     dstd::Vector<MetricComparison> out;
 
-    auto make = [](const dstd::String& name, double bval,
+    auto make = [](dstd::StringView name, double bval,
                    double vval) -> MetricComparison {
         MetricComparison mc;
-        mc.metric_name = name;
+        mc.metric_name = dstd::String(name);
         mc.baseline_value = bval;
         mc.variant_value = vval;
         mc.delta = vval - bval;
@@ -89,7 +90,7 @@ double safe_quantile(const QuantileStore& store, double p) {
     return std::isnan(v) ? 0.0 : v;
 }
 
-dstd::String percentile_label(const dstd::String& prefix, double p) {
+dstd::String percentile_label(dstd::StringView prefix, double p) {
     return dstd::fmt<"{}_p{}">(prefix, static_cast<int>(p * 100.0));
 }
 
@@ -97,8 +98,8 @@ dstd::String percentile_label(const dstd::String& prefix, double p) {
 
 dstd::Vector<MetricComparison> compare_metrics(
     const CollapsedMetrics& baseline, const CollapsedMetrics& variant,
-    const dstd::Vector<dstd::String>& metrics,
-    const dstd::Vector<double>& percentiles) {
+    dstd::Span<const dstd::String> metrics,
+    dstd::Span<const double> percentiles) {
     dstd::Vector<MetricComparison> result;
     const auto& bm = baseline.merged;
     const auto& vm = variant.merged;
@@ -204,24 +205,24 @@ dstd::Vector<MetricComparison> compare_metrics(
     return result;
 }
 
-bool is_atomic_metric(const dstd::String& name) {
+bool is_atomic_metric(dstd::StringView name) {
     return name == "count" || name == "transfer_size" || name == "bandwidth" ||
            name == "unique_files" || name == "proc_files" ||
            name == "processes" || name == "threads" || name == "total_bytes";
 }
 
-dstd::String metric_group(const dstd::String& name) {
+dstd::String metric_group(dstd::StringView name) {
     if (is_atomic_metric(name)) return "";
     auto pos = name.find('_');
-    if (pos == dstd::String::npos) return "";
-    return name.substr(0, pos);
+    if (pos == dstd::StringView::npos) return "";
+    return dstd::String(name.substr(0, pos));
 }
 
-dstd::String metric_leaf(const dstd::String& name) {
-    if (is_atomic_metric(name)) return name;
+dstd::String metric_leaf(dstd::StringView name) {
+    if (is_atomic_metric(name)) return dstd::String(name);
     auto pos = name.find('_');
-    if (pos == dstd::String::npos) return name;
-    return name.substr(pos + 1);
+    if (pos == dstd::StringView::npos) return dstd::String(name);
+    return dstd::String(name.substr(pos + 1));
 }
 
 const char* significance_to_string(Significance s) {

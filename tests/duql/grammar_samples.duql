@@ -237,7 +237,26 @@ any(missing) == "a" and x is missing
 from data | sink "toy_sink.out" path "out.csv" mode "a"
 ---
 from data | where x > 1 | sink "csv"
+---
+explain from data | where x > 1
+---
+explain analyze from data | where x > 1 | take 5
+---
+duql 0
+explain analyze
+let a = from data | where x > 1;
+from a | select x
+---
+explain where x > 1
+---
+`explain` == 1 and y < 2
 ### invalid
+explain analyze analyze from data
+---
+explain explain from data
+---
+from data | explain analyze
+---
 from data | sink "csv" | take 1
 ---
 def m = from data | where x;

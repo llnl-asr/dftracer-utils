@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -28,7 +29,7 @@ struct Ref {
 
 // Neumaier-compensated sum: the reference must not lose digits to the very
 // cancellation under test (on some targets `long double` is a plain double).
-double compensated_sum(const dstd::Vector<double>& v) {
+double compensated_sum(dstd::Vector<double> v) {
     double sum = 0.0, c = 0.0;
     for (double x : v) {
         const double t = sum + x;
@@ -40,7 +41,7 @@ double compensated_sum(const dstd::Vector<double>& v) {
 
 // The corrected two-pass value: deviations from the compensated mean, with the
 // (sum d)^2 / n term removing the rounding error of the mean itself.
-Ref two_pass(const dstd::Vector<double>& v) {
+Ref two_pass(dstd::Vector<double> v) {
     const double n = static_cast<double>(v.size());
     const double mu = compensated_sum(v) / n;
     double s1 = 0, s2 = 0, s3 = 0, s4 = 0;
@@ -66,7 +67,7 @@ Ref two_pass(const dstd::Vector<double>& v) {
 // 128-bit integers, so no rounding enters before the final division.
 __extension__ typedef __int128 Wide;
 
-double exact_std(const dstd::Vector<std::int64_t>& v) {
+double exact_std(dstd::Vector<std::int64_t> v) {
     Wide s = 0;
     for (auto x : v) s += x;
     const std::int64_t k =
@@ -264,8 +265,9 @@ TEST_CASE("every group keeps its own accuracy at different offsets") {
     dstd::Vector<const Series*> inputs = {&k, &x};
     DataFrame r = dftu_utils_test::ok(dataframe::group_agg_expr(
         dataframe::expr_col(0),
-        {dataframe::agg_std(dataframe::expr_col(1), "s"),
-         dataframe::agg_var(dataframe::expr_col(1), "v")},
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggExprSpec>(
+            {dataframe::agg_std(dataframe::expr_col(1), "s"),
+             dataframe::agg_var(dataframe::expr_col(1), "v")}),
         inputs, "g"));
     REQUIRE(r.num_rows() == static_cast<std::int64_t>(G));
     const std::int64_t* gk = r.column("g").data<std::int64_t>();
@@ -294,7 +296,9 @@ TEST_CASE("a group-by over one group with a large offset") {
     dstd::Vector<const Series*> inputs = {&k, &x};
     DataFrame r = dftu_utils_test::ok(dataframe::group_agg_expr(
         dataframe::expr_col(0),
-        {dataframe::agg_std(dataframe::expr_col(1), "s")}, inputs, "g"));
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggExprSpec>(
+            {dataframe::agg_std(dataframe::expr_col(1), "s")}),
+        inputs, "g"));
     REQUIRE(r.num_rows() == 1);
     CHECK(rel(r.column("s").data<double>()[0], ref.sd) < 1e-9);
 }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -26,12 +27,14 @@ constexpr int RECORDS = 3000;
 // and p75, c with a scalar `meta` one segment short of the pattern) and an
 // array of 12 positions. a.p50 climbs with the record, so only the last
 // chunks hold a value above 92.
-dstd::String write_counters(TestEnvironment& env, const dstd::String& dir = "",
+dstd::String write_counters(TestEnvironment& env, dstd::CStringView dir = "",
                             bool build = true) {
     if (!dir.empty())
-        dstd::fs::create_directories(env.dir() + "/" + dir).has_value();
-    const dstd::String plain =
-        env.dir() + "/" + (dir.empty() ? "" : dir + "/") + "counters.ndjson";
+        dstd::fs::create_directories(env.dir() + "/" + dstd::String(dir))
+            .has_value();
+    const dstd::String plain = env.dir() + "/" +
+                               (dir.empty() ? "" : dstd::String(dir) + "/") +
+                               "counters.ndjson";
     {
         dftu_utils_test::FileOut out(plain);
         for (int i = 0; i < RECORDS; ++i) {
@@ -56,7 +59,7 @@ dstd::String write_counters(TestEnvironment& env, const dstd::String& dir = "",
     return gz;
 }
 
-View view_of(const dstd::String& gz) {
+View view_of(dstd::CStringView gz) {
     return View::from_file(
         dstd::String(gz),
         dstd::String(dstd::String(determine_index_path(gz, ""))));
@@ -70,8 +73,7 @@ dstd::Vector<dstd::String> names(const dataframe::DataFrame& f) {
     return dstd::to_strings(f.names);
 }
 
-void same(const View& v, const dstd::String& wild,
-          const dstd::String& spelled) {
+void same(const View& v, dstd::StringView wild, dstd::StringView spelled) {
     CAPTURE(wild);
     CAPTURE(spelled);
     const auto a = frame(v.duql(wild));
@@ -81,7 +83,7 @@ void same(const View& v, const dstd::String& wild,
     CHECK(sorted_row_keys(a) == sorted_row_keys(b));
 }
 
-dstd::String error_of(const View& v, const dstd::String& q) {
+dstd::String error_of(const View& v, dstd::StringView q) {
     const auto status = v.duql(q).status();
     return status ? dstd::String() : dstd::String(status.error().message());
 }
@@ -255,10 +257,12 @@ TEST_SUITE("DuqlWildcards") {
 
     TEST_CASE("a pattern on a fresh genesis trace builds the catalog") {
         TestEnvironment env(10);
-        const auto mk = [&](const dstd::String& dir, bool build) {
-            REQUIRE(dstd::fs::create_directories(env.dir() + "/" + dir)
+        const auto mk = [&](dstd::CStringView dir, bool build) {
+            REQUIRE(dstd::fs::create_directories(env.dir() + "/" +
+                                                 dstd::String(dir))
                         .has_value());
-            const dstd::String plain = env.dir() + "/" + dir + "/g.ndjson";
+            const dstd::String plain =
+                env.dir() + "/" + dstd::String(dir) + "/g.ndjson";
             {
                 dftu_utils_test::FileOut out(plain);
                 for (int i = 0; i < 600; ++i)

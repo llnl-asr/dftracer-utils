@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -20,11 +21,11 @@ bool bit(const Series& s, std::int64_t i) {
            1;
 }
 
-dftu_scalar str_scalar(const char* t) {
+dftu_scalar str_scalar(dstd::CStringView t) {
     dftu_scalar s{};
     s.kind = DFTU_SCALAR_TAG_STR;
-    s.len = static_cast<std::uint32_t>(dstd::StringView(t).size());
-    s.value.s = t;
+    s.len = static_cast<std::uint32_t>(t.size());
+    s.value.s = t.c_str();
     return s;
 }
 

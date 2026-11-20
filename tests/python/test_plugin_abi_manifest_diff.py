@@ -53,7 +53,7 @@ APPENDED_MANIFEST = OLD_MANIFEST.replace(
 
 
 def _version(abi):
-    return "api: 0.0.0\nabi: %s\nindex: 0\nduql: 0.0\n" % abi
+    return f"api: 0.0.0\nabi: {abi}\nindex: 0\nduql: 0.0\n"
 
 
 @pytest.fixture(name="module")

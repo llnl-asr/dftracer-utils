@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/index/build/batch_builder.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
 
@@ -32,7 +33,14 @@ dstd::Result<void> finish_aggregation(AggRun& run,
 
 /// Removes the tier of the index at @p index_path, so the next build does not
 /// merge onto rows of other settings.
-dstd::Result<void> clear_aggregation(const dstd::String& index_path);
+dstd::Result<void> clear_aggregation(dstd::StringView index_path);
+
+/// Removes the aggregation rows of @p files, trace paths of the index at
+/// @p index_path, and no other file's rows or the index-wide records. A
+/// forced build of some files uses it, so a trace folder that shares the
+/// index keeps its tier. @p files are only read during the call.
+dstd::Result<void> clear_aggregation_files(
+    dstd::StringView index_path, dstd::Span<const dstd::String> files);
 
 }  // namespace dftracer::utils::trace::index::build
 

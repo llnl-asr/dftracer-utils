@@ -38,7 +38,7 @@ coro::CoroTask<dstd::Expected<dstd::fs::FileStat, dstd::Error>> local_stat(
     dstd::PathView path, bool follow_symlinks) {
     const dstd::internal::PathCString name(path.str());
     io::Statx info;
-    io::IoAwaitable op = io::statx(AT_FDCWD, name.c_str(),
+    io::IoAwaitable op = io::statx(AT_FDCWD, name.view(),
                                    follow_symlinks ? 0 : AT_SYMLINK_NOFOLLOW,
                                    io::STATX_BASIC_MASK, &info);
     const ssize_t found = co_await op;

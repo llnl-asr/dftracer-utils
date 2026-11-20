@@ -49,7 +49,7 @@ template <class E>
 inline constexpr bool is_unexpected_v<Unexpected<E>> = true;
 
 template <class E>
-[[noreturn]] void expected_fatal(const char* what, const E& error) noexcept {
+[[noreturn]] void expected_fatal(StringView what, const E& error) noexcept {
     if constexpr (requires { error.format().c_str(); }) {
         const auto text = error.format();
         fatal(what, text.c_str());

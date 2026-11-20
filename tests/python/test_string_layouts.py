@@ -14,6 +14,7 @@ from dftracer.utils import DataFrame, Series, TraceViewer
 from .common import Environment
 
 pa = pytest.importorskip("pyarrow")
+import pyarrow.ipc  # noqa: E402,F401
 
 CATS = ["posix", "stdio", "mpiio"]
 N = 240
@@ -27,7 +28,7 @@ def _rows():
             args["path"] = "/f%d" % (i % 2)
         rows.append(
             {
-                "ph": "X",
+                "ph": 1,
                 "name": "op%d" % (i % 2),
                 "cat": CATS[i % 3],
                 "pid": 1,
@@ -45,7 +46,7 @@ def _collect(env, query=None):
     with gzip.open(path, "wt") as f:
         f.write("\n".join(json.dumps(r) for r in _rows()) + "\n")
     with dftu_utils.Indexer(files=[path]) as indexer:
-        indexer.ensure_indexed()
+        indexer.ensure()
     view = TraceViewer(path)
     if query:
         view = view.filter(query)

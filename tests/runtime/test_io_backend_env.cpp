@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -17,8 +18,9 @@ namespace {
 
 constexpr const char* BACKEND_ENV = "DFTRACER_UTILS_IO_BACKEND";
 
-fresh_process::Result run_with(const char* value, const char* test_case) {
-    ::setenv(BACKEND_ENV, value, 1);
+fresh_process::Result run_with(dstd::CStringView value,
+                               dstd::StringView test_case) {
+    ::setenv(BACKEND_ENV, value.c_str(), 1);
     auto result = fresh_process::run(test_case);
     ::unsetenv(BACKEND_ENV);
     return result;

@@ -14,7 +14,7 @@ namespace dftracer::utils::dataframe {
 namespace {
 // Reorders `v` (blocks of `stride` elements per group) into `perm` order.
 template <class Vec>
-void permute_blocks(Vec& v, const dstd::Vector<std::int64_t>& perm,
+void permute_blocks(Vec& v, dstd::Span<const std::int64_t> perm,
                     std::size_t stride) {
     if (stride == 0 || v.empty()) return;
     Vec tmp(v.size());
@@ -44,7 +44,7 @@ void agg_sort_groups(AggState& st) {
     agg_permute_groups(st, perm);
 }
 
-void agg_permute_groups(AggState& st, const dstd::Vector<std::int64_t>& perm) {
+void agg_permute_groups(AggState& st, dstd::Span<const std::int64_t> perm) {
     st.settle_light();
     const std::int64_t ng = st.ngroups();
     for (std::size_t k = 0; k < st.nkeys; ++k) {
@@ -71,8 +71,18 @@ void agg_permute_groups(AggState& st, const dstd::Vector<std::int64_t>& perm) {
         permute_blocks(st.arg_has, perm, st.n_arg);
         permute_blocks(st.arg_repr, perm, st.n_arg_repr);
     }
+    if (st.has_apos) {
+        permute_blocks(st.apos_bits, perm, st.n_apos);
+        permute_blocks(st.apos_rank, perm, st.n_apos);
+        permute_blocks(st.apos_dom, perm, st.n_apos);
+    }
+    if (st.has_bw) {
+        permute_blocks(st.bw_acc, perm, st.n_bw);
+        permute_blocks(st.bw_seen, perm, st.n_bw);
+    }
     if (st.has_bitor) permute_blocks(st.bitor_acc, perm, st.n_bitor);
     if (st.has_prod) permute_blocks(st.prod_acc, perm, st.n_prod);
+    if (st.has_qv) permute_blocks(st.qv, perm, st.n_qv);
     if (st.has_msk) permute_blocks(st.msk, perm, st.n_msk);
     if (st.has_kmv) permute_blocks(st.kmv, perm, st.n_kmv);
     if (st.has_lst) permute_blocks(st.lst, perm, st.n_lst);
@@ -116,7 +126,7 @@ void agg_permute_groups(AggState& st, const dstd::Vector<std::int64_t>& perm) {
 }
 
 AggStatePtr agg_extract_groups(const AggState& st_in,
-                               const dstd::Vector<std::int64_t>& groups) {
+                               dstd::Span<const std::int64_t> groups) {
     const AggState& st = settled(st_in);
     AggStatePtr out(new AggState());
     out->specs = st.specs;
@@ -132,6 +142,8 @@ AggStatePtr agg_extract_groups(const AggState& st_in,
     out->key_domain = st.key_domain;
     out->key_type = st.key_type;
     out->key_json = st.key_json;
+    out->key_time_unit = st.key_time_unit;
+    out->key_timezone = st.key_timezone;
     out->key_byte_width = st.key_byte_width;
     out->key_decimal_precision = st.key_decimal_precision;
     out->key_decimal_scale = st.key_decimal_scale;
@@ -139,6 +151,10 @@ AggStatePtr agg_extract_groups(const AggState& st_in,
     out->skey_cols.assign(out->nkeys, {});
     out->nkey_cols.assign(out->nkeys, {});
     out->field_domain = st.field_domain;
+    out->field_type = st.field_type;
+    out->bw_type = st.bw_type;
+    out->field_time_unit = st.field_time_unit;
+    out->field_timezone = st.field_timezone;
     out->field_is_str = st.field_is_str;
     for (std::size_t o = 0; o < groups.size(); ++o) {
         const std::int64_t g = groups[o];
@@ -184,6 +200,23 @@ AggStatePtr agg_extract_groups(const AggState& st_in,
             for (std::size_t ri = 0; ri < st.n_arg_repr; ++ri)
                 out->arg_repr[o * st.n_arg_repr + ri] = st.arg_repr[rbase + ri];
         }
+        if (st.has_apos) {
+            const std::size_t pbase = static_cast<std::size_t>(g) * st.n_apos;
+            for (std::size_t slot = 0; slot < st.n_apos; ++slot) {
+                out->apos_bits[o * st.n_apos + slot] =
+                    st.apos_bits[pbase + slot];
+                out->apos_rank[o * st.n_apos + slot] =
+                    st.apos_rank[pbase + slot];
+                out->apos_dom[o * st.n_apos + slot] = st.apos_dom[pbase + slot];
+            }
+        }
+        if (st.has_bw) {
+            const std::size_t wbase = static_cast<std::size_t>(g) * st.n_bw;
+            for (std::size_t slot = 0; slot < st.n_bw; ++slot) {
+                out->bw_acc[o * st.n_bw + slot] = st.bw_acc[wbase + slot];
+                out->bw_seen[o * st.n_bw + slot] = st.bw_seen[wbase + slot];
+            }
+        }
         if (st.has_bitor) {
             const std::size_t bbase = static_cast<std::size_t>(g) * st.n_bitor;
             for (std::size_t slot = 0; slot < st.n_bitor; ++slot)
@@ -194,6 +227,11 @@ AggStatePtr agg_extract_groups(const AggState& st_in,
             const std::size_t pbase = static_cast<std::size_t>(g) * st.n_prod;
             for (std::size_t slot = 0; slot < st.n_prod; ++slot)
                 out->prod_acc[o * st.n_prod + slot] = st.prod_acc[pbase + slot];
+        }
+        if (st.has_qv) {
+            const std::size_t qbase = static_cast<std::size_t>(g) * st.n_qv;
+            for (std::size_t slot = 0; slot < st.n_qv; ++slot)
+                out->qv[o * st.n_qv + slot] = st.qv[qbase + slot];
         }
         if (st.has_msk) {
             const std::size_t mbase = static_cast<std::size_t>(g) * st.n_msk;
@@ -252,7 +290,7 @@ AggStatePtr agg_extract_groups(const AggState& st_in,
 }
 
 AggStatePtr agg_extract_group(const AggState& st, std::int64_t g) {
-    return agg_extract_groups(st, {g});
+    return agg_extract_groups(st, dstd::Span<const std::int64_t>(&g, 1));
 }
 
 // The seed path rebuilds a group only from a FieldStat + optional DDSketch;
@@ -269,6 +307,8 @@ static bool agg_op_seedable(AggOp op) {
         case AggOp::Std:
         case AggOp::Skew:
         case AggOp::Kurt:
+        case AggOp::SkewUnbiased:
+        case AggOp::KurtUnbiased:
         case AggOp::Pct:
         case AggOp::Hist:
         case AggOp::SumSq:
@@ -278,7 +318,12 @@ static bool agg_op_seedable(AggOp op) {
         case AggOp::Last:
         case AggOp::ArgMax:
         case AggOp::ArgMin:
+        case AggOp::ArgMaxPos:
+        case AggOp::ArgMinPos:
         case AggOp::SetUnion:
+        case AggOp::BitwiseAnd:
+        case AggOp::BitwiseOr:
+        case AggOp::BitwiseXor:
         case AggOp::BitOr:
         case AggOp::Distinct:
         case AggOp::ListSorted:
@@ -297,6 +342,7 @@ static bool agg_op_seedable(AggOp op) {
         case AggOp::Utilization:
         case AggOp::Active:
         case AggOp::Prod:
+        case AggOp::Quantile:
         case AggOp::SketchQuantile:
         case AggOp::Udaf:
             return false;
@@ -317,9 +363,10 @@ void agg_seed_begin(AggState& st, std::size_t nkeys) {
     st.inited = true;
 }
 
-void agg_seed_group(AggState& st, const dstd::Vector<dstd::String>& str_keys,
-                    const dstd::Vector<bool>& null_keys, std::uint64_t count,
-                    const dstd::Vector<AggSeedValue>& values) {
+void agg_seed_group(AggState& st, dstd::Span<const dstd::String> str_keys,
+                    dstd::Span<const std::uint8_t> null_keys,
+                    std::uint64_t count,
+                    dstd::Span<const AggSeedValue> values) {
     if (!st.inited) agg_seed_begin(st, str_keys.size());
     for (const AggSpec& sp : st.specs)
         if (!agg_op_seedable(sp.op))

@@ -119,9 +119,9 @@ IoAwaitable pwrite(dstd::NativeHandle fd, const void* buf, std::size_t len,
                                    len, offset));
 }
 
-IoAwaitable open(const char* path, int flags, mode_t mode) noexcept {
+IoAwaitable open(dstd::CStringView path, int flags, mode_t mode) noexcept {
     IoAwaitable op = make_op(IoOpKind::Open, -1);
-    op.path = path;
+    op.path = path.c_str();
     op.flags = flags;
     op.mode = mode;
     return dispatch(op);
@@ -169,29 +169,29 @@ IoAwaitable fstat(dstd::NativeHandle fd, struct stat* buf) noexcept {
     return dispatch(op);
 }
 
-IoAwaitable unlink(const char* path) noexcept {
+IoAwaitable unlink(dstd::CStringView path) noexcept {
     IoAwaitable op = make_op(IoOpKind::Unlink, -1);
-    op.path = path;
+    op.path = path.c_str();
     return dispatch(op);
 }
 
-IoAwaitable rmdir(const char* path) noexcept {
+IoAwaitable rmdir(dstd::CStringView path) noexcept {
     IoAwaitable op = make_op(IoOpKind::Unlink, -1);
-    op.path = path;
+    op.path = path.c_str();
     op.flags = AT_REMOVEDIR;
     return dispatch(op);
 }
 
-IoAwaitable rename(const char* from, const char* to) noexcept {
+IoAwaitable rename(dstd::CStringView from, dstd::CStringView to) noexcept {
     IoAwaitable op = make_op(IoOpKind::Rename, -1);
-    op.path = from;
-    op.path2 = to;
+    op.path = from.c_str();
+    op.path2 = to.c_str();
     return dispatch(op);
 }
 
-IoAwaitable mkdir(const char* path, mode_t mode) noexcept {
+IoAwaitable mkdir(dstd::CStringView path, mode_t mode) noexcept {
     IoAwaitable op = make_op(IoOpKind::Mkdir, -1);
-    op.path = path;
+    op.path = path.c_str();
     op.mode = mode;
     return dispatch(op);
 }
@@ -205,22 +205,22 @@ IoAwaitable fadvise(dstd::NativeHandle fd, std::uint64_t offset,
     return dispatch(op);
 }
 
-IoAwaitable linkat(dstd::NativeHandle from_dirfd, const char* from,
-                   dstd::NativeHandle to_dirfd, const char* to,
+IoAwaitable linkat(dstd::NativeHandle from_dirfd, dstd::CStringView from,
+                   dstd::NativeHandle to_dirfd, dstd::CStringView to,
                    int flags) noexcept {
     IoAwaitable op = make_op(IoOpKind::Linkat, from_dirfd);
-    op.path = from;
-    op.path2 = to;
+    op.path = from.c_str();
+    op.path2 = to.c_str();
     op.out_handle = to_dirfd;
     op.flags = flags;
     return dispatch(op);
 }
 
-IoAwaitable symlinkat(const char* target, dstd::NativeHandle dirfd,
-                      const char* link) noexcept {
+IoAwaitable symlinkat(dstd::CStringView target, dstd::NativeHandle dirfd,
+                      dstd::CStringView link) noexcept {
     IoAwaitable op = make_op(IoOpKind::Symlinkat, dirfd);
-    op.path = target;
-    op.path2 = link;
+    op.path = target.c_str();
+    op.path2 = link.c_str();
     return dispatch(op);
 }
 
@@ -298,10 +298,10 @@ IoAwaitable poll_add(dstd::NativeHandle fd, unsigned events) noexcept {
 }
 
 #ifdef __linux__
-IoAwaitable statx(dstd::NativeHandle dirfd, const char* path, int flags,
+IoAwaitable statx(dstd::NativeHandle dirfd, dstd::CStringView path, int flags,
                   std::uint32_t mask, Statx* out) noexcept {
     IoAwaitable op = make_op(IoOpKind::Statx, dirfd);
-    op.path = path;
+    op.path = path.c_str();
     op.flags = flags;
     op.statx_mask = mask;
     op.statx_out = out;
@@ -338,24 +338,24 @@ IoAwaitable splice(dstd::NativeHandle in_fd, std::int64_t in_offset,
     return dispatch(op);
 }
 
-IoAwaitable openat2(dstd::NativeHandle dirfd, const char* path,
+IoAwaitable openat2(dstd::NativeHandle dirfd, dstd::CStringView path,
                     const OpenHow& how) noexcept {
     IoAwaitable op = make_op(IoOpKind::Openat2, dirfd);
-    op.path = path;
+    op.path = path.c_str();
     op.how = &how;
     return dispatch(op);
 }
 
-IoAwaitable getxattr(const char* path, const XattrArgs& args) noexcept {
+IoAwaitable getxattr(dstd::CStringView path, const XattrArgs& args) noexcept {
     IoAwaitable op = make_op(IoOpKind::Getxattr, -1);
-    op.path = path;
+    op.path = path.c_str();
     op.xattr = &args;
     return dispatch(op);
 }
 
-IoAwaitable setxattr(const char* path, const XattrArgs& args) noexcept {
+IoAwaitable setxattr(dstd::CStringView path, const XattrArgs& args) noexcept {
     IoAwaitable op = make_op(IoOpKind::Setxattr, -1);
-    op.path = path;
+    op.path = path.c_str();
     op.xattr = &args;
     return dispatch(op);
 }

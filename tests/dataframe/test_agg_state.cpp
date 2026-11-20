@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/builders_types.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
@@ -10,15 +11,19 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
+#include <span_list.h>
 #include <task_result.h>
 
+#include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
+using namespace dftracer::utils::dataframe::test_types;
 
 namespace {
 
@@ -141,7 +146,8 @@ TEST_CASE("agg_regroup coarsens (k1,k2)->k1 matching a direct k1 group_agg") {
     auto fine = dftu_utils_test::ok(
         dataframe::group_agg_state(s.keys2, s.values, mixed_specs()));
 
-    auto coarse = dataframe::agg_regroup(*fine, {0});  // keep k1 only
+    auto coarse = dataframe::agg_regroup(
+        *fine, dftu_utils_test::span_of<std::int32_t>({0}));  // keep k1 only
     dataframe::agg_sort_groups(*coarse);
     DataFrame got = dataframe::agg_finalize(*coarse, "k1");
 
@@ -194,7 +200,8 @@ TEST_CASE("agg_regroup preserves occupancy busy/active exactly") {
 
     auto fine =
         dftu_utils_test::ok(dataframe::group_agg_state(keys2, values, specs));
-    auto coarse = dataframe::agg_regroup(*fine, {0});
+    auto coarse = dataframe::agg_regroup(
+        *fine, dftu_utils_test::span_of<std::int32_t>({0}));
     dataframe::agg_sort_groups(*coarse);
     DataFrame got = dataframe::agg_finalize(*coarse, "k1");
 
@@ -231,7 +238,9 @@ TEST_CASE("agg_regroup with bucket_recut coarsens the time grain") {
 
     auto fine =
         dftu_utils_test::ok(dataframe::group_agg_state(keys, values, specs));
-    auto coarse = dataframe::agg_regroup(*fine, {0, 1}, /*bucket_recut=*/20);
+    auto coarse = dataframe::agg_regroup(
+        *fine, dftu_utils_test::span_of<std::int32_t>({0, 1}),
+        /*bucket_recut=*/20);
     dataframe::agg_sort_groups(*coarse);
     DataFrame got = dataframe::agg_finalize(
         *coarse, dstd::Vector<dstd::String>{"bucket", "grp"});
@@ -506,7 +515,8 @@ TEST_CASE("agg_regroup over serialize/deserialize round-trip is exact") {
         auto one = dftu_utils_test::ok(dataframe::agg_deserialize(blob));
         dataframe::agg_merge(*rebuilt, *one);
     }
-    auto coarse = dataframe::agg_regroup(*rebuilt, {0});
+    auto coarse = dataframe::agg_regroup(
+        *rebuilt, dftu_utils_test::span_of<std::int32_t>({0}));
     dataframe::agg_sort_groups(*coarse);
     DataFrame got = dataframe::agg_finalize(*coarse, "k1");
 
@@ -532,22 +542,22 @@ namespace {
 // first batch carries the dynamics) and the full FieldStat per cell (taken when
 // the state holds the group already). Every reduction must answer the same from
 // either.
-dataframe::AggStatePtr dyn_light_state(
-    const dstd::Vector<AggDynSpec>& specs,
-    const dstd::Vector<const Series*>& keys,
-    const dstd::Vector<AggDynInput>& inputs) {
+dataframe::AggStatePtr dyn_light_state(dstd::Vector<AggDynSpec> specs,
+                                       dstd::Vector<const Series*> keys,
+                                       dstd::Vector<AggDynInput> inputs) {
     auto st = dataframe::agg_new({}, specs);
     dftu_utils_test::ok(agg_accumulate(*st, keys, {}, inputs));
     return st;
 }
 
-dataframe::AggStatePtr dyn_full_state(const dstd::Vector<AggDynSpec>& specs,
-                                      const dstd::Vector<const Series*>& keys,
-                                      const dstd::Vector<AggDynInput>& inputs) {
+dataframe::AggStatePtr dyn_full_state(dstd::Vector<AggDynSpec> specs,
+                                      dstd::Vector<const Series*> keys,
+                                      dstd::Vector<AggDynInput> inputs) {
     // The same batches regrouped into a fresh state, whose cells are FieldStats
     // unpacked from the light ones.
     auto st = dyn_light_state(specs, keys, inputs);
-    return dataframe::agg_regroup(*st, {0});
+    return dataframe::agg_regroup(*st,
+                                  dftu_utils_test::span_of<std::int32_t>({0}));
 }
 
 // Every column, bit for bit. The two layouts must not differ in one bit.
@@ -575,9 +585,9 @@ void check_same_columns(const DataFrame& a, const DataFrame& b) {
     }
 }
 
-void check_same_dyn(const dstd::Vector<AggDynSpec>& specs,
-                    const dstd::Vector<const Series*>& keys,
-                    const dstd::Vector<AggDynInput>& inputs) {
+void check_same_dyn(dstd::Vector<AggDynSpec> specs,
+                    dstd::Vector<const Series*> keys,
+                    dstd::Vector<AggDynInput> inputs) {
     auto light = dyn_light_state(specs, keys, inputs);
     auto full = dyn_full_state(specs, keys, inputs);
     dataframe::agg_sort_groups(*light);
@@ -677,12 +687,24 @@ TEST_CASE("AggState dyn: a name fed two domains keeps the full cells") {
                                          {AggOp::Count, 0.0, "n_"}};
 
     auto light = dataframe::agg_new({}, specs);
-    dftu_utils_test::ok(agg_accumulate(*light, keys, {}, {{"a", &sa}}));
-    dftu_utils_test::ok(agg_accumulate(*light, keys, {}, {{"a", &sf}}));
+    dftu_utils_test::ok(agg_accumulate(
+        *light, keys, {},
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggDynInput>(
+            {{"a", &sa}})));
+    dftu_utils_test::ok(agg_accumulate(
+        *light, keys, {},
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggDynInput>(
+            {{"a", &sf}})));
     auto full = dataframe::agg_new({}, specs);
     dftu_utils_test::ok(agg_accumulate(*full, keys, {}));
-    dftu_utils_test::ok(agg_accumulate(*full, keys, {}, {{"a", &sa}}));
-    dftu_utils_test::ok(agg_accumulate(*full, keys, {}, {{"a", &sf}}));
+    dftu_utils_test::ok(agg_accumulate(
+        *full, keys, {},
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggDynInput>(
+            {{"a", &sa}})));
+    dftu_utils_test::ok(agg_accumulate(
+        *full, keys, {},
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggDynInput>(
+            {{"a", &sf}})));
     dataframe::agg_sort_groups(*light);
     dataframe::agg_sort_groups(*full);
     check_same_columns(dataframe::agg_finalize(*light, "k"),
@@ -709,9 +731,14 @@ TEST_CASE("AggState dyn: merge unions names through both layouts") {
     // Two batches, one naming a only and one naming a and b. Folding them into
     // one state is the merge's answer. a is in both, so it counts twice.
     auto ref = dataframe::agg_new({}, specs);
-    dftu_utils_test::ok(agg_accumulate(*ref, keys, {}, {{"a", &sa}}));
-    dftu_utils_test::ok(
-        agg_accumulate(*ref, keys, {}, {{"a", &sa}, {"b", &sb}}));
+    dftu_utils_test::ok(agg_accumulate(
+        *ref, keys, {},
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggDynInput>(
+            {{"a", &sa}})));
+    dftu_utils_test::ok(agg_accumulate(
+        *ref, keys, {},
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggDynInput>(
+            {{"a", &sa}, {"b", &sb}})));
     dataframe::agg_sort_groups(*ref);
     const DataFrame w = dataframe::agg_finalize(*ref, "k");
     CHECK(w.column("n_a").data<std::int64_t>()[0] == 4);
@@ -731,8 +758,10 @@ TEST_CASE("AggState dyn: merge unions names through both layouts") {
     // A full other, one pass of both names, into a fresh destination. The same
     // batches folded once into one state.
     auto one_pass = dataframe::agg_new({}, specs);
-    dftu_utils_test::ok(
-        agg_accumulate(*one_pass, keys, {}, {{"a", &sa}, {"b", &sb}}));
+    dftu_utils_test::ok(agg_accumulate(
+        *one_pass, keys, {},
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggDynInput>(
+            {{"a", &sa}, {"b", &sb}})));
     dataframe::agg_sort_groups(*one_pass);
     const DataFrame w1 = dataframe::agg_finalize(*one_pass, "k");
 
@@ -795,7 +824,8 @@ TEST_CASE("seeding an op with no seed form ends the process" *
           doctest::skip()) {
     fresh_process::announce_abort();
     auto st = dataframe::agg_new({AggSpec{AggOp::First, 0, "first"}});
-    dataframe::agg_seed_group(*st, {"k"}, {}, 1, {});
+    dataframe::agg_seed_group(
+        *st, dftu_utils_test::span_of<dstd::String>({"k"}), {}, 1, {});
 }
 
 TEST_CASE("seeding an op with no seed form is fatal") {
@@ -814,7 +844,13 @@ TEST_CASE("packed accumulation of a shape that does not pack ends the process" *
     auto st = dataframe::agg_new({AggSpec{AggOp::Sum, 0, "sum"}});
     dataframe::AggPacked shape;
     dataframe::AggPages pages;
-    dataframe::agg_accumulate_packed(*st, {&key}, {&val}, shape, pages);
+    dataframe::agg_accumulate_packed(
+        *st,
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&key}),
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&val}),
+        shape, pages);
 }
 
 TEST_CASE("packed accumulation of a shape that does not pack is fatal") {
@@ -846,4 +882,434 @@ TEST_CASE(
         auto empty = dataframe::agg_new({spec});
         CHECK(dataframe::agg_accumulate(*empty, key, values, 0, 0).has_value());
     }
+}
+
+namespace {
+
+struct TemporalCase {
+    const char* name;
+    Series column;
+};
+
+dstd::Vector<TemporalCase> temporal_cases() {
+    dstd::Vector<TemporalCase> cases;
+    cases.push_back(
+        {"ts_s", make_timestamp(
+                     dftu_utils_test::span_of<std::int64_t>({10, 20, 30, 40}),
+                     TimeUnit::Second, "")});
+    cases.push_back(
+        {"ts_ms_utc", make_timestamp(dftu_utils_test::span_of<std::int64_t>(
+                                         {10, 20, 30, 40}),
+                                     TimeUnit::Milli, "UTC")});
+    cases.push_back(
+        {"ts_ns_zone", make_timestamp(dftu_utils_test::span_of<std::int64_t>(
+                                          {10, 20, 30, 40}),
+                                      TimeUnit::Nano, "America/Chicago")});
+    cases.push_back(
+        {"date32", make_date32(dftu_utils_test::span_of<std::int32_t>(
+                       {10, 20, 30, 40}))});
+    cases.push_back(
+        {"date64", make_date64(dftu_utils_test::span_of<std::int64_t>(
+                       {10, 20, 30, 40}))});
+    cases.push_back(
+        {"time32",
+         make_time32(dftu_utils_test::span_of<std::int32_t>({10, 20, 30, 40}),
+                     TimeUnit::Milli)});
+    cases.push_back(
+        {"time64",
+         make_time64(dftu_utils_test::span_of<std::int64_t>({10, 20, 30, 40}),
+                     TimeUnit::Micro)});
+    cases.push_back(
+        {"dur_ns",
+         make_duration(dftu_utils_test::span_of<std::int64_t>({10, 20, 30, 40}),
+                       TimeUnit::Nano)});
+    return cases;
+}
+
+}  // namespace
+
+TEST_CASE(
+    "a min/max/first/last aggregate keeps the temporal type of its column") {
+    dstd::Vector<std::int64_t> k{0, 1, 0, 1};
+    Series key = Series::flat_i64(k.data(), 4);
+    const AggOp ops[] = {AggOp::Min, AggOp::Max, AggOp::First, AggOp::Last};
+    for (const TemporalCase& c : temporal_cases()) {
+        CAPTURE(c.name);
+        for (const AggOp op : ops) {
+            dstd::Vector<AggSpec> specs{AggSpec{op, 0, "v"}};
+            dstd::Vector<const Series*> keys{&key};
+            dstd::Vector<const Series*> values{&c.column};
+            DataFrame out = dftu_utils_test::ok(dataframe::group_agg(
+                keys, values, specs, dstd::Vector<dstd::String>{"k"}));
+            CHECK(out.column("v").data_type() == c.column.data_type());
+            CHECK(out.column("v").data_type() ==
+                  agg_output_type(op, c.column.data_type()));
+        }
+    }
+}
+
+TEST_CASE("a temporal aggregate holds the right values and survives the wire") {
+    dstd::Vector<std::int64_t> k{0, 1, 0, 1};
+    Series key = Series::flat_i64(k.data(), 4);
+    Series ts =
+        make_timestamp(dftu_utils_test::span_of<std::int64_t>({10, 20, 30, 40}),
+                       TimeUnit::Milli, "UTC");
+    Series dur =
+        make_duration(dftu_utils_test::span_of<std::int64_t>({10, 20, 30, 40}),
+                      TimeUnit::Nano);
+    dstd::Vector<AggSpec> specs{
+        AggSpec{AggOp::Max, 0, "max_ts"}, AggSpec{AggOp::Mean, 0, "mean_ts"},
+        AggSpec{AggOp::Sum, 1, "sum_dur"}, AggSpec{AggOp::Count, -1, "n"}};
+    dstd::Vector<const Series*> keys{&key};
+    dstd::Vector<const Series*> values{&ts, &dur};
+    auto st =
+        dftu_utils_test::ok(dataframe::group_agg_state(keys, values, specs));
+    auto back = dftu_utils_test::ok(
+        dataframe::agg_deserialize(dataframe::agg_serialize(*st)));
+    for (const AggState* state : {st.get(), back.get()}) {
+        DataFrame out = dataframe::agg_finalize(*state, "k");
+        REQUIRE(out.num_rows() == 2);
+        CHECK(out.column("max_ts").data_type() == ts.data_type());
+        CHECK(out.column("mean_ts").data_type() == ts.data_type());
+        CHECK(out.column("sum_dur").data_type() == dur.data_type());
+        CHECK(out.column("n").data_type() == scalar(TypeId::Int64));
+        const std::int64_t g0 =
+            out.column("k").data<std::int64_t>()[0] == 0 ? 0 : 1;
+        CHECK(out.column("max_ts").data<std::int64_t>()[g0] == 30);
+        CHECK(out.column("mean_ts").data<std::int64_t>()[g0] == 20);
+        CHECK(out.column("sum_dur").data<std::int64_t>()[g0] == 40);
+        CHECK(out.column("max_ts").data<std::int64_t>()[1 - g0] == 40);
+    }
+}
+
+TEST_CASE("agg_output_type is one rule for every operation") {
+    const DataType ts = timestamp(TimeUnit::Nano, "UTC");
+    const DataType dur = duration_of(TimeUnit::Milli);
+    const DataType i64 = scalar(TypeId::Int64);
+    CHECK(agg_output_type(AggOp::Max, ts) == ts);
+    CHECK(agg_output_type(AggOp::Min, scalar(TypeId::Date32)) ==
+          scalar(TypeId::Date32));
+    CHECK(agg_output_type(AggOp::Sum, dur) == dur);
+    CHECK(agg_output_type(AggOp::Sum, ts) == i64);
+    CHECK(agg_output_type(AggOp::Mean, ts) == ts);
+    CHECK(agg_output_type(AggOp::Mean, dur) == dur);
+    CHECK(agg_output_type(AggOp::Mean, scalar(TypeId::Date32)) ==
+          scalar(TypeId::Float64));
+    CHECK(agg_output_type(AggOp::Std, dur) == scalar(TypeId::Float64));
+    CHECK(agg_output_type(AggOp::Count, ts) == i64);
+    CHECK(agg_output_type(AggOp::CountValid, ts) == i64);
+    CHECK(agg_output_type(AggOp::Max, i64) == i64);
+}
+
+namespace {
+
+// Group 0 holds the rows 0 and 1 (present), group 1 the rows 2 and 3 (null).
+struct NullGroupColumns {
+    dstd::Vector<std::int64_t> k{0, 0, 1, 1};
+    dstd::Vector<std::uint8_t> bits{0x03};
+    Series key = Series::flat_i64(k.data(), 4);
+    Series i64, f64, u64, text, ts, d32, dur;
+
+    NullGroupColumns() {
+        dstd::Vector<std::int64_t> i{5, 7, 0, 0};
+        dstd::Vector<double> f{1.5, 2.5, 0.0, 0.0};
+        dstd::Vector<std::uint64_t> u{5, 9, 0, 0};
+        i64 = Series::flat_i64(i.data(), 4, bits.data());
+        f64 = Series::flat_f64(f.data(), 4, bits.data());
+        u64 = Series::flat(TypeId::Uint64, u.data(), 4, bits.data());
+        dstd::Vector<dstd::StringView> t{"p", "q", "", ""};
+        text = Series::strings(dstd::Span<const dstd::StringView>(t.data(), 4),
+                               bits.data());
+        ts = make_timestamp(
+            dftu_utils_test::span_of<std::int64_t>({10, 20, 0, 0}),
+            TimeUnit::Nano, "UTC");
+        set_validity(ts.handle(), bits.data(), 4);
+        d32 =
+            make_date32(dftu_utils_test::span_of<std::int32_t>({10, 20, 0, 0}));
+        set_validity(d32.handle(), bits.data(), 4);
+        dur = make_duration(
+            dftu_utils_test::span_of<std::int64_t>({10, 20, 0, 0}),
+            TimeUnit::Milli);
+        set_validity(dur.handle(), bits.data(), 4);
+    }
+
+    dstd::Vector<const Series*> values() const {
+        return {&i64, &f64, &u64, &text, &ts, &d32, &dur};
+    }
+};
+
+dstd::Vector<AggSpec> null_group_specs() {
+    dstd::Vector<AggSpec> specs;
+    const char* names[] = {"i", "f", "u", "s", "ts", "d32", "dur"};
+    const AggOp ops[] = {AggOp::First, AggOp::Last, AggOp::Min, AggOp::Max,
+                         AggOp::Mean};
+    const char* op_names[] = {"first", "last", "min", "max", "mean"};
+    for (std::int32_t c = 0; c < 7; ++c)
+        for (int o = 0; o < 5; ++o) {
+            // String and Date columns take no moment or extremum.
+            if ((c == 3 && o >= 2) || (c == 5 && o == 4)) continue;
+            specs.push_back(
+                AggSpec{ops[o], c, dstd::fmt<"{}_{}">(op_names[o], names[c])});
+        }
+    specs.push_back(AggSpec{AggOp::Sum, 0, "sum_i"});
+    specs.push_back(AggSpec{AggOp::Sum, 1, "sum_f"});
+    specs.push_back(AggSpec{AggOp::Sum, 6, "sum_dur"});
+    specs.push_back(AggSpec{AggOp::CountValid, 0, "valid_i"});
+    return specs;
+}
+
+// Every aggregate of a group that holds no value is null, but the sum (zero,
+// as Polars and pandas give) and the count of present values (zero).
+void check_null_group(const DataFrame& out) {
+    REQUIRE(out.num_rows() == 2);
+    const std::int64_t g0 =
+        out.column("k").data<std::int64_t>()[0] == 0 ? 0 : 1;
+    const std::int64_t g1 = 1 - g0;
+    for (std::size_t c = 1; c < out.columns.size(); ++c) {
+        const dstd::String name{out.names[c].view()};
+        CAPTURE(name);
+        const Series& col = out.columns[c];
+        if (name.rfind("sum_", 0) == 0 || name == "valid_i") {
+            CHECK_FALSE(col.is_null(g0));
+            CHECK_FALSE(col.is_null(g1));
+            continue;
+        }
+        CHECK_FALSE(col.is_null(g0));
+        CHECK(col.is_null(g1));
+    }
+    CHECK(out.column("sum_i").data<std::int64_t>()[g1] == 0);
+    CHECK(out.column("sum_f").data<double>()[g1] == 0.0);
+    CHECK(out.column("sum_dur").data<std::int64_t>()[g1] == 0);
+    CHECK(out.column("valid_i").data<std::int64_t>()[g1] == 0);
+    CHECK(dstd::String(out.column("first_s").string_at(g0)) == "p");
+    CHECK(dstd::String(out.column("last_s").string_at(g0)) == "q");
+    CHECK(out.column("first_ts").data<std::int64_t>()[g0] == 10);
+    CHECK(out.column("last_dur").data<std::int64_t>()[g0] == 20);
+    CHECK(out.column("first_d32").data<std::int32_t>()[g0] == 10);
+    CHECK(out.column("max_u").data<std::uint64_t>()[g0] == 9);
+    CHECK(out.column("first_ts").data_type() ==
+          timestamp(TimeUnit::Nano, "UTC"));
+}
+
+}  // namespace
+
+TEST_CASE(
+    "a group with no present value gives null for first, last, min, max "
+    "and mean") {
+    NullGroupColumns c;
+    dstd::Vector<const Series*> keys{&c.key};
+    auto st = dftu_utils_test::ok(
+        dataframe::group_agg_state(keys, c.values(), null_group_specs()));
+    check_null_group(dataframe::agg_finalize(*st, "k"));
+}
+
+TEST_CASE("a null group stays null across serialize, merge and the spill cut") {
+    NullGroupColumns c;
+    dstd::Vector<const Series*> keys{&c.key};
+    const dstd::Vector<AggSpec> specs = null_group_specs();
+    auto st = dftu_utils_test::ok(
+        dataframe::group_agg_state(keys, c.values(), specs));
+    auto back = dftu_utils_test::ok(
+        dataframe::agg_deserialize(dataframe::agg_serialize(*st)));
+    check_null_group(dataframe::agg_finalize(*back, "k"));
+
+    auto lo = dataframe::agg_new(specs);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*lo, keys, c.values(), 0, 2));
+    auto hi = dataframe::agg_new(specs);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*hi, keys, c.values(), 2, 4));
+    dataframe::agg_merge(*lo, *hi);
+    check_null_group(dataframe::agg_finalize(*lo, "k"));
+
+    const auto cut = dataframe::agg_split_groups(*st, 2, 0);
+    dstd::Vector<AggStatePtr> pieces;
+    for (const auto& part : cut)
+        if (!part.empty())
+            pieces.push_back(dataframe::agg_extract_groups(*st, part));
+    AggStatePtr whole = dataframe::agg_new(specs);
+    for (const AggStatePtr& piece : pieces) {
+        auto wire = dftu_utils_test::ok(dataframe::agg_deserialize(
+            dataframe::agg_serialize(*piece, true), true, st.get()));
+        dataframe::agg_merge(*whole, *wire);
+    }
+    check_null_group(dataframe::agg_finalize(*whole, "k"));
+}
+
+TEST_CASE("the spill cut keeps a temporal group key's unit and zone") {
+    dstd::Vector<std::int64_t> v{1, 2, 3, 4};
+    Series key = make_timestamp(
+        dftu_utils_test::span_of<std::int64_t>({100, 200, 100, 300}),
+        TimeUnit::Nano, "America/Chicago");
+    Series val = Series::flat_i64(v.data(), 4);
+    dstd::Vector<const Series*> keys{&key};
+    dstd::Vector<const Series*> values{&val};
+    dstd::Vector<AggSpec> specs{AggSpec{AggOp::Sum, 0, "s"}};
+    auto st =
+        dftu_utils_test::ok(dataframe::group_agg_state(keys, values, specs));
+    const auto cut = dataframe::agg_split_groups(*st, 2, 0);
+    AggStatePtr whole = dataframe::agg_new(specs);
+    for (const auto& part : cut) {
+        if (part.empty()) continue;
+        AggStatePtr piece = dataframe::agg_extract_groups(*st, part);
+        auto wire = dftu_utils_test::ok(dataframe::agg_deserialize(
+            dataframe::agg_serialize(*piece, true), true, st.get()));
+        dataframe::agg_merge(*whole, *wire);
+    }
+    DataFrame out = dataframe::agg_finalize(*whole, "k");
+    CHECK(out.num_rows() == 3);
+    CHECK(out.column("k").data_type() ==
+          timestamp(TimeUnit::Nano, "America/Chicago"));
+}
+
+namespace {
+
+constexpr std::int64_t NS_BASE = 1'700'000'000'000'000'017;
+
+// A Timestamp[ns] column and an Int64 column of the same values, one group.
+struct NsColumns {
+    dstd::Vector<std::int64_t> k, raw;
+    Series key, ts, ints;
+    dstd::Vector<const Series*> keys, values;
+
+    NsColumns(std::int64_t n, bool arange) : k(n, 0), raw(n) {
+        for (std::int64_t i = 0; i < n; ++i)
+            raw[static_cast<std::size_t>(i)] = NS_BASE + (arange ? i : 0);
+        key = Series::flat_i64(k.data(), n);
+        ints = Series::flat_i64(raw.data(), n);
+        ts = make_timestamp(raw, TimeUnit::Nano, "UTC");
+        keys = {&key};
+        values = {&ts, &ints};
+    }
+};
+
+dstd::Vector<AggSpec> mean_specs() {
+    return {AggSpec{AggOp::Mean, 0, "mean_ts"},
+            AggSpec{AggOp::Mean, 1, "mean_i"}};
+}
+
+void check_ns_mean(const DataFrame& out, std::int64_t want_ts) {
+    REQUIRE(out.num_rows() == 1);
+    CHECK(out.column("mean_ts").data_type() ==
+          timestamp(TimeUnit::Nano, "UTC"));
+    CHECK(out.column("mean_ts").data<std::int64_t>()[0] == want_ts);
+    // The Float64 mean rounds once: within an ulp of the exact value.
+    CHECK(std::abs(out.column("mean_i").data<double>()[0] -
+                   static_cast<double>(want_ts)) <= 512.0);
+}
+
+}  // namespace
+
+TEST_CASE("the mean of nanosecond timestamps is exact, not a rounded sum") {
+    const std::int64_t n = 1'000'000;
+    for (const bool arange : {false, true}) {
+        CAPTURE(arange);
+        NsColumns c(n, arange);
+        const std::int64_t want = NS_BASE + (arange ? (n - 1) / 2 : 0);
+        auto st = dftu_utils_test::ok(
+            dataframe::group_agg_state(c.keys, c.values, mean_specs()));
+        check_ns_mean(dataframe::agg_finalize(*st, "k"), want);
+
+        auto back = dftu_utils_test::ok(
+            dataframe::agg_deserialize(dataframe::agg_serialize(*st)));
+        check_ns_mean(dataframe::agg_finalize(*back, "k"), want);
+
+        auto whole = dataframe::agg_new(mean_specs());
+        for (std::int64_t lo = 0; lo < n; lo += n / 7 + 1) {
+            auto part = dataframe::agg_new(mean_specs());
+            dftu_utils_test::ok(dataframe::agg_accumulate(
+                *part, c.keys, c.values, lo, std::min(n, lo + n / 7 + 1)));
+            auto wire = dftu_utils_test::ok(dataframe::agg_deserialize(
+                dataframe::agg_serialize(*part, true), true, part.get()));
+            dataframe::agg_merge(*whole, *wire);
+        }
+        check_ns_mean(dataframe::agg_finalize(*whole, "k"), want);
+    }
+}
+
+TEST_CASE(
+    "an old-layout blob, a blob with trailing bytes and a bad unit are "
+    "refused") {
+    dstd::Vector<std::int64_t> k{0, 0};
+    Series key = Series::flat_i64(k.data(), 2);
+    Series ts = make_timestamp(dftu_utils_test::span_of<std::int64_t>({5, 7}),
+                               TimeUnit::Nano, "");
+    dstd::Vector<const Series*> keys{&key};
+    dstd::Vector<const Series*> values{&ts};
+    dstd::Vector<AggSpec> specs{AggSpec{AggOp::Max, 0, "s"}};
+    auto st =
+        dftu_utils_test::ok(dataframe::group_agg_state(keys, values, specs));
+    const dstd::String blob = dataframe::agg_serialize(*st);
+    REQUIRE(dataframe::agg_deserialize(blob));
+
+    // Header 8, one key (4 flag bytes, 4-byte unit, 8-byte empty zone, 3
+    // 4-byte widths), one spec (29 bytes), nf (4), one domain byte.
+    const std::size_t types_at = 8 + 4 + 4 + 8 + 12 + 29 + 4 + 1;
+    REQUIRE(static_cast<TypeId>(blob[types_at]) == TypeId::Timestamp);
+    // The per-field types section (type, unit, empty zone: 13 bytes) did not
+    // exist in the layout before it.
+    dstd::String old_layout = blob;
+    old_layout.erase(types_at, 13);
+    CHECK_FALSE(dataframe::agg_deserialize(old_layout));
+
+    CHECK_FALSE(dataframe::agg_deserialize(blob + "x"));
+
+    dstd::String bad_field_unit = blob;
+    bad_field_unit[types_at + 1] = 9;
+    CHECK_FALSE(dataframe::agg_deserialize(bad_field_unit));
+    dstd::String bad_key_unit = blob;
+    bad_key_unit[12] = 9;
+    CHECK_FALSE(dataframe::agg_deserialize(bad_key_unit));
+}
+
+TEST_CASE("agg_merge refuses partials of another temporal type, unit or zone") {
+    dstd::Vector<std::int64_t> k{0, 1};
+    Series key = Series::flat_i64(k.data(), 2);
+    dstd::Vector<AggSpec> specs{AggSpec{AggOp::Max, 0, "m"}};
+    auto build = [&](const Series& col) {
+        dstd::Vector<const Series*> keys{&key};
+        dstd::Vector<const Series*> values{&col};
+        return dftu_utils_test::ok(
+            dataframe::group_agg_state(keys, values, specs));
+    };
+    Series ns = make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 2}),
+                               TimeUnit::Nano, "UTC");
+    Series ms = make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 2}),
+                               TimeUnit::Milli, "UTC");
+    Series zoned =
+        make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 2}),
+                       TimeUnit::Nano, "America/Chicago");
+    Series dur = make_duration(dftu_utils_test::span_of<std::int64_t>({1, 2}),
+                               TimeUnit::Nano);
+    for (const Series* other : {&ms, &zoned, &dur}) {
+        auto into = build(ns);
+        auto b = build(*other);
+        dataframe::agg_merge(*into, *b);
+        CHECK_FALSE(dataframe::agg_check(*into));
+        CHECK(dataframe::agg_group_count(*into) == 2);
+    }
+    auto into = build(ns);
+    auto same = build(ns);
+    dataframe::agg_merge(*into, *same);
+    CHECK(dataframe::agg_check(*into));
+}
+
+TEST_CASE("every row of agg_ops.def survives a serialize and deserialize") {
+    std::int32_t rows = 0;
+#define DFTU_AGG_OP(id, code, name)                          \
+    {                                                        \
+        ++rows;                                              \
+        AggSpec sp{AggOp::id, 0, name};                      \
+        sp.param = 0.5;                                      \
+        if (agg_uses_by_col(AggOp::id)) sp.by_col = 1;       \
+        auto st = agg_new({sp});                             \
+        INFO("row " name);                                   \
+        if (AggOp::id != AggOp::Udaf) {                      \
+            auto back = agg_deserialize(agg_serialize(*st)); \
+            REQUIRE(back.has_value());                       \
+            CHECK((*back)->specs.size() == 1);               \
+            CHECK((*back)->specs[0].op == AggOp::id);        \
+        }                                                    \
+    }
+#include <dftracer/utils/dataframe/agg_ops.def>
+#undef DFTU_AGG_OP
+    CHECK(rows == static_cast<std::int32_t>(AGG_OP_LAST) + 1);
 }

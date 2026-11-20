@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_DATAFRAME_LAZY_HASH_ARENA_H
 
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/arena.h>
 #include <dftracer/utils/memory/detail/manager.h>
@@ -30,18 +31,19 @@ class HashArena {
     HashArena() : HashArena(memory::detail::current_pool()) {}
 
     /// True when `key` was not present (and is now); false on a duplicate.
-    bool insert(std::uint64_t hash, const char* key, std::uint32_t len) {
+    bool insert(std::uint64_t hash, dstd::StringView key) {
         const auto it = head_.find(hash);
-        const char* next = nullptr;
+        const std::byte* next = nullptr;
         if (it != head_.end()) {
             next = it->second;
-            if (find_in_chain(next, key, len)) return false;
+            if (find_in_chain(next, key)) return false;
         }
+        const auto len = static_cast<std::uint32_t>(key.size());
         auto* record =
-            static_cast<char*>(keys_.allocate(RECORD_HEADER + len, 1));
+            static_cast<std::byte*>(keys_.allocate(RECORD_HEADER + len, 1));
         std::memcpy(record, &next, NEXT_BYTES);
         std::memcpy(record + NEXT_BYTES, &len, sizeof(len));
-        if (len != 0) std::memcpy(record + RECORD_HEADER, key, len);
+        if (len != 0) std::memcpy(record + RECORD_HEADER, key.data(), len);
         if (it != head_.end()) {
             it->second = record;
             return true;
@@ -53,10 +55,9 @@ class HashArena {
         return true;
     }
 
-    bool contains(std::uint64_t hash, const char* key,
-                  std::uint32_t len) const {
+    bool contains(std::uint64_t hash, dstd::StringView key) const {
         const auto it = head_.find(hash);
-        return it != head_.end() && find_in_chain(it->second, key, len);
+        return it != head_.end() && find_in_chain(it->second, key);
     }
 
     std::size_t table_buckets() const noexcept { return head_.bucket_count(); }
@@ -107,10 +108,10 @@ class HashArena {
     // A record is the newest-first chain pointer, the length and the key
     // bytes, packed with no padding and read with memcpy. Most keys are a few
     // bytes, so padding to the pointer would cost a third of the arena.
-    static constexpr std::size_t NEXT_BYTES = sizeof(const char*);
+    static constexpr std::size_t NEXT_BYTES = sizeof(const std::byte*);
     static constexpr std::size_t RECORD_HEADER =
         NEXT_BYTES + sizeof(std::uint32_t);
-    using Head = dstd::PoolHashMap<std::uint64_t, const char*>;
+    using Head = dstd::PoolHashMap<std::uint64_t, const std::byte*>;
     // The table grows four times at a time, as Arrow's BinaryMemoTable and
     // ClickHouse's HashTable do, so the tables a rehash frees add up to a third
     // of the new one. Below GROWTH_FROM the reserve ahead costs more than that.
@@ -163,15 +164,16 @@ class HashArena {
         return total;
     }
 
-    static bool find_in_chain(const char* record, const char* key,
-                              std::uint32_t len) noexcept {
+    static bool find_in_chain(const std::byte* record,
+                              dstd::StringView key) noexcept {
+        const auto len = static_cast<std::uint32_t>(key.size());
         while (record != nullptr) {
             std::uint32_t have = 0;
             std::memcpy(&have, record + NEXT_BYTES, sizeof(have));
             if (have == len && (len == 0 || std::memcmp(record + RECORD_HEADER,
-                                                        key, len) == 0))
+                                                        key.data(), len) == 0))
                 return true;
-            const char* next = nullptr;
+            const std::byte* next = nullptr;
             std::memcpy(&next, record, NEXT_BYTES);
             record = next;
         }

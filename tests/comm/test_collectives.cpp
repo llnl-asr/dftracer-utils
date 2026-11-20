@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -819,7 +820,7 @@ TEST_SUITE("CommCollectives") {
             record.flags = comm::backend::RECORD_TABLE | flags;
             return record;
         };
-        auto contribution = [](const std::string& text) {
+        auto contribution = [](dstd::StringView text) {
             auto owner = std::make_shared<std::string>(text);
             return comm::backend::Contribution{bytes_of(*owner), owner, {}};
         };

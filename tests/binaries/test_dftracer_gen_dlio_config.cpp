@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -57,7 +59,7 @@ dstd::String create_dlio_pfw_gz(dftu_utils_test::TestEnvironment& env, int id,
                     << R"(,"tid":)" << tid << R"(,"name":")"
                     << labels.fetch_block_name << R"(","cat":")"
                     << labels.fetch_block_cat << R"(")"
-                    << R"(,"ph":"X","ts":)" << ts << R"(,"dur":)" << fb_dur
+                    << R"(,"ph":1,"ts":)" << ts << R"(,"dur":)" << fb_dur
                     << R"(,"args":{"hhash":"h1"}})"
                     << "\n";
                 ts += fb_dur;
@@ -68,7 +70,7 @@ dstd::String create_dlio_pfw_gz(dftu_utils_test::TestEnvironment& env, int id,
                     << R"(,"tid":)" << tid << R"(,"name":")"
                     << labels.fetch_iter_name << R"(","cat":")"
                     << labels.fetch_iter_cat << R"(")"
-                    << R"(,"ph":"X","ts":)" << ts << R"(,"dur":)" << fi_dur
+                    << R"(,"ph":1,"ts":)" << ts << R"(,"dur":)" << fi_dur
                     << R"(,"args":{"hhash":"h1"}})"
                     << "\n";
                 ts += fi_dur;
@@ -80,7 +82,7 @@ dstd::String create_dlio_pfw_gz(dftu_utils_test::TestEnvironment& env, int id,
                     << R"(,"tid":)" << tid << R"(,"name":")"
                     << labels.preprocess_name << R"(","cat":")"
                     << labels.preprocess_cat << R"(")"
-                    << R"(,"ph":"X","ts":)" << ts << R"(,"dur":)" << pre_dur
+                    << R"(,"ph":1,"ts":)" << ts << R"(,"dur":)" << pre_dur
                     << R"(,"args":{"hhash":"h1"}})"
                     << "\n";
                 ts += pre_dur;
@@ -107,12 +109,11 @@ dstd::String find_binary() {
         "DFTRACER_UTILS_GEN_DLIO_CONFIG_PATH", "dftracer_gen_dlio_config");
 }
 
-int run_binary(const dstd::String& binary,
-               const dstd::Vector<dstd::String>& args) {
+int run_binary(dstd::String binary, dstd::Vector<dstd::String> args) {
     return dftu_utils_test::run_process(binary, args);
 }
 
-dstd::String read_file(const dstd::String& path) {
+dstd::String read_file(dstd::StringView path) {
     return dftu_utils_test::read_text(path);
 }
 

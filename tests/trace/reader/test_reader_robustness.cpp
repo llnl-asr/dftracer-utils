@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <checkpoint_indexer_helpers.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/map.h>
@@ -36,10 +37,10 @@ using namespace dftracer::utils::trace::index::gzip;
 using namespace dftracer::utils::trace::reader::internal;
 using namespace dftu_utils_test;
 
-std::size_t count_json_lines(const dstd::String& content);
-bool validate_json_lines(const dstd::String& content);
-dstd::String get_last_json_line(const dstd::String& content);
-std::size_t extract_id_from_json(const dstd::String& line);
+std::size_t count_json_lines(dstd::StringView content);
+bool validate_json_lines(dstd::StringView content);
+dstd::String get_last_json_line(dstd::StringView content);
+std::size_t extract_id_from_json(dstd::StringView line);
 
 // Helper to create large JSON test data
 class LargeTestEnvironment {
@@ -66,9 +67,9 @@ class LargeTestEnvironment {
     }
 
     dstd::String create_large_gzip_file(
-        const dstd::String& name = "large_test.gz") {
-        dstd::String txt_file = temp_dir_ + "/" + name + ".txt";
-        dstd::String gz_file = temp_dir_ + "/" + name;
+        dstd::StringView name = "large_test.gz") {
+        dstd::String txt_file = temp_dir_ + "/" + dstd::String(name) + ".txt";
+        dstd::String gz_file = temp_dir_ + "/" + dstd::String(name);
 
         dftu_utils_test::FileOut f(txt_file);
         if (!f) return "";
@@ -111,8 +112,8 @@ class LargeTestEnvironment {
         return success ? gz_file : "";
     }
 
-    dstd::String get_index_path(const dstd::String& gz_file) {
-        return gz_file + ".idx";
+    dstd::String get_index_path(dstd::CStringView gz_file) {
+        return dstd::String(gz_file) + ".idx";
     }
 
     dstd::String dir() const { return temp_dir_; }
@@ -122,7 +123,7 @@ class LargeTestEnvironment {
 };
 
 // Helper function to count JSON lines in content
-std::size_t count_json_lines(const dstd::String& content) {
+std::size_t count_json_lines(dstd::StringView content) {
     std::size_t count = 0;
     std::size_t pos = 0;
     while ((pos = content.find("}\n", pos)) != dstd::String::npos) {
@@ -133,7 +134,7 @@ std::size_t count_json_lines(const dstd::String& content) {
 }
 
 // Helper function to validate all lines are complete JSON
-bool validate_json_lines(const dstd::String& content) {
+bool validate_json_lines(dstd::StringView content) {
     if (content.empty()) return true;
 
     dftu_utils_test::LineStream ss(content);
@@ -158,7 +159,7 @@ bool validate_json_lines(const dstd::String& content) {
 }
 
 // Helper function to get the last complete JSON line
-dstd::String get_last_json_line(const dstd::String& content) {
+dstd::String get_last_json_line(dstd::StringView content) {
     if (content.empty()) return "";
 
     // Find the last occurrence of "}\n"
@@ -176,11 +177,11 @@ dstd::String get_last_json_line(const dstd::String& content) {
     }
 
     // Extract the line (without the trailing \n)
-    return content.substr(line_start, last_pos - line_start + 1);
+    return dstd::String(content.substr(line_start, last_pos - line_start + 1));
 }
 
 // Helper function to extract ID from JSON line
-std::size_t extract_id_from_json(const dstd::String& line) {
+std::size_t extract_id_from_json(dstd::StringView line) {
     std::size_t name_pos = line.find("\"name\":\"name_");
     if (name_pos == dstd::String::npos) return 0;
 
@@ -188,7 +189,7 @@ std::size_t extract_id_from_json(const dstd::String& line) {
     std::size_t end_pos = line.find("\"", name_pos);
     if (end_pos == dstd::String::npos) return 0;
 
-    dstd::String id_str = line.substr(name_pos, end_pos - name_pos);
+    dstd::String id_str(line.substr(name_pos, end_pos - name_pos));
     if (id_str.empty()) return 0;
 
     return dftu_utils_test::to_number<unsigned long long>(id_str);

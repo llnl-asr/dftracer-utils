@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/memory/cgroup.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -7,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <string_view>
 
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -18,116 +20,53 @@ namespace dftracer::utils::memory {
 static constexpr std::size_t FALLBACK_AVAILABLE_BYTES =
     1ULL * 1024 * 1024 * 1024;
 
-static std::size_t read_size_from_file(const char *path) {
-    FILE *f = std::fopen(path, "r");
-    if (!f) return 0;
-    char buf[64];
-    std::size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
-    std::fclose(f);
-    if (n == 0) return 0;
-    buf[n] = '\0';
-    if (std::strncmp(buf, "max", 3) == 0) return 0;
-    char *end = nullptr;
-    unsigned long long val = std::strtoull(buf, &end, 10);
-    if (end == buf) return 0;
-    return static_cast<std::size_t>(val);
-}
-
 static constexpr std::size_t CGROUP_LIMIT_SENTINEL =
     1ULL * 1024 * 1024 * 1024 * 1024;
 
-static void read_self_cgroup_paths(std::string &v2_path, std::string &v1_path) {
-    FILE *f = std::fopen("/proc/self/cgroup", "r");
-    if (!f) return;
-    char line[1024];
-    while (std::fgets(line, sizeof(line), f)) {
-        std::size_t n = std::strlen(line);
-        while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) {
-            line[--n] = '\0';
-        }
-        if (n >= 3 && line[0] == '0' && line[1] == ':' && line[2] == ':') {
-            v2_path = line + 3;
-            continue;
-        }
-        char *first = std::strchr(line, ':');
-        if (!first) continue;
-        char *second = std::strchr(first + 1, ':');
-        if (!second) continue;
-        std::string controllers(first + 1, second - first - 1);
-        std::size_t start = 0;
-        while (start <= controllers.size()) {
-            std::size_t comma = controllers.find(',', start);
-            std::size_t end =
-                (comma == std::string::npos) ? controllers.size() : comma;
-            if (controllers.compare(start, end - start, "memory") == 0) {
-                v1_path = second + 1;
-                break;
-            }
-            if (comma == std::string::npos) break;
-            start = comma + 1;
-        }
-    }
-    std::fclose(f);
+static std::size_t read_size_at(std::string_view dir, std::string_view leaf) {
+    const std::string text = read_cgroup_file(dir, leaf);
+    if (text.empty() || std::strncmp(text.c_str(), "max", 3) == 0) return 0;
+    char *end = nullptr;
+    unsigned long long val = std::strtoull(text.c_str(), &end, 10);
+    if (end == text.c_str()) return 0;
+    return static_cast<std::size_t>(val);
 }
 
-// The memory library links nothing of ours, so no dstd::fmt here.
-static std::size_t read_size_at(const std::string &dir, const char *leaf) {
-    std::string path;
-    path.reserve(dir.size() + std::strlen(leaf));
-    path.append(dir);
-    path.append(leaf);
-    return read_size_from_file(path.c_str());
-}
-
-static std::size_t cgroup_v2_limit_at(const std::string &cg_path) {
-    std::string dir("/sys/fs/cgroup");
-    dir.append(cg_path);
-    while (true) {
+static std::size_t cgroup_v2_limit_at(std::string_view cg_path) {
+    std::size_t room = 0;
+    for_each_cgroup_dir("/sys/fs/cgroup", cg_path, [&](std::string_view dir) {
         std::size_t max_mem = read_size_at(dir, "/memory.max");
-        if (max_mem > 0 && max_mem < CGROUP_LIMIT_SENTINEL) {
-            std::size_t current = read_size_at(dir, "/memory.current");
-            if (current >= max_mem) return 0;
-            return max_mem - current;
-        }
-        if (dir.size() <= std::strlen("/sys/fs/cgroup")) break;
-        std::size_t slash = dir.find_last_of('/');
-        if (slash == std::string::npos || slash < std::strlen("/sys/fs/cgroup"))
-            break;
-        dir.resize(slash);
-    }
-    return 0;
+        if (max_mem == 0 || max_mem >= CGROUP_LIMIT_SENTINEL) return false;
+        std::size_t current = read_size_at(dir, "/memory.current");
+        room = current >= max_mem ? 0 : max_mem - current;
+        return true;
+    });
+    return room;
 }
 
-static std::size_t cgroup_v1_limit_at(const std::string &cg_path) {
-    std::string dir("/sys/fs/cgroup/memory");
-    dir.append(cg_path);
-    while (true) {
-        std::size_t limit = read_size_at(dir, "/memory.limit_in_bytes");
-        if (limit > 0 && limit < CGROUP_LIMIT_SENTINEL) {
+static std::size_t cgroup_v1_limit_at(std::string_view cg_path) {
+    std::size_t room = 0;
+    for_each_cgroup_dir(
+        "/sys/fs/cgroup/memory", cg_path, [&](std::string_view dir) {
+            std::size_t limit = read_size_at(dir, "/memory.limit_in_bytes");
+            if (limit == 0 || limit >= CGROUP_LIMIT_SENTINEL) return false;
             std::size_t usage = read_size_at(dir, "/memory.usage_in_bytes");
-            if (usage >= limit) return 0;
-            return limit - usage;
-        }
-        if (dir.size() <= std::strlen("/sys/fs/cgroup/memory")) break;
-        std::size_t slash = dir.find_last_of('/');
-        if (slash == std::string::npos ||
-            slash < std::strlen("/sys/fs/cgroup/memory"))
-            break;
-        dir.resize(slash);
-    }
-    return 0;
+            room = usage >= limit ? 0 : limit - usage;
+            return true;
+        });
+    return room;
 }
 
 static std::size_t try_cgroups_v2() {
-    std::string v2_path, v1_path;
-    read_self_cgroup_paths(v2_path, v1_path);
+    std::string v2_path =
+        read_self_cgroup_paths("/proc/self/cgroup", "memory").v2;
     if (v2_path.empty()) v2_path = "/";
     return cgroup_v2_limit_at(v2_path);
 }
 
 static std::size_t try_cgroups_v1() {
-    std::string v2_path, v1_path;
-    read_self_cgroup_paths(v2_path, v1_path);
+    std::string v1_path =
+        read_self_cgroup_paths("/proc/self/cgroup", "memory").v1;
     if (v1_path.empty()) v1_path = "/";
     return cgroup_v1_limit_at(v1_path);
 }

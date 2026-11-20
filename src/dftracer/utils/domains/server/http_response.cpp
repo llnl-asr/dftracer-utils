@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -21,7 +22,7 @@ bool icase_equal(dstd::StringView a, dstd::StringView b) {
 }
 
 bool has_content_length(
-    const dstd::Vector<dstd::Pair<dstd::String, dstd::String>> &headers) {
+    dstd::Span<const dstd::Pair<dstd::String, dstd::String>> headers) {
     return std::any_of(headers.begin(), headers.end(), [](const auto &h) {
         return icase_equal(h.first, "Content-Length");
     });
@@ -72,11 +73,10 @@ HttpResponse HttpResponse::ok() {
         .status_code = 200, .status_text = "OK", .headers = {}, .body = {}};
 }
 
-HttpResponse HttpResponse::ok(dstd::String body,
-                              const dstd::String &content_type) {
+HttpResponse HttpResponse::ok(dstd::String body, dstd::String content_type) {
     return HttpResponse{.status_code = 200,
                         .status_text = "OK",
-                        .headers = {{"Content-Type", content_type}},
+                        .headers = {{"Content-Type", std::move(content_type)}},
                         .body = std::move(body)};
 }
 
@@ -87,34 +87,34 @@ HttpResponse HttpResponse::not_found() {
                         .body = "Not Found"};
 }
 
-HttpResponse HttpResponse::bad_request(const dstd::String &msg) {
+HttpResponse HttpResponse::bad_request(dstd::String msg) {
     return HttpResponse{.status_code = 400,
                         .status_text = "Bad Request",
                         .headers = {{"Content-Type", "text/plain"}},
-                        .body = msg};
+                        .body = std::move(msg)};
 }
 
-HttpResponse HttpResponse::internal_error(const dstd::String &msg) {
+HttpResponse HttpResponse::internal_error(dstd::String msg) {
     return HttpResponse{.status_code = 500,
                         .status_text = "Internal Server Error",
                         .headers = {{"Content-Type", "text/plain"}},
-                        .body = msg};
+                        .body = std::move(msg)};
 }
 
 HttpResponse HttpResponse::from_error(const dstd::Error &error) {
-    const dstd::String message(error.message());
+    dstd::String message(error.message());
     if (common::errorcode_of(error) == common::ErrorCode::InvalidArgument ||
         error.is_code(duql::DuqlErrc::Parse))
-        return bad_request(message);
-    return internal_error(message);
+        return bad_request(std::move(message));
+    return internal_error(std::move(message));
 }
 
 HttpResponse HttpResponse::streaming(dstd::UniquePtr<StreamGenerator> gen,
-                                     const dstd::String &content_type) {
+                                     dstd::String content_type) {
     HttpResponse resp;
     resp.status_code = 200;
     resp.status_text = "OK";
-    resp.headers = {{"Content-Type", content_type},
+    resp.headers = {{"Content-Type", std::move(content_type)},
                     {"Transfer-Encoding", "chunked"}};
     resp.stream = std::move(gen);
     return resp;

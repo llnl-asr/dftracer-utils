@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
+#include <dftracer/utils/dataframe/internal/frame_index.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/ops/ops_common.h>
 #include <dftracer/utils/dstd/string.h>
@@ -21,11 +22,10 @@ struct RightPartition {
 
 }  // namespace
 
-dstd::Result<DataFrame> interval(const DataFrame& left, const DataFrame& right,
-                                 const dstd::String& point,
-                                 const dstd::String& lo, const dstd::String& hi,
-                                 const dstd::Vector<dstd::String>& by,
-                                 bool outer) {
+static dstd::Result<DataFrame> interval_raw(
+    const DataFrame& left, const DataFrame& right, dstd::StringView point,
+    dstd::StringView lo, dstd::StringView hi, dstd::Span<const dstd::String> by,
+    bool outer) {
     const dstd::Result<std::size_t> p =
         ops::column_named(left, point, "interval");
     if (!p) return p.error();
@@ -169,4 +169,14 @@ dstd::Result<DataFrame> interval(const DataFrame& left, const DataFrame& right,
                              "interval");
 }
 
+dstd::Result<DataFrame> interval(const DataFrame& left, const DataFrame& right,
+                                 dstd::StringView point, dstd::StringView lo,
+                                 dstd::StringView hi,
+                                 dstd::Span<const dstd::String> by,
+                                 bool outer) {
+    dstd::Result<DataFrame> out =
+        interval_raw(left, right, point, lo, hi, by, outer);
+    if (out) index_keep<"interval">(left, *out);
+    return out;
+}
 }  // namespace dftracer::utils::dataframe

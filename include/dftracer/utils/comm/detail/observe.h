@@ -87,7 +87,7 @@ class Tracer {
     };
 
     void write_locked(Sink& sink);
-    void warn_once(const dstd::String& path, const dstd::Error& why);
+    void warn_once(dstd::StringView path, const dstd::Error& why);
 
     dstd::String directory_;
     std::uint64_t pid_ = 0;

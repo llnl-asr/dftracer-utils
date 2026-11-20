@@ -98,44 +98,24 @@ The native ``DataFrame`` also implements ``__arrow_c_stream__`` and ``Series``
 implements ``__arrow_c_array__``, so any Arrow-aware library can pull the data
 directly.
 
-Read Arrow IPC files in parallel (Python)
--------------------------------------------
+Read Arrow IPC files (Python)
+-----------------------------
 
-To read a batch of already-written ``.arrow`` IPC files back in, use
-``read_arrow_files_parallel`` from the C extension. It fans the reads out
-across the :doc:`Runtime <../../api/runtime>` and returns per-file results
-plus totals:
-
-.. code-block:: python
-
-   from dftracer.utils.dftracer_utils_ext import read_arrow_files_parallel
-
-   result = read_arrow_files_parallel(["a.arrow", "b.arrow"])
-   result["total_rows"]      # rows across every file
-   result["files_read"]      # files that succeeded
-   result["files_failed"]    # files that raised
-
-   for fr in result["file_results"]:
-       fr["path"], fr["success"], fr["total_rows"]
-       fr["batches"]          # list of Arrow-capsule batches
-
-Pass an explicit ``runtime=`` (a :class:`~dftracer.utils.Runtime`) to reuse a
-runtime you already created; it uses the module-level default otherwise. Each
-entry in ``fr["batches"]`` implements the Arrow C Data Interface
-(``__arrow_c_array__``); wrap the list in ``dftracer.utils.arrow.ArrowTable``
-(a pure-Python helper, not part of the ``dftracer.utils`` top-level namespace)
-to get ``to_pandas`` / ``to_polars``:
+To read already-written ``.arrow`` IPC files back in, open them with pyarrow
+and import the table with ``DataFrame.from_arrow``:
 
 .. code-block:: python
 
    import pyarrow as pa
-   from dftracer.utils.arrow import ArrowTable
+   from dftracer.utils import DataFrame
 
-   batches = [pa.record_batch(b) for fr in result["file_results"] for b in fr["batches"]]
-   table = ArrowTable(batches).to_pandas()
+   tables = [pa.ipc.open_file(path).read_all() for path in ["a.arrow", "b.arrow"]]
+   df = DataFrame.from_arrow(pa.concat_tables(tables))
 
-There is no Python-level write path for IPC files. To write one, convert through
-pyarrow (``pa.ipc.new_file(...).write_table(df.to_arrow())``).
+``df.write_ipc(path)`` writes the frame as an Arrow IPC stream, and
+``df.to_ipc()`` gives the same bytes in memory; read either back with
+``pa.ipc.open_stream``. For the IPC file format, convert through pyarrow
+(``pa.ipc.new_file(...).write_table(df.to_arrow())``).
 
 The Arrow C Data Interface (C++)
 --------------------------------

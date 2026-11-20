@@ -40,7 +40,7 @@ inline constexpr std::array<dstd::Pair<const char*, TimeUnit>, 4> UNIT_NAMES = {
 /// it in errors. Returns an InvalidArgument error for text that is not YAML,
 /// an unknown key, or a value of the wrong type.
 dstd::Result<SchemaSpec> parse_schema_spec(dstd::StringView text,
-                                           const dstd::String& source);
+                                           dstd::StringView source);
 
 }  // namespace dftracer::utils::trace::index
 

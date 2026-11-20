@@ -13,6 +13,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -131,7 +132,7 @@ void same(const Series& got, const Series& want) {
 
 Series joined(const Series& s) { return s.materialize(); }
 
-dstd::Vector<const Series*> ptrs(const dstd::Vector<Series>& v) {
+dstd::Vector<const Series*> ptrs(dstd::Span<const Series> v) {
     dstd::Vector<const Series*> p;
     for (const Series& s : v) p.push_back(&s);
     return p;
@@ -143,7 +144,7 @@ dstd::Vector<Expr> roots() {
             expr_str_size(col(2), true)};
 }
 
-void compare(const dstd::Vector<Series>& in, const dstd::Vector<Series>& flat,
+void compare(dstd::Span<const Series> in, dstd::Span<const Series> flat,
              bool expect_chunked) {
     const dstd::Vector<Expr> rs = roots();
     const dstd::Vector<Series> got =

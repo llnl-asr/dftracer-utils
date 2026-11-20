@@ -19,8 +19,8 @@ bool bit(const Series& s, std::int64_t i) {
 }
 
 template <class T>
-void check_to_bool(const dstd::Vector<T>& x, TypeId type,
-                   const dstd::Vector<std::uint8_t>& valid = {}) {
+void check_to_bool(dstd::Vector<T> x, TypeId type,
+                   dstd::Vector<std::uint8_t> valid = {}) {
     const auto n = static_cast<std::int64_t>(x.size());
     Series s =
         Series::flat(type, x.data(), n, valid.empty() ? nullptr : valid.data());

@@ -1,9 +1,11 @@
 // duql grammar for Lark's LALR(1) generator. Checked by
 // scripts/check_duql_grammar.py.
 
-start: pragma? decl* pipeline?
+start: pragma? explain? decl* pipeline?
 
 pragma: "duql" (INT | FLOAT)
+
+explain: "explain" ["analyze"]
 
 decl: "let" NAME "=" pipeline ";"                    -> let_decl
     | "def" NAME params? "=" def_body ";"            -> def_decl

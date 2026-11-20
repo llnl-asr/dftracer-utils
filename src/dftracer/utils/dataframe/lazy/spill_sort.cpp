@@ -148,12 +148,16 @@ struct KeyData {
 };
 
 // A k-way merge of sorted runs by the key columns `key_idx` (each ascending or
-// descending, a null last in both directions). On a tie the earlier run comes
+// descending; a null last in both directions, or first for a key whose
+// `nulls_last` flag is false). On a tie the earlier run comes
 // first, so the merge is stable. It holds one morsel per run.
 class RunMerger {
    public:
-    RunMerger(dstd::Vector<int> key_idx, dstd::Vector<bool> descending)
-        : key_idx_(std::move(key_idx)), descending_(std::move(descending)) {}
+    RunMerger(dstd::Vector<int> key_idx, dstd::Vector<bool> descending,
+              dstd::Vector<bool> nulls_last)
+        : key_idx_(std::move(key_idx)),
+          descending_(std::move(descending)),
+          nulls_last_(std::move(nulls_last)) {}
 
     void add_run(dstd::UniquePtr<Cursor> run) {
         runs_.push_back(std::move(run));
@@ -281,15 +285,18 @@ class RunMerger {
         // call sequence (pos_/cur_ persist between next() calls), so the
         // concatenation of every morsel this cursor returns is sorted. The
         // leading key is the one ordering claim a morsel carries.
-        out.ordering = Ordering::ByColumn;
-        out.ordered_column = key_idx_.front();
-        out.ordered_descending = descending_.front();
+        if (nulls_last_.front()) {
+            out.ordering = Ordering::ByColumn;
+            out.ordered_column = key_idx_.front();
+            out.ordered_descending = descending_.front();
+        }
         co_return MorselResult(std::move(out));
     }
 
    private:
     // Lexicographic over the keys: negative when the head row `ia` of run `a`
-    // sorts before row `ib` of run `b`. A null sorts last in both directions.
+    // sorts before row `ib` of run `b`. A null sorts last in both directions,
+    // or first for a key with `nulls_last` false.
     int cmp_rows(std::size_t a, std::int64_t ia, std::size_t b,
                  std::int64_t ib) const {
         for (std::size_t i = 0; i < key_idx_.size(); ++i) {
@@ -299,7 +306,7 @@ class RunMerger {
             const bool ny = y.null_at(ib);
             if (nx || ny) {
                 if (nx && ny) continue;
-                return nx ? 1 : -1;
+                return (nx == nulls_last_[i]) ? 1 : -1;
             }
             const int r =
                 descending_[i] ? -x.compare(ia, y, ib) : x.compare(ia, y, ib);
@@ -328,6 +335,7 @@ class RunMerger {
 
     dstd::Vector<int> key_idx_;
     dstd::Vector<bool> descending_;
+    dstd::Vector<bool> nulls_last_;
     dstd::Vector<dstd::UniquePtr<Cursor>> runs_;
     dstd::Vector<dstd::Optional<Morsel>> cur_;
     dstd::Vector<dstd::Vector<KeyData>> run_keys_;
@@ -349,12 +357,21 @@ class SortMergeCursor : public Cursor {
 
     SortMergeCursor(dstd::UniquePtr<Cursor> in, dstd::Vector<dstd::String> sch,
                     dstd::Vector<dstd::String> keys,
-                    dstd::Vector<bool> descending, std::uint64_t budget)
+                    dstd::Vector<bool> descending, std::uint64_t budget,
+                    dstd::Vector<bool> nulls_last)
         : in_(std::move(in)),
           sch_(std::move(sch)),
           keys_(std::move(keys)),
           descending_(std::move(descending)),
-          budget_(budget) {}
+          nulls_last_(std::move(nulls_last)),
+          budget_(budget) {
+        if (descending_.empty()) descending_.push_back(false);
+        if (descending_.size() == 1)
+            descending_.resize(keys_.size(), descending_[0]);
+        if (nulls_last_.empty()) nulls_last_.push_back(true);
+        if (nulls_last_.size() == 1)
+            nulls_last_.resize(keys_.size(), nulls_last_[0]);
+    }
 
     // Sorting commutes with a row-wise narrowing, and the input is untouched
     // until the first next(), which is when a join sends one.
@@ -383,7 +400,7 @@ class SortMergeCursor : public Cursor {
         }
         auto task = single_->next(max_rows);
         auto m = co_await std::move(task).or_fail();
-        if (m) {
+        if (m && nulls_last_.front()) {
             m->ordering = Ordering::ByColumn;
             m->ordered_column = key_idx_.front();
             m->ordered_descending = descending_.front();
@@ -393,9 +410,15 @@ class SortMergeCursor : public Cursor {
 
    private:
     dstd::Result<DataFrame> sort_rows(DataFrame df) const {
-        return keys_.size() == 1
-                   ? df.sort_by(keys_.front(), descending_.front())
-                   : df.sort_by_multi(keys_, descending_);
+        if (keys_.size() == 1)
+            return df.sort_by(keys_.front(), descending_.front(),
+                              nulls_last_.front());
+        dstd::Vector<std::uint8_t> desc, last;
+        for (std::size_t i = 0; i < keys_.size(); ++i) {
+            desc.push_back(descending_[i] ? 1 : 0);
+            last.push_back(nulls_last_[i] ? 1 : 0);
+        }
+        return df.sort_by_multi(keys_, desc, last);
     }
 
     dstd::Result<DataFrame> concat_pending(
@@ -463,11 +486,11 @@ class SortMergeCursor : public Cursor {
             std::max<std::uint64_t>(4, budget_ / per_run));
     }
 
-    coro::CoroTask<dstd::Result<int>> merge_runs(const dstd::Vector<int>& ids,
+    coro::CoroTask<dstd::Result<int>> merge_runs(dstd::Vector<int> ids,
                                                  int out_id,
                                                  std::int64_t max_rows) {
         {
-            RunMerger merger(key_idx_, descending_);
+            RunMerger merger(key_idx_, descending_, nulls_last_);
             for (int id : ids) {
                 auto reader = spill::Reader::open(dir_->run_path(id));
                 if (!reader) co_return reader.error();
@@ -565,9 +588,10 @@ class SortMergeCursor : public Cursor {
                         next_ids.push_back(ids[at]);
                         continue;
                     }
-                    const dstd::Vector<int> group(ids.begin() + at,
-                                                  ids.begin() + end);
-                    auto merging = merge_runs(group, run_id++, max_rows);
+                    dstd::Vector<int> group(ids.begin() + at,
+                                            ids.begin() + end);
+                    auto merging =
+                        merge_runs(std::move(group), run_id++, max_rows);
                     auto merged_id = co_await std::move(merging);
                     if (!merged_id) co_return merged_id.error();
                     next_ids.push_back(*merged_id);
@@ -583,7 +607,7 @@ class SortMergeCursor : public Cursor {
         if (runs.size() == 1) {
             single_ = std::move(runs.front());
         } else {
-            merger_.emplace(key_idx_, descending_);
+            merger_.emplace(key_idx_, descending_, nulls_last_);
             for (dstd::UniquePtr<Cursor>& r : runs)
                 merger_->add_run(std::move(r));
             auto opening = merger_->open(max_rows);
@@ -600,6 +624,7 @@ class SortMergeCursor : public Cursor {
     dstd::Vector<dstd::String> sch_;
     dstd::Vector<dstd::String> keys_;
     dstd::Vector<bool> descending_;
+    dstd::Vector<bool> nulls_last_;
     std::uint64_t budget_;
     bool built_ = false;
     dstd::Vector<int> key_idx_;
@@ -618,10 +643,11 @@ CursorResult make_sort_merge(dstd::UniquePtr<Cursor> in,
                              dstd::Vector<dstd::String> sch,
                              dstd::Vector<dstd::String> keys,
                              dstd::Vector<bool> descending,
-                             std::uint64_t budget) {
-    return dstd::make_unique<SortMergeCursor>(std::move(in), std::move(sch),
-                                              std::move(keys),
-                                              std::move(descending), budget);
+                             std::uint64_t budget,
+                             dstd::Vector<bool> nulls_last) {
+    return dstd::make_unique<SortMergeCursor>(
+        std::move(in), std::move(sch), std::move(keys), std::move(descending),
+        budget, std::move(nulls_last));
 }
 
 }  // namespace lazy_internal

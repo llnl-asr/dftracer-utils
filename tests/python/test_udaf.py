@@ -23,7 +23,7 @@ _PLUGIN = find_installed_example_plugin("stats_udafs")
 
 pytestmark = [
     pytest.mark.skipif(
-        not hasattr(_ext, "_LazyFrame"), reason="extension built without Arrow support"
+        not hasattr(_ext, "LazyFrame"), reason="extension built without Arrow support"
     ),
     pytest.mark.skipif(not _PLUGIN, reason="no stats_udafs plugin installed next to the extension"),
 ]
@@ -252,7 +252,7 @@ def test_group_by_dynamic_takes_a_built_in_aggregate():
 
 
 def test_a_malformed_udaf_spec_is_a_type_error_not_a_crash():
-    lazy = _df().lazy()._native
+    lazy = _df().lazy()
     for bad in [("p50",), ("p50", "out"), ("p50", "out", "v"), ("p50", "out", ["v"], 1)]:
         with pytest.raises(TypeError):
             lazy.group_by(["k"], [bad])
@@ -272,16 +272,16 @@ def test_over_runs_a_udaf_per_group_and_broadcasts_it():
 
 
 def test_trace_viewer_agg_refuses_a_udaf_naming_it():
-    from dftracer.utils.trace_viewer import _agg_specs
+    from dftracer.utils.trace.partials import agg_specs
 
     plugins = Plugins([_PLUGIN])
     with pytest.raises(TypeError, match="p50"):
-        _agg_specs([dft.udaf["p50"](col("v"))])
+        agg_specs([dft.udaf["p50"](col("v"))])
     del plugins
 
 
 def test_dask_agg_refuses_a_udaf_naming_it():
-    dask_frame = pytest.importorskip("dftracer.utils.dask_frame")
+    dask_frame = pytest.importorskip("dftracer.utils.dask.frame")
     plugins = Plugins([_PLUGIN])
     with pytest.raises(TypeError, match="p50"):
         dask_frame._parse("m", dft.udaf["p50"](col("v")))

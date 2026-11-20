@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/agg.h>        // AggState, AggStatePtr
 #include <dftracer/utils/dataframe/lazyframe.h>  // Cursor, Morsel
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -41,11 +42,11 @@ dstd::Result<Series> get_series(const std::uint8_t*& p,
                                 const std::uint8_t* end);
 
 /// Approximate in-memory bytes of FLAT columns.
-std::size_t columns_bytes(const dstd::Vector<Series>& cols);
+std::size_t columns_bytes(dstd::Span<const Series> cols);
 /// Bytes of the buffers of `cols` not already in `seen`, which it records:
 /// the memory a frame part adds when parts share buffers. The data buffers a
 /// view column points into are not counted.
-std::size_t new_buffer_bytes(const dstd::Vector<Series>& cols,
+std::size_t new_buffer_bytes(dstd::Span<const Series> cols,
                              dstd::HashSet<const void*, dstd::PtrHash>& seen);
 
 /// One collect's spill file. The file is unlinked as soon as it is created, so
@@ -64,7 +65,7 @@ class PartFile {
     /// of the file; a region is unmapped when the last window is released.
     /// Nested columns are returned as shared copies and stay in memory.
     /// An Io error naming the spill directory on a write or mapping failure.
-    dstd::Result<dstd::Vector<Series>> append(const dstd::Vector<Series>& cols);
+    dstd::Result<dstd::Vector<Series>> append(dstd::Span<const Series> cols);
 
    private:
     dstd::UniquePtr<common::SpillFile> file_;
@@ -87,7 +88,7 @@ class Dir {
     common::SpillCharge& charge() const noexcept { return dir_.charge(); }
     /// Delete the file `path` in this directory and release its bytes from
     /// the charge.
-    void remove_run(const dstd::String& path) const noexcept;
+    void remove_run(dstd::CStringView path) const noexcept;
 
    private:
     common::ScopedSpillSubdir dir_;
@@ -99,13 +100,12 @@ class Dir {
 class Writer {
    public:
     /// An Io error when `path` cannot be opened.
-    static dstd::Result<Writer> open(const dstd::String& path);
+    static dstd::Result<Writer> open(dstd::CStringView path);
     Writer(Writer&&) noexcept;
     Writer& operator=(Writer&&) noexcept;
     ~Writer();
     /// An Io error when the file cannot be written (disk full).
-    dstd::Result<void> write(const dstd::Vector<Series>& cols,
-                             std::int64_t rows);
+    dstd::Result<void> write(dstd::Span<const Series> cols, std::int64_t rows);
     /// An Io error when the file cannot be finished.
     dstd::Result<void> close();
     /// The bytes written so far: where the next morsel starts.
@@ -124,8 +124,7 @@ class Writer {
 /// Writes `cols` (`rows` rows each) to `w` in morsels of at most
 /// `rows_per_morsel` rows (at least 1). Returns the bytes of the largest morsel
 /// written, or the Io error of the write.
-dstd::Result<std::uint64_t> write_run(Writer& w,
-                                      const dstd::Vector<Series>& cols,
+dstd::Result<std::uint64_t> write_run(Writer& w, dstd::Span<const Series> cols,
                                       std::int64_t rows,
                                       std::int64_t rows_per_morsel);
 
@@ -138,7 +137,7 @@ class HashPartitions {
     static dstd::Result<HashPartitions> make(Dir& dir, std::size_t parts);
     std::size_t size() const noexcept { return paths_.size(); }
     /// Appends one morsel to partition `p`.
-    dstd::Result<void> write(std::size_t p, const dstd::Vector<Series>& cols,
+    dstd::Result<void> write(std::size_t p, dstd::Span<const Series> cols,
                              std::int64_t rows);
     /// Flushes and closes every partition's file.
     dstd::Result<void> close();
@@ -159,7 +158,7 @@ class HashPartitions {
 class Reader : public Cursor {
    public:
     /// An Io error when `path` cannot be opened or sized.
-    static dstd::Result<dstd::UniquePtr<Reader>> open(const dstd::String& path);
+    static dstd::Result<dstd::UniquePtr<Reader>> open(dstd::CStringView path);
     /// Use @ref open.
     Reader(dstd::ScopedFile is, std::uint64_t size);
     ~Reader() override;
@@ -188,7 +187,7 @@ class Reader : public Cursor {
 /// long-lived AggSpiller) read and write this one format, so it cannot drift
 /// between them. An Io error if `path` cannot be opened or written - a
 /// silently empty run loses the groups it was meant to hold.
-dstd::Result<void> write_agg_run(AggState& state, const dstd::String& path);
+dstd::Result<void> write_agg_run(AggState& state, dstd::CStringView path);
 
 /// Streams one run's single-group states back in key order.
 class AggRunReader {
@@ -196,7 +195,7 @@ class AggRunReader {
     /// Opens `path` and reads its first group. An Io error when the file
     /// cannot be opened, a Parse one for a corrupt run.
     static dstd::Result<dstd::UniquePtr<AggRunReader>> open(
-        const dstd::String& path);
+        dstd::CStringView path);
     /// Use @ref open.
     AggRunReader(dstd::ScopedFile is, std::uint64_t size);
     bool valid() const { return valid_; }

@@ -133,7 +133,7 @@ dstd::Result<AggInputSpec> make_agg_input_spec(const ViewPlan& plan);
 /// feeds agg_accumulate_chunk with `spec.group_key_names`, the gagg value
 /// names, and `spec.dyn_prefix`. The error is that of a computed column.
 dstd::Result<dftracer::utils::dataframe::DataFrame> build_agg_input_frame(
-    const dstd::Vector<FoldEvent>& events,
+    dstd::Span<const FoldEvent> events,
     const dftracer::utils::dstd::StringIntern& intern, const AggInputSpec& spec,
     const dftracer::utils::trace::index::plan::GroupResolver* resolver);
 

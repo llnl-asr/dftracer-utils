@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dataframe/internal/file_format_registry.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -20,6 +21,7 @@
 #include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/index/build/resolver.h>
 #include <dftracer/utils/trace/index/extensions/extension_registry.h>
+#include <dftracer/utils/trace/index/format_index.h>
 #include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/index/plan/chunk_pruner.h>
 #include <dftracer/utils/trace/index/plan/prune.h>
@@ -30,9 +32,20 @@
 #include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
+#include <algorithm>
 #include <utility>
 
 namespace dftracer::utils::trace::index {
+
+namespace {
+
+/// A file a plugin file format claims, with the format.
+struct FormatEntry {
+    runtime::fs::FoundFile entry;
+    dstd::SharedPtr<dataframe::FileFormatFactory> factory;
+};
+
+}  // namespace
 
 struct Indexer::Impl {
     dstd::Vector<dstd::String> paths;
@@ -58,6 +71,25 @@ struct Indexer::Impl {
         c.auto_max_distinct = bloom.auto_max_distinct;
         c.expected_entries_per_chunk = bloom.expected_entries_per_chunk;
         c.extensions = extensions;
+        for (const SummaryChoice& choice : options.summaries) {
+            build::PathSummaries p;
+            p.path = build::extra_dimension_name(choice.path);
+            p.written = choice.path;
+            for (const dstd::String& name : choice.summaries)
+                if (const auto ext = store::parse_extension(name);
+                    ext && store::PRUNING_EXTENSIONS.has(*ext))
+                    p.kinds.add(*ext);
+            if (!p.kinds.empty() && !build::is_fixed_dimension(p.path) &&
+                std::find(c.extra_dimensions.begin(), c.extra_dimensions.end(),
+                          p.path) == c.extra_dimensions.end())
+                c.extra_dimensions.push_back(p.path);
+            c.path_summaries.push_back(std::move(p));
+        }
+        std::sort(
+            c.path_summaries.begin(), c.path_summaries.end(),
+            [](const build::PathSummaries& a, const build::PathSummaries& b) {
+                return a.path < b.path;
+            });
         return c;
     }
 
@@ -91,10 +123,45 @@ struct Indexer::Impl {
         return out;
     }
 
+    /// `entries` split by reader: the files a registered plugin file format
+    /// claims (by the probe a scan uses, or the format `options.format`
+    /// names), and every other file, which the built-in trace reader indexes.
+    /// An error when two readers tie on a file, none claims it, or the format
+    /// name is unknown.
+    struct Readers {
+        dstd::Vector<runtime::fs::FoundFile> trace;
+        dstd::Vector<FormatEntry> formats;
+    };
+    dstd::Result<Readers> split_readers(
+        dstd::Vector<runtime::fs::FoundFile> entries) const {
+        Readers out;
+        for (auto& entry : entries) {
+            auto reader = dataframe::claim_trace_reader(
+                entry.path.str(), dstd::StringView(options.format));
+            if (!reader) return reader.error();
+            if (reader->is_builtin())
+                out.trace.push_back(std::move(entry));
+            else
+                out.formats.push_back(
+                    {std::move(entry), std::move(reader->plugin)});
+        }
+        return out;
+    }
+
+    /// The settings a plugin-format file's summaries are built with: the
+    /// pruning extensions of the options, none when the bloom tier is off.
+    FormatIndexSettings format_settings() const {
+        FormatIndexSettings settings;
+        settings.config = bloom_config();
+        if (!options.bloom) settings.config.extensions = {};
+        return settings;
+    }
+
     build::ResolverInput resolver_input(
         dstd::Vector<runtime::fs::FoundFile> entries) const {
         build::ResolverInput in;
-        in.files = paths;
+        in.files.reserve(entries.size());
+        for (const auto& e : entries) in.files.emplace_back(e.path.str());
         in.entries = std::move(entries);
         in.index_dir = options.index_dir;
         in.require_checkpoints = options.checkpoints;
@@ -109,7 +176,8 @@ struct Indexer::Impl {
     build::ResolveAndBuildInput build_input(
         bool force, dstd::Vector<runtime::fs::FoundFile> entries) const {
         build::ResolveAndBuildInput in;
-        in.files = paths;
+        in.files.reserve(entries.size());
+        for (const auto& e : entries) in.files.emplace_back(e.path.str());
         in.entries = std::move(entries);
         in.index_dir = options.index_dir;
         in.checkpoint_size = options.checkpoint_size;
@@ -162,8 +230,8 @@ dstd::Unexpected<dstd::Error> failed(dstd::StringView what,
 
 /// Clears plugin extension `name` of every file in `traces`.
 coro::CoroTask<dstd::Result<void>> drop_plugin_extension(
-    const dstd::String& index_path, const dstd::String& name,
-    const dstd::Vector<const dstd::String*>& traces) {
+    dstd::String index_path, dstd::String name,
+    dstd::Vector<const dstd::String*> traces) {
     auto opened = Index::open(normalize_index_root(index_path));
     if (!opened)
         co_return failed(dstd::fmt<"drop extension {}">(name), opened.error());
@@ -182,7 +250,7 @@ coro::CoroTask<dstd::Result<void>> drop_plugin_extension(
     co_return dstd::Result<void>{};
 }
 
-dstd::Result<store::IndexExtension> tier_extension(const dstd::String& name) {
+dstd::Result<store::IndexExtension> tier_extension(dstd::StringView name) {
     if (extensions::find_extension(name)) return store::IndexExtension::Plugin;
     auto ext = store::parse_extension(name);
     if (!ext || !(store::PRUNING_EXTENSIONS.has(*ext) ||
@@ -196,7 +264,7 @@ dstd::Result<store::IndexExtension> tier_extension(const dstd::String& name) {
 }
 
 template <class T, class Fn>
-dstd::Result<T> block_on(Runtime& rt, const char* name, Fn fn) {
+dstd::Result<T> block_on(Runtime& rt, dstd::StringView name, Fn fn) {
     return rt.block_on(coro::named(
         name, coro::with_scope([&](coro::Scope& scope) { return fn(scope); })));
 }
@@ -207,11 +275,169 @@ coro::CoroTask<dstd::Result<bool>> has_store(dstd::String index_path) {
     co_return co_await std::move(checking);
 }
 
+/// The size and mtime the index records for the file at `path`; nullopt when
+/// it cannot be stat'ed.
+dstd::Optional<SourceStat> source_stat(dstd::StringView path) {
+    common::InputFileStat stat;
+    if (!common::stat_input(dstd::String(path), stat)) return dstd::nullopt;
+    return SourceStat{static_cast<std::uint64_t>(stat.mtime), stat.size, 0};
+}
+
+/// Whether each file of `formats` has a current index of its format, in order.
+dstd::Result<dstd::Vector<bool>> format_files_current(
+    dstd::Span<const FormatEntry> formats, const IndexerOptions& options,
+    const FormatIndexSettings& settings) {
+    dstd::Vector<bool> current(formats.size(), false);
+    dstd::Map<dstd::String, dstd::Vector<std::size_t>> by_root;
+    for (std::size_t i = 0; i < formats.size(); ++i)
+        by_root[trace::internal::determine_index_path(
+                    dstd::String(formats[i].entry.path.str()),
+                    options.index_dir)]
+            .push_back(i);
+    for (const auto& [root, at] : by_root) {
+        const auto present = dstd::fs::exists(dstd::PathView(store_of(root)));
+        if (!present.has_value()) return present.error();
+        if (!*present) continue;
+        const auto opened = plan::open_snapshot(root);
+        if (!opened) return opened.error();
+        for (const std::size_t i : at) {
+            const auto& f = formats[i];
+            const SourceStat now{f.entry.mtime_seconds(), f.entry.size, 0};
+            const auto fresh = format_file_current(
+                *opened, fileio::get_logical_path(f.entry.path.str()), now,
+                f.factory->name(), f.factory->version(), settings);
+            if (!fresh.has_value()) return fresh.error();
+            current[i] = *fresh;
+        }
+    }
+    return current;
+}
+
+/// Indexes the files of `formats` that lack a current index, or all of them
+/// when `force`. Each file replaces only its own copy of the index.
+coro::CoroTask<dstd::Result<void>> build_format_files(
+    dstd::Vector<FormatEntry> formats, IndexerOptions options,
+    FormatIndexSettings settings, bool force) {
+    dstd::Vector<bool> current(formats.size(), false);
+    if (!force) {
+        auto checked = format_files_current(formats, options, settings);
+        if (!checked) co_return checked.error();
+        current = std::move(*checked);
+    }
+    for (std::size_t i = 0; i < formats.size(); ++i) {
+        if (current[i]) continue;
+        const dstd::String path(formats[i].entry.path.str());
+        const auto stat = source_stat(path);
+        if (!stat)
+            co_return common::make_error<"failed to index {}: cannot stat it">(
+                common::ErrorCode::Io, path);
+        auto opened = formats[i].factory->open(path, "");
+        if (!opened)
+            co_return common::make_error<"failed to index {}: {}">(
+                common::ErrorCode::Io, path, opened.error().message());
+        const dstd::String root =
+            trace::internal::determine_index_path(path, options.index_dir);
+        auto index = Index::open(normalize_index_root(root));
+        if (!index)
+            co_return common::make_error<"failed to index {}: {}">(
+                common::ErrorCode::Io, path, index.error().message());
+        SourceStat recorded = *stat;
+        recorded.hash = fileio::calculate_file_hash(path);
+        auto building =
+            build_format_index(*index, fileio::get_logical_path(path), recorded,
+                               **opened, settings);
+        auto built = co_await std::move(building);
+        if (!built)
+            co_return common::make_error<"failed to index {}: {}">(
+                common::ErrorCode::Io, path, built.error().message());
+    }
+    co_return dstd::Result<void>{};
+}
+
 }  // namespace
 
 Indexer::Indexer(dstd::SharedPtr<Impl> impl) : impl_(std::move(impl)) {}
 
+namespace {
+
+// Whether index extension `ext` takes the column of `path`, the path as
+// filters name it with or without "args.".
+bool takes_path(const extensions::Extension& ext, dstd::StringView path) {
+    const auto bare = [](dstd::StringView p) {
+        return p.starts_with("args.") ? p.substr(5) : p;
+    };
+    for (const dstd::String& column : ext.columns())
+        if (column == "*" || bare(column) == bare(path)) return true;
+    return false;
+}
+
+// The summaries of a choice must name zonemap, bloom or counts, once each,
+// among the extensions the build makes; a path is listed once.
+dstd::Result<void> validate_summaries(const IndexerOptions& options,
+                                      store::ExtensionMask extensions) {
+    dstd::Vector<dstd::String> seen;
+    for (const SummaryChoice& choice : options.summaries) {
+        const dstd::String path = build::extra_dimension_name(choice.path);
+        if (path.empty())
+            return common::make_error<
+                "Indexer::open: summaries has an empty path">(
+                common::ErrorCode::InvalidArgument);
+        if (std::find(seen.begin(), seen.end(), path) != seen.end())
+            return common::make_error<
+                "Indexer::open: summaries lists path {} twice">(
+                common::ErrorCode::InvalidArgument, choice.path);
+        seen.push_back(path);
+        if (choice.summaries.empty())
+            return common::make_error<
+                "Indexer::open: summaries of path {} is empty">(
+                common::ErrorCode::InvalidArgument, choice.path);
+        store::ExtensionMask chosen;
+        dstd::Vector<dstd::String> plugins;
+        for (const dstd::String& name : choice.summaries) {
+            if (const auto registered = extensions::find_extension(name)) {
+                if (std::find(plugins.begin(), plugins.end(), name) !=
+                    plugins.end())
+                    return common::make_error<
+                        "Indexer::open: summary {} listed twice for path {}">(
+                        common::ErrorCode::InvalidArgument, name, choice.path);
+                plugins.push_back(name);
+                if (!takes_path(*registered, path))
+                    return common::make_error<
+                        "Indexer::open: summary {} does not take path {}">(
+                        common::ErrorCode::InvalidArgument, name, choice.path);
+                continue;
+            }
+            const auto ext = store::parse_extension(name);
+            if (!ext || !(*ext == store::IndexExtension::Zonemap ||
+                          *ext == store::IndexExtension::Bloom ||
+                          *ext == store::IndexExtension::Counts))
+                return common::make_error<
+                    "Indexer::open: unknown summary {} for path {} (expected "
+                    "zonemap, bloom, counts or a registered index extension)">(
+                    common::ErrorCode::InvalidArgument, name, choice.path);
+            if (chosen.has(*ext))
+                return common::make_error<
+                    "Indexer::open: summary {} listed twice for path {}">(
+                    common::ErrorCode::InvalidArgument, name, choice.path);
+            if (!extensions.has(*ext))
+                return common::make_error<
+                    "Indexer::open: summary {} for path {} is not in "
+                    "extensions">(common::ErrorCode::InvalidArgument, name,
+                                  choice.path);
+            chosen.add(*ext);
+        }
+    }
+    return {};
+}
+
+}  // namespace
+
 dstd::Result<void> Indexer::validate_options(Impl& impl) {
+    if (!impl.options.format.empty())
+        if (auto named = dataframe::claim_reader(
+                {}, dstd::StringView(impl.options.format));
+            !named)
+            return named.error();
     for (const auto& name : impl.options.extensions) {
         auto ext = store::parse_extension(name);
         if (!ext || !store::PRUNING_EXTENSIONS.has(*ext))
@@ -221,6 +447,9 @@ dstd::Result<void> Indexer::validate_options(Impl& impl) {
                 common::ErrorCode::InvalidArgument, name);
         impl.extensions.add(*ext);
     }
+    if (auto chosen = validate_summaries(impl.options, impl.extensions);
+        !chosen)
+        return chosen;
     if (impl.options.bloom) return impl.bloom_config().validate();
     return {};
 }
@@ -300,12 +529,33 @@ coro::CoroTask<dstd::Result<IndexStatus>> Indexer::status(
 
 coro::CoroTask<dstd::Result<IndexStatus>> Indexer::status_of(
     coro::Scope& scope, dstd::Vector<runtime::fs::FoundFile> entries) const {
-    build::Resolver resolver;
-    auto resolved =
-        co_await resolver(scope, impl_->resolver_input(std::move(entries)));
-    if (!resolved) co_return resolved.error();
-    const build::ResolverResult& result = *resolved;
+    auto readers = impl_->split_readers(std::move(entries));
+    if (!readers) co_return readers.error();
+    build::ResolverResult result;
+    if (!readers->trace.empty()) {
+        build::Resolver resolver;
+        auto resolved = co_await resolver(
+            scope, impl_->resolver_input(std::move(readers->trace)));
+        if (!resolved) co_return resolved.error();
+        result = std::move(*resolved);
+    }
     auto status = to_status(result);
+    if (!readers->formats.empty()) {
+        const auto current = format_files_current(
+            readers->formats, impl_->options, impl_->format_settings());
+        if (!current) co_return current.error();
+        status.total += readers->formats.size();
+        for (std::size_t i = 0; i < readers->formats.size(); ++i) {
+            dstd::String path(readers->formats[i].entry.path.str());
+            if (status.index_path.empty())
+                status.index_path = trace::internal::determine_index_path(
+                    path, impl_->options.index_dir);
+            if ((*current)[i])
+                status.ready.push_back(std::move(path));
+            else
+                status.needs_work.push_back(std::move(path));
+        }
+    }
     dstd::HashMap<dstd::String, dstd::Vector<const build::ResolvedFile*>>
         by_index;
     for (const auto& f : result.cached)
@@ -338,11 +588,20 @@ coro::CoroTask<dstd::Result<IndexStatus>> Indexer::build(coro::Scope& scope) {
     const std::size_t indexed = before->aggregation_needs_rebuild
                                     ? before->total
                                     : before->needs_work.size();
-    auto built = co_await build::resolve_and_build_index(
-        impl_->build_input(false, entries));
-    if (!built) co_return built.error();
-    const auto checked = check_failures(*built);
-    if (!checked) co_return checked.error();
+    auto readers = impl_->split_readers(entries);
+    if (!readers) co_return readers.error();
+    if (!readers->trace.empty()) {
+        auto built = co_await build::resolve_and_build_index(
+            impl_->build_input(false, std::move(readers->trace)));
+        if (!built) co_return built.error();
+        const auto checked = check_failures(*built);
+        if (!checked) co_return checked.error();
+    }
+    auto forming =
+        build_format_files(std::move(readers->formats), impl_->options,
+                           impl_->format_settings(), false);
+    const auto formed = co_await std::move(forming);
+    if (!formed) co_return formed.error();
     auto after = co_await status_of(scope, std::move(entries));
     if (!after) co_return after.error();
     after->indexed = indexed;
@@ -351,11 +610,20 @@ coro::CoroTask<dstd::Result<IndexStatus>> Indexer::build(coro::Scope& scope) {
 
 coro::CoroTask<dstd::Result<IndexStatus>> Indexer::rebuild(coro::Scope& scope) {
     auto entries = impl_->take_entries();
-    auto built = co_await build::resolve_and_build_index(
-        impl_->build_input(true, entries));
-    if (!built) co_return built.error();
-    const auto checked = check_failures(*built);
-    if (!checked) co_return checked.error();
+    auto readers = impl_->split_readers(entries);
+    if (!readers) co_return readers.error();
+    if (!readers->trace.empty()) {
+        auto built = co_await build::resolve_and_build_index(
+            impl_->build_input(true, std::move(readers->trace)));
+        if (!built) co_return built.error();
+        const auto checked = check_failures(*built);
+        if (!checked) co_return checked.error();
+    }
+    auto forming =
+        build_format_files(std::move(readers->formats), impl_->options,
+                           impl_->format_settings(), true);
+    const auto formed = co_await std::move(forming);
+    if (!formed) co_return formed.error();
     auto after = co_await status_of(scope, std::move(entries));
     if (!after) co_return after.error();
     after->indexed = impl_->paths.size();
@@ -407,8 +675,10 @@ coro::CoroTask<dstd::Result<dstd::Vector<FileManifest>>> Indexer::manifest(
         const auto opened = plan::open_snapshot(index_path);
         if (!opened) co_return opened.error();
         const auto& snapshot = *opened;
-        const std::uint64_t agg_params =
-            impl_->options.aggregation.params_hash();
+        const auto serving = schemas::dft::agg::tier::serving_config(
+            snapshot, impl_->options.aggregation);
+        if (!serving) co_return serving.error();
+        const std::uint64_t agg_params = serving->params_hash();
         for (const auto* p : traces) {
             const auto file = snapshot.file(fileio::get_logical_path(*p));
             if (!file) continue;
@@ -425,13 +695,19 @@ coro::CoroTask<dstd::Result<dstd::Vector<FileManifest>>> Indexer::manifest(
                 if (!found) co_return found.error();
                 rec_schema = *found;
             }
+            const auto format = format_record(snapshot, *file);
+            if (!format) co_return format.error();
             const auto file_config =
                 rec_schema ? build::for_schema(config, *rec_schema) : config;
             for (auto ext : store::ALL_EXTENSIONS) {
                 const auto state = extension_state(snapshot, *file, ext);
                 if (!state) continue;
                 std::uint64_t want = file_config.params_hash(ext);
-                if (ext == store::IndexExtension::Profile)
+                if (ext == store::IndexExtension::Format)
+                    want = format ? format_params_hash((*format)->format,
+                                                       (*format)->feeder)
+                                  : 0;
+                else if (ext == store::IndexExtension::Profile)
                     want = rec_schema ? rec_schema->params_hash() : 0;
                 else if (ext == store::IndexExtension::Agg)
                     want = agg_params;
@@ -482,6 +758,24 @@ coro::CoroTask<dstd::Result<dstd::Vector<FileExplain>>> Indexer::explain(
         const auto& snapshot = *opened;
         const duql::Query& q = *parsed;
         for (const auto* p : traces) {
+            const auto indexed_file =
+                snapshot.file(fileio::get_logical_path(*p));
+            if (indexed_file) {
+                const auto format = format_record(snapshot, *indexed_file);
+                if (!format) co_return format.error();
+                if (*format) {
+                    FileExplain f;
+                    f.path = *p;
+                    f.indexed = true;
+                    f.chunks = (*format)->tokens.empty()
+                                   ? 1
+                                   : (*format)->tokens.size();
+                    for (std::uint64_t c = 0; c < f.chunks; ++c)
+                        f.read.push_back(c);
+                    out.push_back(std::move(f));
+                    continue;
+                }
+            }
             auto explained = plan::explain_file_chunks(snapshot, *p, q);
             if (!explained) co_return explained.error();
             auto& e = *explained;
@@ -490,10 +784,15 @@ coro::CoroTask<dstd::Result<dstd::Vector<FileExplain>>> Indexer::explain(
                           e.file_may_match,
                           e.total_chunks,
                           std::move(e.read),
+                          {},
                           {}};
             for (auto& by : e.by_extension)
                 f.extensions.push_back({std::move(by.name), by.file_ruled_out,
                                         std::move(by.removed)});
+            for (auto& by : e.by_summary)
+                f.summaries.push_back({std::move(by.path),
+                                       std::move(by.summary), by.skipped,
+                                       by.chunks});
             out.push_back(std::move(f));
         }
     }
@@ -506,16 +805,29 @@ coro::CoroTask<dstd::Result<IndexStatus>> Indexer::rebuild_extension(
     if (!named) co_return named.error();
     const auto ext = *named;
     auto entries = impl_->take_entries();
-    auto in = impl_->build_input(false, entries);
-    in.build_bloom = true;
-    in.require_bloom = true;
-    in.bloom_config = impl_->bloom_config();
-    in.bloom_config.extensions.add(ext);
-    in.rebuild_extensions.add(ext);
-    auto built = co_await build::resolve_and_build_index(std::move(in));
-    if (!built) co_return built.error();
-    const auto checked = check_failures(*built);
-    if (!checked) co_return checked.error();
+    auto readers = impl_->split_readers(entries);
+    if (!readers) co_return readers.error();
+    if (!readers->trace.empty()) {
+        auto in = impl_->build_input(false, std::move(readers->trace));
+        in.build_bloom = true;
+        in.require_bloom = true;
+        in.bloom_config = impl_->bloom_config();
+        in.bloom_config.extensions.add(ext);
+        in.rebuild_extensions.add(ext);
+        auto built = co_await build::resolve_and_build_index(std::move(in));
+        if (!built) co_return built.error();
+        const auto checked = check_failures(*built);
+        if (!checked) co_return checked.error();
+    }
+    // A plugin-format file has one build for all its summaries, so it is
+    // indexed again whole, with `ext` among them.
+    auto settings = impl_->format_settings();
+    if (impl_->options.bloom && store::PRUNING_EXTENSIONS.has(ext))
+        settings.config.extensions.add(ext);
+    auto forming = build_format_files(std::move(readers->formats),
+                                      impl_->options, settings, true);
+    const auto formed = co_await std::move(forming);
+    if (!formed) co_return formed.error();
     auto after = co_await status_of(scope, std::move(entries));
     if (!after) co_return after.error();
     after->indexed = impl_->paths.size();
@@ -633,12 +945,9 @@ void append_string(dstd::String& out, dstd::StringView s) {
     out.push_back('"');
 }
 
-void append_chunks(dstd::String& out, const dstd::Vector<std::uint64_t>& v) {
+void append_chunks(dstd::String& out, dstd::Span<const std::uint64_t> v) {
     out.push_back('[');
-    for (std::size_t i = 0; i < v.size(); ++i) {
-        if (i) out.push_back(',');
-        out.append(dstd::to_string(v[i]));
-    }
+    dstd::fmt_append_join<",">(out, v);
     out.push_back(']');
 }
 
@@ -646,14 +955,14 @@ const char* json_bool(bool b) { return b ? "true" : "false"; }
 
 }  // namespace
 
-dstd::String to_json(const dstd::Vector<FileManifest>& manifest) {
+dstd::String to_json(dstd::Span<const FileManifest> manifest) {
     dstd::String out = "[";
     for (std::size_t i = 0; i < manifest.size(); ++i) {
         const auto& m = manifest[i];
         if (i) out.push_back(',');
         out.append("{\"path\":");
         append_string(out, m.path);
-        out.append(",\"index_path\":");
+        out.append(",\"index_dir\":");
         append_string(out, m.index_path);
         out.append(",\"extensions\":[");
         for (std::size_t j = 0; j < m.extensions.size(); ++j) {
@@ -676,7 +985,7 @@ dstd::String to_json(const dstd::Vector<FileManifest>& manifest) {
     return dstd::String(out);
 }
 
-dstd::String to_json(const dstd::Vector<FileExplain>& explain) {
+dstd::String to_json(dstd::Span<const FileExplain> explain) {
     dstd::String out = "[";
     for (std::size_t i = 0; i < explain.size(); ++i) {
         const auto& f = explain[i];
@@ -700,10 +1009,33 @@ dstd::String to_json(const dstd::Vector<FileExplain>& explain) {
             append_chunks(out, e.removed);
             out.push_back('}');
         }
+        out.append("],\"summaries\":[");
+        for (std::size_t j = 0; j < f.summaries.size(); ++j) {
+            const auto& e = f.summaries[j];
+            if (j) out.push_back(',');
+            out.append("{\"path\":");
+            append_string(out, e.path);
+            out.append(",\"summary\":");
+            append_string(out, e.summary);
+            out.append(",\"skipped\":" + dstd::to_string(e.skipped));
+            out.append(",\"chunks\":" + dstd::to_string(e.chunks) + "}");
+        }
         out.append("]}");
     }
     out.push_back(']');
     return dstd::String(out);
+}
+
+dstd::String to_text(dstd::Span<const FileExplain> explain) {
+    dstd::String out;
+    for (const FileExplain& f : explain) {
+        dstd::fmt_append<"{}: read {} of {} chunks\n">(out, f.path,
+                                                       f.read.size(), f.chunks);
+        for (const SummarySkipped& s : f.summaries)
+            dstd::fmt_append<"  summary {} {}: skipped {} of {} chunks\n">(
+                out, s.path, s.summary, s.skipped, s.chunks);
+    }
+    return out;
 }
 
 const dstd::Vector<dstd::String>& Indexer::paths() const {

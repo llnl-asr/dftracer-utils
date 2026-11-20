@@ -5,6 +5,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -29,8 +30,8 @@ namespace {
 // Widens a FLAT numeric column's row `row` to double regardless of its
 // stored width, matching test_view_common.h's bnum() so a value can be
 // compared across the C ABI and C++ result the same test derives.
-double abi_num(dftu_dataframe* df, std::int64_t row, const char* name) {
-    dftu_series* c = dftu_dataframe_column(df, name);
+double abi_num(dftu_dataframe* df, std::int64_t row, dstd::CStringView name) {
+    dftu_series* c = dftu_dataframe_column(df, name.c_str());
     REQUIRE(c != nullptr);
     double v = 0.0;
     switch (dftu_series_type(c)) {
@@ -64,10 +65,11 @@ double abi_num(dftu_dataframe* df, std::int64_t row, const char* name) {
     return v;
 }
 
-dstd::String abi_str(dftu_dataframe* df, std::int64_t row, const char* name) {
-    dftu_series* c = dftu_dataframe_column(df, name);
+dstd::String abi_str(dftu_dataframe* df, std::int64_t row,
+                     dstd::CStringView name) {
+    dftu_series* c = dftu_dataframe_column(df, name.c_str());
     REQUIRE(c != nullptr);
-    int64_t len = 0;
+    std::int64_t len = 0;
     const char* data = dftu_series_string_at(c, row, &len);
     dstd::String s(data ? data : "", static_cast<std::size_t>(len));
     dftu_series_free(c);
@@ -80,13 +82,13 @@ dstd::String abi_str(dftu_dataframe* df, std::int64_t row, const char* name) {
 dstd::String write_group_trace(TestEnvironment& env) {
     dstd::String pfw = env.dir() + "/grp.pfw";
     dftu_utils_test::FileOut ofs(pfw);
-    ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
+    ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
         << "\n";
-    ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":10,"args":{}})"
+    ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":10,"args":{}})"
         << "\n";
-    ofs << R"({"ph":"X","name":"write","cat":"POSIX","pid":2,"tid":1,"ts":1000,"dur":20,"args":{}})"
+    ofs << R"({"ph":1,"name":"write","cat":"POSIX","pid":2,"tid":1,"ts":1000,"dur":20,"args":{}})"
         << "\n";
-    ofs << R"({"ph":"X","name":"write","cat":"POSIX","pid":2,"tid":1,"ts":1100,"dur":20,"args":{}})"
+    ofs << R"({"ph":1,"name":"write","cat":"POSIX","pid":2,"tid":1,"ts":1100,"dur":20,"args":{}})"
         << "\n";
     ofs.close();
     dstd::String gz = pfw + ".gz";
@@ -105,17 +107,17 @@ dstd::String write_group_trace(TestEnvironment& env) {
 dstd::String write_argmax_trace(TestEnvironment& env) {
     dstd::String pfw = env.dir() + "/argmax.pfw";
     dftu_utils_test::FileOut ofs(pfw);
-    ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
+    ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
         << "\n";
-    ofs << R"({"ph":"X","name":"readv","cat":"POSIX","pid":1,"tid":1,"ts":1050,"dur":50,"args":{}})"
+    ofs << R"({"ph":1,"name":"readv","cat":"POSIX","pid":1,"tid":1,"ts":1050,"dur":50,"args":{}})"
         << "\n";
-    ofs << R"({"ph":"X","name":"pread","cat":"POSIX","pid":1,"tid":1,"ts":1200,"dur":20,"args":{}})"
+    ofs << R"({"ph":1,"name":"pread","cat":"POSIX","pid":1,"tid":1,"ts":1200,"dur":20,"args":{}})"
         << "\n";
-    ofs << R"({"ph":"X","name":"write","cat":"POSIX","pid":2,"tid":1,"ts":1000,"dur":5,"args":{}})"
+    ofs << R"({"ph":1,"name":"write","cat":"POSIX","pid":2,"tid":1,"ts":1000,"dur":5,"args":{}})"
         << "\n";
-    ofs << R"({"ph":"X","name":"writev","cat":"POSIX","pid":2,"tid":1,"ts":1010,"dur":30,"args":{}})"
+    ofs << R"({"ph":1,"name":"writev","cat":"POSIX","pid":2,"tid":1,"ts":1010,"dur":30,"args":{}})"
         << "\n";
-    ofs << R"({"ph":"X","name":"pwrite","cat":"POSIX","pid":2,"tid":1,"ts":1100,"dur":15,"args":{}})"
+    ofs << R"({"ph":1,"name":"pwrite","cat":"POSIX","pid":2,"tid":1,"ts":1100,"dur":15,"args":{}})"
         << "\n";
     ofs.close();
     dstd::String gz = pfw + ".gz";
@@ -126,13 +128,13 @@ dstd::String write_argmax_trace(TestEnvironment& env) {
 
 // Writes a small trace of `n` "ev" events at `dir`/name.pfw.gz and builds its
 // index, for the directory-scan test.
-dstd::String write_and_index(const dstd::String& dir, const dstd::String& name,
+dstd::String write_and_index(dstd::CStringView dir, dstd::StringView name,
                              int n, int pid) {
     REQUIRE(dstd::fs::create_directories(dir).has_value());
-    dstd::String pfw = dir + "/" + name + ".pfw";
+    dstd::String pfw = dstd::String(dir) + "/" + dstd::String(name) + ".pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < n; ++i)
-        ofs << R"({"ph":"X","name":")" << name << R"(","cat":"POSIX","pid":)"
+        ofs << R"({"ph":1,"name":")" << name << R"(","cat":"POSIX","pid":)"
             << pid << R"(,"tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
             << (10 + i) << R"(,"args":{}})" << "\n";
     ofs.close();
@@ -362,10 +364,10 @@ TEST_SUITE("View C ABI") {
         const dstd::String pfw = env.dir() + "/hosts.pfw";
         {
             dftu_utils_test::FileOut o(pfw);
-            o << R"({"ph":"X","name":"op","cat":"io","pid":1,"tid":1,"ts":1,)"
+            o << R"({"ph":1,"name":"op","cat":"io","pid":1,"tid":1,"ts":1,)"
                  R"("dur":1,"args":{"hosts":[4,5]}})"
               << "\n"
-              << R"({"ph":"X","name":"op","cat":"io","pid":1,"tid":1,"ts":2,)"
+              << R"({"ph":1,"name":"op","cat":"io","pid":1,"tid":1,"ts":2,)"
                  R"("dur":1,"args":{"hosts":[6]}})"
               << "\n";
         }
@@ -651,7 +653,7 @@ TEST_SUITE("View C ABI") {
             dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"name":"EH","cat":"dftracer","type":1,"pid":1,"tid":1,"ph":4,"args":{"hhash":"ab"}})"
                 << "\n";
-            ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
+            ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
                 << "\n";
         }
         dstd::String gz = pfw + ".gz";

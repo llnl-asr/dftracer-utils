@@ -88,7 +88,7 @@ void parts_of(const LineIndex& ix, std::uint32_t line, LineParts& pt) {
     if ((e.flags & NOT_PLAIN) != 0 || e.kind == LineKind::Blank ||
         e.kind == LineKind::Comment || e.kind == LineKind::Root ||
         e.kind == LineKind::RootDoc || is_nest_kind(e.kind)) {
-        classify_line(ix.text, e.start, end, pt);
+        classify_line(dstd::StringView(ix.text, ix.size), e.start, end, pt);
         return;
     }
     const char* t = ix.text;

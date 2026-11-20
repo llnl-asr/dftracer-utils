@@ -25,19 +25,19 @@ package root):
 
 The minimal call runs inline on the coordinator - no cluster needed. Two
 arguments are required: a source (``directory`` or ``files``) and an
-``index_path``:
+``index_dir``:
 
 .. code-block:: python
 
    result = distributed_index(
-       directory="./traces",
-       index_path="/path/to/index.dftindex",
+       "./traces",
+       index_dir="/path/to/index.dftindex",
    )
-   # {"total_files": 128, "per_worker": [...], "index_path": "..."}
+   # {"total_files": 128, "per_worker": [...], "index_dir": "..."}
 
 With ``client=None`` (the default) every task runs inline on the coordinator. To
 fan the work across workers, pass a ``dask.distributed.Client`` and give every
-worker write access to ``index_path``:
+worker write access to ``index_dir``:
 
 .. code-block:: python
 
@@ -48,8 +48,8 @@ worker write access to ``index_path``:
    register_auto_thread_plugin()   # size each worker's C++ runtime threads
 
    result = distributed_index(
-       directory="/shared/traces",
-       index_path="/shared/index.dftindex",
+       "/shared/traces",
+       index_dir="/shared/index.dftindex",
        client=client,
        partition="lpt",                    # longest-processing-time balancing
    )
@@ -64,10 +64,10 @@ Useful parameters
    * - Parameter
      - Default
      - Meaning
-   * - ``directory`` / ``files``
-     - ``""`` / ``None``
-     - Trace source. Give one of them.
-   * - ``index_path``
+   * - ``files``
+     - (required)
+     - Trace source: a file, a directory or a list of paths, as for ``Indexer``.
+   * - ``index_dir``
      - (required)
      - Output index store path, written by every worker.
    * - ``client``
@@ -82,7 +82,7 @@ Useful parameters
    * - ``build_bloom``
      - ``True``
      - Build bloom filters over ``bloom_dimensions``.
-   * - ``force_rebuild``
+   * - ``force``
      - ``False``
      - Rebuild even when an index already exists.
    * - ``progress``
@@ -90,23 +90,22 @@ Useful parameters
      - Callback ``(done, total, message)`` for progress reporting.
 
 ``distributed_index`` returns a dict with ``total_files``, ``per_worker`` (files
-per worker) and ``index_path``. It raises ``ValueError``
-when ``index_path`` is empty or neither ``directory`` nor
-``files`` is given, and ``ImportError`` when dask is not installed.
+per worker) and ``index_dir``. It raises ``ValueError``
+when ``index_dir`` is empty or ``files`` names no path, and ``ImportError`` when dask is not installed.
 
 The build runs in four steps.
 
 1. Each worker builds its files as a complete index root at
-   ``<index_path>/shards/<worker>``, staging the build on node-local disk when
-   ``<index_path>`` is a network filesystem,
+   ``<index_dir>/shards/<worker>``, staging the build on node-local disk when
+   ``<index_dir>`` is a network filesystem,
    and falling back to building in place when there is no node-local scratch.
-2. The coordinator writes ``<index_path>/shards.json`` once every task
+2. The coordinator writes ``<index_dir>/shards.json`` once every task
    finished.
-3. The coordinator merges the shards into ``<index_path>/store`` by moving
+3. The coordinator merges the shards into ``<index_dir>/store`` by moving
    their store data files there, then removes the manifest and the emptied
    shard directories.
 4. The coordinator records the aggregation config and queries read
-   ``<index_path>/store`` like any other index root.
+   ``<index_dir>/store`` like any other index root.
 
 A failed task fails the whole build and leaves the arrived shards in place, so
 a later call merges them without rebuilding.
@@ -169,14 +168,14 @@ as if one worker had indexed its slice alone. Make a different trace for each:
        for i in range(200):
            f.write(
                f'{{"name":"read","cat":"POSIX","pid":1,"tid":1,'
-               f'"ts":{1000 + i},"dur":{10 + i},"ph":"X","args":{{}}}}\n'
+               f'"ts":{1000 + i},"dur":{10 + i},"ph":1,"args":{{}}}}\n'
            )
 
    with gzip.open("shard-b/trace.pfw.gz", "wt") as f:
        for i in range(300):
            f.write(
                f'{{"name":"read","cat":"POSIX","pid":2,"tid":1,'
-               f'"ts":{2000 + i},"dur":{5 + i},"ph":"X","args":{{}}}}\n'
+               f'"ts":{2000 + i},"dur":{5 + i},"ph":1,"args":{{}}}}\n'
            )
 
 Index each shard with no coordination between them:

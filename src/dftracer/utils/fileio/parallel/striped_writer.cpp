@@ -26,7 +26,7 @@ class StripedWriter final : public ParallelWriter {
                              coro::Scope* /*scope*/) override {
         path_ = std::move(path);
         ssize_t fd = co_await ::dftracer::utils::runtime::io::open(
-            path_.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            path_, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd < 0) {
             DFTRACER_UTILS_LOG_ERROR("Failed to open striped output: {}",
                                      path_);
@@ -55,10 +55,13 @@ class StripedWriter final : public ParallelWriter {
         if (worker_idx < per_worker_layout_.size()) {
             per_worker_layout_[worker_idx].push_back({base, data.size()});
         }
-        co_return co_await pwrite_fully(
-            fd_, path_.c_str(),
-            reinterpret_cast<const std::uint8_t*>(data.data()), data.size(),
-            static_cast<off_t>(base));
+        const int rc = co_await pwrite_fully(
+            fd_, reinterpret_cast<const std::uint8_t*>(data.data()),
+            data.size(), static_cast<off_t>(base));
+        if (rc != 0)
+            DFTRACER_UTILS_LOG_ERROR("pwrite failed on {} at offset {}", path_,
+                                     static_cast<long long>(base));
+        co_return rc;
     }
 
     coro::CoroTask<int> write_footer(dstd::ByteView data) override {
@@ -108,10 +111,13 @@ class StripedWriter final : public ParallelWriter {
         if (data.size() == 0) co_return 0;
         const auto base =
             offset_.fetch_add(data.size(), std::memory_order_relaxed);
-        co_return co_await pwrite_fully(
-            fd_, path_.c_str(),
-            reinterpret_cast<const std::uint8_t*>(data.data()), data.size(),
-            static_cast<off_t>(base));
+        const int rc = co_await pwrite_fully(
+            fd_, reinterpret_cast<const std::uint8_t*>(data.data()),
+            data.size(), static_cast<off_t>(base));
+        if (rc != 0)
+            DFTRACER_UTILS_LOG_ERROR("pwrite failed on {} at offset {}", path_,
+                                     static_cast<long long>(base));
+        co_return rc;
     }
 
     dstd::String path_;

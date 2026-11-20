@@ -141,7 +141,12 @@ class ReserveAsync {
         state->listed.store(true, std::memory_order_release);
         if (deadline == Clock::time_point::max()) return true;
         TimerService& timers = *state->timers;
-        timers.start();
+        // With no timer thread no deadline can fire: the wait ends now, as at
+        // its deadline.
+        if (!timers.start()) {
+            state->on_timeout();
+            return true;
+        }
         dstd::WeakPtr<detail::ReserveWaitState> weak = state;
         TimerService::TimerId id =
             timers.register_timeout(deadline - dstd::steady_now(), [weak] {

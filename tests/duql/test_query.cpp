@@ -25,8 +25,8 @@ struct JsonDoc {
     simdjson::dom::element elem;
     bool valid = false;
 
-    JsonDoc(const char* json) {
-        auto result = parser.parse(json, std::strlen(json));
+    JsonDoc(dstd::StringView json) {
+        auto result = parser.parse(json.data(), json.size());
         if (!result.error()) {
             elem = result.value_unsafe();
             valid = true;
@@ -304,7 +304,7 @@ TEST_CASE("Query::matches agrees with the engine on every filter and event") {
     std::size_t dropped = 0;
     std::size_t pairs = 0;
 
-    const auto check = [&](const Query& q, const char* event) {
+    const auto check = [&](const Query& q, dstd::StringView event) {
         JsonDoc dom(event);
         REQUIRE(dom.valid);
         const bool expected = eval_json(q, dom.root());

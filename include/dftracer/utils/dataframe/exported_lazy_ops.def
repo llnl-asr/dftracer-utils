@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 /* Built-in dataframe lazy ops (lazy plan -> lazy plan) seeded into the op
  * registry under the "dftu.lazy." prefix. APPEND ONLY.
+ * A later row with the same name supersedes an earlier one for lookup by name.
  *
  *   DFTU_LAZY_OP(name, fn, ret, o0, o1, o2, o3, o4, o5, o6)
  *     name        - registry key suffix; registered as "dftu.lazy.<name>".
@@ -110,5 +111,11 @@ DFTU_LAZY_OP(drop, dftu_lazyframe_drop, LAZY, LAZY, STRLIST, NONE, NONE, NONE, N
 
 /* lazy + from names + to names. */
 DFTU_LAZY_OP(rename_columns, dftu_lazyframe_rename_columns, LAZY, LAZY, STRLIST, STRLIST, NONE, NONE, NONE, NONE)
+
+/* Rows that supersede the same-named sort rows above, which stay as they were:
+ * the registry resolves a name to the last row that carries it. The null
+ * placement is a second flag. */
+DFTU_LAZY_OP(sort_by_multi, dftu_lazyframe_sort_by_multi_nulls, LAZY, LAZY, STRLIST, I32, I32, NONE, NONE, NONE)
+DFTU_LAZY_OP(sort_by, dftu_lazyframe_sort_by_nulls, LAZY, LAZY, STR, I32, I32, NONE, NONE, NONE)
 
 #undef DFTU_LAZY_OP

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
@@ -107,7 +108,7 @@ bool decompress_first_member(std::FILE* in, std::int64_t fsize,
 
 }  // namespace
 
-TimeMetric read_time_metric(const dstd::String& trace_path) {
+TimeMetric read_time_metric(dstd::CStringView trace_path) {
     dstd::ScopedFile in(std::fopen(trace_path.c_str(), "rb"));
     if (!in) return TimeMetric::Us;
     const std::int64_t fsize = file_size(in.get());
@@ -161,7 +162,7 @@ dstd::Optional<TraceConfig> parse_end_event(dstd::StringView line) {
     return TraceConfig{ev.pid, std::move(ev.args)};
 }
 
-dstd::Vector<TraceConfig> read_trace_config(const dstd::String& trace_path) {
+dstd::Vector<TraceConfig> read_trace_config(dstd::CStringView trace_path) {
     dstd::Vector<TraceConfig> out;
     dstd::ScopedFile in(std::fopen(trace_path.c_str(), "rb"));
     if (!in) return out;

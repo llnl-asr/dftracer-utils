@@ -13,8 +13,8 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-Series ints(const dstd::Vector<std::int64_t>& v,
-            const dstd::Vector<std::uint8_t>& valid = {}) {
+Series ints(dstd::Vector<std::int64_t> v,
+            dstd::Vector<std::uint8_t> valid = {}) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()),
                             valid.empty() ? nullptr : valid.data());
 }

@@ -18,8 +18,8 @@
 namespace dftracer::utils::plugins {
 
 /// An @ref AsyncOp whose awaited result is built from the task's status.
-/// Awaiting it fails the @ref Task as the op does; `co_await v.expected()`
-/// gives a @ref dstd::Result instead.
+/// Awaiting it fails the @ref dftracer::utils::plugins::Task as the op does;
+/// `co_await v.expected()` gives a @ref dstd::Result instead.
 template <class T, class Finish>
 class [[nodiscard]] AsyncValue {
    public:

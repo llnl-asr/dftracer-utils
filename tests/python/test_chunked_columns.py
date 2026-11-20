@@ -42,7 +42,7 @@ def test_series_conversions_match_joined(nulls):
 def test_buffer_protocol_falls_back():
     c = _chunked(_frame())["a"]
     with pytest.raises(BufferError):
-        memoryview(c._native)
+        memoryview(c)
     assert np.asarray(c).tolist() == list(range(N))
 
 

@@ -36,15 +36,15 @@ bool defers_left(JoinHow how) {
            how == JoinHow::Semi || how == JoinHow::Anti || how == JoinHow::Nest;
 }
 
-dstd::Result<std::size_t> index_of(const dstd::Vector<dstd::String>& names,
-                                   const dstd::String& name) {
+dstd::Result<std::size_t> index_of(dstd::Span<const dstd::String> names,
+                                   dstd::StringView name) {
     const auto it = std::find(names.begin(), names.end(), name);
     if (it == names.end()) return not_found<"join: no column named {}">(name);
     return static_cast<std::size_t>(it - names.begin());
 }
 
 dstd::Vector<dstd::SharedString> shared_names(
-    const dstd::Vector<dstd::String>& names) {
+    dstd::Span<const dstd::String> names) {
     dstd::Vector<dstd::SharedString> out;
     out.reserve(names.size());
     for (const dstd::String& n : names) out.emplace_back(dstd::StringView{n});
@@ -69,7 +69,7 @@ std::uint64_t block_bytes(std::uint64_t budget) {
 }
 
 dstd::Vector<Series> flat_keys(const DataFrame& f,
-                               const dstd::Vector<std::size_t>& key) {
+                               dstd::Span<const std::size_t> key) {
     dstd::Vector<Series> out;
     out.reserve(key.size());
     for (const std::size_t k : key) out.push_back(flat(f.columns[k]));
@@ -77,7 +77,7 @@ dstd::Vector<Series> flat_keys(const DataFrame& f,
 }
 
 // The value key of row `r`; false when a part has none.
-bool row_key(dstd::String& text, const dstd::Vector<Series>& keys,
+bool row_key(dstd::String& text, dstd::Span<const Series> keys,
              std::int64_t r) {
     text.clear();
     for (const Series& k : keys)

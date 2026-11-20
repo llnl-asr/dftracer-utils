@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -37,7 +38,7 @@ constexpr std::uint64_t MIB = std::uint64_t{1} << 20;
 
 // Small gzip members, so the file has about a thousand chunks and a small
 // budget forces the bloom tier to spill.
-dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
+dstd::String write_trace(dstd::CStringView dir, dstd::StringView name,
                          int events) {
     dstd::String out;
     out += "[\n";
@@ -46,12 +47,12 @@ dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
         ts += 7 + static_cast<std::uint64_t>(i % 13);
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"op{}\",\"cat\":\"C{}\",\"pid\":{},\"tid\":{}"
-            ",\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{\"k{}\":{}}}\n">(
+            ",\"ph\":1,\"ts\":{},\"dur\":{},\"args\":{\"k{}\":{}}}\n">(
             out, i, (i / 50) % 7, i % 3, 1 + i % 4, 10 + i % 4, ts, 5 + i % 97,
             i % 600, i % 50);
     }
     out += "]\n";
-    const auto plain = dir + "/" + name + ".pfw";
+    const auto plain = dstd::String(dir) + "/" + dstd::String(name) + ".pfw";
     {
         dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
@@ -63,7 +64,7 @@ dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
 }
 
 trace::index::build::IndexBuildBatchResult run_build(
-    const dstd::String& file, const dstd::String& index_dir,
+    dstd::CStringView file, dstd::CStringView index_dir,
     std::uint64_t memory_budget,
     trace::index::build::IndexBuildBatchConfig::AggFoldFactory
         agg_fold_factory = {}) {
@@ -88,7 +89,7 @@ trace::index::build::IndexBuildBatchResult run_build(
     return out;
 }
 
-dstd::String index_root(const dstd::String& file, const dstd::String& dir) {
+dstd::String index_root(dstd::CStringView file, dstd::CStringView dir) {
     return dstd::String(trace::index::normalize_index_root(
         trace::internal::determine_index_path(file, dir)));
 }

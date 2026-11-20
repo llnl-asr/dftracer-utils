@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -229,8 +230,7 @@ class Expander {
     }
 
     // Replaces each bare parameter name in `e` with a copy of its argument.
-    static void bind(ExprPtr& e, const Macro& m,
-                     const dstd::Vector<Arg>& args) {
+    static void bind(ExprPtr& e, const Macro& m, dstd::Span<const Arg> args) {
         if (!e) return;
         if (const auto* p = std::get_if<Path>(&e->node);
             p && p->root == PathRoot::Record && p->steps.size() == 1 &&
@@ -362,7 +362,7 @@ dstd::Result<void> load_env(PathRegistry& r) {
 
 dftracer::utils::dstd::Expected<dstd::Vector<Macro>, DuqlError> macros_of(
     dstd::Vector<syntax::Def>& defs, dstd::StringView text,
-    const dstd::String& origin) {
+    dstd::StringView origin) {
     dstd::Vector<Macro> out;
     for (auto& def : defs) {
         if (def.name == "args_fallback") continue;
@@ -376,17 +376,18 @@ dftracer::utils::dstd::Expected<dstd::Vector<Macro>, DuqlError> macros_of(
                     dstd::fmt<"macro '{}' is defined twice">(def.name)));
         if (expr)
             out.push_back({def.name, def.params,
-                           dstd::to_shared_ptr(std::move(*expr)), origin});
+                           dstd::to_shared_ptr(std::move(*expr)),
+                           dstd::String(origin)});
         else
             out.push_back({def.name, def.params,
                            dstd::to_shared_ptr(
                                std::move(std::get<PipelinePtr>(def.body))),
-                           origin});
+                           dstd::String(origin)});
     }
     return out;
 }
 
-bool args_fallback(const dstd::Vector<syntax::Def>& defs) {
+bool args_fallback(dstd::Span<const syntax::Def> defs) {
     for (const auto& def : defs)
         if (const auto* e = std::get_if<ExprPtr>(&def.body);
             def.name == "args_fallback" && def.params.empty() && e && *e)

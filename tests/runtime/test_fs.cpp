@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -43,7 +44,7 @@ void write_file_at(const dstd::Path& path, dstd::StringView text) {
 }
 
 dstd::Vector<dstd::String> names_below(const dstd::Path& root,
-                                       const dstd::Vector<FoundFile>& files) {
+                                       dstd::Span<const FoundFile> files) {
     dstd::Vector<dstd::String> names;
     for (const FoundFile& file : files) {
         dstd::StringView text = file.path.str();

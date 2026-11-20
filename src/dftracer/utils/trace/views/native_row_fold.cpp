@@ -145,8 +145,9 @@ dstd::String window_sel(dstd::StringView prefix, std::uint64_t lo,
 
 // An Arrow-layout validity bitmap (1 = valid) from a per-row present flag;
 // empty (no nulls) when every row is present.
-dstd::Vector<std::uint8_t> validity_of(const dstd::Vector<bool>& present) {
-    if (std::all_of(present.begin(), present.end(), [](bool b) { return b; }))
+dstd::Vector<std::uint8_t> validity_of(dstd::Span<const std::uint8_t> present) {
+    if (std::all_of(present.begin(), present.end(),
+                    [](std::uint8_t b) { return b != 0; }))
         return {};
     dstd::Vector<std::uint8_t> v((present.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < present.size(); ++i)
@@ -211,7 +212,7 @@ Scalar scalar_of(simdjson::dom::element e) {
 }
 
 // The letter the values share: i, f, s, b, or j when they mix.
-char infer_kind(const dstd::Vector<Scalar>& vals) {
+char infer_kind(dstd::Span<const Scalar> vals) {
     bool i = false, d = false, s = false, b = false, j = false;
     for (const Scalar& v : vals) {
         i |= v.k == Scalar::K::Int;
@@ -230,9 +231,9 @@ char infer_kind(const dstd::Vector<Scalar>& vals) {
     return 's';
 }
 
-dataframe::Series column_of(const dstd::Vector<Scalar>& vals, char kind) {
+dataframe::Series column_of(dstd::Span<const Scalar> vals, char kind) {
     const auto n = static_cast<std::int64_t>(vals.size());
-    dstd::Vector<bool> present(vals.size(), false);
+    dstd::Vector<std::uint8_t> present(vals.size(), false);
     if (kind == 'i' || kind == 'f') {
         dstd::Vector<std::int64_t> is(vals.size(), 0);
         dstd::Vector<double> ds(vals.size(), 0);
@@ -430,7 +431,7 @@ dataframe::Series u64_column(EventRows evs, std::uint64_t FoldEvent::* field,
 // numeric dur, as number_typed("dur") reports it.
 dataframe::Series dur_column(EventRows evs, double time_scale) {
     dstd::Vector<std::uint64_t> vals;
-    dstd::Vector<bool> present;
+    dstd::Vector<std::uint8_t> present;
     vals.reserve(evs.size());
     present.reserve(evs.size());
     const auto scaled = [time_scale](std::uint64_t dur) {
@@ -543,8 +544,8 @@ class ChunkViews {
 // A column over a buffer that holds every row's bytes back to back; row r
 // ends at ends[r]. The buffer is shared, so the column copies no bytes.
 dataframe::Series text_view_column(const dstd::SharedPtr<dstd::String>& data,
-                                   const dstd::Vector<std::size_t>& ends,
-                                   const dstd::Vector<bool>& present,
+                                   dstd::Span<const std::size_t> ends,
+                                   dstd::Span<const std::uint8_t> present,
                                    bool json) {
     dataframe::ViewBuilder b;
     b.reserve(static_cast<std::int64_t>(ends.size()));
@@ -581,7 +582,7 @@ dataframe::Series interned_column(
         table.reset(slots);
         dstd::Vector<std::int32_t> codes(n, 0);
         dstd::Vector<std::uint32_t> distinct;
-        dstd::Vector<bool> present(n, true);
+        dstd::Vector<std::uint8_t> present(n, true);
         bool all_valid = true;
         bool fits = true;
         for (std::size_t r = 0; r < n; ++r) {
@@ -662,7 +663,7 @@ dstd::String number_text(const FoldEvent::ArgValue& v) {
 
 // The column of `vals` (one per row, null when absent) as `type`.
 dataframe::Series typed_arg_column(
-    const dstd::Vector<const FoldEvent::ArgValue*>& vals, ArgType::Kind kind,
+    dstd::Span<const FoldEvent::ArgValue* const> vals, ArgType::Kind kind,
     std::size_t present_count,
     const dftracer::utils::dstd::StringIntern& intern) {
     using Kind = ArgType::Kind;
@@ -675,10 +676,11 @@ dataframe::Series typed_arg_column(
                 vbits[r >> 3] |= static_cast<std::uint8_t>(1u << (r & 7));
     }
     const std::uint8_t* valid = vbits.empty() ? nullptr : vbits.data();
-    dstd::Vector<bool> present;
+    dstd::Vector<std::uint8_t> present;
     if (kind == Kind::Json) {
         present.resize(vals.size());
-        for (std::size_t r = 0; r < vals.size(); ++r) present[r] = vals[r];
+        for (std::size_t r = 0; r < vals.size(); ++r)
+            present[r] = vals[r] != nullptr;
     }
     switch (kind) {
         case Kind::Json: {
@@ -912,7 +914,7 @@ dataframe::Series group_key_str_column(
     dstd::StringView field, bool arg_only, bool json) {
     auto data = dstd::make_shared<dstd::String>();
     dstd::Vector<std::size_t> ends;
-    dstd::Vector<bool> present;
+    dstd::Vector<std::uint8_t> present;
     ends.reserve(evs.size());
     present.reserve(evs.size());
     for (const auto& ev : evs) {
@@ -957,7 +959,7 @@ dataframe::Series num_arg_column(
             name);
     const std::int64_t n = static_cast<std::int64_t>(evs.size());
     dstd::Vector<double> vals;
-    dstd::Vector<bool> present;
+    dstd::Vector<std::uint8_t> present;
     vals.reserve(evs.size());
     present.reserve(evs.size());
     for (const auto& ev : evs) {
@@ -997,7 +999,7 @@ dataframe::Series derived_agg_column(
     const bool is_size = name == "size";
     const std::int64_t n = static_cast<std::int64_t>(evs.size());
     dstd::Vector<std::uint64_t> vals;
-    dstd::Vector<bool> present;
+    dstd::Vector<std::uint8_t> present;
     vals.reserve(evs.size());
     present.reserve(evs.size());
     for (const auto& ev : evs) {
@@ -1033,7 +1035,7 @@ bool is_path_token(dstd::StringView sel) {
 dataframe::Series window_mask_column(EventRows evs, const WindowSel& w) {
     const std::int64_t n = static_cast<std::int64_t>(evs.size());
     dstd::Vector<std::int64_t> ones(evs.size(), 1);
-    dstd::Vector<bool> present;
+    dstd::Vector<std::uint8_t> present;
     present.reserve(evs.size());
     for (const auto& ev : evs) present.push_back(ev.ts >= w.lo && ev.ts < w.hi);
     auto vbits = validity_of(present);
@@ -1045,7 +1047,7 @@ dataframe::Series clip_column(EventRows evs, const WindowSel& w) {
     const bool is_ts = w.rest == "ts";
     const std::int64_t n = static_cast<std::int64_t>(evs.size());
     dstd::Vector<std::uint64_t> vals;
-    dstd::Vector<bool> present;
+    dstd::Vector<std::uint8_t> present;
     vals.reserve(evs.size());
     present.reserve(evs.size());
     for (const auto& ev : evs) {
@@ -1115,7 +1117,7 @@ bool is_clip_token(dstd::StringView sel) {
 }
 
 dstd::Vector<dstd::String> row_fold_extra_captures(
-    const dstd::Vector<dstd::String>& select) {
+    dstd::Span<const dstd::String> select) {
     auto is_pod_scalar = [](dstd::StringView f) {
         return f == "name" || f == "cat" || f == "pid" || f == "tid" ||
                f == "ts" || f == "dur";
@@ -1158,7 +1160,7 @@ dstd::Vector<dstd::String> row_fold_extra_captures(
     return out;
 }
 
-bool row_select_is_arg_free(const dstd::Vector<dstd::String>& select) {
+bool row_select_is_arg_free(dstd::Span<const dstd::String> select) {
     if (select.empty()) return false;
     for (const dstd::String& token : select) {
         const dstd::StringView f = window_inner(token);
@@ -1233,7 +1235,7 @@ namespace {
 
 dataframe::Series select_column(
     EventRows evs, const dftracer::utils::dstd::StringIntern& intern,
-    const dstd::String& sel, double time_scale, bool by_path) {
+    dstd::StringView sel, double time_scale, bool by_path) {
     WindowSel win;
     if (parse_window_sel(sel, WINDOW_PREFIX, win)) {
         dataframe::Series mask = window_mask_column(evs, win);
@@ -1338,10 +1340,10 @@ RowKeySource row_key_source(dstd::StringView sel, bool by_path) {
 
 dataframe::DataFrame build_row_frame(
     EventRows evs, const dftracer::utils::dstd::StringIntern& intern,
-    const dstd::Vector<dstd::String>& select, double time_scale, bool by_path) {
+    dstd::Span<const dstd::String> select, double time_scale, bool by_path) {
     dataframe::DataFrame out;
     const dftracer::utils::dstd::StringIntern* intern_ = &intern;
-    const dstd::Vector<dstd::String>& select_ = select;
+    const dstd::Span<const dstd::String> select_ = select;
 
     if (select_.empty() && by_path) {
         append_all_arg_columns(evs, *intern_, out, {});
@@ -1380,7 +1382,7 @@ dataframe::DataFrame build_row_frame(
 dstd::Vector<dstd::Pair<dstd::String, dataframe::Series>>
 build_dyn_numeric_columns(EventRows evs,
                           const dftracer::utils::dstd::StringIntern& intern,
-                          const dstd::Vector<dstd::String>& select) {
+                          dstd::Span<const dstd::String> select) {
     // A windowed select holds only the events that start in the window.
     dstd::Optional<WindowSel> win;
     for (const dstd::String& sel : select) {
@@ -1424,7 +1426,8 @@ build_dyn_numeric_columns(EventRows evs,
 
 dataframe::DataFrame NativeRowFold::build() {
     dataframe::DataFrame out =
-        build_row_frame(events_, *intern_, select_, time_scale_, by_path_);
+        build_row_frame(dstd::Span<const FoldEvent>(events_), *intern_, select_,
+                        time_scale_, by_path_);
     events_.clear();
     return out;
 }

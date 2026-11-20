@@ -98,9 +98,9 @@ duql::detail::QueryNodePtr expand_field_leaf(const Leaf& leaf,
     const auto& paths = positions.at(leaf.field.path);
     if (paths.size() > MAX_ANY_POSITIONS)
         return duql::detail::make_node(Leaf(leaf));
-    auto at = [&](const dstd::String& path) {
+    auto at = [&](dstd::StringView path) {
         Leaf copy(leaf);
-        copy.field = duql::detail::FieldNode{path};
+        copy.field = duql::detail::FieldNode{dstd::String(path)};
         return duql::detail::make_node(std::move(copy));
     };
     // No position: the plain path, which the catalog check rules out.
@@ -159,7 +159,7 @@ dstd::Result<dstd::Optional<Query>> expand_any(const Snapshot& snapshot,
 }
 
 dstd::Result<ChunkPrunerOutput> prune_file_chunks(const Snapshot& snapshot,
-                                                  const dstd::String& file_path,
+                                                  dstd::StringView file_path,
                                                   const Query& query_in) {
     ChunkPrunerOutput out;
     const auto file = snapshot.file(get_logical_path(file_path));
@@ -221,9 +221,9 @@ ChunkExplanation::ByExtension explain_alone(const Query& query,
 
 }  // namespace
 
-dstd::Result<ChunkExplanation> explain_file_chunks(
-    const Snapshot& snapshot, const dstd::String& file_path,
-    const Query& query_in) {
+dstd::Result<ChunkExplanation> explain_file_chunks(const Snapshot& snapshot,
+                                                   dstd::StringView file_path,
+                                                   const Query& query_in) {
     ChunkExplanation out;
     const auto file = snapshot.file(get_logical_path(file_path));
     if (!file) return out;
@@ -272,6 +272,9 @@ dstd::Result<ChunkExplanation> explain_file_chunks(
         out.by_extension.push_back(
             explain_alone(query, std::move(name), std::move(own), ctx));
     }
+    out.by_summary = summary_skips(duql::detail::QueryAccess::root(query), ctx,
+                                   ctx.all_chunks);
+    if (ctx.error) return std::move(*ctx.error);
     return out;
 }
 

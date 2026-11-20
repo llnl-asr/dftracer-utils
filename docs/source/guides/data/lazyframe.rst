@@ -96,6 +96,25 @@ never a guess; a step whose columns are data-dependent (``pivot``,
    # head 10
    plan.columns       # ['name', 'count', 'sum_dur']
 
+A plugin source, file format or node with an explain hook adds a line to the
+plan (``provider 'a.src': filters_accepted=1``). ``explain(analyze=True)``
+(C++ ``explain_analyze()``) runs the plan to its end, drops the rows and adds,
+per stage, the rows in and out and the time, the votes of the source for each
+filter (``exact``, ``inexact``, ``no``) and the counters plugins added; see
+:doc:`../../plugins` for the hooks.
+
+.. code-block:: python
+
+   print(plan.explain(analyze=True))
+   # ...
+   # analyze:
+   #   pushed filter 0: inexact
+   #   scan: rows out 150000, time (incl. inputs) 31.2 ms
+   #   filter: rows in 150000, rows out 92311, time (incl. inputs) 33.0 ms
+
+The time of a stage includes the stages below it, since each one pulls from
+the one before: the time of ``filter`` here holds the scan's 31.2 ms.
+
 The optimizer inserts a projection of the columns the plan reads (a
 ``select``, or a group-by's keys and aggregate columns) and pushes it with
 the filters after it into the source, drops a filter the source applied

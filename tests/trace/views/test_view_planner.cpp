@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -21,8 +22,8 @@ using namespace dftracer::utils::trace::index::extensions;
 //   1: name={open,close}, cat={POSIX}
 //   2: name={train}, cat={compute}
 //   3: name={forward}, cat={compute,ai_framework}
-static void populate_test_idx(const dstd::String& index_path,
-                              const dstd::String& file_path) {
+static void populate_test_idx(dstd::CStringView index_path,
+                              dstd::CStringView file_path) {
     auto index = dftu_utils_test::open_test_index(index_path);
     auto writer = dftu_utils_test::register_test_file(
         index, dftu_utils_test::index_key(file_path), 40000);

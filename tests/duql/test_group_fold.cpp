@@ -3,12 +3,14 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/query/group_fold.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string_view>
 
@@ -29,8 +31,8 @@ dataframe::Series strs(const Cells& cells) {
     return dataframe::Series::strings(v, valid.data());
 }
 
-dataframe::Series ints(const dstd::Vector<std::int64_t>& v) {
-    return dataframe::Series::flat_i64(v.data(),
+dataframe::Series ints(std::initializer_list<std::int64_t> v) {
+    return dataframe::Series::flat_i64(v.begin(),
                                        static_cast<std::int64_t>(v.size()));
 }
 
@@ -104,6 +106,17 @@ TEST_CASE("count_distinct by an integer key takes the general path") {
     CHECK(k[1] == 1);
     CHECK(k[2] == 3);
     CHECK(counts(out) == dstd::Vector<std::int64_t>{2, 2, 1});
+}
+
+TEST_CASE("a float key groups every NaN together and -0.0 with 0.0") {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double keys[] = {nan, -0.0, 0.0, -nan, 1.5, nan};
+    const dataframe::DataFrame out =
+        fold(dataframe::scalar(dataframe::TypeId::Float64),
+             batch(dataframe::Series::flat_f64(keys, 6),
+                   strs({"a", "b", "c", "d", "e", "f"})));
+    REQUIRE(out.num_rows() == 3);
+    CHECK(counts(out) == dstd::Vector<std::int64_t>{3, 2, 1});
 }
 
 TEST_CASE("a JSON batch and a plain batch share groups and distinct values") {

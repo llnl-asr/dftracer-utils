@@ -128,14 +128,14 @@ class PivotCursor : public Cursor {
 
    private:
     // The cells of `parts` as one materialized column.
-    static dstd::Result<Series> joined(const dstd::Vector<Series>& parts) {
+    static dstd::Result<Series> joined(dstd::Span<const Series> parts) {
         if (parts.size() == 1) return parts[0].materialize();
         auto whole = concat_columns(column_ptrs(parts));
         if (!whole) return whole.error();
         return whole->materialize();
     }
 
-    int idx_of(const dstd::String& name) const {
+    int idx_of(dstd::StringView name) const {
         auto it = std::find(sch_.begin(), sch_.end(), name);
         return it == sch_.end() ? -1 : static_cast<int>(it - sch_.begin());
     }
@@ -190,7 +190,7 @@ class PivotCursor : public Cursor {
         if (!distinct.empty()) {
             auto all = concat_columns(column_ptrs(distinct));
             if (!all) co_return all.error();
-            uniq_col_ = all->unique().materialize();
+            uniq_col_ = all->drop_nulls().unique().materialize();
         }
         const std::int64_t C = uniq_col_.length();
         dstd::Vector<Series> one;

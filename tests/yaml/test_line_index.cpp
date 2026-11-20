@@ -88,13 +88,12 @@ void run_on_threads(std::size_t n,
 // Builds `text` in one pass and in chunks of about `piece` bytes, and checks
 // that both give the same index or the same problem. True when the chunks
 // were joined.
-bool check_chunked_build(const dstd::String& text, std::size_t piece,
+bool check_chunked_build(dstd::StringView text, std::size_t piece,
                          yaml::RunJobs run_jobs) {
     LineIndex whole;
-    const auto whole_ok = whole.build(text.data(), text.size());
+    const auto whole_ok = whole.build(text);
     LineIndex chunked;
-    const auto chunked_ok =
-        chunked.build_parallel(text.data(), text.size(), run_jobs, piece);
+    const auto chunked_ok = chunked.build_parallel(text, run_jobs, piece);
     REQUIRE(whole_ok == chunked_ok);
     if (whole_ok != yaml::BuildResult::Accepted) {
         CHECK(whole.problem.line == chunked.problem.line);
@@ -115,12 +114,12 @@ TEST_CASE("line index: every text builds, and a fault is an error") {
          {"a: 1\n", "[a, b]\n", "{a: [1,\n 2]}\n", "- - a\n  - b\n",
           "--- |\n x\n", "", "\n\n", "# c\n", "a: \"x\n y\"\n"}) {
         INFO("text: ", dstd::String(text));
-        CHECK(ix.build(text, std::strlen(text)) == yaml::BuildResult::Accepted);
+        CHECK(ix.build(text) == yaml::BuildResult::Accepted);
     }
     for (const char* text :
          {"a: &x 1\n", "a: [1\n", "a: 1\na: 2\n", "- a\nb: 1\n"}) {
         INFO("text: ", dstd::String(text));
-        CHECK(ix.build(text, std::strlen(text)) == yaml::BuildResult::Invalid);
+        CHECK(ix.build(text) == yaml::BuildResult::Invalid);
     }
 }
 
@@ -168,8 +167,7 @@ TEST_CASE("line index: each kind of error, with its message") {
     for (const Case& c : CASES) {
         INFO("kind: ", dstd::String(c.what));
         LineIndex probe;
-        CHECK(probe.build(c.text, std::strlen(c.text)) ==
-              yaml::BuildResult::Invalid);
+        CHECK(probe.build(c.text) == yaml::BuildResult::Invalid);
         CHECK(error_of(c.text) == dstd::String(c.message));
     }
 }
@@ -347,12 +345,10 @@ TEST_CASE("line index: the scalar Highway target builds the same index") {
         if (i % 7 == 0) text += "  # comment\n\n";
     }
     LineIndex best;
-    REQUIRE(best.build(text.data(), text.size()) ==
-            yaml::BuildResult::Accepted);
+    REQUIRE(best.build(text) == yaml::BuildResult::Accepted);
     yaml::detail::set_scalar_line_masks_for_test(true);
     LineIndex scalar;
-    const bool ok =
-        scalar.build(text.data(), text.size()) == yaml::BuildResult::Accepted;
+    const bool ok = scalar.build(text) == yaml::BuildResult::Accepted;
     yaml::detail::set_scalar_line_masks_for_test(false);
     REQUIRE(ok);
     check_same_index(best, scalar);
@@ -379,11 +375,10 @@ TEST_CASE("line index: lines around the short window read the same way") {
                     dstd::String(len - 9, 'b') + " #c\n";
         }
         LineIndex plain;
-        REQUIRE(plain.build(text.data(), text.size()) ==
-                yaml::BuildResult::Accepted);
+        REQUIRE(plain.build(text) == yaml::BuildResult::Accepted);
         yaml::detail::set_slow_lines_for_test(true);
         LineIndex slow;
-        const auto slow_ok = slow.build(text.data(), text.size());
+        const auto slow_ok = slow.build(text);
         yaml::detail::set_slow_lines_for_test(false);
         REQUIRE(slow_ok == yaml::BuildResult::Accepted);
         check_same_index(plain, slow);
@@ -397,10 +392,10 @@ TEST_CASE("line index: the plain-line path and the byte classifier agree") {
         const Tree tree = gen.tree();
         const dstd::String text = gen.text(tree);
         LineIndex plain;
-        const auto plain_ok = plain.build(text.data(), text.size());
+        const auto plain_ok = plain.build(text);
         yaml::detail::set_slow_lines_for_test(true);
         LineIndex slow;
-        const auto slow_ok = slow.build(text.data(), text.size());
+        const auto slow_ok = slow.build(text);
         yaml::detail::set_slow_lines_for_test(false);
         REQUIRE(plain_ok == slow_ok);
         if (plain_ok != yaml::BuildResult::Accepted) continue;
@@ -419,10 +414,10 @@ TEST_CASE("line index: the plain-line path and the byte classifier agree") {
         };
         for (const auto& text : texts) {
             LineIndex plain;
-            const auto plain_ok = plain.build(text.data(), text.size());
+            const auto plain_ok = plain.build(text);
             yaml::detail::set_slow_lines_for_test(true);
             LineIndex slow;
-            const auto slow_ok = slow.build(text.data(), text.size());
+            const auto slow_ok = slow.build(text);
             yaml::detail::set_slow_lines_for_test(false);
             CHECK(plain_ok == slow_ok);
             if (plain_ok == yaml::BuildResult::Accepted)
@@ -1028,16 +1023,12 @@ TEST_CASE("line index: a large text of generated values joins as one pass") {
             }
             if (!value.empty() && value.back() != '\n') entry += '\n';
             LineIndex alone;
-            if (alone.build(entry.data(), entry.size()) !=
-                yaml::BuildResult::Accepted)
-                continue;
+            if (alone.build(entry) != yaml::BuildResult::Accepted) continue;
             text += entry;
             ++k;
         }
         LineIndex whole;
-        if (whole.build(text.data(), text.size()) ==
-            yaml::BuildResult::Accepted)
-            ++valid;
+        if (whole.build(text) == yaml::BuildResult::Accepted) ++valid;
         for (const std::size_t piece : {64u, 300u, 2000u})
             joined += check_chunked_build(text, piece, run_backward) ? 1 : 0;
     }

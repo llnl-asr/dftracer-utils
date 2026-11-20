@@ -37,6 +37,8 @@ struct Index::Impl {
     /// The store when it exists on disk, else nothing.
     dstd::Expected<dstd::Optional<dftracer::utils::store::Store>, dstd::Error>
     find_store();
+    /// False when the store this handle opened is not the one on disk now.
+    bool is_current();
 };
 
 struct Snapshot::Impl {
@@ -149,6 +151,8 @@ struct IndexAccess {
                       dstd::ByteView begin, dstd::ByteView end);
 
     static const dstd::String& root(const Index& index);
+    static bool is_current(const Index& index);
+    static bool same(const Index& a, const Index& b);
     /// Opens the store, which creates its directory.
     static dstd::Expected<dftracer::utils::store::Store, dstd::Error>
     open_store(const Index& index);

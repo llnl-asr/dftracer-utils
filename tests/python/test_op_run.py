@@ -80,7 +80,7 @@ class TestInlineInPlugin:
             for i in range(n):
                 f.write(
                     f'{{"name":"read","cat":"POSIX","pid":1,"tid":1,'
-                    f'"ts":{1000 + i},"dur":{i},"ph":"X","args":{{}}}}\n'
+                    f'"ts":{1000 + i},"dur":{i},"ph":1,"args":{{}}}}\n'
                 )
 
         pa = pytest.importorskip("pyarrow")
@@ -257,6 +257,11 @@ def not_posix(x: jit.str_) -> jit.i64:
     return x != "POSIX"
 
 
+@jit.op
+def is_awkward(x: jit.str_) -> jit.i64:
+    return x == 'a\tb\n"c"\\'
+
+
 class TestStrOps:
     """DFTU_T_STR (an interned-string id) supports only == and != against a
     string literal, never arithmetic or ordering - id order is intern order,
@@ -270,6 +275,11 @@ class TestStrOps:
         # (this op's only literal) before running, so it always lands at id 0.
         assert jit_op.run_op(is_posix, 0) == 1
         assert jit_op.run_op(is_posix, 1) == 0
+
+    @_needs_cxx
+    def test_str_literal_with_control_bytes_compiles_and_matches(self):
+        assert jit_op.run_op(is_awkward, 0) == 1
+        assert jit_op.run_op(is_awkward, 1) == 0
 
     @_needs_cxx
     def test_str_inequality_produces_correct_result(self):

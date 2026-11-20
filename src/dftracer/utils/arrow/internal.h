@@ -40,6 +40,25 @@ dstd::Vector<ArrowArray> to_arrow_batches(const dataframe::Series& st,
 dataframe::Series import_series(const ArrowSchema* schema, ArrowArray* array,
                                 dstd::SharedPtr<void> keep);
 
+/// The schema metadata key that carries DataFrame::index_names, a JSON array
+/// of column names.
+inline constexpr const char INDEX_METADATA_KEY[] = "dftracer.utils.index";
+
+/// Adds the row index of `frame` to the metadata of the struct `schema` that
+/// exports it; nothing for a frame with no index.
+void set_frame_metadata(const dataframe::DataFrame& frame, ArrowSchema* schema);
+
+/// Sets the row index of `frame`, imported from the struct `schema`: its
+/// INDEX_METADATA_KEY, else the `index_columns` of its pandas metadata (a
+/// RangeIndex is none). A name that is no column, or is of a nested type, is
+/// ignored.
+void import_frame_metadata(const ArrowSchema* schema,
+                           dataframe::DataFrame& frame);
+
+/// Fills `schema` with the Arrow type of `frame` as a struct column, row index
+/// included.
+void frame_schema(const dataframe::DataFrame& frame, ArrowSchema* schema);
+
 /// The same for a struct `array`: one column per child.
 dataframe::DataFrame import_frame(const ArrowSchema* schema, ArrowArray* array,
                                   dstd::SharedPtr<void> keep);

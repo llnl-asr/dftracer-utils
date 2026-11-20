@@ -109,16 +109,17 @@ def test_a_dask_directory_reads_without_its_index_marker(tmp_path):
 def test_the_marker_can_be_asked_for_by_name(tmp_path):
     path, _ = dask_dir(tmp_path, "idx2")
     got = DataFrame.from_parquet(path, columns=["s", "__null_dask_index__"])
-    assert "__null_dask_index__" in got.columns
+    assert got.index_names() == ["__null_dask_index__"]
+    assert "__null_dask_index__" in got.schema
 
 
 def test_a_named_index_stays_a_column(tmp_path):
     frame = pd.DataFrame({"v": [1, 2, 3]}, index=pd.Index([10, 20, 30], name="id"))
     path = str(tmp_path / "named.parquet")
     frame.to_parquet(path)
-    assert DataFrame.from_parquet(path).columns == ["v", "id"] or set(
-        DataFrame.from_parquet(path).columns
-    ) == {"v", "id"}
+    got = DataFrame.from_parquet(path)
+    assert got.columns == list(pd.read_parquet(path).columns) == ["v"]
+    assert got.index_names() == ["id"] and set(got.schema) == {"v", "id"}
 
 
 def test_the_parts_read_and_concatenate(tmp_path):

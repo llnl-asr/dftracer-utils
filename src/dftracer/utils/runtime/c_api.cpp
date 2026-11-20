@@ -10,7 +10,7 @@ dftu_runtime* dftu_default_runtime(void) {
     return reinterpret_cast<dftu_runtime*>(&default_runtime());
 }
 
-dftu_runtime* dftu_runtime_new(int32_t threads, int32_t io_threads) {
+dftu_runtime* dftu_runtime_new(std::int32_t threads, std::int32_t io_threads) {
     RuntimeSettings settings;
     settings.threads = threads > 0 ? static_cast<std::size_t>(threads) : 0;
     settings.io_threads =

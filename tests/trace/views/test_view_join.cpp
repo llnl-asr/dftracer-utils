@@ -14,17 +14,17 @@ using namespace test_view_common;
 
 namespace {
 
-std::int64_t col_of(const dataframe::DataFrame& b, const dstd::String& name) {
+std::int64_t col_of(const dataframe::DataFrame& b, dstd::StringView name) {
     for (std::size_t i = 0; i < b.names.size(); ++i)
         if (b.names[i] == name) return static_cast<std::int64_t>(i);
     return -1;
 }
-std::int64_t row_of(const dataframe::DataFrame& b, const dstd::String& key) {
+std::int64_t row_of(const dataframe::DataFrame& b, dstd::StringView key) {
     for (std::int64_t i = 0; i < b.num_rows(); ++i)
         if (b.columns[0].string_at(i) == key) return i;
     return -1;
 }
-double num(const dataframe::DataFrame& b, const dstd::String& col,
+double num(const dataframe::DataFrame& b, dstd::StringView col,
            std::int64_t row) {
     const dataframe::Series& c =
         b.columns[static_cast<std::size_t>(col_of(b, col))];
@@ -37,7 +37,7 @@ double num(const dataframe::DataFrame& b, const dstd::String& col,
             return c.data<double>()[row];
     }
 }
-bool is_null(const dataframe::DataFrame& b, const dstd::String& col,
+bool is_null(const dataframe::DataFrame& b, dstd::StringView col,
              std::int64_t row) {
     return b.columns[static_cast<std::size_t>(col_of(b, col))].is_null(row);
 }

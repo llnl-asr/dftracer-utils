@@ -79,7 +79,7 @@ using Clock = std::chrono::steady_clock;
 constexpr const char* SMOKE_LINES =
     R"({"id":1,"name":"read","cat":"POSIX","pid":1,"tid":2,"ts":10,"dur":5,"ph":1,"args":{"hhash":"a","fhash":"b","size":4096,"o":{"x":1.5}}}
 {"name":"HH","ph":4,"type":1,"args":{"hhash":"e696ebc2","name":"node-0"}}
-{"name":"write","cat":"POSIX","pid":1,"tid":2,"ts":20,"ph":"X","args":{"fname":"/a/b","l":[1,2,null,true]}}
+{"name":"write","cat":"POSIX","pid":1,"tid":2,"ts":20,"ph":1,"args":{"fname":"/a/b","l":[1,2,null,true]}}
 )";
 
 struct Hash {
@@ -374,7 +374,8 @@ class BatchRow {
     explicit BatchRow(const Input& in) : in_(in) {}
     template <bool Check>
     void run(Acc& acc) {
-        trace::parse_lines(parser_, in_.text.data(), in_.length,
+        trace::parse_lines(parser_,
+                           dstd::StringView(in_.text.data(), in_.length),
                            [&](simdjson::dom::element root, dstd::StringView) {
                                trace::views::detail::extract_fold_event_into(
                                    ev_, root, intern_, true);
@@ -399,7 +400,7 @@ class IndexDomRow {
     template <bool Check>
     void run(Acc& acc) {
         trace::parse_lines(
-            parser_, in_.text.data(), in_.length,
+            parser_, dstd::StringView(in_.text.data(), in_.length),
             [&](simdjson::dom::element root, dstd::StringView) {
                 if (!trace::views::detail::append_dftracer_record(
                         batch_, root, intern_, true, true, hints_, &cache_))
@@ -450,7 +451,7 @@ class IndexRefusedRow {
     template <bool Check>
     void run(Acc& acc) {
         trace::parse_lines(
-            parser_, in_.text.data(), in_.length,
+            parser_, dstd::StringView(in_.text.data(), in_.length),
             [&](simdjson::dom::element root, dstd::StringView) {
                 if (!trace::views::detail::append_dftracer_record(
                         batch_, root, intern_, true, true, hints_, &cache_))
@@ -459,8 +460,7 @@ class IndexRefusedRow {
                 if (batch_.size() == PIECE_EVENTS) batch_.clear();
             },
             [&](dstd::StringView line, std::size_t capacity) {
-                auto parsed =
-                    doc_.parse_in_place(line.data(), line.size(), capacity);
+                auto parsed = doc_.parse_in_place(line, capacity);
                 if (!parsed) return;
                 if (!trace::views::detail::append_dftracer_record(
                         batch_, *parsed, intern_, true, true, refused_hints_,
@@ -489,7 +489,7 @@ class IndexDroppedRow {
     template <bool Check>
     void run(Acc& acc) {
         trace::parse_lines(
-            parser_, in_.text.data(), in_.length,
+            parser_, dstd::StringView(in_.text.data(), in_.length),
             [&](simdjson::dom::element root, dstd::StringView) {
                 if (!trace::views::detail::append_dftracer_record(
                         batch_, root, intern_, true, true, hints_, &cache_))

@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -66,7 +67,8 @@ DataFrame basic_frame() {
     df.names = dstd::make_shared_strings({"a", "b", "cat"});
     df.columns.push_back(i64({1, 2, 3, 4, 5}));
     df.columns.push_back(f64({1.5, 2.5, 3.5, 4.5, 5.5}));
-    df.columns.push_back(Series::strings({"x", "y", "x", "z", "y"}));
+    df.columns.push_back(Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"x", "y", "x", "z", "y"})));
     return df;
 }
 
@@ -76,10 +78,14 @@ DataFrame basic_frame() {
 DataFrame mixed_frame() {
     DataFrame df;
     df.names = dstd::make_shared_strings({"cat", "a", "b", "s", "ts", "dur"});
-    df.columns.push_back(Series::strings({"x", "x", "x", "y", "y", "y"}));
+    df.columns.push_back(
+        Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"x", "x", "x", "y", "y", "y"})));
     df.columns.push_back(i64({1, 2, 3, 10, 20, 30}));
     df.columns.push_back(f64({1.5, 2.5, 3.5, 10.5, 20.5, 30.5}));
-    df.columns.push_back(Series::strings({"p", "q", "r", "m", "n", "o"}));
+    df.columns.push_back(
+        Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"p", "q", "r", "m", "n", "o"})));
     df.columns.push_back(i64({100, 150, 200, 1000, 1050, 1100}));
     df.columns.push_back(i64({10, 20, 15, 5, 25, 10}));
     return df;
@@ -178,7 +184,8 @@ TEST_SUITE("LazyFrame output_schema") {
         DataFrame df;
         df.names = dstd::make_shared_strings({"ts"});
         df.columns.push_back(
-            make_timestamp({1, 2, 3}, TimeUnit::Micro, "America/Chicago"));
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 2, 3}),
+                           TimeUnit::Micro, "America/Chicago"));
         LazyFrame lf =
             LazyFrame::scan(src(std::move(df))).fill_null(std::int64_t{0});
         Schema s = lf.output_schema();
@@ -193,8 +200,11 @@ TEST_SUITE("LazyFrame output_schema") {
         "Decimal128's precision/scale") {
         DataFrame df;
         df.names = dstd::make_shared_strings({"ts", "dec", "n"});
-        df.columns.push_back(make_timestamp({1, 2, 3}, TimeUnit::Nano, "UTC"));
-        df.columns.push_back(make_decimal128({1, 2, 3}, 38, 9));
+        df.columns.push_back(
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 2, 3}),
+                           TimeUnit::Nano, "UTC"));
+        df.columns.push_back(make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({1, 2, 3}), 38, 9));
         df.columns.push_back(i64({3, 1, 2}));
 
         LazyFrame lf = LazyFrame::scan(src(std::move(df)))
@@ -381,10 +391,13 @@ TEST_SUITE("LazyFrame output_schema") {
         "Int64 domain") {
         DataFrame df;
         df.names = dstd::make_shared_strings({"cat", "dec", "ts"});
-        df.columns.push_back(Series::strings({"x", "x", "y"}));
-        df.columns.push_back(make_decimal128({100, 200, 300}, 38, 9));
+        df.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"x", "x", "y"})));
+        df.columns.push_back(make_decimal128(
+            dftu_utils_test::span_of<std::int64_t>({100, 200, 300}), 38, 9));
         df.columns.push_back(
-            make_timestamp({1, 2, 3}, TimeUnit::Micro, "America/Chicago"));
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 2, 3}),
+                           TimeUnit::Micro, "America/Chicago"));
         LazyFrame lf =
             LazyFrame::scan(src(std::move(df)))
                 .group_by("cat", {GroupAgg{Agg::Sum, "dec", "sum_dec"},
@@ -393,15 +406,91 @@ TEST_SUITE("LazyFrame output_schema") {
                                   GroupAgg{Agg::First, "ts", "first_ts"}});
         Schema s = lf.output_schema();
         REQUIRE(s.fields.size() == 5);
-        // Decimal128 and Timestamp both fall through col_domain's default
-        // branch to I64, so Sum/First widen to plain Int64: the decimal's
-        // scale and the timestamp's unit/timezone are both lost. Documented
-        // in agg_output_type's contract; agg_finalize does the same, so this
-        // is a real limitation, not a schema/collect() disagreement.
+        // Decimal128 falls through col_domain's default branch to I64, so its
+        // scale is lost; a Timestamp keeps its unit and zone under First and
+        // widens to Int64 under Sum.
         CHECK(s.fields[1] == Field{"sum_dec", scalar(TypeId::Int64), true});
         CHECK(s.fields[2] == Field{"first_dec", scalar(TypeId::Int64), true});
         CHECK(s.fields[3] == Field{"sum_ts", scalar(TypeId::Int64), true});
-        CHECK(s.fields[4] == Field{"first_ts", scalar(TypeId::Int64), true});
+        CHECK(s.fields[4] ==
+              Field{"first_ts", timestamp(TimeUnit::Micro, "America/Chicago"),
+                    true});
         check_matches_collect(lf);
+    }
+
+    TEST_CASE(
+        "group_by keeps a temporal column's type under min/max/first/last") {
+        DataFrame df;
+        df.names =
+            dstd::make_shared_strings({"cat", "ts", "d32", "d64", "dur"});
+        df.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"x", "x", "y", "y"})));
+        df.columns.push_back(
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 2, 3, 4}),
+                           TimeUnit::Nano, "UTC"));
+        df.columns.push_back(
+            make_date32(dftu_utils_test::span_of<std::int32_t>({1, 2, 3, 4})));
+        df.columns.push_back(
+            make_date64(dftu_utils_test::span_of<std::int64_t>({1, 2, 3, 4})));
+        df.columns.push_back(
+            make_duration(dftu_utils_test::span_of<std::int64_t>({1, 2, 3, 4}),
+                          TimeUnit::Milli));
+        LazyFrame lf =
+            LazyFrame::scan(src(std::move(df)))
+                .group_by("cat", {GroupAgg{Agg::Max, "ts", "max_ts"},
+                                  GroupAgg{Agg::Min, "d32", "min_d32"},
+                                  GroupAgg{Agg::First, "d64", "first_d64"},
+                                  GroupAgg{Agg::Last, "dur", "last_dur"},
+                                  GroupAgg{Agg::Sum, "dur", "sum_dur"},
+                                  GroupAgg{Agg::Mean, "ts", "mean_ts"},
+                                  GroupAgg{Agg::Count, "", "n"}});
+        Schema s = lf.output_schema();
+        REQUIRE(s.fields.size() == 8);
+        CHECK(s.fields[0] == Field{"cat", scalar(TypeId::String), true});
+        CHECK(s.fields[1].type == timestamp(TimeUnit::Nano, "UTC"));
+        CHECK(s.fields[2].type == scalar(TypeId::Date32));
+        CHECK(s.fields[3].type == scalar(TypeId::Date64));
+        CHECK(s.fields[4].type == duration_of(TimeUnit::Milli));
+        CHECK(s.fields[5].type == duration_of(TimeUnit::Milli));
+        CHECK(s.fields[6].type == timestamp(TimeUnit::Nano, "UTC"));
+        CHECK(s.fields[7].type == scalar(TypeId::Int64));
+        check_matches_collect(lf);
+    }
+
+    TEST_CASE(
+        "the reduce shortcut takes the temporal columns an aggregate "
+        "keeps in their type") {
+        DataFrame df;
+        df.names = dstd::make_shared_strings({"cat", "ts", "d32", "dur", "s"});
+        df.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"x", "x", "y", "y"})));
+        df.columns.push_back(
+            make_timestamp(dftu_utils_test::span_of<std::int64_t>({1, 2, 3, 4}),
+                           TimeUnit::Nano, "UTC"));
+        df.columns.push_back(
+            make_date32(dftu_utils_test::span_of<std::int32_t>({1, 2, 3, 4})));
+        df.columns.push_back(
+            make_duration(dftu_utils_test::span_of<std::int64_t>({1, 2, 3, 4}),
+                          TimeUnit::Milli));
+        df.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"a", "b", "c", "d"})));
+        LazyFrame lf = LazyFrame::scan(src(std::move(df)));
+        auto names = [&](Agg agg) {
+            dstd::Vector<dstd::String> out;
+            for (const GroupAgg& a : dftu_utils_test::ok(
+                     lf.reduce_specs(agg, dstd::Vector<dstd::String>{"cat"})))
+                out.push_back(a.out);
+            return out;
+        };
+        using Names = dstd::Vector<dstd::String>;
+        CHECK(names(Agg::Max) == Names{"ts", "d32", "dur"});
+        CHECK(names(Agg::Min) == Names{"ts", "d32", "dur"});
+        CHECK(names(Agg::Sum) == Names{"dur"});
+        CHECK(names(Agg::Mean) == Names{"ts", "dur"});
+        CHECK(names(Agg::First) == Names{"ts", "d32", "dur", "s"});
+        check_matches_collect(lf.group_by(
+            "cat",
+            dftu_utils_test::ok(lf.reduce_specs(
+                Agg::Max, dftu_utils_test::span_of<dstd::String>({"cat"})))));
     }
 }

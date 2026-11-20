@@ -18,6 +18,8 @@ set(TRACE_TEST_SOURCES
     # Indexing
     index/extensions/test_bloom_filter.cpp
     index/extensions/test_scalable_bloom_filter.cpp
+    index/extensions/test_summaries.cpp
+    index/extensions/test_zone_bounds.cpp
     index/schemas/dft/test_chunk_statistics.cpp
     index/build/test_chunk_indexer.cpp
     index/plan/test_chunk_pruner.cpp
@@ -42,6 +44,7 @@ set(TRACE_TEST_SOURCES
     views/test_field_filter.cpp
     views/test_view_aggregate.cpp
     views/test_view_partials.cpp
+    views/test_view_agg_config_rebuild.cpp
     views/test_view_index_parity.cpp
     views/test_time_window.cpp
     views/test_generic_view.cpp

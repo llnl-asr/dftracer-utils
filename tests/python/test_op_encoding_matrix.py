@@ -101,13 +101,13 @@ def _operands(signature):
 def _run(name, column, tokens):
     args = []
     for tok in tokens[1:]:
-        args.append(column._native if tok == "series" else _TOKEN_ARGS[tok])
+        args.append(column if tok == "series" else _TOKEN_ARGS[tok])
     try:
-        out = _ext.op_run(name, column._native, *args)
+        out = _ext.op_run(name, column, *args)
     except _REFUSALS as e:
         return ("refused", type(e).__name__)
-    if isinstance(out, _ext._Series):
-        return ("series", Series(out).to_list())
+    if isinstance(out, _ext.Series):
+        return ("series", out.to_list())
     return ("scalar", out)
 
 

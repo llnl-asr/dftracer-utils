@@ -9,10 +9,10 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/trace/index/build/chunk_indexer.h>
 #include <dftracer/utils/trace/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/trace/index/extensions/scalable_bloom_filter.h>
+#include <dftracer/utils/trace/index/extensions/summaries.h>
 #include <dftracer/utils/trace/index/schemas/dft/chunk_statistics.h>
 
 #include <array>
@@ -74,12 +74,11 @@ class BloomCore {
     static dstd::Span<const dstd::StringView> fixed_dimension_names();
 
     struct ChunkState {
-        std::array<trace::index::extensions::ScalableBloomFilter, BfCount>
+        std::array<trace::index::extensions::BloomBuilder, BfCount>
             fixed_blooms;
         std::array<ChunkDimensionStats, FdCount> fixed_dim_stats;
         /// Blooms of the leading extra dimensions, observed value by value.
-        dstd::Vector<trace::index::extensions::ScalableBloomFilter>
-            extra_blooms;
+        dstd::Vector<trace::index::extensions::BloomBuilder> extra_blooms;
         dstd::Vector<ChunkDimensionStats> extra_dim_stats;
         /// The values of an extra dimension past extra_blooms, sorted and
         /// borrowed; write_chunk sizes its bloom for them.
@@ -152,7 +151,7 @@ class BloomCore {
     /// source-specific.
     static void init_chunk_state(ChunkState& chunk,
                                  const ChunkIndexerConfig& config,
-                                 const dstd::Vector<dstd::String>& extra_dims);
+                                 dstd::Span<const dstd::String> extra_dims);
     static void observe_data(ChunkState& chunk, EventCache& cache,
                              std::uint32_t name_id, std::uint32_t cat_id,
                              dstd::StringView name, dstd::StringView cat,
@@ -161,10 +160,9 @@ class BloomCore {
                              dstd::StringView hhash, dstd::StringView fhash,
                              dstd::StringView shash);
     /// One value of extra dimension `e` (init_chunk_state's extra_dims
-    /// order): its text joins the bloom and its value the min/max, kept in
-    /// the dimension's own type. Integers and doubles share "double"; a
-    /// dimension that also holds strings becomes "mixed" and keeps no
-    /// min/max, so a range filter never prunes on it.
+    /// order): its canonical hash joins the bloom and its value the zone,
+    /// kept in the dimension's own type. A dimension that holds both numbers
+    /// and strings has no bounds, so a range filter never prunes on it.
     static void observe_extra(ChunkState& chunk, std::size_t e,
                               std::int64_t value);
     static void observe_extra(ChunkState& chunk, std::size_t e,
@@ -173,23 +171,7 @@ class BloomCore {
     static void observe_extra(ChunkState& chunk, std::size_t e,
                               dstd::StringView value);
 
-    /// The parsed min and max text of a dimension that one caller alone
-    /// observes. `valid` is false until they are parsed, and must be reset
-    /// when anything else writes the dimension's bounds.
-    struct NumericBounds {
-        dstd::Optional<duql::Number> min;
-        dstd::Optional<duql::Number> max;
-        bool valid = false;
-    };
-    /// As observe_value, with the same min and max text, but a value that
-    /// moves no bound is compared as a number and never formatted.
-    static void observe_value(ChunkDimensionStats& stats, NumericBounds& bounds,
-                              std::int64_t value);
-    static void observe_value(ChunkDimensionStats& stats, NumericBounds& bounds,
-                              std::uint64_t value);
-    static void observe_value(ChunkDimensionStats& stats, NumericBounds& bounds,
-                              double value);
-    /// observe_extra's min/max and type rule, without the bloom.
+    /// observe_extra's zone and count, without the bloom.
     static void observe_value(ChunkDimensionStats& stats, std::int64_t value);
     static void observe_value(ChunkDimensionStats& stats, std::uint64_t value);
     static void observe_value(ChunkDimensionStats& stats, double value);
@@ -238,15 +220,14 @@ class BloomCore {
         explicit FileAccumulator(const ChunkIndexerConfig& config);
 
         struct ExtraBloom {
-            trace::index::extensions::ScalableBloomFilter bloom;
+            trace::index::extensions::BloomBuilder bloom;
             /// A chunk kept no bloom for the dimension, so the file has none.
             bool skip = false;
         };
         ExtraBloom& extra(dstd::StringView dim);
 
         ChunkStatistics statistics;
-        dstd::Vector<trace::index::extensions::ScalableBloomFilter>
-            fixed_blooms;
+        dstd::Vector<trace::index::extensions::BloomBuilder> fixed_blooms;
         dftracer::utils::dstd::StringViewMap<ExtraBloom> extras;
         std::uint64_t chunks = 0;
         dstd::Vector<unsigned char> blob;
@@ -260,9 +241,8 @@ class BloomCore {
     /// in order. An extra dimension with no value in the chunk gets a zone
     /// with `present = 0` and no bloom.
     static void write_chunk(trace::index::FileBuild& build,
-                            std::uint64_t checkpoint_idx,
-                            const ChunkState& chunk,
-                            const dstd::Vector<dstd::String>& extra_dims,
+                            std::uint64_t checkpoint_idx, ChunkState& chunk,
+                            dstd::Span<const dstd::String> extra_dims,
                             const ChunkIndexerConfig& config,
                             FileAccumulator& acc);
 
@@ -279,7 +259,7 @@ class BloomCore {
     static ChunkStatistics finish_file(
         trace::index::FileBuild& build, FileAccumulator& acc,
         const ChunkIndexerConfig& config,
-        const dstd::Vector<dstd::String>& extra_dims, const Catalog& catalog);
+        dstd::Span<const dstd::String> extra_dims, const Catalog& catalog);
 };
 
 }  // namespace dftracer::utils::trace::index::schemas::dft

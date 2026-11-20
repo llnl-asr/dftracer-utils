@@ -6,8 +6,10 @@
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -26,25 +28,26 @@ constexpr const char* ROW = "__dftu_row__";
 
 // `name` is a column the plan's own schema produced or a temporary column the
 // transform has just added, so a miss is a broken transform.
-std::int32_t index_of(const LazyFrame& plan, const dstd::String& name) {
+std::int32_t index_of(const LazyFrame& plan, dstd::StringView name) {
     const dstd::Vector<dstd::String> sch = plan.schema();
     auto it = std::find(sch.begin(), sch.end(), name);
     if (it == sch.end())
         dstd::fatal("group_by transform: a column of its own plan is missing",
-                    name.c_str());
+                    dstd::String(name).c_str());
     return static_cast<std::int32_t>(it - sch.begin());
 }
 
-Expr ref(const LazyFrame& plan, const dstd::String& name) {
+Expr ref(const LazyFrame& plan, dstd::StringView name) {
     return expr_col(index_of(plan, name));
 }
 
-dftu_window_spec spec(dftu_window_func func, const char* value, const char* out,
-                      std::int64_t offset = 0) {
+dftu_window_spec spec(dftu_window_func func,
+                      dstd::Optional<dstd::CStringView> value,
+                      dstd::CStringView out, std::int64_t offset = 0) {
     dftu_window_spec s{};
     s.func = func;
-    s.value = value;
-    s.out = out;
+    s.value = value ? value->c_str() : nullptr;
+    s.out = out.c_str();
     if (func >= DFTU_WINDOW_FRAME_SUM && func <= DFTU_WINDOW_FRAME_MEAN)
         s.param.frame = {offset,
                          DFTU_WINDOW_UNBOUNDED,
@@ -57,24 +60,32 @@ dftu_window_spec spec(dftu_window_func func, const char* value, const char* out,
     return s;
 }
 
-LazyFrame window(const LazyFrame& plan, const dstd::Vector<dstd::String>& part,
-                 const dstd::Vector<dstd::String>& order,
-                 const dstd::Vector<dftu_window_spec>& specs) {
+LazyFrame window(const LazyFrame& plan, dstd::Span<const dstd::String> part,
+                 dstd::Span<const dstd::String> order,
+                 dstd::Span<const dftu_window_spec> specs) {
     dstd::Vector<const char*> pc;
     dstd::Vector<const char*> oc;
     for (const dstd::String& s : part) pc.push_back(s.c_str());
     for (const dstd::String& s : order) oc.push_back(s.c_str());
     OpArgs a;
-    a.strlist(1, pc.data(), static_cast<std::int32_t>(pc.size()))
-        .strlist(2, oc.data(), static_cast<std::int32_t>(oc.size()))
-        .winlist(3, specs);
+    a.strlist(1, pc).strlist(2, oc).winlist(3, specs);
     dstd::Vector<dstd::String> names = plan.schema();
     for (const dftu_window_spec& s : specs) names.emplace_back(s.out);
     return plan.frame_op("dftu.frame.window", a, {}, std::move(names));
 }
 
+// A single-spec list for window(); the spec's value column is unset.
+struct OneSpec {
+    dftu_window_spec spec_;
+    operator dstd::Span<const dftu_window_spec>() const { return {&spec_, 1}; }
+};
+
+OneSpec one_spec(dftu_window_func func, dstd::CStringView out) {
+    return {spec(func, dstd::nullopt, out)};
+}
+
 dstd::Result<dstd::Vector<dstd::String>> value_columns(
-    const LazyFrame& plan, const dstd::Vector<dstd::String>& keys, Agg agg) {
+    const LazyFrame& plan, dstd::Span<const dstd::String> keys, Agg agg) {
     auto specs = plan.reduce_specs(agg, keys);
     if (!specs) return specs.error();
     dstd::Vector<dstd::String> out;
@@ -84,21 +95,19 @@ dstd::Result<dstd::Vector<dstd::String>> value_columns(
     return out;
 }
 
-dstd::String tmp(const char* stem, std::size_t i) {
+dstd::String tmp(dstd::StringView stem, std::size_t i) {
     return dstd::fmt<"__dftu_{}_{}__">(stem, i);
 }
 
-Expr keep_null(const LazyFrame& p, const dstd::String& c,
-               const dstd::String& out) {
+Expr keep_null(const LazyFrame& p, dstd::StringView c, dstd::StringView out) {
     return ref(p, out) + (ref(p, c) - ref(p, c));
 }
 
 // One window column per value column, then the rows back in input order and
 // `post` under the column's own name.
 template <class Spec, class Post>
-LazyFrame per_column(const LazyFrame& plan,
-                     const dstd::Vector<dstd::String>& keys,
-                     const dstd::Vector<dstd::String>& columns, Spec make_spec,
+LazyFrame per_column(const LazyFrame& plan, dstd::Span<const dstd::String> keys,
+                     dstd::Span<const dstd::String> columns, Spec make_spec,
                      Post post) {
     LazyFrame out = plan.with_row_index(ROW);
     dstd::Vector<dstd::String> outs;
@@ -106,17 +115,20 @@ LazyFrame per_column(const LazyFrame& plan,
     for (std::size_t i = 0; i < columns.size(); ++i)
         outs.push_back(tmp("w", i));
     for (std::size_t i = 0; i < columns.size(); ++i)
-        specs.push_back(make_spec(columns[i].c_str(), outs[i].c_str()));
-    out = window(out, keys, {ROW}, specs).sort_by(ROW);
+        specs.push_back(make_spec(columns[i], outs[i]));
+    const dstd::String row = ROW;
+    out = window(out, keys, dstd::Span<const dstd::String>(&row, 1), specs)
+              .sort_by(ROW);
     for (std::size_t i = 0; i < columns.size(); ++i)
         out = out.with_column(columns[i], post(out, columns[i], outs[i]));
-    return out.select(columns);
+    return out.select(
+        dstd::Vector<dstd::String>(columns.begin(), columns.end()));
 }
 
 // per_column over the value columns `agg` broadcasts to.
 template <class Spec, class Post>
 dstd::Result<LazyFrame> per_value_column(const LazyFrame& plan,
-                                         const dstd::Vector<dstd::String>& keys,
+                                         dstd::Span<const dstd::String> keys,
                                          Agg agg, Spec make_spec, Post post) {
     const dstd::Result<dstd::Vector<dstd::String>> columns =
         value_columns(plan, keys, agg);
@@ -125,7 +137,7 @@ dstd::Result<LazyFrame> per_value_column(const LazyFrame& plan,
 }
 
 dstd::Result<LazyFrame> ranked(const LazyFrame& plan,
-                               const dstd::Vector<dstd::String>& keys,
+                               dstd::Span<const dstd::String> keys,
                                RankMethod method, bool ascending) {
     const dstd::Result<dstd::Vector<dstd::String>> found =
         value_columns(plan, keys, Agg::Sum);
@@ -145,20 +157,20 @@ dstd::Result<LazyFrame> ranked(const LazyFrame& plan,
             // Ties share a rank only when the row index is not part of the
             // order, so Min and Dense order by the value alone.
             case RankMethod::Dense:
-                out =
-                    window(out, keys, {key},
-                           {spec(DFTU_WINDOW_DENSE_RANK, nullptr, rk.c_str())});
+                out = window(out, keys, dstd::Span<const dstd::String>(&key, 1),
+                             one_spec(DFTU_WINDOW_DENSE_RANK, rk));
                 value = ref(out, rk);
                 break;
-            case RankMethod::Ordinal:
-                out =
-                    window(out, keys, {key, ROW},
-                           {spec(DFTU_WINDOW_ROW_NUMBER, nullptr, rk.c_str())});
+            case RankMethod::Ordinal: {
+                const dstd::String order[] = {key, ROW};
+                out = window(out, keys, order,
+                             one_spec(DFTU_WINDOW_ROW_NUMBER, rk));
+            }
                 value = ref(out, rk);
                 break;
             case RankMethod::Min:
-                out = window(out, keys, {key},
-                             {spec(DFTU_WINDOW_RANK, nullptr, rk.c_str())});
+                out = window(out, keys, dstd::Span<const dstd::String>(&key, 1),
+                             one_spec(DFTU_WINDOW_RANK, rk));
                 value = ref(out, rk);
                 break;
             case RankMethod::Max:
@@ -171,12 +183,13 @@ dstd::Result<LazyFrame> ranked(const LazyFrame& plan,
                 const dstd::String rk2 = tmp("rk2", i);
                 out =
                     out.with_column(rev, ref(out, key) * lit(std::int64_t{-1}));
-                out = window(
-                    out, keys, {key},
-                    {spec(DFTU_WINDOW_RANK, nullptr, rk.c_str()),
-                     spec(DFTU_WINDOW_FRAME_COUNT, c.c_str(), cnt.c_str())});
-                out = window(out, keys, {rev},
-                             {spec(DFTU_WINDOW_RANK, nullptr, rk2.c_str())});
+                const dftu_window_spec rank_specs[] = {
+                    spec(DFTU_WINDOW_RANK, dstd::nullopt, rk),
+                    spec(DFTU_WINDOW_FRAME_COUNT, c, cnt)};
+                out = window(out, keys, dstd::Span<const dstd::String>(&key, 1),
+                             rank_specs);
+                out = window(out, keys, dstd::Span<const dstd::String>(&rev, 1),
+                             one_spec(DFTU_WINDOW_RANK, rk2));
                 Expr max_rank =
                     ref(out, cnt) + lit(std::int64_t{1}) - ref(out, rk2);
                 value = method == RankMethod::Max
@@ -194,21 +207,21 @@ dstd::Result<LazyFrame> ranked(const LazyFrame& plan,
     return out.select(columns);
 }
 
-LazyFrame counter(const LazyFrame& plan, const dstd::Vector<dstd::String>& part,
-                  const dstd::Vector<dstd::String>& order,
-                  dftu_window_func func, const char* out_name) {
+LazyFrame counter(const LazyFrame& plan, dstd::Span<const dstd::String> part,
+                  dstd::Span<const dstd::String> order, dftu_window_func func,
+                  dstd::StringView out_name) {
     const dstd::String w = "__dftu_rn__";
     LazyFrame out = plan.with_row_index(ROW);
-    out =
-        window(out, part, order, {spec(func, nullptr, w.c_str())}).sort_by(ROW);
-    out = out.with_column(out_name, ref(out, w) - lit(std::int64_t{1}));
-    return out.select({out_name});
+    out = window(out, part, order, one_spec(func, w)).sort_by(ROW);
+    out = out.with_column(dstd::String(out_name),
+                          ref(out, w) - lit(std::int64_t{1}));
+    return out.select({dstd::String(out_name)});
 }
 
 // The nearest present value before (or, over the reversed row order, after)
 // each row within its group.
 dstd::Result<LazyFrame> filled(const LazyFrame& plan,
-                               const dstd::Vector<dstd::String>& keys,
+                               dstd::Span<const dstd::String> keys,
                                bool backward) {
     const dstd::Result<dstd::Vector<dstd::String>> found =
         value_columns(plan, keys, Agg::First);
@@ -225,9 +238,9 @@ dstd::Result<LazyFrame> filled(const LazyFrame& plan,
     for (std::size_t i = 0; i < columns.size(); ++i)
         outs.push_back(tmp("w", i));
     for (std::size_t i = 0; i < columns.size(); ++i)
-        specs.push_back(spec(DFTU_WINDOW_FILL_FORWARD, columns[i].c_str(),
-                             outs[i].c_str()));
-    out = window(out, keys, {order}, specs).sort_by(ROW);
+        specs.push_back(spec(DFTU_WINDOW_FILL_FORWARD, columns[i], outs[i]));
+    out = window(out, keys, dstd::Span<const dstd::String>(&order, 1), specs)
+              .sort_by(ROW);
     for (std::size_t i = 0; i < columns.size(); ++i)
         out = out.with_column(columns[i], ref(out, outs[i]));
     return out.select(columns);
@@ -236,26 +249,25 @@ dstd::Result<LazyFrame> filled(const LazyFrame& plan,
 // A trailing frame of `n` rows within the group, null until it holds `n`
 // present values (the FRAME_* minimum count).
 dstd::Result<LazyFrame> rolling(const LazyFrame& plan,
-                                const dstd::Vector<dstd::String>& keys,
+                                dstd::Span<const dstd::String> keys,
                                 dftu_window_func func, std::int64_t n) {
     if (n < 1)
         return invalid_argument<"rolling: the window must be at least 1">();
     return per_value_column(
         plan, keys, Agg::Sum,
-        [func, n](const char* c, const char* o) {
+        [func, n](dstd::CStringView c, dstd::CStringView o) {
             dftu_window_spec s = spec(func, c, o, n);
             s.param.frame.preceding = n - 1;
             s.param.frame.following = 0;
             return s;
         },
-        [](const LazyFrame& p, const dstd::String&, const dstd::String& o) {
+        [](const LazyFrame& p, dstd::StringView, dstd::StringView o) {
             return ref(p, o);
         });
 }
 
-LazyFrame positional(const LazyFrame& plan,
-                     const dstd::Vector<dstd::String>& keys, CmpOp cmp,
-                     std::int64_t rn, bool from_end) {
+LazyFrame positional(const LazyFrame& plan, dstd::Span<const dstd::String> keys,
+                     CmpOp cmp, std::int64_t rn, bool from_end) {
     const dstd::Vector<dstd::String> input = plan.schema();
     LazyFrame out = plan.with_row_index(ROW);
     dstd::String order = ROW;
@@ -264,8 +276,8 @@ LazyFrame positional(const LazyFrame& plan,
         out = out.with_column(order, ref(out, ROW) * lit(std::int64_t{-1}));
     }
     const dstd::String w = "__dftu_rn__";
-    out = window(out, keys, {order},
-                 {spec(DFTU_WINDOW_ROW_NUMBER, nullptr, w.c_str())});
+    out = window(out, keys, dstd::Span<const dstd::String>(&order, 1),
+                 one_spec(DFTU_WINDOW_ROW_NUMBER, w));
     out = out.filter(
                  expr_cmp(cmp, ref(out, w), Scalar{detail::expr_scalar_i(rn)}))
               .sort_by(ROW);
@@ -278,69 +290,73 @@ namespace {
 
 // The window plan of a group-wise transform. The parameters carry the names
 // of the LazyGroupBy members the cases below read.
-dstd::Result<LazyFrame> composed_transform(
-    const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
-    GroupwiseOp kind, std::int64_t n, RankMethod method, bool ascending) {
+dstd::Result<LazyFrame> composed_transform(const LazyFrame& plan,
+                                           dstd::Span<const dstd::String> keys,
+                                           GroupwiseOp kind, std::int64_t n,
+                                           RankMethod method, bool ascending) {
     switch (kind) {
         case GroupwiseOp::CumSum:
             return per_value_column(
                 plan, keys, Agg::Sum,
-                [](const char* c, const char* o) {
+                [](dstd::CStringView c, dstd::CStringView o) {
                     return spec(DFTU_WINDOW_RUNNING_SUM, c, o);
                 },
                 keep_null);
         case GroupwiseOp::CumProd:
             return per_value_column(
                 plan, keys, Agg::Sum,
-                [](const char* c, const char* o) {
+                [](dstd::CStringView c, dstd::CStringView o) {
                     return spec(DFTU_WINDOW_RUNNING_PROD, c, o);
                 },
                 keep_null);
         case GroupwiseOp::CumMax:
             return per_value_column(
                 plan, keys, Agg::Max,
-                [](const char* c, const char* o) {
+                [](dstd::CStringView c, dstd::CStringView o) {
                     return spec(DFTU_WINDOW_RUNNING_MAX, c, o);
                 },
                 keep_null);
         case GroupwiseOp::CumMin:
             return per_value_column(
                 plan, keys, Agg::Min,
-                [](const char* c, const char* o) {
+                [](dstd::CStringView c, dstd::CStringView o) {
                     return spec(DFTU_WINDOW_RUNNING_MIN, c, o);
                 },
                 keep_null);
-        case GroupwiseOp::CumCount:
-            return counter(plan, keys, {ROW}, DFTU_WINDOW_ROW_NUMBER,
-                           "cumcount");
+        case GroupwiseOp::CumCount: {
+            const dstd::String row = ROW;
+            return counter(plan, keys, dstd::Span<const dstd::String>(&row, 1),
+                           DFTU_WINDOW_ROW_NUMBER, "cumcount");
+        }
         case GroupwiseOp::Shift: {
             const dftu_window_func func =
                 n >= 0 ? DFTU_WINDOW_LAG : DFTU_WINDOW_LEAD;
             const std::int64_t offset = n >= 0 ? n : -n;
             return per_value_column(
                 plan, keys, Agg::First,
-                [func, offset](const char* c, const char* o) {
+                [func, offset](dstd::CStringView c, dstd::CStringView o) {
                     return spec(func, c, o, offset);
                 },
-                [](const LazyFrame& p, const dstd::String&,
-                   const dstd::String& o) { return ref(p, o); });
+                [](const LazyFrame& p, dstd::StringView, dstd::StringView o) {
+                    return ref(p, o);
+                });
         }
         case GroupwiseOp::Diff:
             return per_value_column(
                 plan, keys, Agg::Sum,
-                [](const char* c, const char* o) {
+                [](dstd::CStringView c, dstd::CStringView o) {
                     return spec(DFTU_WINDOW_DELTA, c, o);
                 },
-                [](const LazyFrame& p, const dstd::String&,
-                   const dstd::String& o) { return ref(p, o); });
+                [](const LazyFrame& p, dstd::StringView, dstd::StringView o) {
+                    return ref(p, o);
+                });
         case GroupwiseOp::PctChange:
             return per_value_column(
                 plan, keys, Agg::Sum,
-                [](const char* c, const char* o) {
+                [](dstd::CStringView c, dstd::CStringView o) {
                     return spec(DFTU_WINDOW_LAG, c, o, 1);
                 },
-                [](const LazyFrame& p, const dstd::String& c,
-                   const dstd::String& o) {
+                [](const LazyFrame& p, dstd::StringView c, dstd::StringView o) {
                     return (ref(p, c) - ref(p, o)) / ref(p, o);
                 });
         case GroupwiseOp::Rank:
@@ -375,7 +391,7 @@ dstd::Result<LazyFrame> composed_transform(
 }  // namespace
 
 dstd::Result<LazyFrame> composed_group_transform(
-    const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
+    const LazyFrame& plan, dstd::Span<const dstd::String> keys,
     GroupwiseOp kind, std::int64_t n, RankMethod method, bool ascending) {
     return composed_transform(plan, keys, kind, n, method, ascending);
 }

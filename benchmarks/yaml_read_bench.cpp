@@ -43,6 +43,7 @@
 
 #include <bench_ok.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -267,8 +268,8 @@ Outcome measure(Fn&& fn) {
     return outcome;
 }
 
-Outcome run_document(const dstd::String& text, Shape shape, bool walks) {
-    dstd::String copy = text;
+Outcome run_document(dstd::StringView text, Shape shape, bool walks) {
+    dstd::String copy(text);
     return measure([&](Answer& answer) {
         auto doc =
             dftu::bench::ok(yaml::Document::parse(std::move(copy), "bench"));
@@ -277,9 +278,9 @@ Outcome run_document(const dstd::String& text, Shape shape, bool walks) {
 }
 
 // Document::parse with its chunks indexed on the threads of `runtime`.
-Outcome run_document_parallel(const dstd::String& text, Shape shape, bool walks,
+Outcome run_document_parallel(dstd::StringView text, Shape shape, bool walks,
                               Runtime& runtime) {
-    dstd::String copy = text;
+    dstd::String copy(text);
     const auto run_jobs =
         [&](std::size_t n,
             dstd::FunctionRef<void(std::size_t, std::size_t)> body) {
@@ -542,10 +543,10 @@ int main(int argc, char** argv) {
                 ++failures;
             }
         }
-        const auto row = [&](const char* name, double median_seconds,
+        const auto row = [&](dstd::CStringView name, double median_seconds,
                              const Outcome& outcome) {
-            std::printf("%-9s %-9s %9.0f %10.1f %9.2f\n", shape_name, name,
-                        input_mb / median_seconds,
+            std::printf("%-9s %-9s %9.0f %10.1f %9.2f\n", shape_name,
+                        name.c_str(), input_mb / median_seconds,
                         static_cast<double>(outcome.extra_bytes) / 1e6,
                         static_cast<double>(outcome.extra_bytes) /
                             static_cast<double>(text.size()));

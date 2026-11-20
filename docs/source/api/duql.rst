@@ -123,7 +123,7 @@ writing it into the text at all.
 Filters with ``F``
 ------------------
 
-``F`` and ``Field``, exported from ``dftracer.utils``, build columnar filter
+``F`` and ``col``, exported from ``dftracer.utils``, build columnar filter
 expressions that also render to duql (see :doc:`columnar`). They pass to
 ``TraceViewer.filter`` and to ``Pipe.where``.
 

@@ -95,14 +95,13 @@ coro::CoroTask<dstd::Result<void>> validate_lines(FileValResult* result) {
         if (!*line_opt)
             co_return dstd::Unexpected<dstd::Error>(line_opt->error());
         const auto& line = **line_opt;
-        const char* start = nullptr;
-        std::size_t trimmed = 0;
-        if (!trim_and_validate(line.content.data(), line.content.size(), start,
-                               trimmed)) {
+        dstd::StringView trimmed;
+        if (!trim_and_validate(line.content, trimmed)) {
             continue;
         }
         ++result->total_lines;
-        if (parser.parse(start, trimmed).error() != simdjson::SUCCESS) {
+        if (parser.parse(trimmed.data(), trimmed.size()).error() !=
+            simdjson::SUCCESS) {
             ++result->invalid_lines;
             if (result->first_bad_line == 0) {
                 result->first_bad_line = line.line_number;

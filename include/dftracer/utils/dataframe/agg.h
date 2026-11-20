@@ -37,7 +37,8 @@ enum class AggOp {
     Kurt = 8,   ///< excess (population) kurtosis
     First = 9,  ///< first non-null value in row order (order-independent merge)
     Last = 10,  ///< last non-null value in row order
-    Pct = 11,   ///< a DDSketch quantile (level in AggSpec::param), mergeable
+    Pct = 11,   ///< an approximate DDSketch quantile (level in AggSpec::param),
+                ///< mergeable in bounded memory; Quantile is the exact one
     Hist = 12,  ///< the DDSketch histogram, a list<struct{lo,hi,count}> column
     ArgMax =
         13,  ///< the String repr of `value_col` at the row maximizing `by_col`
@@ -105,8 +106,55 @@ enum class AggOp {
     /// A registered user-defined aggregate (see @ref make_udaf), named by
     /// AggSpec::fn and fed the columns `value_col` and AggSpec::args; the
     /// result type is the one its bind chose.
-    Udaf = 37
+    Udaf = 37,
+    /// The pandas sample skewness G1 of `value_col`'s present values, Float64:
+    /// NaN below three values and when they are all equal.
+    SkewUnbiased = 38,
+    /// The pandas sample excess kurtosis G2, Float64: NaN below four values
+    /// and when they are all equal.
+    KurtUnbiased = 39,
+    /// The exact quantile of the present values of `value_col`, Float64 (null
+    /// for a group with none). `param` is the level in [0, 1] and
+    /// AggSpec::interp chooses the result between two ranks; a level outside
+    /// [0, 1] or NaN is refused by agg_accumulate.
+    /// The state keeps every present value (8 bytes each) and merges by
+    /// concatenation, so it grows with the rows of a group; the spill path of
+    /// the aggregation engine bounds it across groups, but one group's values
+    /// must fit in memory when it is finalized. For a bounded-memory estimate
+    /// use Pct.
+    Quantile = 40,
+    /// The position within its group, from 0 and in input order, of the first
+    /// row holding the greatest present value of `value_col`, Int64 (null for
+    /// a group with no present value). A NaN counts only while the group has no
+    /// number: then the first NaN is the winner, as Polars. The
+    /// column is read exactly in its own domain (signed, unsigned or float);
+    /// a String or Binary column is refused by agg_accumulate. The state
+    /// holds the winner's value and position, so it is fixed size, but the
+    /// position counts the rows an accumulator saw before the winner: states
+    /// are merged in row order (`other` holds the rows after `into`), which a
+    /// serial accumulation, the batches of a streamed group-by and the spill
+    /// of one stream satisfy; merging a state that starts before `into` for a
+    /// shared group is refused by agg_check. Not available to the trace-view
+    /// aggregation, whose files have no common row order.
+    ArgMaxPos = 41,
+    /// As ArgMaxPos for the least present value; a tie keeps the first row.
+    ArgMinPos = 42,
+    /// The bitwise AND of the present values of `value_col`, in the column's
+    /// own type: an integer column of any width or a Bool column; another type
+    /// is refused by agg_accumulate. Null for a group with no present value.
+    /// The state is one 64-bit word and a flag per group, merged with the same
+    /// operation, so it is fixed size and the merge order does not matter.
+    BitwiseAnd = 43,
+    /// As BitwiseAnd for the bitwise OR (BitOr is the older form that reads
+    /// the column as u64 and gives 0 for a group with no value).
+    BitwiseOr = 44,
+    /// As BitwiseAnd for the bitwise XOR.
+    BitwiseXor = 45
 };
+
+/// The last row of agg_ops.def, which bounds every serialized op code. A row
+/// appended to the table moves it (c_api_enum_lockstep.cpp checks).
+inline constexpr AggOp AGG_OP_LAST = AggOp::BitwiseXor;
 
 /// Ops taking a second input through `by_col`: the extremum ArgMax/ArgMin
 /// maximize/minimize, the ordered list/top-k ops order by, the co-moment ops
@@ -133,18 +181,24 @@ inline bool agg_uses_raw_value(AggOp op) {
 }
 
 /// The @ref DataType agg_finalize actually writes for `op` over a value column
-/// of `value_type`: Sum/Min/Max/First/Last widen through the same
-/// integer/unsigned/float domain agg_finalize keys on (Int64/Uint64/Float64),
-/// String columns pass First/Last through unchanged, and every other op's
-/// type is fixed regardless of `value_type`. An Unknown `value_type` gives
-/// Unknown for the widening ops: collect() settles it from the data. Never
-/// guesses: every AggOp is covered, so schema code built on this can never
-/// disagree with collect().
+/// of `value_type`. The one rule for eager and lazy execution and for the plan
+/// schema:
+/// - Min, Max, First and Last keep a temporal column's whole type (Timestamp
+///   with its unit and zone, Date32, Date64, Time32, Time64, Duration); Sum
+///   keeps a Duration; Mean keeps a Timestamp or a Duration (the mean is
+///   truncated to the unit). A String column passes First/Last through.
+/// - Any other column widens through the integer/unsigned/float domain
+///   agg_finalize keys on (Int64/Uint64/Float64) for Sum/Min/Max/First/Last.
+/// - Every other op's type is fixed regardless of `value_type`.
+/// An Unknown `value_type` gives Unknown for the widening ops: collect()
+/// settles it from the data. Never guesses: every AggOp is covered, so schema
+/// code built on this can never disagree with collect().
 ///
 /// SetUnion with a nonzero `param` is the typed result: a list of the value
 /// column's element type (set_union_element_type), or of Unknown when the
 /// column is itself a list (the caller reads that element type from the field).
-DataType agg_output_type(AggOp op, TypeId value_type, double param = 0.0);
+DataType agg_output_type(AggOp op, const DataType& value_type,
+                         double param = 0.0);
 
 /// The element type a typed SetUnion over a column of type `t` lists: String
 /// and Bool as is, integers widened to Int64 or Uint64, floats to Float64,
@@ -157,12 +211,15 @@ struct AggSpec {
     AggOp op;
     std::int32_t value_col = -1;
     dstd::String out;
-    double param = 0.0;  ///< Pct: quantile q in [0, 1]; occupancy: occ_cell_us;
+    double param = 0.0;  ///< Pct, Quantile: quantile q in [0, 1]; occupancy:
+                         ///< occ_cell_us;
                          ///< Distinct/TopK/BottomK/ApproxTopK/Sample: k;
                          ///< SetUnion: nonzero asks for the typed list
     std::int32_t by_col = -1;  ///< the second input for the ops
                                ///< agg_uses_by_col() names; unused otherwise
-    dstd::String fn{};         ///< Udaf: the registered name of the aggregate
+    Interpolation interp = Interpolation::Linear;  ///< Quantile: the result
+                                                   ///< between two ranks
+    dstd::String fn{};  ///< Udaf: the registered name of the aggregate
     dstd::Vector<std::int32_t> args{};  ///< Udaf: the arguments after
                                         ///< `value_col`, which is argument 0
                                         ///< (-1 when the UDAF takes none)
@@ -214,8 +271,8 @@ AggStatePtr agg_new(dstd::Vector<AggSpec> specs,
 /// type or over a string that holds the separator byte 0x1e, a text
 /// aggregate over a nested column, an unsupported dyn op).
 dstd::Result<void> agg_accumulate(AggState& state,
-                                  const dstd::Vector<const Series*>& keys,
-                                  const dstd::Vector<const Series*>& values,
+                                  dstd::Span<const Series* const> keys,
+                                  dstd::Span<const Series* const> values,
                                   std::int64_t begin = 0,
                                   std::int64_t end = -1);
 /// As above plus the dyn inputs: each @ref AggDynInput feeds a per-argument
@@ -224,14 +281,14 @@ dstd::Result<void> agg_accumulate(AggState& state,
 /// to batch, and a group's dyn set grows to the union of names seen for it.
 /// Errors are those of the form above.
 dstd::Result<void> agg_accumulate(AggState& state,
-                                  const dstd::Vector<const Series*>& keys,
-                                  const dstd::Vector<const Series*>& values,
-                                  const dstd::Vector<AggDynInput>& dyn,
+                                  dstd::Span<const Series* const> keys,
+                                  dstd::Span<const Series* const> values,
+                                  dstd::Span<const AggDynInput> dyn,
                                   std::int64_t begin = 0,
                                   std::int64_t end = -1);
 /// Single-key convenience: forwards to the N-key form with `keys = {&key}`.
 dstd::Result<void> agg_accumulate(AggState& state, const Series& key,
-                                  const dstd::Vector<const Series*>& values,
+                                  dstd::Span<const Series* const> values,
                                   std::int64_t begin = 0,
                                   std::int64_t end = -1);
 
@@ -242,10 +299,13 @@ dstd::Result<void> agg_accumulate(AggState& state, const Series& key,
 void agg_set_row_base(AggState& state, std::int64_t base);
 
 /// Combine `other` into `into` (associative; for spill + distributed merge).
+/// Two partials that hold a temporal value column of another type, unit or zone
+/// are not merged: `into` is left as it was and the error is held for
+/// @ref agg_check, as for a failing UDAF.
 void agg_merge(AggState& into, const AggState& other);
 /// The same, other's groups taken in `order` (indices into its groups).
 void agg_merge(AggState& into, const AggState& other,
-               const dstd::Vector<std::int64_t>& order);
+               dstd::Span<const std::int64_t> order);
 
 /// Re-key `src` to a coarser grouping and merge groups that collapse together.
 /// `keep` lists src key-column indices in destination order (a subset and/or
@@ -257,7 +317,7 @@ void agg_merge(AggState& into, const AggState& other,
 /// result shares src's specs and value/field layout; finalize with
 /// agg_finalize. Every index in `keep` must be a valid src key column.
 AggStatePtr agg_regroup(const AggState& src,
-                        const dstd::Vector<std::int32_t>& keep,
+                        dstd::Span<const std::int32_t> keep,
                         std::int64_t bucket_recut = 0);
 
 /// Bound every group's occupancy (Busy/Concurrency/Utilization/Active) by the
@@ -277,9 +337,9 @@ AggStatePtr agg_clip_occupancy(const AggState& src, std::uint64_t lo,
 /// Materialize the result: one key column per `key_names` (in order, each
 /// keeping its original type) plus one column per spec, in spec order.
 DataFrame agg_finalize(const AggState& state,
-                       const dstd::Vector<dstd::String>& key_names);
+                       dstd::Span<const dstd::String> key_names);
 /// Single-key convenience: forwards to the vector form with `{key_name}`.
-DataFrame agg_finalize(const AggState& state, const dstd::String& key_name);
+DataFrame agg_finalize(const AggState& state, dstd::StringView key_name);
 
 /// The dyn argument names of a result with the value domain of each. A result
 /// built from several states (spill parts) finalizes each under the layout of
@@ -290,7 +350,7 @@ using AggDynLayout = dstd::Map<dstd::String, FieldStatDomain>;
 void agg_dyn_layout_add(AggDynLayout& layout, const AggState& state);
 /// agg_finalize with the dyn columns of `layout` in place of the state's own.
 DataFrame agg_finalize(const AggState& state,
-                       const dstd::Vector<dstd::String>& key_names,
+                       dstd::Span<const dstd::String> key_names,
                        const AggDynLayout& layout);
 
 /// Serialize a partial to a portable byte blob (distributed partials / spill)
@@ -309,7 +369,7 @@ dstd::String agg_serialize(const AggState& state, bool compact = false);
 /// the same argument types: the result then shares its binding and bind does
 /// not run. A reader of many blobs passes a state it read before. `like` is
 /// only read, so threads may share one.
-dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
+dstd::Result<AggStatePtr> agg_deserialize(dstd::StringView blob,
                                           bool compact = false,
                                           const AggState* like = nullptr);
 
@@ -372,7 +432,7 @@ AggStatePtr agg_extract_group(const AggState& state, std::int64_t g);
 /// extracted from, serialized, finalized or merged from, although it is const:
 /// two threads must not call these on one such state at once.
 AggStatePtr agg_extract_groups(const AggState& state,
-                               const dstd::Vector<std::int64_t>& groups);
+                               dstd::Span<const std::int64_t> groups);
 
 /// Like group_agg but returns the mergeable partial instead of finalizing: the
 /// same one-pass parallel accumulate over `keys`/`values`, stopping before
@@ -381,8 +441,8 @@ AggStatePtr agg_extract_groups(const AggState& state,
 /// rollup materialize path to store per-group partials.
 /// Errors are those of @ref agg_accumulate.
 dstd::Result<AggStatePtr> group_agg_state(
-    const dstd::Vector<const Series*>& keys,
-    const dstd::Vector<const Series*>& values, dstd::Vector<AggSpec> specs);
+    dstd::Span<const Series* const> keys,
+    dstd::Span<const Series* const> values, dstd::Vector<AggSpec> specs);
 
 /// One value column's already-reduced statistics to seed into an AggState,
 /// identified by `value_col` (the AggSpec value_col index the state was built
@@ -404,9 +464,9 @@ void agg_seed_begin(AggState& state, std::size_t nkeys);
 /// key k null (empty means none). Repeated calls for a key merge. Call
 /// agg_seed_finalize once, after all calls and before agg_finalize/serialize.
 /// Ends the process when a spec has no seed representation.
-void agg_seed_group(AggState& state, const dstd::Vector<dstd::String>& str_keys,
-                    const dstd::Vector<bool>& null_keys, std::uint64_t count,
-                    const dstd::Vector<AggSeedValue>& values);
+void agg_seed_group(AggState& state, dstd::Span<const dstd::String> str_keys,
+                    dstd::Span<const std::uint8_t> null_keys,
+                    std::uint64_t count, dstd::Span<const AggSeedValue> values);
 
 /// Fix each value column's finalized integer/float domain from the seeded
 /// per-group stats, matching the columnar materializer's per-column rule (a
@@ -417,15 +477,15 @@ void agg_seed_finalize(AggState& state);
 /// Fused group-by: accumulate the whole batch in one pass over all specs (the
 /// sync driver chunks via the parallel_for seam and merges), then finalize.
 /// Errors are those of @ref agg_accumulate.
-dstd::Result<DataFrame> group_agg(const dstd::Vector<const Series*>& keys,
-                                  const dstd::Vector<const Series*>& values,
+dstd::Result<DataFrame> group_agg(dstd::Span<const Series* const> keys,
+                                  dstd::Span<const Series* const> values,
                                   dstd::Vector<AggSpec> specs,
-                                  const dstd::Vector<dstd::String>& key_names);
+                                  dstd::Span<const dstd::String> key_names);
 /// Single-key convenience: forwards to the N-key form.
 dstd::Result<DataFrame> group_agg(const Series& key,
-                                  const dstd::Vector<const Series*>& values,
+                                  dstd::Span<const Series* const> values,
                                   dstd::Vector<AggSpec> specs,
-                                  const dstd::String& key_name);
+                                  dstd::StringView key_name);
 
 /// How many group-bys wrote their aggregate columns in place (straight into
 /// the output, with no per-partition columns to join) since the process began.

@@ -113,7 +113,7 @@ static CoroTask<dstd::Vector<dstd::String>> collect_lines(
 struct ParsedEvent {
     dstd::String name;
     dstd::String cat;
-    dstd::String ph;
+    std::int64_t ph = 0;
 };
 
 static CoroTask<dstd::Vector<ParsedEvent>> collect_json_events(
@@ -126,7 +126,7 @@ static CoroTask<dstd::Vector<ParsedEvent>> collect_json_events(
         ParsedEvent ev;
         if (auto v = p->get_string("name")) ev.name = dstd::String(*v);
         if (auto v = p->get_string("cat")) ev.cat = dstd::String(*v);
-        if (auto v = p->get_string("ph")) ev.ph = dstd::String(*v);
+        if (auto v = p->get_int64("ph")) ev.ph = *v;
         events.push_back(std::move(ev));
     }
     co_return events;
@@ -151,13 +151,14 @@ namespace {
 /// The result goes in its own directory: a gzip trace sitting directly in
 /// the temp root would pick up any .dftindex another test left there and be
 /// read through an index that does not list it.
-dstd::String gzip_fixture(const dstd::String& plain_path) {
+dstd::String gzip_fixture(dstd::StringView plain_path) {
     const dstd::Path dir = make_unique_test_path("trace_fixture");
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     const dstd::String gz_path(
         (dir / (dstd::String(dstd::PathView(plain_path).filename()) + ".gz"))
             .str());
-    REQUIRE(dftu_utils_test::compress_file_to_gzip(plain_path, gz_path));
+    REQUIRE(dftu_utils_test::compress_file_to_gzip(dstd::String(plain_path),
+                                                   gz_path));
     dstd::fs::remove(plain_path).discard();
     return gz_path;
 }
@@ -437,11 +438,11 @@ TEST_SUITE("TraceReader") {
     TEST_CASE("read_lines plain file byte range completes current line") {
         auto test_file = make_unique_test_path("trace_reader_plain_range.pfw");
         const dstd::String first_line =
-            R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"ph":"X","args":{"ret":1}})";
+            R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"ph":1,"args":{"ret":1}})";
         const dstd::String second_line =
-            R"({"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":2000,"dur":20,"ph":"X","args":{"ret":2}})";
+            R"({"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":2000,"dur":20,"ph":1,"args":{"ret":2}})";
         const dstd::String third_line =
-            R"({"name":"close","cat":"POSIX","pid":1,"tid":1,"ts":3000,"dur":30,"ph":"X","args":{"ret":3}})";
+            R"({"name":"close","cat":"POSIX","pid":1,"tid":1,"ts":3000,"dur":30,"ph":1,"args":{"ret":3}})";
         {
             dstd::String out;
             dstd::fmt_append<"{}\n">(out, first_line);
@@ -608,10 +609,10 @@ TEST_SUITE("TraceReader") {
             dstd::String out;
             out +=
                 "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
-                "\"ts\":1000,\"dur\":10,\"ph\":\"X\",\"args\":{\"ret\":1}}\n";
+                "\"ts\":1000,\"dur\":10,\"ph\":1,\"args\":{\"ret\":1}}\n";
             out +=
                 "{\"name\":\"write\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
-                "\"ts\":2000,\"dur\":20,\"ph\":\"X\",\"args\":{\"ret\":2}}\n";
+                "\"ts\":2000,\"dur\":20,\"ph\":1,\"args\":{\"ret\":2}}\n";
             dstd::fs::write_file(dstd::PathView(test_file), out).discard();
         }
 
@@ -640,16 +641,16 @@ TEST_SUITE("TraceReader") {
         {
             dstd::String out;
             out +=
-                R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"ph":"X","args":{"ret":1}})"
+                R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"ph":1,"args":{"ret":1}})"
                 "\n";
             for (int k = 0; k < REFUSED_KINDS; ++k)
                 out +=
                     refused_line(k, R"("name":"write","cat":"POSIX","pid":2,)"
-                                    R"("tid":1,"ts":2,"dur":20,"ph":"X")") +
+                                    R"("tid":1,"ts":2,"dur":20,"ph":1)") +
                     "\n";
             for (int k = 0; k < REFUSED_KINDS; ++k)
                 out += refused_line(k, R"("name":"read","cat":"POSIX","pid":3,)"
-                                       R"("tid":1,"ts":3,"dur":20,"ph":"X")") +
+                                       R"("tid":1,"ts":3,"dur":20,"ph":1)") +
                        "\n";
             dstd::fs::write_file(dstd::PathView(test_file), out).discard();
         }
@@ -679,7 +680,7 @@ TEST_SUITE("TraceReader") {
             for (const char* name : {"read", "write"}) {
                 out +=
                     R"({"name":")" + dstd::String(name) +
-                    R"(","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"ph":"X","args":{"ret":1,"deep":)";
+                    R"(","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"ph":1,"args":{"ret":1,"deep":)";
                 out.append(100000, '[');
                 out.append(100000, ']');
                 out += "}}\n";
@@ -709,10 +710,10 @@ TEST_SUITE("TraceReader") {
                 make_unique_test_path("trace_reader_refused_metric.pfw");
             {
                 dstd::String out =
-                    R"({"name":"CM","cat":"dftracer","pid":1,"tid":1,"ts":1,"ph":"M","args":{"name":"time_metric","value":"NS",)" +
+                    R"({"name":"CM","cat":"dftracer","pid":1,"tid":1,"ts":1,"ph":4,"args":{"name":"time_metric","value":"NS",)" +
                     refused_member(k) + "}}\n";
                 out +=
-                    R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"ph":"X","args":{"ret":1}})"
+                    R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"ph":1,"args":{"ret":1}})"
                     "\n";
                 dstd::fs::write_file(dstd::PathView(test_file), out).discard();
             }
@@ -838,13 +839,13 @@ TEST_SUITE("TraceReader") {
             dstd::String out;
             for (int i = 0; i < 200; ++i) {
                 dstd::fmt_append<
-                    "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":"
+                    "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":"
                     "1,\"tid\":1,\"ts\":{}{}\n">(out, (1000 + i),
                                                  R"(,"dur":10,"args":{}})");
             }
             for (int i = 0; i < 200; ++i) {
                 dstd::fmt_append<
-                    "{\"ph\":\"X\",\"name\":\"train\",\"cat\":\"COMPUTE\","
+                    "{\"ph\":1,\"name\":\"train\",\"cat\":\"COMPUTE\","
                     "\"pid\":1,\"tid\":1,\"ts\":{}{}\n">(
                     out, (100000 + i), R"(,"dur":500,"args":{}})");
             }
@@ -897,7 +898,7 @@ TEST_SUITE("TraceReader") {
             dstd::String out;
             for (int i = 0; i < 100; ++i) {
                 dstd::fmt_append<
-                    "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":"
+                    "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":"
                     "1,\"tid\":1,\"ts\":{}{}\n">(out, (1000 + i),
                                                  R"(,"dur":10,"args":{}})");
             }
@@ -950,19 +951,19 @@ TEST_SUITE("TraceReader") {
             dstd::String out;
             for (int i = 0; i < POSIX_BEFORE; ++i) {
                 dstd::fmt_append<
-                    "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":"
+                    "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":"
                     "1,\"tid\":1,\"ts\":{},\"dur\":10,\"args\":{\"pad\":\"{}\"}"
                     "}\n">(out, (1000 + i), pad);
             }
             for (int i = 0; i < COMPUTE_COUNT; ++i) {
                 dstd::fmt_append<
-                    "{\"ph\":\"X\",\"name\":\"train\",\"cat\":\"COMPUTE\","
+                    "{\"ph\":1,\"name\":\"train\",\"cat\":\"COMPUTE\","
                     "\"pid\":2,\"tid\":2,\"ts\":{},\"dur\":500,\"args\":{"
                     "\"pad\":\"{}\"}}\n">(out, (100000 + i), pad);
             }
             for (int i = 0; i < POSIX_AFTER; ++i) {
                 dstd::fmt_append<
-                    "{\"ph\":\"X\",\"name\":\"write\",\"cat\":\"POSIX\","
+                    "{\"ph\":1,\"name\":\"write\",\"cat\":\"POSIX\","
                     "\"pid\":1,\"tid\":1,\"ts\":{},\"dur\":10,\"args\":{"
                     "\"pad\":\"{}\"}}\n">(out, (200000 + i), pad);
             }
@@ -1025,7 +1026,7 @@ TEST_SUITE("TraceReader::read_json") {
                 .get());
         CHECK(events.size() > 0);
         for (const auto& ev : events) {
-            CHECK_FALSE(ev.ph.empty());
+            CHECK(ev.ph != 0);
         }
     }
 
@@ -1102,13 +1103,13 @@ TEST_SUITE("TraceReader::read_json") {
             dstd::String out;
             for (int i = 0; i < 100; ++i) {
                 dstd::fmt_append<
-                    "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":"
+                    "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":"
                     "1,\"tid\":1,\"ts\":{}{}\n">(out, (1000 + i),
                                                  R"(,"dur":10,"args":{}})");
             }
             for (int i = 0; i < 50; ++i) {
                 dstd::fmt_append<
-                    "{\"ph\":\"X\",\"name\":\"train\",\"cat\":\"COMPUTE\","
+                    "{\"ph\":1,\"name\":\"train\",\"cat\":\"COMPUTE\","
                     "\"pid\":2,\"tid\":2,\"ts\":{}{}\n">(
                     out, (100000 + i), R"(,"dur":500,"args":{}})");
             }
@@ -1141,19 +1142,19 @@ TEST_SUITE("TraceReader::read_json") {
             dstd::String out;
             for (int i = 0; i < 100; ++i) {
                 dstd::fmt_append<
-                    "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":"
+                    "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":"
                     "1,\"tid\":1,\"ts\":{},\"dur\":10,\"args\":{\"pad\":\"{}\"}"
                     "}\n">(out, (1000 + i), pad);
             }
             for (int i = 0; i < 5; ++i) {
                 dstd::fmt_append<
-                    "{\"ph\":\"X\",\"name\":\"train\",\"cat\":\"COMPUTE\","
+                    "{\"ph\":1,\"name\":\"train\",\"cat\":\"COMPUTE\","
                     "\"pid\":2,\"tid\":2,\"ts\":{},\"dur\":500,\"args\":{"
                     "\"pad\":\"{}\"}}\n">(out, (100000 + i), pad);
             }
             for (int i = 0; i < 100; ++i) {
                 dstd::fmt_append<
-                    "{\"ph\":\"X\",\"name\":\"write\",\"cat\":\"POSIX\","
+                    "{\"ph\":1,\"name\":\"write\",\"cat\":\"POSIX\","
                     "\"pid\":1,\"tid\":1,\"ts\":{},\"dur\":10,\"args\":{"
                     "\"pad\":\"{}\"}}\n">(out, (200000 + i), pad);
             }
@@ -1202,7 +1203,7 @@ TEST_SUITE("TraceReader::read_json") {
         {
             dstd::fs::write_file(
                 dstd::PathView(test_file),
-                dstd::String("{\"ph\":\"X\",\"name\":\"read\",\"cat\":"
+                dstd::String("{\"ph\":1,\"name\":\"read\",\"cat\":"
                              "\"POSIX\",\"pid\":42,\"tid\":7,\"ts\":1000,"
                              "\"dur\":10,\"args\":{\"ret\":1}}\n"))
                 .discard();
@@ -1217,7 +1218,7 @@ TEST_SUITE("TraceReader::read_json") {
         REQUIRE(events.size() == 1);
         CHECK(events[0].name == "read");
         CHECK(events[0].cat == "POSIX");
-        CHECK(events[0].ph == "X");
+        CHECK(events[0].ph == 1);
 
         dstd::fs::remove(gz_file).discard();
     }
@@ -1227,8 +1228,8 @@ namespace {
 
 // Lines written to a gzip trace, read back through read_json with and without
 // an index. Returns the line count the reader keeps.
-std::size_t read_kept(const dstd::Vector<dstd::String>& lines,
-                      const dstd::String& query, bool indexed) {
+std::size_t read_kept(dstd::Span<const dstd::String> lines,
+                      dstd::StringView query, bool indexed) {
     dstd::String content;
     for (const auto& l : lines) content += l + "\n";
     const dstd::Path dir = make_unique_test_path("malformed_reader");
@@ -1329,9 +1330,9 @@ TEST_SUITE("TraceReader malformed lines") {
             R"(lower(name) == "read" and dur > 1)",
         };
         std::size_t shapes = 0;
-        const auto check = [&](const dstd::Vector<dstd::String>& lines,
+        const auto check = [&](dstd::Vector<dstd::String> lines,
                                std::size_t good_lines, std::size_t extra,
-                               const char* query) {
+                               dstd::StringView query) {
             const auto plain = read_kept(lines, query, false);
             const auto indexed = read_kept(lines, query, true);
             CAPTURE(query);
@@ -1427,9 +1428,9 @@ WindowFixture window_fixture(std::size_t rounds, std::size_t checkpoint_size) {
     std::mt19937_64 rng(7);
     for (std::size_t round = 0; round < rounds; ++round) {
         for (const std::size_t size : sizes) {
-            dstd::String line = dstd::fmt<
-                "{\"name\":\"read\",\"ph\":\"X\",\"id\":{},\"pad\":\"">(
-                f.lines.size());
+            dstd::String line =
+                dstd::fmt<"{\"name\":\"read\",\"ph\":1,\"id\":{},\"pad\":\"">(
+                    f.lines.size());
             for (std::size_t i = 0; i < size; ++i)
                 line.push_back(HEX[rng() & 15]);
             line += R"("})";
@@ -1543,7 +1544,7 @@ static CoroTask<void> collect_odd_json(AsyncGenerator<JsonLine> gen,
     }
 }
 
-dstd::String write_odd_trace(const dstd::Vector<dstd::String>& lines,
+dstd::String write_odd_trace(dstd::Span<const dstd::String> lines,
                              bool indexed) {
     dstd::String content;
     for (const auto& l : lines) content += l + "\n";
@@ -1982,7 +1983,7 @@ WindowFixture long_line_fixture(bool indexed) {
     const std::size_t sizes[] = {40, 400, LONG_LINE_BYTES, 40, 4000};
     for (const std::size_t size : sizes) {
         dstd::String line =
-            dstd::fmt<"{\"name\":\"read\",\"ph\":\"X\",\"id\":{},\"pad\":\"">(
+            dstd::fmt<"{\"name\":\"read\",\"ph\":1,\"id\":{},\"pad\":\"">(
                 f.lines.size());
         for (std::size_t i = 0; i < size; ++i) line.push_back(HEX[rng() & 15]);
         line += R"("})";

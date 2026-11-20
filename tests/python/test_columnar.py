@@ -6,7 +6,8 @@ only when the test asks for it, via VecColumn.to_arrow()."""
 
 import pytest
 
-from dftracer.utils import F, col, columnar, lit, where
+from dftracer.utils import F, col, lit, where
+from dftracer.utils._eval import Columnar
 
 pa = pytest.importorskip("pyarrow")
 pytest.importorskip("numpy")
@@ -94,7 +95,7 @@ def test_columnar_fillna_null_aware():
 
 
 def test_columnar_integer_arithmetic():
-    out = columnar(F.dur + F.cnt).apply(_table())
+    out = Columnar(F.dur + F.cnt).apply(_table())
     assert _list(out) == [1001, 2002, 3003, 4004]
     assert _type(out) == pa.int64()
 
@@ -108,71 +109,71 @@ def test_columnar_eval_many_matches_individual():
     e3 = F.ts * lit(0.5)  # reads a different column
     outs = eval_many([e1, e2, e3], t)
     assert len(outs) == 3
-    assert _list(outs[0]) == _list(columnar(e1).apply(t))
-    assert _list(outs[1]) == _list(columnar(e2).apply(t))
-    assert _list(outs[2]) == _list(columnar(e3).apply(t))
+    assert _list(outs[0]) == _list(Columnar(e1).apply(t))
+    assert _list(outs[1]) == _list(Columnar(e2).apply(t))
+    assert _list(outs[2]) == _list(Columnar(e3).apply(t))
     assert _list(outs[0]) == [1001, 2002, 3003, 4004]
     assert _list(outs[1]) == [2002, 4004, 6006, 8008]
 
 
 def test_columnar_subtract_columns():
-    out = columnar(F.dur - F.cnt).apply(_table())
+    out = Columnar(F.dur - F.cnt).apply(_table())
     assert _list(out) == [999, 1998, 2997, 3996]
 
 
 def test_columnar_scalar_broadcast():
-    out = columnar(F.dur * lit(2)).apply(_table())
+    out = Columnar(F.dur * lit(2)).apply(_table())
     assert _list(out) == [2000, 4000, 6000, 8000]
 
 
 def test_columnar_scalar_on_left_commutes():
-    out = columnar(lit(3) * F.cnt).apply(_table())
+    out = Columnar(lit(3) * F.cnt).apply(_table())
     assert _list(out) == [3, 6, 9, 12]
 
 
 def test_columnar_mixed_promotes_to_float():
-    out = columnar(F.dur * lit(0.001) + F.ts).apply(_table())
+    out = Columnar(F.dur * lit(0.001) + F.ts).apply(_table())
     assert _list(out) == [11.0, 22.0, 33.0, 44.0]
     assert _type(out) == pa.float64()
 
 
 def test_columnar_primitive_ilog2():
-    out = columnar(F.dur.ilog2()).apply(_table())
+    out = Columnar(F.dur.ilog2()).apply(_table())
     assert _list(out) == [(d).bit_length() - 1 for d in [1000, 2000, 3000, 4000]]
     assert _type(out) == pa.int64()
 
 
 def test_columnar_primitive_popcount():
-    out = columnar(F.cnt.popcount()).apply(_table())
+    out = Columnar(F.cnt.popcount()).apply(_table())
     assert _list(out) == [bin(x).count("1") for x in [1, 2, 3, 4]]
 
 
 def test_columnar_primitive_over_an_expression():
     # ilog2 of a derived column: cast + prim, still one vec pipeline.
-    out = columnar((F.dur + F.cnt).ilog2()).apply(_table())
+    out = Columnar((F.dur + F.cnt).ilog2()).apply(_table())
     assert _list(out) == [
         (d + c).bit_length() - 1 for d, c in zip([1000, 2000, 3000, 4000], [1, 2, 3, 4])
     ]
 
 
 def test_columnar_col_and_F_are_equivalent():
-    a = columnar(col("dur") + lit(1)).apply(_table())
-    b = columnar(F.dur + lit(1)).apply(_table())
+    a = Columnar(col("dur") + lit(1)).apply(_table())
+    b = Columnar(F.dur + lit(1)).apply(_table())
     assert _list(a) == _list(b)
 
 
 def test_columnar_reports_input_columns():
-    assert columnar(F.dur * lit(2) + F.ts).columns == ["dur", "ts"]
+    assert Columnar(F.dur * lit(2) + F.ts).columns == ["dur", "ts"]
 
 
 def test_columnar_division_columns():
-    out = columnar(F.dur / F.cnt).apply(_table())
+    out = Columnar(F.dur / F.cnt).apply(_table())
     assert _list(out) == [1000.0, 1000.0, 1000.0, 1000.0]
     assert _type(out) == pa.float64()
 
 
 def test_columnar_division_by_scalar():
-    out = columnar(F.dur / lit(2)).apply(_table())
+    out = Columnar(F.dur / lit(2)).apply(_table())
     assert _list(out) == [500.0, 1000.0, 1500.0, 2000.0]
     assert _type(out) == pa.float64()
 
@@ -194,18 +195,18 @@ def test_dataframe_apply_rejects_non_expr():
 
 
 def test_columnar_comparison_makes_a_bool_mask():
-    out = columnar(F.dur > lit(2000)).apply(_table())
+    out = Columnar(F.dur > lit(2000)).apply(_table())
     assert _list(out) == [False, False, True, True]
     assert _type(out) == pa.bool_()
 
 
 def test_columnar_logical_and():
-    out = columnar((F.dur > lit(1000)) & (F.cnt < lit(4))).apply(_table())
+    out = Columnar((F.dur > lit(1000)) & (F.cnt < lit(4))).apply(_table())
     assert _list(out) == [False, True, True, False]
 
 
 def test_columnar_invert():
-    out = columnar(~(F.dur > lit(2000))).apply(_table())
+    out = Columnar(~(F.dur > lit(2000))).apply(_table())
     assert _list(out) == [True, True, False, False]
 
 
@@ -226,14 +227,14 @@ def test_columnar_over_view_batch_stays_in_vec():
     with Environment(lines=100) as env:
         gz = env.create_test_gzip_file()
         with dft.Indexer(files=[gz]) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
 
         batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur", "mean:dur").collect()
         assert isinstance(batch, DataFrame)
         assert set(["cat", "count", "sum_dur", "mean_dur"]).issubset(batch.keys())
 
         # A derived metric computed on the vec batch: sum/count == mean.
-        avg = columnar(F.sum_dur / F.count).apply(batch)
+        avg = Columnar(F.sum_dur / F.count).apply(batch)
         mean = batch["mean_dur"].to_arrow()
         for a, m in zip(avg.to_arrow().to_pylist(), mean.to_pylist()):
             assert abs(a - m) <= 1e-6 * max(1.0, abs(m))
@@ -253,7 +254,7 @@ def test_columnar_batch_to_arrow_and_pandas_roundtrip():
     with Environment(lines=100) as env:
         gz = env.create_test_gzip_file()
         with dft.Indexer(files=[gz]) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         batch = TraceViewer(gz).group_by("cat").agg("count").collect()
         tbl = batch.to_arrow()
         assert tbl.num_rows == batch.num_rows
@@ -273,7 +274,7 @@ def test_columnar_batch_and_column_pickle_roundtrip():
     with Environment(lines=100) as env:
         gz = env.create_test_gzip_file()
         with dft.Indexer(files=[gz]) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur").collect()
 
         b2 = pickle.loads(pickle.dumps(batch))
@@ -298,7 +299,7 @@ def test_vecbatch_native_frame_ops():
     with Environment(lines=200) as env:
         gz = env.create_test_gzip_file()
         with dft.Indexer(files=[gz]) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur").collect()
 
         proj = batch.select("cat", "count")
@@ -309,7 +310,7 @@ def test_vecbatch_native_frame_ops():
         assert "n" in rn.keys() and "count" not in rn.keys()
         assert rn.num_rows == batch.num_rows
 
-        avg = columnar(F.sum_dur / F.count).apply(batch)
+        avg = Columnar(F.sum_dur / F.count).apply(batch)
         wc = batch.with_column("avg_dur", avg)
         assert "avg_dur" in wc.keys()
         assert wc["avg_dur"].to_arrow().to_pylist() == avg.to_arrow().to_pylist()
@@ -592,7 +593,7 @@ def test_vecbatch_topk_and_concat():
     with Environment(lines=200) as env:
         gz = env.create_test_gzip_file()
         with dft.Indexer(files=[gz]) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur").collect()
 
         top1 = batch.topk("count", 1, largest=True)
@@ -692,13 +693,13 @@ def test_columnar_fused_parallel_large_input():
     b = (np.arange(n, dtype=np.int64) * 3) % 7
     tbl = pa.table({"a": pa.array(a), "b": pa.array(b)})
 
-    out = columnar((F.a + F.b) * lit(2)).apply(tbl).to_arrow()
+    out = Columnar((F.a + F.b) * lit(2)).apply(tbl).to_arrow()
     assert out.to_pylist() == ((a + b) * 2).tolist()
 
-    fout = columnar(F.a / lit(2) + F.b).apply(tbl).to_arrow()
+    fout = Columnar(F.a / lit(2) + F.b).apply(tbl).to_arrow()
     assert np.allclose(fout.to_numpy(), a / 2 + b)
 
-    mask = columnar(F.a > lit(100000)).apply(tbl).to_arrow()
+    mask = Columnar(F.a > lit(100000)).apply(tbl).to_arrow()
     assert mask.to_pylist() == (a > 100000).tolist()
 
 
@@ -739,7 +740,7 @@ def test_group_by_first_last():
     # first/last take the group's first / last value in row order; the merge is
     # order-independent (min/max global row index), so the parallel path is
     # exact. Cover both the string-spec form and the F-expression form.
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F
 
     tbl = pa.table(
         {
@@ -767,12 +768,11 @@ def test_group_by_first_last():
 
 
 def test_group_by_quantile_percentile():
-    # Per-group DDSketch quantiles: F.x.quantile(q) and F.x.percentile(p) land
-    # within the sketch's relative accuracy of the true value. Both the string
-    # spec and the F-expression forms are covered.
+    # F.x.approx_quantile(q) lands within the DDSketch's relative accuracy of
+    # the true value; F.x.quantile and percentile are exact.
     import numpy as np
 
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F
 
     n = 5000
     cats = np.array([0, 1] * (n // 2))
@@ -782,7 +782,7 @@ def test_group_by_quantile_percentile():
 
     out = (
         batch.group_by("cat")
-        .agg(F.dur.quantile(0.5).alias("p50"), F.dur.percentile(90).alias("p90"))
+        .agg(F.dur.approx_quantile(0.5).alias("p50"), F.dur.approx_quantile(0.9).alias("p90"))
         .to_pandas()
         .set_index("cat")
         .sort_index()
@@ -794,16 +794,24 @@ def test_group_by_quantile_percentile():
         assert out.loc[c, "p50"] == pytest.approx(true_p50, rel=0.03)
         assert out.loc[c, "p90"] == pytest.approx(true_p90, rel=0.03)
 
-    # percentile(p) == quantile(p/100).
-    a = batch.group_by("cat").agg(F.dur.percentile(99).alias("x")).to_pandas()
-    b = batch.group_by("cat").agg(F.dur.quantile(0.99).alias("x")).to_pandas()
-    assert a["x"].to_list() == pytest.approx(b["x"].to_list())
+    # percentile(p) == quantile(p/100, "linear"), both exact (numpy's default).
+    a = batch.group_by("cat").agg(F.dur.percentile(99).alias("x")).to_pandas().set_index("cat")
+    b = (
+        batch.group_by("cat")
+        .agg(F.dur.quantile(0.99, "linear").alias("x"))
+        .to_pandas()
+        .set_index("cat")
+    )
+    for c in (0, 1):
+        want = np.percentile(dur[cats == c], 99)
+        assert a.loc[c, "x"] == pytest.approx(want, rel=1e-12)
+        assert b.loc[c, "x"] == pytest.approx(want, rel=1e-12)
 
 
 def test_group_by_hist():
     # F.x.hist() emits a per-group DDSketch histogram as a list<struct> column;
     # each group's bin counts sum to its row count.
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F
 
     tbl = pa.table(
         {
@@ -827,7 +835,7 @@ def test_group_by_hist():
 
 def test_group_by_sumsq():
     # sumsq is a straight finalize of FieldStat::sumsq: sum(x**2) per group.
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F
 
     tbl = pa.table(
         {
@@ -850,7 +858,7 @@ def test_group_by_argmax():
     # argmax(value, by) is the String repr of `value` at the row maximizing
     # `by`, matching pandas' idxmax-then-lookup.
     pd = pytest.importorskip("pandas")
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F
 
     tbl = pa.table(
         {
@@ -878,7 +886,7 @@ def test_group_by_argmax():
 def test_group_by_set_union():
     # set_union is the sorted, distinct String values of a field, joined by the
     # engine's separator (matching a sorted-unique-join reference).
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F
 
     tbl = pa.table(
         {
@@ -897,7 +905,7 @@ def test_group_by_set_union():
 def test_group_by_agg_expressions():
     # Aggregate over expressions (Polars-style), both the two-step .agg() and the
     # one-shot form, plus legacy strings - all through the CSE group_agg_expr.
-    from dftracer.utils.columnar import F, count
+    from dftracer.utils import F, count
 
     tbl = pa.table(
         {
@@ -926,7 +934,7 @@ def test_group_by_agg_expressions():
     assert set(one.keys()) == {"cat", "sum_ab", "count"}
 
     # No aggregates returns a GroupBy for chaining.
-    from dftracer.utils.columnar import GroupBy
+    from dftracer.utils import GroupBy
 
     assert isinstance(batch.group_by("cat"), GroupBy)
 
@@ -941,7 +949,7 @@ def test_group_by_multi_key_matches_pandas():
     # its own type (cat stays String, pid stays Int64), matching
     # pandas.groupby([k1, k2]).
     pd = pytest.importorskip("pandas")
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F
 
     cat = ["io", "cpu", "io", "cpu", "io", "cpu", "io"]
     pid = pa.array([1, 1, 2, 1, 1, 2, 2], pa.int64())
@@ -973,7 +981,7 @@ def test_group_by_multi_key_matches_pandas():
 def test_query_string_filter():
     # A duql string filters a VecBatch via the SIMD mask backend
     # (pandas.query-style), and where() routes strings through it.
-    from dftracer.utils.columnar import where
+    from dftracer.utils import where
     from dftracer.utils.dftracer_utils_ext import DFTUtilsDuqlError
 
     tbl = pa.table(
@@ -984,11 +992,12 @@ def test_query_string_filter():
     )
     batch = _dataframe_from_arrow(tbl)
 
-    got = batch.query("dur > 100 and cat == 'io'").to_arrow().to_pydict()
-    assert got == {"dur": [200], "cat": ["io"]}
+    kept = batch.query("dur > 100 and cat == 'io'")
+    assert kept.reset_index(drop=True).to_arrow().to_pydict() == {"dur": [200], "cat": ["io"]}
+    assert kept.index.to_list() == [2]
 
     # in-list
-    got2 = batch.query("cat in ['io', 'net']").to_arrow().to_pydict()
+    got2 = batch.query("cat in ['io', 'net']").reset_index(drop=True).to_arrow().to_pydict()
     assert got2["cat"] == ["io", "io", "io", "net"]
 
     # where() accepts the string form on an arrow table.
@@ -996,7 +1005,11 @@ def test_query_string_filter():
     assert wr["dur"] == [150, 200, 300]
 
     # Patterns run on the columns.
-    assert batch.query("cat ~ '^i'").to_arrow().to_pydict()["dur"] == [50, 200, 80]
+    assert batch.query("cat ~ '^i'").reset_index(drop=True).to_arrow().to_pydict()["dur"] == [
+        50,
+        200,
+        80,
+    ]
 
     # A predicate with no columnar lowering raises the typed query error.
     with pytest.raises(DFTUtilsDuqlError):
@@ -1191,8 +1204,8 @@ def test_series_null_metadata():
 
     nullable = _series_from_arrow(pa.array([1, None, 3], pa.int64()))
     assert nullable.null_count == 1
-    assert nullable.is_null(1) is True
-    assert nullable.is_null(0) is False
+    assert nullable.is_null_at(1) is True
+    assert nullable.is_null_at(0) is False
 
 
 def test_series_comparison_operators():
@@ -1231,8 +1244,8 @@ def test_columnar_null_aware():
     # A null-bearing column flows through the engine; the op preserves the null
     # position, and fillna can close it.
     tbl = pa.table({"dur": pa.array([1, None, 3], pa.int64())})
-    assert _list(columnar(F.dur + lit(1)).apply(tbl)) == [2, None, 4]
-    assert _list(columnar((F.dur + lit(1)).fillna(0)).apply(tbl)) == [2, 0, 4]
+    assert _list(Columnar(F.dur + lit(1)).apply(tbl)) == [2, None, 4]
+    assert _list(Columnar((F.dur + lit(1)).fillna(0)).apply(tbl)) == [2, 0, 4]
 
 
 def test_dataframe_tail_reverse_row_index_sample():
@@ -1452,25 +1465,24 @@ def test_dataframe_group_by_dynamic():
 def test_series_value_counts():
     col = _series_from_arrow(pa.array([1, 2, 1, 3, 1, 2], pa.int64()))
     vc = col.value_counts()
-    values = pa.array(vc["value"]).to_pylist()
-    counts = pa.array(vc["count"]).to_pylist()
-    assert values[0] == 1 and counts[0] == 3  # most frequent first
-    assert dict(zip(values, counts)) == {1: 3, 2: 2, 3: 1}
+    assert vc.name == "count"
+    assert vc.to_list() == [3, 2, 1]  # most frequent first
+    assert vc.index.to_list() == [1, 2, 3]
 
 
 def test_columnar_expr_apply_direct_no_wrapper():
-    # (expr).apply(source) works without the columnar() wrapper.
+    # (expr).apply(source) works without the Columnar() wrapper.
     t = _table()
     out = (F.dur + F.cnt).apply(t)
     assert _list(out) == [1001, 2002, 3003, 4004]
 
 
 def test_query_F_shorthand_and_callable():
-    from dftracer.utils.columnar import F, Field
+    from dftracer.utils import F, col
 
-    assert str(F.dur > 100) == str(Field("dur") > 100)
-    assert str(F("args.level") == 3) == str(Field("args.level") == 3)
-    assert str(F["args.level"] == 3) == str(Field("args.level") == 3)
+    assert str(F.dur > 100) == str(col("dur") > 100)
+    assert str(F("args.level") == 3) == str(col("args.level") == 3)
+    assert str(F["args.level"] == 3) == str(col("args.level") == 3)
 
 
 def test_host_ops_registered_by_name(tmp_path):
@@ -1515,5 +1527,5 @@ def test_host_ops_registered_by_name(tmp_path):
     assert _ext.op_run("dftu.file.compress", str(tmp_path / "absent"), str(gz)) == 0
 
     lines = _series_from_arrow(pa.array(["ERROR: full", "INFO: ok", "ERROR: slow"], pa.string()))
-    kept = _ext.op_run("dftu.text.line_filter", lines._native, "ERROR")
+    kept = _ext.op_run("dftu.text.line_filter", lines, "ERROR")
     assert pa.array(kept).to_pylist() == ["ERROR: full", "ERROR: slow"]

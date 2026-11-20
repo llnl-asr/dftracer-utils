@@ -220,6 +220,18 @@ class Dir {
 /// matches `/`, and `**` is the same as `*`.
 bool match_name(StringView pattern, StringView name) noexcept;
 
+/// Whether a path pattern has a character that @ref glob_match_name reads as a
+/// wildcard: `*`, `?` or `[`.
+bool has_glob_chars(StringView pattern) noexcept;
+
+/// Whether one path component matches a pattern. @ref match_name plus the
+/// class `[...]`: one character of the listed characters and `a-z` ranges, or
+/// any other with a leading `!` or `^`. A `]` first in the class and a `-`
+/// first or last are themselves. A `[` with no closing `]` is itself. There is
+/// no escape character, so a backslash is itself. A name that starts with `.`
+/// is a name like any other.
+bool glob_match_name(StringView pattern, StringView name) noexcept;
+
 /// Depth-first, pre-order walk of the tree at root. fn is called for root
 /// itself first, then for each descendant before its children. A symlinked
 /// directory is reported and not followed. The path handed to fn is built in

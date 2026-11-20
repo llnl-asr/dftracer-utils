@@ -413,36 +413,17 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
         index_dir = s;
     }
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> paths;
-    dftracer::utils::dstd::Optional<dftracer::utils::dstd::String> dir;
-    if (!python::core::parse_trace_files(files, paths, dir)) return -1;
+    if (!python::core::parse_trace_files(files, paths)) return -1;
     View tv;
-    if (dir) {
-        if (!run_blocking([&] {
-                tv = dftracer::utils::python::core::py_unwrap(
-                    python::runtime::get_default_runtime()
-                        ->submit(View::from_directory(*dir, DS(index_dir),
-                                                      DS(format)))
-                        .get());
-                dftracer::utils::python::core::py_unwrap(tv.status());
-            }))
-            return -1;
-    } else {
-        dftracer::utils::dstd::Vector<trace::views::ViewFile> vfiles;
-        vfiles.reserve(paths.size());
-        for (const dftracer::utils::dstd::String& p : paths) {
-            const auto index_path =
-                dftracer::utils::trace::internal::determine_index_path(
-                    p, index_dir);
-            trace::views::ViewFile vf{DS(p), index_path};
-            vf.format = format;
-            vfiles.push_back(std::move(vf));
-        }
-        if (!run_blocking([&] {
-                tv = View::from_files(std::move(vfiles));
-                dftracer::utils::python::core::py_unwrap(tv.status());
-            }))
-            return -1;
-    }
+    if (!run_blocking([&] {
+            tv = dftracer::utils::python::core::py_unwrap(
+                python::runtime::get_default_runtime()
+                    ->submit(View::from_inputs(std::move(paths), DS(index_dir),
+                                               DS(format)))
+                    .get());
+            dftracer::utils::python::core::py_unwrap(tv.status());
+        }))
+        return -1;
     dftracer::utils::dstd::UniquePtr<View>(self->tv).reset();
     self->tv =
         dftracer::utils::dstd::make_unique<View>(std::move(tv)).release();

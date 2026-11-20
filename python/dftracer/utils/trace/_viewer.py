@@ -84,15 +84,30 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
     """A lazy view over trace files; see the module docstring.
 
     ``files`` is a path (``str`` or ``os.PathLike``) or a sequence of paths,
-    with the same rule as :class:`~dftracer.utils.index.Indexer`. One path that names
-    a directory is scanned recursively for trace files; a directory inside a
-    sequence raises ``ValueError``. A repeated path is read once. A glob is not
-    expanded, so it is a missing path. Nothing is read when the view is
-    built, so a missing path or a file that is not a trace raises a
-    ``DFTUtilsError`` at ``collect()`` (``Indexer`` raises a missing path on
-    its first ``status``, ``ensure`` or ``build``, and a non-trace file when
-    it indexes it). An empty sequence and an empty directory are views of no
-    rows, so a worker with no shard can still build one (``Indexer`` raises
+    with the same rule as :class:`~dftracer.utils.index.Indexer`. Each path is a
+    file, a directory or a glob, and a sequence may mix them. A directory is
+    scanned recursively for trace files (``*.gz``, not the ``.dftindex``,
+    ``split`` and ``schemas`` folders). A glob has ``*`` (any run of
+    characters), ``?`` (one character), ``[abc]``, ``[a-z]``, ``[!a-z]`` or
+    ``[^a-z]``, and ``**`` as a whole path part (zero or more directories); a
+    part that starts with ``.`` is matched like any other, there is no escape
+    character, and ``**`` does not enter ``.dftindex``, ``split``, ``schemas``
+    or a symlink to a directory. A glob names any file it matches whatever the
+    file's name, and a directory it matches is scanned like a directory path.
+    A path that exists is taken as it is, even when its name has a wildcard.
+    The files are those of the paths in order. With several paths each file
+    appears once, by device and inode (the first one wins, so a symlink or
+    hard link names its file once); one path lists a file as often as it
+    names it. One directory or glob gives its files sorted by path. Staging folders and
+    files of a table writer (``.<name>.tmp-<id>``, ``.<name>.old-<id>``) and
+    ``.dftindex`` folders are left out of a scan or a glob. A glob that
+    matches nothing adds no file. Nothing is read
+    when the view is built, so a missing path (one with no wildcard that does
+    not exist) or a file that is not a trace raises a ``DFTUtilsError`` at
+    ``collect()`` (``Indexer`` raises a missing path on its first ``status``,
+    ``ensure`` or ``build``, and a non-trace file when it indexes it). An
+    empty sequence, an empty directory and a glob with no match are views of
+    no rows, so a worker with no shard can still build one (``Indexer`` raises
     ``ValueError`` for an empty sequence).
 
     ``record_schema`` names a registered record

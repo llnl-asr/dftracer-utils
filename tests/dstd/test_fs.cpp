@@ -975,3 +975,55 @@ TEST_CASE("match_name") {
     CHECK(match_name("a/b", "a/b"));
     CHECK(match_name("*/b", "/b"));
 }
+
+TEST_CASE("glob_match_name classes") {
+    using dstd::fs::glob_match_name;
+    CHECK(glob_match_name("[abc]", "a"));
+    CHECK(glob_match_name("[abc]", "c"));
+    CHECK_FALSE(glob_match_name("[abc]", "d"));
+    CHECK_FALSE(glob_match_name("[abc]", ""));
+    CHECK_FALSE(glob_match_name("[abc]", "ab"));
+    CHECK(glob_match_name("t[0-9].gz", "t7.gz"));
+    CHECK_FALSE(glob_match_name("t[0-9].gz", "tx.gz"));
+    CHECK(glob_match_name("[a-cx-z]", "y"));
+    CHECK_FALSE(glob_match_name("[a-cx-z]", "m"));
+    CHECK(glob_match_name("[!a-c]", "d"));
+    CHECK_FALSE(glob_match_name("[!a-c]", "b"));
+    CHECK(glob_match_name("[^a-c]", "d"));
+    CHECK_FALSE(glob_match_name("[^a-c]", "b"));
+    // A ']' first in the class, and a '-' first or last, are literal.
+    CHECK(glob_match_name("[]a]", "]"));
+    CHECK(glob_match_name("[]a]", "a"));
+    CHECK(glob_match_name("[!]a]", "b"));
+    CHECK_FALSE(glob_match_name("[!]a]", "]"));
+    CHECK(glob_match_name("[-a]", "-"));
+    CHECK(glob_match_name("[a-]", "-"));
+    CHECK_FALSE(glob_match_name("[a-]", "b"));
+    // An unterminated class is the text '['.
+    CHECK(glob_match_name("[abc", "[abc"));
+    CHECK_FALSE(glob_match_name("[abc", "a"));
+    CHECK(glob_match_name("a[", "a["));
+    CHECK(glob_match_name("[]", "[]"));
+    // A class is one character, so it never matches '/'.
+    CHECK_FALSE(glob_match_name("a[!x]b", "a/b"));
+    // Wildcards mix with classes and star runs.
+    CHECK(glob_match_name("*[0-9]?.gz", "run3x.gz"));
+    CHECK(glob_match_name("**.gz", "a.gz"));
+    CHECK(glob_match_name("*", ".hidden"));
+    CHECK(glob_match_name("?*", ".hidden"));
+    // No escaping: a backslash is itself.
+    CHECK(glob_match_name("a\\*", "a\\xyz"));
+    CHECK_FALSE(glob_match_name("a\\*", "a*"));
+    CHECK(glob_match_name("a\\*", "a\\*"));
+}
+
+TEST_CASE("has_glob_chars") {
+    using dstd::fs::has_glob_chars;
+    CHECK(has_glob_chars("a/*.gz"));
+    CHECK(has_glob_chars("a?"));
+    CHECK(has_glob_chars("a/[x]"));
+    CHECK(has_glob_chars("**"));
+    CHECK_FALSE(has_glob_chars("a/b.gz"));
+    CHECK_FALSE(has_glob_chars(""));
+    CHECK_FALSE(has_glob_chars("a\\b"));
+}

@@ -178,6 +178,7 @@ set(DFTRACER_UTILS_RUNTIME_SOURCES
     # Async I/O
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/filesystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/fs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/inputs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/local_stat.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs_on_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io.cpp

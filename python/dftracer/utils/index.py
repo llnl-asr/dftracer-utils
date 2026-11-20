@@ -212,17 +212,20 @@ class Indexer:
 
     Args:
         files: A path (``str`` or ``os.PathLike``) or a sequence of paths,
-            with the same rule as :class:`~dftracer.utils.trace.TraceViewer`. One
-            path that names a directory is scanned recursively for trace
-            gzip files (``*.gz``); a directory
-            inside a sequence raises ``ValueError``. A repeated path is
-            indexed once. A glob is not expanded, so it is a missing path and
-            raises ``DFTUtilsNotFoundError``, as does any missing path, on the
-            first ``status``, ``ensure`` or ``build`` (``TraceViewer`` raises
-            it at ``collect()``, as it reads nothing before). An empty
-            sequence raises ``ValueError``, since there is nothing to index
-            (``TraceViewer`` takes it as a view of no rows); an empty
-            directory is an index of no files. A file that is not a trace raises
+            with the same rule as :class:`~dftracer.utils.trace.TraceViewer`: each
+            path is a file, a directory (scanned recursively for trace gzip
+            files, ``*.gz``) or a glob (``*``, ``?``, ``[...]``, ``**``), and a
+            sequence may mix them. The files are those of the paths in order;
+            with several paths each file appears once (by device and inode).
+            A path that exists is taken as it is, even when its name has a
+            wildcard; a glob that matches nothing adds no
+            file. A missing path with no wildcard raises
+            ``DFTUtilsNotFoundError`` on the first ``status``, ``ensure`` or
+            ``build`` (``TraceViewer`` raises it at ``collect()``, as it
+            reads nothing before). An empty sequence raises ``ValueError``,
+            since there is nothing to index (``TraceViewer`` takes it as a
+            view of no rows); an empty directory or a glob with no match is
+            an index of no files. A file that is not a trace raises
             ``DFTUtilsIOError`` when ``ensure`` or ``build`` indexes it;
             ``status`` reads no content, so it does not.
         index_dir: Directory for .dftindex stores (default: next to files).

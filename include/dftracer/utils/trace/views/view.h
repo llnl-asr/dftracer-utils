@@ -734,6 +734,19 @@ class View : public dataframe::LazyOps<View> {
 
     static View from_file(dstd::String file_path, dstd::String index_path = "");
     static View from_files(dstd::Vector<ViewFile> files);
+    /// A view over every input form: a file, a directory, a glob (`*`, `?`,
+    /// `[...]`, `**`), or a list of them. A directory is scanned as
+    /// @ref from_directory does, a file is read whatever its name, and a path
+    /// that does not exist and has no wildcard is kept, so the view keeps its
+    /// error. The files are those of the inputs in order, each once by device
+    /// and inode when there are several inputs; one directory or glob lists its
+    /// files sorted by path. A glob that matches nothing adds no file. Each
+    /// file's index resolves under `index_dir` (empty = beside the trace);
+    /// `format` is
+    /// @ref ViewFile::format of every file.
+    static coro::CoroTask<View> from_inputs(dstd::Vector<dstd::String> inputs,
+                                            dstd::String index_dir = "",
+                                            dstd::String format = "");
     /// Scans `dir` recursively for gzip trace files (*.gz),
     /// sorted by path; index, split and schemas
     /// directories are skipped. Each file's index resolves under

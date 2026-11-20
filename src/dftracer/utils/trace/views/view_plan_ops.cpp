@@ -25,6 +25,7 @@
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/fs/fs.h>
+#include <dftracer/utils/runtime/fs/inputs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/index/cache/mv_store.h>
@@ -459,40 +460,39 @@ ScanPlan from_file(dstd::String file_path, dstd::String index_path) {
     return from_files(std::move(files));
 }
 
-coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
-                                        dstd::String index_dir,
-                                        dstd::String format) {
-    runtime::fs::FindOptions options;
-    options.patterns =
-        runtime::fs::names_of(common::constants::indexer::INPUT_FILE_PATTERNS);
-    options.skip_dirs =
-        runtime::fs::names_of(common::constants::indexer::SCAN_SKIP_DIRS);
-    options.with_stat = false;
-    options.skip_unreadable = true;
-
+coro::CoroTask<ScanPlan> from_inputs(dstd::Vector<dstd::String> inputs,
+                                     dstd::String index_dir,
+                                     dstd::String format) {
     auto scoped = coro::with_scope([&](coro::Scope& scope) {
-        return runtime::fs::find_all(scope, dstd::PathView(dir), options);
+        return runtime::fs::expand_inputs(
+            scope,
+            dstd::Span<const dstd::String>(inputs.data(), inputs.size()));
     });
-    auto found = co_await std::move(scoped);
-    if (!found)
+    auto expanded = co_await std::move(scoped);
+    if (!expanded)
         co_return failed_plan(dstd::make_shared<detail::ViewPlan>(),
-                              found.error());
+                              expanded.error());
 
     dstd::Vector<ViewFile> files;
-    files.reserve(found->size());
-    for (auto& e : *found) {
-        dstd::String fp(e.path.str());
+    files.reserve(expanded->files.size());
+    for (auto& path : expanded->files) {
         const dstd::String index =
-            internal::determine_index_path(fp, index_dir);
-        ViewFile vf{fp, dstd::String(index.data(), index.size())};
+            internal::determine_index_path(path, index_dir);
+        ViewFile vf{std::move(path), dstd::String(index.data(), index.size())};
         vf.format = format;
         files.push_back(std::move(vf));
     }
-    std::sort(files.begin(), files.end(),
-              [](const ViewFile& a, const ViewFile& b) {
-                  return a.file_path < b.file_path;
-              });
     co_return from_files(std::move(files));
+}
+
+coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
+                                        dstd::String index_dir,
+                                        dstd::String format) {
+    dstd::Vector<dstd::String> inputs;
+    inputs.push_back(std::move(dir));
+    auto planning =
+        from_inputs(std::move(inputs), std::move(index_dir), std::move(format));
+    co_return co_await std::move(planning);
 }
 
 dstd::Result<dstd::Vector<TraceConfig>> config(const ScanPlan& plan) {

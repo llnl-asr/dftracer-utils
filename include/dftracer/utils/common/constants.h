@@ -268,9 +268,11 @@ inline constexpr const char* EXTENSION = ".dftindex";
 /// dstd::fs::match_name.
 inline constexpr const char* INPUT_FILE_PATTERNS[] = {"*.gz"};
 /// Folders discovery does not enter: index data, the default output of
-/// dftracer_split and record schema specs, none of which hold input traces.
-inline constexpr const char* SCAN_SKIP_DIRS[] = {".dftindex*", "split",
-                                                 "schemas"};
+/// dftracer_split and record schema specs, none of which hold input traces,
+/// and the staging folders of a table writer (`.<name>.tmp-<id>` and
+/// `.<name>.old-<id>`).
+inline constexpr const char* SCAN_SKIP_DIRS[] = {
+    ".dftindex*", "split", "schemas", ".*.tmp-*", ".*.old-*"};
 }  // namespace indexer
 
 namespace reader {

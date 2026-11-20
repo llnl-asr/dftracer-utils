@@ -18,6 +18,7 @@
 #include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/runtime/fs/fs.h>
+#include <dftracer/utils/runtime/fs/inputs.h>
 #include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/index/build/resolver.h>
 #include <dftracer/utils/trace/index/extensions/extension_registry.h>
@@ -474,35 +475,17 @@ dstd::Result<Indexer> Indexer::open(dstd::Vector<dstd::String> paths,
     impl->options = std::move(options);
     const auto valid = validate_options(*impl);
     if (!valid) return valid.error();
-    for (auto& p : paths) {
-        common::InputFileStat self;
-        const bool known = common::stat_input(p, self);
-        const bool is_directory = known && self.is_directory;
-        const bool is_regular_file = known && self.is_regular_file;
-        const auto present = dstd::fs::exists(dstd::PathView(p));
-        if (!is_directory && !is_regular_file &&
-            !(present.has_value() && *present))
-            return common::make_error<"Indexer::open: no such path: {}">(
-                common::ErrorCode::NotFound, p);
-        if (!is_directory) {
-            impl->paths.push_back(std::move(p));
-            continue;
-        }
-        runtime::fs::FindOptions find_options;
-        find_options.patterns = runtime::fs::names_of(
-            common::constants::indexer::INPUT_FILE_PATTERNS);
-        find_options.recursive = false;
-        find_options.with_stat = false;
-        auto found = impl->runtime().block_on(coro::named(
-            "indexer-open", coro::with_scope([&](coro::Scope& scope) {
-                return runtime::fs::find_all(scope, dstd::PathView(p),
-                                             find_options);
-            })));
-        if (!found) return found.error();
-        const auto& matched = *found;
-        for (const auto& e : matched)
-            impl->paths.push_back(dstd::String(e.path.str()));
-    }
+    auto expanded = impl->runtime().block_on(coro::named(
+        "indexer-open", coro::with_scope([&](coro::Scope& scope) {
+            return runtime::fs::expand_inputs(
+                scope,
+                dstd::Span<const dstd::String>(paths.data(), paths.size()));
+        })));
+    if (!expanded) return expanded.error();
+    if (!expanded->missing.empty())
+        return common::make_error<"Indexer::open: no such path: {}">(
+            common::ErrorCode::NotFound, expanded->missing.front());
+    impl->paths = std::move(expanded->files);
     return finish_open(std::move(impl));
 }
 

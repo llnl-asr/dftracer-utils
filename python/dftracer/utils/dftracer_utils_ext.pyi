@@ -110,12 +110,12 @@ class Indexer:
     """Indexer with status/ensure/build pattern for tiered indexing.
 
     ``files`` follows the same rule as ``TraceViewer``: a path (``str`` or
-    ``os.PathLike``) or a sequence of paths; one directory is scanned
-    recursively, a directory inside a sequence raises ``ValueError``, a
-    repeated path counts once, a glob is a missing path
-    (``DFTUtilsNotFoundError``, on the first ``status``, ``ensure`` or
-    ``build``) and an empty sequence raises ``ValueError`` (``TraceViewer``
-    takes it as a view of no rows). A file that is not a trace raises ``DFTUtilsIOError`` when it is indexed
+    ``os.PathLike``) or a sequence of paths, each a file, a directory
+    (scanned recursively) or a glob (``*``, ``?``, ``[...]``, ``**``); a
+    repeated file counts once, a missing path with no wildcard raises
+    ``DFTUtilsNotFoundError`` on the first ``status``, ``ensure`` or
+    ``build``, a glob with no match adds no file and an empty sequence raises
+    ``ValueError`` (``TraceViewer`` takes it as a view of no rows). A file that is not a trace raises ``DFTUtilsIOError`` when it is indexed
     (``ensure``, ``build``); ``status`` reads no content."""
 
     def __init__(
@@ -1706,13 +1706,12 @@ class TraceViewer:
         format: str | None = ...,
     ) -> None:
         """``files`` is a path (``str`` or ``os.PathLike``) or a sequence of
-        paths. One path that names a directory is scanned recursively for
-        traces; a directory inside a sequence raises ``ValueError``. A repeated
-        path counts once. A glob is not expanded, so it is a missing path,
-        and a missing path or a file that is not a trace raises a
+        paths, each a file, a directory (scanned recursively for traces) or a
+        glob (``*``, ``?``, ``[...]``, ``**``). A repeated file counts once.
+        A missing path with no wildcard or a file that is not a trace raises a
         ``DFTUtilsError`` when the plan runs (``collect()``), since nothing is
-        read before that. An empty sequence and an empty directory are views
-        of no rows."""
+        read before that. An empty sequence, an empty directory and a glob
+        with no match are views of no rows."""
         ...
     def lazy(self) -> PublicLazyFrame:
         """The plan as a LazyFrame."""

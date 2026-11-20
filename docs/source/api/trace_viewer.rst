@@ -36,8 +36,20 @@ Constructing a view
 
    TraceViewer(files, index_dir=None, runtime=None)
 
-``files`` is a directory (scanned recursively for ``.pfw.gz`` traces), a single
-file path, or a list of file paths. Pass ``index_dir`` to point at an index
+``files`` is one path or a list of paths. Each path is a file, a directory
+(scanned recursively for ``.pfw.gz`` traces) or a glob, and a list may mix
+them. A glob uses ``*`` (any run of characters), ``?`` (one character),
+``[abc]`` and ``[a-z]`` classes (``[!...]`` or ``[^...]`` negates), and ``**``
+as a whole path part for any number of directories, including none:
+``runs/**/*.pfw.gz``, ``runs/rank[0-3]/*.pfw.gz``. Names that start with ``.``
+match like any other; there is no escape character, and a path that exists is
+taken as it is even if its name has a wildcard. ``**`` does not enter
+``.dftindex``, ``split``, ``schemas`` or a symlink to a directory. A glob names
+any file it matches, and a directory it matches is scanned like a directory
+path. The files are those of the paths in order, each once by device and inode (a symlink or a hard link names its file once); one directory or glob lists its files sorted by path. Staging names (``.<name>.tmp-<id>``, ``.<name>.old-<id>``) and ``.dftindex``
+folders are skipped. A glob that
+matches nothing is a view of no rows; a missing path with no wildcard raises at
+``collect()``. Pass ``index_dir`` to point at an index
 directory explicitly; omit it to use the sidecar convention. An optional
 :class:`~dftracer.utils.runtime.Runtime` controls the thread pool.
 

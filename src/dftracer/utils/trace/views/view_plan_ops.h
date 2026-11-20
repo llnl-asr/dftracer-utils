@@ -32,6 +32,12 @@ using detail::ScanPlan;
 /// (@ref ViewPlan::error); every terminal on it returns that error.
 ScanPlan from_files(dstd::Vector<ViewFile> files);
 ScanPlan from_file(dstd::String file_path, dstd::String index_path = "");
+/// The plan over the files that @ref runtime::fs::expand_inputs makes of
+/// `inputs`, in its order. A missing path stays a file of the plan, so the plan
+/// keeps its error.
+coro::CoroTask<ScanPlan> from_inputs(dstd::Vector<dstd::String> inputs,
+                                     dstd::String index_dir = "",
+                                     dstd::String format = "");
 coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
                                         dstd::String index_dir = "",
                                         dstd::String format = "");

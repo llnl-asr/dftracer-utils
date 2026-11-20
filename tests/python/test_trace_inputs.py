@@ -72,13 +72,6 @@ class TestOneInputRule:
             ).status()
             assert status.needs_work == [second, first]
 
-    @pytest.mark.parametrize("make", [_viewer, _indexer], ids=["TraceViewer", "Indexer"])
-    def test_a_directory_in_a_list_is_a_value_error(self, make):
-        with Environment() as env:
-            env.create_test_gzip_file()
-            with pytest.raises(ValueError, match="directory"):
-                make([env.temp_dir], os.path.join(env.temp_dir, "idx"))
-
     def test_an_empty_list_is_a_value_error_for_the_indexer_only(self):
         with Environment() as env:
             index_dir = os.path.join(env.temp_dir, "idx")
@@ -87,16 +80,13 @@ class TestOneInputRule:
             # A shard with no files is a view of no rows.
             assert _rows([], index_dir) == 0
 
-    def test_a_missing_path_and_a_glob_are_not_found(self):
+    def test_a_missing_path_is_not_found(self):
         with Environment() as env:
             trace = env.create_test_gzip_file()
             index_dir = os.path.join(env.temp_dir, "idx")
-            glob_text = os.path.join(os.path.dirname(trace), "*.pfw.gz")
             for spec in (
                 os.path.join(env.temp_dir, "nope.pfw.gz"),
                 [trace, os.path.join(env.temp_dir, "nope.pfw.gz")],
-                glob_text,
-                [glob_text],
             ):
                 # Indexer stats its files on the first call, TraceViewer reads
                 # them when the plan runs.
@@ -127,6 +117,251 @@ class TestOneInputRule:
             assert indexer.status().needs_work == [junk]
             with pytest.raises(dftu.errors.DFTUtilsIOError):
                 indexer.ensure()
+
+
+def _tree(env):
+    """root/a.pfw.gz, b.pfw.gz, x1.pfw.gz, x[1].pfw.gz, sub/c.pfw.gz,
+    sub/deep/d.pfw.gz, other/e.pfw.gz, notes.txt; one pid per file."""
+    names = [
+        "a.pfw.gz",
+        "b.pfw.gz",
+        "x1.pfw.gz",
+        "x[1].pfw.gz",
+        "sub/c.pfw.gz",
+        "sub/deep/d.pfw.gz",
+        "other/e.pfw.gz",
+    ]
+    paths = {}
+    for pid, name in enumerate(names, start=1):
+        paths[name] = env.create_dft_trace_file_with_pid(name, pid, num_events=5)
+    notes = os.path.join(env.temp_dir, "notes.txt")
+    pathlib.Path(notes).write_text("not a trace\n")
+    paths["notes.txt"] = notes
+    return paths
+
+
+def _pids(files, index_dir):
+    return sorted(set(_viewer(files, index_dir).lazy().collect().to_dict()["pid"]))
+
+
+def _listed(files, index_dir):
+    return _indexer(files, index_dir).status().needs_work
+
+
+@pytest.mark.parametrize("make", [_viewer, _indexer], ids=["TraceViewer", "Indexer"])
+class TestEveryInputForm:
+    def test_a_directory_is_scanned_recursively(self, make):
+        with Environment() as env:
+            paths = _tree(env)
+            idx = os.path.join(env.temp_dir, "idx")
+            expected = sorted(v for k, v in paths.items() if k.endswith(".pfw.gz"))
+            if make is _indexer:
+                assert sorted(_listed(env.temp_dir, idx)) == expected
+            else:
+                assert _pids(env.temp_dir, idx) == [1, 2, 3, 4, 5, 6, 7]
+
+    def test_a_list_of_directories_and_a_mixed_list(self, make):
+        with Environment() as env:
+            paths = _tree(env)
+            idx = os.path.join(env.temp_dir, "idx")
+            sub = os.path.join(env.temp_dir, "sub")
+            other = os.path.join(env.temp_dir, "other")
+            make([sub, other], idx)
+            if make is _indexer:
+                assert _listed([sub, other], idx) == [
+                    paths["sub/c.pfw.gz"],
+                    paths["sub/deep/d.pfw.gz"],
+                    paths["other/e.pfw.gz"],
+                ]
+                assert _listed([paths["a.pfw.gz"], sub, paths["b.pfw.gz"]], idx) == [
+                    paths["a.pfw.gz"],
+                    paths["sub/c.pfw.gz"],
+                    paths["sub/deep/d.pfw.gz"],
+                    paths["b.pfw.gz"],
+                ]
+            else:
+                assert _pids([sub, other], idx) == [5, 6, 7]
+                assert _pids([paths["a.pfw.gz"], sub, paths["b.pfw.gz"]], idx) == [1, 2, 5, 6]
+
+    def test_overlapping_inputs_and_symlinks_name_a_file_once(self, make):
+        with Environment() as env:
+            paths = _tree(env)
+            idx = os.path.join(env.temp_dir, "idx")
+            sub = os.path.join(env.temp_dir, "sub")
+            link = os.path.join(env.temp_dir, "linked")
+            os.symlink(sub, link)
+            alias = os.path.join(env.temp_dir, "alias.pfw.gz")
+            os.symlink(paths["a.pfw.gz"], alias)
+            spec = [sub, link, paths["sub/c.pfw.gz"], env.temp_dir, alias]
+            if make is _indexer:
+                listed = _listed(spec, idx)
+                assert len(listed) == 7
+                assert len({os.path.realpath(p) for p in listed}) == 7
+                assert listed[:2] == [paths["sub/c.pfw.gz"], paths["sub/deep/d.pfw.gz"]]
+            else:
+                rows = _viewer(spec, idx).lazy().collect().num_rows
+                real = [v for k, v in paths.items() if k.endswith(".pfw.gz")]
+                assert rows == _rows(real, idx)
+
+    def test_glob_star_question_and_classes(self, make):
+        with Environment() as env:
+            paths = _tree(env)
+            idx = os.path.join(env.temp_dir, "idx")
+            root = env.temp_dir
+            if make is _indexer:
+                assert _listed(os.path.join(root, "*.pfw.gz"), idx) == [
+                    paths["a.pfw.gz"],
+                    paths["b.pfw.gz"],
+                    paths["x1.pfw.gz"],
+                    paths["x[1].pfw.gz"],
+                ]
+                assert _listed(os.path.join(root, "x?.pfw.gz"), idx) == [paths["x1.pfw.gz"]]
+                assert _listed(os.path.join(root, "[ab].pfw.gz"), idx) == [
+                    paths["a.pfw.gz"],
+                    paths["b.pfw.gz"],
+                ]
+                assert _listed(os.path.join(root, "[!a]*.pfw.gz"), idx) == [
+                    paths["b.pfw.gz"],
+                    paths["x1.pfw.gz"],
+                    paths["x[1].pfw.gz"],
+                ]
+                assert _listed(os.path.join(root, "[^ab]?.pfw.gz"), idx) == [paths["x1.pfw.gz"]]
+                assert _listed(os.path.join(root, "*", "*.pfw.gz"), idx) == [
+                    paths["other/e.pfw.gz"],
+                    paths["sub/c.pfw.gz"],
+                ]
+            else:
+                assert _pids(os.path.join(root, "*.pfw.gz"), idx) == [1, 2, 3, 4]
+                assert _pids(os.path.join(root, "x?.pfw.gz"), idx) == [3]
+                assert _pids(os.path.join(root, "[ab].pfw.gz"), idx) == [1, 2]
+                assert _pids(os.path.join(root, "[!a]*.pfw.gz"), idx) == [2, 3, 4]
+                assert _pids(os.path.join(root, "*", "*.pfw.gz"), idx) == [5, 7]
+
+    def test_glob_double_star_alone_and_in_a_list(self, make):
+        with Environment() as env:
+            paths = _tree(env)
+            idx = os.path.join(env.temp_dir, "idx")
+            root = env.temp_dir
+            if make is _indexer:
+                assert _listed(os.path.join(root, "**", "*.pfw.gz"), idx) == sorted(
+                    v for k, v in paths.items() if k.endswith(".pfw.gz")
+                )
+                assert _listed(os.path.join(root, "**", "d.pfw.gz"), idx) == [
+                    paths["sub/deep/d.pfw.gz"]
+                ]
+                assert _listed(
+                    [paths["a.pfw.gz"], os.path.join(root, "sub", "**", "*.pfw.gz")], idx
+                ) == [paths["a.pfw.gz"], paths["sub/c.pfw.gz"], paths["sub/deep/d.pfw.gz"]]
+            else:
+                assert _pids(os.path.join(root, "**", "*.pfw.gz"), idx) == [1, 2, 3, 4, 5, 6, 7]
+                assert _pids(os.path.join(root, "**", "d.pfw.gz"), idx) == [6]
+                assert _pids(
+                    [paths["a.pfw.gz"], os.path.join(root, "sub", "**", "*.pfw.gz")], idx
+                ) == [1, 5, 6]
+
+    def test_an_existing_file_with_a_wildcard_in_its_name_is_taken_literally(self, make):
+        with Environment() as env:
+            paths = _tree(env)
+            idx = os.path.join(env.temp_dir, "idx")
+            if make is _indexer:
+                assert _listed(paths["x[1].pfw.gz"], idx) == [paths["x[1].pfw.gz"]]
+            else:
+                assert _pids(paths["x[1].pfw.gz"], idx) == [4]
+
+    def test_a_glob_that_matches_nothing_is_an_empty_input(self, make):
+        with Environment() as env:
+            _tree(env)
+            idx = os.path.join(env.temp_dir, "idx")
+            nothing = os.path.join(env.temp_dir, "*.nothing")
+            if make is _indexer:
+                for spec in (nothing, [nothing]):
+                    status = _indexer(spec, idx).status()
+                    assert status.total_files == 0
+                    assert status.needs_work == []
+            else:
+                assert _rows(nothing, idx) == 0
+                assert _rows([nothing], idx) == 0
+
+    def test_a_file_that_is_named_is_taken_whatever_its_name(self, make):
+        with Environment() as env:
+            paths = _tree(env)
+            idx = os.path.join(env.temp_dir, "idx")
+            notes = paths["notes.txt"]
+            if make is _indexer:
+                assert _listed([notes], idx) == [notes]
+            else:
+                with pytest.raises(dftu.DFTUtilsIOError):
+                    _viewer(notes, idx).lazy().collect()
+
+
+class TestHardLinksAndStagingNames:
+    def test_a_hard_link_names_its_file_once(self):
+        with Environment() as env:
+            a = env.create_dft_trace_file_with_pid("a.pfw.gz", 1, num_events=5)
+            os.link(a, os.path.join(env.temp_dir, "b.pfw.gz"))
+            idx = os.path.join(env.temp_dir, "idx")
+            assert _listed([env.temp_dir, a], idx) == [a]
+            assert _listed([os.path.join(env.temp_dir, "b.pfw.gz"), a], idx) == [
+                os.path.join(env.temp_dir, "b.pfw.gz")
+            ]
+            assert _rows([env.temp_dir, a], idx) == _rows(a, idx)
+
+    def test_staging_folders_and_index_folders_are_not_read(self):
+        with Environment() as env:
+            a = env.create_dft_trace_file_with_pid("a.pfw.gz", 1, num_events=5)
+            env.create_dft_trace_file_with_pid(".out.tmp-1/p.pfw.gz", 2, num_events=5)
+            env.create_dft_trace_file_with_pid(".out.old-2/p.pfw.gz", 3, num_events=5)
+            env.create_dft_trace_file_with_pid(".dftindex-x/p.pfw.gz", 4, num_events=5)
+            idx = os.path.join(env.temp_dir, "idx")
+            root = env.temp_dir
+            assert _rows(os.path.join(root, "*", "*.gz"), idx) == 0
+            for spec in (root, os.path.join(root, "**", "*.pfw.gz")):
+                assert _pids(spec, idx) == [1]
+            assert _listed(root, idx) == [a]
+            assert _listed(os.path.join(root, "**", "*.pfw.gz"), idx) == [a]
+            assert _pids(root, idx) == [1]
+
+
+class TestTwoFoldersOneIndexRoot:
+    def test_two_folders_in_one_list_share_an_index_root(self):
+        with Environment() as env:
+            a = env.create_dft_trace_file_with_pid("A/a.pfw.gz", 1, num_events=5)
+            b = env.create_dft_trace_file_with_pid("B/b.pfw.gz", 2, num_events=5)
+            shared = os.path.join(env.temp_dir, "shared_index")
+            folders = [os.path.dirname(a), os.path.dirname(b)]
+            both = _indexer(folders, shared)
+            assert both.status().needs_work == [a, b]
+            assert both.ensure().needs_work == []
+            assert _pids(folders, shared) == [1, 2]
+            assert _indexer(folders, shared).status().needs_work == []
+
+    def test_a_rebuild_of_one_folder_keeps_the_data_of_the_other(self):
+        with Environment() as env:
+            a = env.create_dft_trace_file_with_pid("A/a.pfw.gz", 1, num_events=5)
+            b = env.create_dft_trace_file_with_pid("B/b.pfw.gz", 2, num_events=5)
+            shared = os.path.join(env.temp_dir, "shared_index")
+            folders = [os.path.dirname(a), os.path.dirname(b)]
+            assert _indexer(folders, shared).ensure().needs_work == []
+            before = _counts(folders, shared)
+
+            only_a = _indexer(os.path.dirname(a), shared)
+            assert only_a.build(force=True).needs_work == []
+
+            assert _indexer(folders, shared).status().needs_work == []
+            assert _counts(folders, shared) == before
+            assert _pids(folders, shared) == [1, 2]
+
+    def test_a_changed_file_in_one_folder_rebuilds_only_that_folder(self):
+        with Environment() as env:
+            a = env.create_dft_trace_file_with_pid("A/a.pfw.gz", 1, num_events=5)
+            b = env.create_dft_trace_file_with_pid("B/b.pfw.gz", 2, num_events=5)
+            shared = os.path.join(env.temp_dir, "shared_index")
+            folders = [os.path.dirname(a), os.path.dirname(b)]
+            assert _indexer(folders, shared).ensure().needs_work == []
+            env.create_dft_trace_file_with_pid("A/a.pfw.gz", 1, num_events=9)
+            assert _indexer(folders, shared).status().needs_work == [a]
+            assert _indexer(folders, shared).ensure().needs_work == []
+            assert _rows(folders, shared) == _rows(a, shared) + _rows(b, shared)
 
 
 class TestPathParsing:

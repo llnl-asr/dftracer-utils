@@ -162,7 +162,7 @@ concept HasFileExplain = requires(typename F::File& file, const ScanView& view,
 ///   using File = MyFile;  // derives from FormatFile, and open() returns it
 ///   dstd::Result<PlanResult> MyFile::plan(const ScanView&);
 /// The host then sets dftu_file_format_vt::plan; the votes and the token hold
-/// for every chunk of the scan (see @ref PlanResult).
+/// for every chunk of the scan (see @ref dftracer::utils::plugins::PlanResult).
 template <class F>
 concept HasFilePlan = requires(typename F::File& file, const ScanView& view) {
     requires std::is_base_of_v<FormatFile, typename F::File>;

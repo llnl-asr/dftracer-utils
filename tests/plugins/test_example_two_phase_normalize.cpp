@@ -43,7 +43,7 @@ dstd::String write_trace(dftu_utils_test::TestEnvironment& env,
     dstd::String lines;
     for (const std::uint64_t ts : starts) {
         dstd::fmt_append<
-            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
             "\"tid\":1,\"ts\":{},\"dur\":10{}\n">(lines, ts, R"(,"args":{}})");
     }
     dstd::fs::write_file(dstd::PathView(pfw), lines).discard();

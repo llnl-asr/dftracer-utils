@@ -41,7 +41,7 @@ dstd::String make_bad_pfw(const dstd::Path& dir, int id) {
     dstd::String content = "[\n";
     content +=
         "{\"name\":\"ok\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,\"ts\":1,"
-        "\"dur\":1,\"ph\":\"X\"}\n";
+        "\"dur\":1,\"ph\":1}\n";
     content += "{\"name\": this is not valid json\n";
     return dftu_utils_test::write_gz_trace(dstd::String(p.str()), content);
 }

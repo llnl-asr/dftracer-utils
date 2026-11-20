@@ -257,7 +257,7 @@ TEST_SUITE("GenericView") {
             const dstd::String meta((dir / "rank_2.pfw").str());
             dftu_utils_test::FileOut(meta)
                 << R"({"name":"HH","cat":"dftracer","pid":2,"tid":2,)"
-                   R"("ph":"M","args":{"name":"host","value":"h1"}})"
+                   R"("ph":4,"args":{"name":"host","value":"h1"}})"
                 << "\n";
             REQUIRE(dftu_utils_test::compress_file_to_gzip(meta, meta + ".gz"));
             dstd::fs::remove(meta).discard();

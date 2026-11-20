@@ -92,7 +92,7 @@ class Fold {
     /// path-decoded scan decodes every path for it. ORed across folds.
     virtual bool reads_every_field() const { return false; }
 
-    /// Whether the fold reads metadata (`ph="M"`) records. ORed across folds;
+    /// Whether the fold reads metadata (`ph=4`) records. ORed across folds;
     /// when none does, the scan neither emits them nor reads chunks for them.
     virtual bool wants_metadata() const { return true; }
 

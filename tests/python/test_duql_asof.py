@@ -32,7 +32,7 @@ def _random_events(seed, n):
         smp = rng.random() < 0.4
         events.append(
             {
-                "ph": "X",
+                "ph": 1,
                 "name": "smp" if smp else "ev",
                 "cat": "POSIX",
                 "pid": rng.randint(1, 4),
@@ -92,12 +92,12 @@ def test_asof_keeps_input_order(tmp_path):
 
 def test_asof_null_key_and_time(tmp_path):
     events = [
-        {"ph": "X", "name": "smp", "pid": 1, "tid": 0, "ts": 10, "dur": 5},
-        {"ph": "X", "name": "smp", "pid": 1, "tid": 1, "dur": 6},
-        {"ph": "X", "name": "smp", "tid": 2, "ts": 11, "dur": 7},
-        {"ph": "X", "name": "ev", "pid": 1, "tid": 3, "ts": 12},
-        {"ph": "X", "name": "ev", "tid": 4, "ts": 12},
-        {"ph": "X", "name": "ev", "pid": 1, "tid": 5},
+        {"ph": 1, "name": "smp", "pid": 1, "tid": 0, "ts": 10, "dur": 5},
+        {"ph": 1, "name": "smp", "pid": 1, "tid": 1, "dur": 6},
+        {"ph": 1, "name": "smp", "tid": 2, "ts": 11, "dur": 7},
+        {"ph": 1, "name": "ev", "pid": 1, "tid": 3, "ts": 12},
+        {"ph": 1, "name": "ev", "tid": 4, "ts": 12},
+        {"ph": 1, "name": "ev", "pid": 1, "tid": 5},
     ]
     got = _trace(tmp_path, events).duql(QUERY.format(clause="")).collect().to_dict()
     assert dict(zip(got["tid"], got["v"])) == {3: 5, 4: None, 5: None}
@@ -105,9 +105,9 @@ def test_asof_null_key_and_time(tmp_path):
 
 def test_asof_equal_times(tmp_path):
     events = [
-        {"ph": "X", "name": "smp", "pid": 1, "tid": 0, "ts": 10, "dur": 1},
-        {"ph": "X", "name": "smp", "pid": 1, "tid": 1, "ts": 10, "dur": 2},
-        {"ph": "X", "name": "ev", "pid": 1, "tid": 2, "ts": 10},
+        {"ph": 1, "name": "smp", "pid": 1, "tid": 0, "ts": 10, "dur": 1},
+        {"ph": 1, "name": "smp", "pid": 1, "tid": 1, "ts": 10, "dur": 2},
+        {"ph": 1, "name": "ev", "pid": 1, "tid": 2, "ts": 10},
     ]
     for direction, want in [("backward", 2), ("forward", 1), ("nearest", 2)]:
         got = _trace(tmp_path, events).duql(QUERY.format(clause=direction)).collect().to_dict()

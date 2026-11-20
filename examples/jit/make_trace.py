@@ -12,5 +12,5 @@ with gzip.open(os.path.join(out, "trace.pfw.gz"), "wt", encoding="utf-8") as f:
         pid = 2 if i % 3 == 0 else 1
         f.write(
             f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":1,'
-            f'"ts":{1000 + i},"dur":{10 + i % 50},"ph":"X","args":{{}}}}\n'
+            f'"ts":{1000 + i},"dur":{10 + i % 50},"ph":1,"args":{{}}}}\n'
         )

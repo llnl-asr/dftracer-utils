@@ -75,7 +75,7 @@ def test_rows_of_a_dftracer_subclass(tmp_path):
 
     events = [
         {
-            "ph": "X",
+            "ph": 1,
             "name": "read",
             "cat": "POSIX",
             "pid": 1,

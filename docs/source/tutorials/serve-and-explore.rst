@@ -23,7 +23,7 @@ The server serves a **directory**, so put a trace inside one:
            cat = "POSIX" if i % 2 else "STDIO"
            f.write(
                f'{{"name":"read","cat":"{cat}","pid":1,"tid":1,'
-               f'"ts":{1000 + i},"dur":{10 + i},"ph":"X","args":{{}}}}\n'
+               f'"ts":{1000 + i},"dur":{10 + i},"ph":1,"args":{{}}}}\n'
            )
 
 2. Start the server
@@ -83,8 +83,8 @@ whole span, which drops every sub-millisecond event in a demo this small:
 
    $ curl 'http://127.0.0.1:8099/api/viz/events?begin=0&end=1600&summary=1' | head -c 300
    {"events":[{"name":"read","cat":"STDIO","pid":1,"tid":1,"ts":0,"dur":10,
-   "ph":"X","args":{}},{"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,
-   "dur":11,"ph":"X","args":{}}, ...
+   "ph":1,"args":{}},{"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,
+   "dur":11,"ph":1,"args":{}}, ...
 
 The response's ``metadata.count`` is 500 (every event in the window);
 ``ts`` is normalized to start at 0 (``ts_normalized:true``), and

@@ -35,7 +35,7 @@ using namespace dftracer::utils::trace;
 
 namespace {
 
-// A ph="X" trace in its own subdir, so each shard's sidecar index is distinct.
+// A ph=1 trace in its own subdir, so each shard's sidecar index is distinct.
 dstd::String make_x_trace(TestEnvironment& env, dstd::StringView tag,
                           int posix_n, int stdio_n) {
     dstd::String dir = env.dir() + "/" + dstd::String(tag);
@@ -43,11 +43,11 @@ dstd::String make_x_trace(TestEnvironment& env, dstd::StringView tag,
     dstd::String pfw = dir + "/" + dstd::String(tag) + ".pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < posix_n; ++i)
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
             << "\n";
     for (int i = 0; i < stdio_n; ++i)
-        ofs << R"({"ph":"X","name":"fwrite","cat":"STDIO","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"fwrite","cat":"STDIO","pid":1,"tid":1,"ts":)"
             << (5000 + i * 100) << R"(,"dur":)" << (20 + i) << R"(,"args":{}})"
             << "\n";
     ofs.close();

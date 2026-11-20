@@ -378,7 +378,7 @@ def test_text_reports_a_parse_error():
 
 def _trace(tmp_path):
     events = [
-        {"ph": "X", "name": n, "cat": "POSIX", "pid": p, "tid": 1, "ts": 10 * i, "dur": d}
+        {"ph": 1, "name": n, "cat": "POSIX", "pid": p, "tid": 1, "ts": 10 * i, "dur": d}
         for i, (n, p, d) in enumerate(
             [
                 ("read", 1, 5),

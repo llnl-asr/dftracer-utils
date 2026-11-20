@@ -147,11 +147,11 @@ TEST_SUITE("TypedRows") {
         const dstd::String pfw = env.dir() + "/meta.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"ph":"M","name":"process_name","pid":1,"tid":1,)"
+            ofs << R"({"ph":4,"name":"process_name","pid":1,"tid":1,)"
                    R"("args":{"name":"app"}})"
                 << "\n";
             for (int i = 0; i < 20; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,)"
                        R"("tid":1,"ts":)"
                     << 1000 + i << R"(,"dur":5,"args":{"size":)" << i << "}}\n";
         }

@@ -58,25 +58,25 @@ dstd::String write_trace(dstd::CStringView dir) {
             const std::uint64_t ts =
                 BASE_TS + static_cast<std::uint64_t>(i) * 130'000;
             dstd::fmt_append<
-                "{\"ph\":\"C\",\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,"
+                "{\"ph\":2,\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,"
                 "\"tid\":1,\"ts\":{},\"args\":{\"hhash\":\"{}\",\"util\":{},"
                 "\"num\":{}}}\n">(out, ts, host, (i + 0.5), (10 + i));
             if (i % 6 == 0)
                 dstd::fmt_append<
-                    "{\"ph\":\"C\",\"name\":\"mem\",\"cat\":\"sys\",\"pid\":1,"
+                    "{\"ph\":2,\"name\":\"mem\",\"cat\":\"sys\",\"pid\":1,"
                     "\"tid\":1,\"ts\":{},\"args\":{\"hhash\":\"{}\",\"used\":{}"
                     "}}\n">(out, ts + 7'000, host, (1000 + i));
             if (i % 3 == 0)
                 dstd::fmt_append<
-                    "{\"ph\":\"C\",\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,"
+                    "{\"ph\":2,\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,"
                     "\"tid\":1,\"ts\":{},\"args\":{\"hhash\":\"{}\",\"count\":"
                     "5,\"util\":99.0}}\n">(out, ts + 11'000, host);
             dstd::fmt_append<
-                "{\"ph\":\"C\",\"name\":\"faults\",\"cat\":\"app\",\"pid\":1,"
+                "{\"ph\":2,\"name\":\"faults\",\"cat\":\"app\",\"pid\":1,"
                 "\"tid\":1,\"ts\":{},\"args\":{\"count\":2}}\n">(out,
                                                                  ts + 3'000);
             dstd::fmt_append<
-                "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+                "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
                 "\"tid\":1,\"ts\":{},\"dur\":10,\"args\":{\"size\":4096}}\n">(
                 out, ts + 5'000);
         }

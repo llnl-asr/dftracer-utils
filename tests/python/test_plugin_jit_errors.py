@@ -34,7 +34,7 @@ def trace(tmp_path_factory):
                 n = f * _PER_FILE + i
                 fh.write(
                     f'{{"name":"read","cat":"POSIX","pid":{1 + n % 4},"tid":1,"ts":{1000 + n},'
-                    f'"dur":{10 + n},"ph":"X","args":{{}}}}\n'
+                    f'"dur":{10 + n},"ph":1,"args":{{}}}}\n'
                 )
     return str(d)
 
@@ -272,7 +272,7 @@ def one_trace(tmp_path):
         for i in range(12):
             fh.write(
                 f'{{"name":"read","cat":"POSIX","pid":{1 + i % 3},"tid":1,"ts":{1000 + i},'
-                f'"dur":{10 + i},"ph":"X","args":{{}}}}\n'
+                f'"dur":{10 + i},"ph":1,"args":{{}}}}\n'
             )
     return str(d)
 

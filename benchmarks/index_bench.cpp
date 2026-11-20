@@ -719,7 +719,7 @@ dstd::String write_smoke_trace(dstd::StringView dir) {
     dstd::String lines;
     const char* names[] = {"read", "write", "open", "close"};
     for (int i = 0; i < 2000; ++i) {
-        lines += R"({"ph":"X","name":")";
+        lines += R"({"ph":1,"name":")";
         lines += names[i % 4];
         lines += R"(","cat":"POSIX","pid":)" + dstd::to_string(i % 4);
         lines += R"(,"tid":1,"ts":)" + dstd::to_string(1000 + i * 10);

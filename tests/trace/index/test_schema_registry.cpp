@@ -423,7 +423,7 @@ TEST_SUITE("SchemaRegistry") {
             dftu_utils_test::ok_ref(trace::index::detect_schema(counters)).id ==
             "genesis");
         const dstd::Vector<dstd::StringView> dft = {
-            R"({"id":1,"name":"read","cat":"POSIX","ph":"X","ts":1})"};
+            R"({"id":1,"name":"read","cat":"POSIX","ph":1,"ts":1})"};
         CHECK(dftu_utils_test::ok_ref(trace::index::detect_schema(dft)).id ==
               "dftracer");
         const dstd::Vector<dstd::StringView> other = {
@@ -564,13 +564,13 @@ TEST_SUITE("SchemaDetection") {
         return R"({"id":)" + dstd::to_string(i) +
                R"(,"name":"read","cat":"POSIX","pid":1,"tid":2,"ts":)" +
                dstd::to_string(100 + i) +
-               R"(,"dur":5,"ph":"X","args":{"fhash":"f1","ret":4096}})";
+               R"(,"dur":5,"ph":1,"args":{"fhash":"f1","ret":4096}})";
     }
 
     static dstd::String hash_line(dstd::StringView kind, int i) {
         return R"({"id":)" + dstd::to_string(i) + R"(,"name":")" +
                dstd::String(kind) +
-               R"(","cat":"dftracer","pid":1,"tid":2,"ph":"M","args":)"
+               R"(","cat":"dftracer","pid":1,"tid":2,"ph":4,"args":)"
                R"({"name":"/p/)" +
                dstd::to_string(i) + R"(","value":"h)" + dstd::to_string(i) +
                "\"}}";
@@ -705,7 +705,7 @@ TEST_SUITE("SchemaDetection") {
             "det_tie.yaml"));
         dstd::Vector<dstd::String> tie;
         for (int i = 0; i < 5; ++i)
-            tie.push_back(R"({"ph":"X","name":"n","ts":1,"zz_tie":)" +
+            tie.push_back(R"({"ph":1,"name":"n","ts":1,"zz_tie":)" +
                           dstd::to_string(i) + "}");
         CHECK(chosen(tie) == "det_tie");
 
@@ -826,9 +826,8 @@ TEST_SUITE("SchemaDetection") {
                 .id == "dftracer");
 
         // A first record past the 16 MiB text cap is read whole.
-        dstd::String big =
-            R"({"id":0,"name":"read","cat":"POSIX","pid":1,)"
-            R"("tid":2,"ts":1,"dur":5,"ph":"X","args":{"blob":")";
+        dstd::String big = R"({"id":0,"name":"read","cat":"POSIX","pid":1,)"
+                           R"("tid":2,"ts":1,"dur":5,"ph":1,"args":{"blob":")";
         big.append(17u * 1024 * 1024, 'x');
         big += "\"}}\n" + dft_event(2) + "\n";
         CHECK(

@@ -68,7 +68,7 @@ def _write_trace(path):
             name = ["read", "write"][i % 2]
             cat = ["POSIX", "STDIO"][i % 2]
             f.write(
-                '{"ph":"X","name":"%s","cat":"%s","pid":1,"tid":1,'
+                '{"ph":1,"name":"%s","cat":"%s","pid":1,"tid":1,'
                 '"ts":%d,"dur":%d,"args":{}}\n' % (name, cat, 1000 + i, 5 + i)
             )
 
@@ -81,7 +81,7 @@ def _write_dotted_arg_trace(path):
             op = "SEND" if i % 2 == 0 else "RECV"
             raw = 100 if i % 2 == 0 else 200
             f.write(
-                '{"ph":"X","name":"rdma","cat":"ib","pid":1,"tid":1,'
+                '{"ph":1,"name":"rdma","cat":"ib","pid":1,"tid":1,'
                 '"ts":%d,"dur":5,"args":{"cqe.raw_ns":%d,"mlx5.op":"%s"}}\n' % (1000 + i, raw, op)
             )
 

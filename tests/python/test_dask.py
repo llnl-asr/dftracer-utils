@@ -343,7 +343,7 @@ class TestDaskTraceViewer:
         for pid in (1, 2):
             p = str(tmp_path / f"p{pid}.pfw.gz")
             rows = [
-                {"ph": "X", "name": n, "cat": "c", "pid": pid, "tid": 1, "ts": t, "dur": d}
+                {"ph": 1, "name": n, "cat": "c", "pid": pid, "tid": 1, "ts": t, "dur": d}
                 for n, t, d in [("A", 0, 100), ("B", 10, 30), ("C", 15, 10)]
             ]
             with gzip.open(p, "wt") as f:
@@ -490,7 +490,7 @@ class TestDaskTraceViewer:
             with gzip.open(p, "wt") as f:
                 for i in range(250):
                     f.write(
-                        '{"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,'
+                        '{"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,'
                         '"ts":%d,"dur":%d,"args":{}}\n' % (1000 + k * 1000 + i, 10 + i)
                     )
             files.append(p)

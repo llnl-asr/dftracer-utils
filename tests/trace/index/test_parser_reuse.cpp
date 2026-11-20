@@ -28,7 +28,7 @@ dstd::String write_small_trace(dstd::CStringView dir, int n) {
     for (int i = 0; i < 40; ++i) {
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":"
-            "1,\"ph\":\"X\",\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
+            "1,\"ph\":1,\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
             "f{}\"}}\n">(out, i, 1000 + i * 10, n);
     }
     out += "]\n";
@@ -43,7 +43,7 @@ dstd::String write_long_line_trace(dstd::CStringView dir, std::size_t bytes) {
     for (int i = 0; i < 40; ++i) {
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":"
-            "1,\"ph\":\"X\",\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
+            "1,\"ph\":1,\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
             "long\"">(out, i, 1000 + i * 10);
         if (i == 20)
             dstd::fmt_append<",\"note\":\"{}{}">(out, dstd::String(bytes, 'x'),

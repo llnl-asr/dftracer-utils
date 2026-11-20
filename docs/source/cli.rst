@@ -472,9 +472,9 @@ dftracer_view
 - ``--occ-cell <us>`` - Occupancy cell size (busy quantum) for
   ``busy``/``concurrency``/``utilization``; finer resolves overlap on short
   events (default 0, the exact union)
-- ``--counters`` - Emit the aggregation as ``ph=C`` counter events
-- ``--phase <phase>`` - Select events by phase: ``events`` (ph=X),
-  ``counters`` (ph=C), ``aggregated`` (rollup records), ``metadata`` (ph=M),
+- ``--counters`` - Emit the aggregation as ``ph=2`` counter events
+- ``--phase <phase>`` - Select events by phase: ``events`` (ph=1),
+  ``counters`` (ph=2), ``aggregated`` (rollup records), ``metadata`` (ph=4),
   ``any`` (every record, metadata included)
 - ``--schema <id>`` - Read records as this registered record schema instead of the one recorded for each file
 - ``--select <cols>`` - Project the result to these columns, comma-separated

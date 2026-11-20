@@ -61,7 +61,7 @@ def trace(tmp_path_factory):
                 fh_arg = "" if fhash is None else f',"fhash":"{fhash}"'
                 fh.write(
                     f'{{"name":"{name}","cat":"{cat}","pid":{pid},"tid":1,"ts":{ts},'
-                    f'"dur":{dur},"ph":"X","args":{{"v":{v},"f":{fl}{fh_arg}}}}}\n'
+                    f'"dur":{dur},"ph":1,"args":{{"v":{v},"f":{fl}{fh_arg}}}}}\n'
                 )
     return str(d)
 

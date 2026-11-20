@@ -107,7 +107,7 @@ dstd::String write_trace(dstd::StringView dir, std::int64_t events) {
     };
     for (std::int64_t i = 0; i < events; ++i) {
         const std::size_t k = rng() % 6;
-        chunk += R"({"ph":"X","name":")";
+        chunk += R"({"ph":1,"name":")";
         chunk += names[k];
         chunk += R"(","cat":")";
         chunk += cats[k];
@@ -146,7 +146,7 @@ dstd::String write_clustered(dstd::StringView dir, std::int64_t events) {
         chunk.clear();
     };
     for (std::int64_t i = 0; i < events; ++i) {
-        chunk += R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1)";
+        chunk += R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1)";
         chunk += R"(,"ts":)" + dstd::to_string(1000 + i * 10);
         chunk += R"(,"dur":)" + dstd::to_string(1 + i % 500);
         chunk += R"(,"args":{"blk":)" + dstd::to_string(i / 10000) + "}}\n";

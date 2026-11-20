@@ -15,7 +15,7 @@ N = 60
 
 def _record(i):
     return {
-        "ph": "X",
+        "ph": 1,
         "name": "ev%d" % i,
         "cat": "POSIX",
         "pid": 1,

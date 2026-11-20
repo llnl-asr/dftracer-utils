@@ -27,8 +27,8 @@ __all__ = [
 class Phase(str, Enum):
     """Which records a view scans."""
 
-    EVENTS = "events"  # ph="X"
-    COUNTERS = "counters"  # ph="C"
+    EVENTS = "events"  # ph=1
+    COUNTERS = "counters"  # ph=2
     ANY = "any"
 
 

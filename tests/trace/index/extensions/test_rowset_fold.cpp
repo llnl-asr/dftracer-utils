@@ -65,9 +65,9 @@ dstd::Vector<dstd::String> trace_lines() {
         R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"node0","value":"hh1"}})",
         R"({"name":"SH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"s","value":"sh1"}})",
         R"({"name":"PR","cat":"dftracer","pid":7,"tid":1,"ph":"M","args":{"name":"rank","value":"3"}})",
-        R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":2,"args":{"fhash":"fh1"}})",
+        R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":2,"args":{"fhash":"fh1"}})",
         R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"name":"/data/b.bin","value":"fh2"}})",
-        R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":5,"dur":2,"args":{"fhash":"fh2"}})",
+        R"({"ph":1,"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":5,"dur":2,"args":{"fhash":"fh2"}})",
     };
 }
 

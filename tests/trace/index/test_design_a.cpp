@@ -49,7 +49,7 @@ dstd::String small_trace(dstd::CStringView dir, int n) {
     for (int i = 0; i < SMALL_EVENTS; ++i) {
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"op{}\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":"
-            "{},\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{\"fname\":\"/data/"
+            "{},\"ph\":1,\"ts\":{},\"dur\":{},\"args\":{\"fname\":\"/data/"
             "d{}/f{}\",\"size\":{},\"hhash\":\"h{}\"}}\n">(
             out, i, (i + n) % 40, 1 + n % 7, 10 + i % 5, 1000 + i * 10 + n * 7,
             3 + i % 50, n % 9, (i * 31 + n) % 700, (i * 17) % 4096, n);
@@ -74,7 +74,7 @@ dstd::String big_trace(dstd::CStringView dir, dstd::StringView stem, int lines,
         const int pick = (i * step + seg * 13) % NAMES;
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"op{}\",\"cat\":\"c{}\",\"pid\":{},\"tid\":{}"
-            ",\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{\"fname\":\"/data/"
+            ",\"ph\":1,\"ts\":{},\"dur\":{},\"args\":{\"fname\":\"/data/"
             "s{}/f{}\",\"size\":{},\"hhash\":\"h{}\",\"path\":\"/p{}/q{}/"
             "r{}\",\"note\":\"abcdefghijklmnopqrstuvwxyz0123456789\"}}\n">(
             out, i, pick, (pick * 3 + seg) % 11, 1 + (i + seg) % 7, 10 + i % 5,

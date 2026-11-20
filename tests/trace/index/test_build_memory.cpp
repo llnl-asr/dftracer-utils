@@ -52,7 +52,7 @@ dstd::String write_trace(dstd::CStringView dir, dstd::StringView name,
         if (i == events / 2) ts += 500000;
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"op{}\",\"cat\":\"C{}\",\"pid\":{},\"tid\":{}"
-            ",\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{">(
+            ",\"ph\":1,\"ts\":{},\"dur\":{},\"args\":{">(
             out, i, (i / 50) % 7, i % 3, 1 + i % 4, 10 + i % 4, ts, 5 + i % 97);
         for (int k = 0; k < 3; ++k) {
             const int p = (i * 7 + k * 131) % paths;

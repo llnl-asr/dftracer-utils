@@ -33,7 +33,7 @@ def _records():
         mix_all = rng.choice([1, 2.0, "3", "x", 1.5, 2, None])
         out.append(
             {
-                "ph": "X",
+                "ph": 1,
                 "name": NAMES[rng.randrange(4)],
                 "cat": "POSIX",
                 "pid": 1,

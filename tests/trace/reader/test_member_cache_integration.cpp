@@ -32,7 +32,7 @@ dstd::String make_trace(int n) {
     for (int i = 0; i < n; ++i) {
         s += "{\"id\":" + dstd::to_string(i) +
              ",\"name\":\"op\",\"cat\":\"POSIX\",\"ts\":" +
-             dstd::to_string(1000 + i) + ",\"dur\":10,\"ph\":\"X\"}\n";
+             dstd::to_string(1000 + i) + ",\"dur\":10,\"ph\":1}\n";
     }
     return s;
 }

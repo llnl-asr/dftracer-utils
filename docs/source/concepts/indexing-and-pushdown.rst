@@ -183,7 +183,7 @@ When the View has a time range, ``prune_file`` then drops chunks whose
 recorded time bounds lie wholly outside it.
 
 The query and time evidence describe data events only, so metadata
-(``ph="M"``) records take their own path through ``dft.metadata``, which
+(``ph=4``) records take their own path through ``dft.metadata``, which
 counts each chunk's metadata records and its context records (thread and
 process names, ``PR``, ``CM``). A default View reads its source's ``data``,
 which for dftracer traces leaves the metadata records out. A scan of every

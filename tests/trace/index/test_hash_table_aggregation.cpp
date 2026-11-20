@@ -34,17 +34,17 @@ void write_single_member(dstd::CStringView path, dstd::StringView content) {
 dstd::String make_trace_with_fh(int n) {
     dstd::String s = "[\n";
     s +=
-        R"({"id":1,"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"h1","name":"node0","value":"h1"}})";
+        R"({"id":1,"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"hhash":"h1","name":"node0","value":"h1"}})";
     s += "\n";
     s +=
-        R"({"id":2,"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"h1","name":"/scratch/data/x.bin","value":"f00d"}})";
+        R"({"id":2,"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"hhash":"h1","name":"/scratch/data/x.bin","value":"f00d"}})";
     s += "\n";
     for (int i = 0; i < n; ++i) {
         s +=
             R"({"id":)" + dstd::to_string(i + 3) +
             R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
             dstd::to_string(1000 + i) +
-            R"(,"dur":100,"ph":"X","args":{"hhash":"h1","fhash":"f00d","ret":4096}})";
+            R"(,"dur":100,"ph":1,"args":{"hhash":"h1","fhash":"f00d","ret":4096}})";
         s += "\n";
     }
     return s;

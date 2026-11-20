@@ -90,7 +90,7 @@ Fixture write_fixture(dstd::String dir) {
             text += R"({"id":)" + dstd::to_string(i) + R"(,"pid":)" +
                     dstd::to_string(pid) + R"(,"tid":)" + dstd::to_string(tid) +
                     R"(,"name":")" + name + R"(","cat":")" + cat +
-                    R"(","ph":"X","ts":)" + dstd::to_string(ts);
+                    R"(","ph":1,"ts":)" + dstd::to_string(ts);
             if (has_dur) text += R"(,"dur":)" + dstd::to_string(dur);
             text += "}\n";
 

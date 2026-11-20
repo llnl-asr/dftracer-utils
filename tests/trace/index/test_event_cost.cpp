@@ -47,7 +47,7 @@ dstd::String write_trace(dstd::CStringView dir) {
             case 0:
                 dstd::fmt_append<
                     ",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":1,"
-                    "\"ph\":\"X\",\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/"
+                    "\"ph\":1,\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/"
                     "data/"
                     "f{}\",\"size\":{},\"hhash\":\"a1b2c3d4e5f60718\","
                     "\"level\":{}}}\n">(out, pid, ts, i % 37, i % 4096, i % 3);
@@ -55,12 +55,12 @@ dstd::String write_trace(dstd::CStringView dir) {
             case 1:
                 dstd::fmt_append<
                     ",\"name\":\"compute\",\"cat\":\"APP\",\"pid\":{},\"tid\":"
-                    "2,\"ph\":\"X\",\"ts\":{},\"dur\":7}\n">(out, pid, ts);
+                    "2,\"ph\":1,\"ts\":{},\"dur\":7}\n">(out, pid, ts);
                 break;
             default:
                 dstd::fmt_append<
                     ",\"name\":\"write\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":"
-                    "1,\"ph\":\"X\",\"ts\":{},\"dur\":5,\"args\":{\"io\":{"
+                    "1,\"ph\":1,\"ts\":{},\"dur\":5,\"args\":{\"io\":{"
                     "\"off\":{},\"len\":512},\"hosts\":[\"n1\",\"n2\"],"
                     "\"note\":null,\"ratio\":0.5}}\n">(out, pid, ts, i);
         }

@@ -739,9 +739,9 @@ class TestOccupancyMetrics:
         pa = pytest.importorskip("pyarrow")
         lines = [
             '{"name":"a","cat":"c","pid":1,"tid":1,"ts":0,"dur":500000,'
-            '"ph":"X","args":{"hhash":"aa"}}',
+            '"ph":1,"args":{"hhash":"aa"}}',
             '{"name":"a","cat":"c","pid":1,"tid":2,"ts":0,"dur":500000,'
-            '"ph":"X","args":{"hhash":"aa"}}',
+            '"ph":1,"args":{"hhash":"aa"}}',
         ]
         with Environment() as env:
             p = self._index(env, lines)
@@ -763,9 +763,9 @@ class TestOccupancyMetrics:
         pa = pytest.importorskip("pyarrow")
         lines = [
             '{"name":"a","cat":"c","pid":1,"tid":1,"ts":0,"dur":500000,'
-            '"ph":"X","args":{"hhash":"aa"}}',
+            '"ph":1,"args":{"hhash":"aa"}}',
             '{"name":"a","cat":"c","pid":1,"tid":1,"ts":500000,"dur":500000,'
-            '"ph":"X","args":{"hhash":"aa"}}',
+            '"ph":1,"args":{"hhash":"aa"}}',
         ]
         with Environment() as env:
             p = self._index(env, lines)
@@ -785,9 +785,9 @@ class TestOccupancyMetrics:
         pa = pytest.importorskip("pyarrow")
         lines = [
             '{"name":"a","cat":"c","pid":1,"tid":1,"ts":0,"dur":500000,'
-            '"ph":"X","args":{"hhash":"aa"}}',
+            '"ph":1,"args":{"hhash":"aa"}}',
             '{"name":"b","cat":"c","pid":1,"tid":2,"ts":250000,"dur":500000,'
-            '"ph":"X","args":{"hhash":"aa"}}',
+            '"ph":1,"args":{"hhash":"aa"}}',
         ]
         with Environment() as env:
             p = self._index(env, lines)
@@ -812,11 +812,11 @@ class TestOccupancyMetrics:
         pa = pytest.importorskip("pyarrow")
         f0 = [
             '{"name":"a","cat":"c","pid":1,"tid":1,"ts":0,"dur":500000,'
-            '"ph":"X","args":{"hhash":"aa"}}'
+            '"ph":1,"args":{"hhash":"aa"}}'
         ]
         f1 = [
             '{"name":"a","cat":"c","pid":2,"tid":1,"ts":0,"dur":500000,'
-            '"ph":"X","args":{"hhash":"aa"}}'
+            '"ph":1,"args":{"hhash":"aa"}}'
         ]
         with Environment() as env:
             paths = self._index_files(env, [f0, f1])
@@ -837,7 +837,7 @@ class TestOccupancyMetrics:
         pa = pytest.importorskip("pyarrow")
         lines = [
             '{"name":"a","cat":"c","pid":1,"tid":%d,"ts":0,"dur":100000,'
-            '"ph":"X","args":{"hhash":"aa"}}' % tid
+            '"ph":1,"args":{"hhash":"aa"}}' % tid
             for tid in (1, 2, 3)
         ]
         with Environment() as env:
@@ -862,11 +862,11 @@ class TestOccupancyMetrics:
         pa = pytest.importorskip("pyarrow")
         f0 = [
             '{"name":"a","cat":"c","pid":1,"tid":1,"ts":0,"dur":500000,'
-            '"ph":"X","args":{"hhash":"aa"}}'
+            '"ph":1,"args":{"hhash":"aa"}}'
         ]
         f1 = [
             '{"name":"a","cat":"c","pid":2,"tid":1,"ts":0,"dur":500000,'
-            '"ph":"X","args":{"hhash":"aa"}}'
+            '"ph":1,"args":{"hhash":"aa"}}'
         ]
         with Environment() as env:
             p0, p1 = self._index_files(env, [f0, f1])
@@ -941,7 +941,7 @@ def _member_trace(path):
             lines = "".join(
                 json.dumps(
                     {
-                        "ph": "X",
+                        "ph": 1,
                         "name": "read",
                         "cat": "POSIX",
                         "pid": 1,
@@ -1180,7 +1180,7 @@ def test_status_reports_truncated_trace(tmp_path):
         for i in range(2000):
             f.write(
                 '{"id":%d,"pid":1,"tid":1,"name":"read","cat":"POSIX",'
-                '"ph":"X","ts":%d,"dur":5,"args":{"hhash":"a"}}\n' % (i, i)
+                '"ph":1,"ts":%d,"dur":5,"args":{"hhash":"a"}}\n' % (i, i)
             )
     data = full.read_bytes()
     cut = tmp_path / "cut.pfw.gz"

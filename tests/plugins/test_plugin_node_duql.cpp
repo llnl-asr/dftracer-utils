@@ -37,7 +37,7 @@ namespace {
 constexpr int EVENTS = 3;
 
 dstd::String event(int i) {
-    return R"({"ph":"X","name":"op)" + dstd::to_string(i % 3) +
+    return R"({"ph":1,"name":"op)" + dstd::to_string(i % 3) +
            R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" +
            dstd::to_string(1000 + 100 * i) + R"(,"dur":)" +
            dstd::to_string(10 + i) + R"(,"args":{}})";

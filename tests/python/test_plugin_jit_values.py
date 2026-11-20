@@ -33,7 +33,7 @@ def trace(tmp_path_factory):
         for i in range(3):
             fh.write(
                 f'{{"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":{1000 + i},'
-                f'"dur":{10 + i},"ph":"X","args":{{}}}}\n'
+                f'"dur":{10 + i},"ph":1,"args":{{}}}}\n'
             )
     return str(d)
 

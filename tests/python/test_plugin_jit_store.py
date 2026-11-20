@@ -36,7 +36,7 @@ def trace(tmp_path):
         for i in range(_N):
             fh.write(
                 f'{{"name":"{"read" if i % 2 else "write"}","cat":"POSIX","pid":{1 + i % 3},'
-                f'"tid":1,"ts":{1000 + i},"dur":{10 + i},"ph":"X","args":{{}}}}\n'
+                f'"tid":1,"ts":{1000 + i},"dur":{10 + i},"ph":1,"args":{{}}}}\n'
             )
     return str(d)
 
@@ -260,7 +260,7 @@ def test_a_missing_string_key_fails_the_run(tmp_path, idx):
     d = tmp_path / "noname"
     d.mkdir()
     with gzip.open(d / "t.pfw.gz", "wt", encoding="utf-8") as fh:
-        fh.write('{"cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":5,"ph":"X","args":{}}\n')
+        fh.write('{"cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":5,"ph":1,"args":{}}\n')
 
     @jit.plugin
     class Keyed:
@@ -283,7 +283,7 @@ def test_every_worker_slice_keeps_its_puts(tmp_path, idx):
                 pid = f * 100 + i
                 fh.write(
                     f'{{"name":"x","cat":"POSIX","pid":{pid},"tid":1,"ts":{1000 + pid},'
-                    f'"dur":{pid},"ph":"X","args":{{}}}}\n'
+                    f'"dur":{pid},"ph":1,"args":{{}}}}\n'
                 )
 
     @jit.plugin

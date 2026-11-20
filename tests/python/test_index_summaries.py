@@ -32,7 +32,7 @@ def write_trace(directory: Path) -> str:
                 "cat": "POSIX",
                 "pid": 1,
                 "tid": 2,
-                "ph": "X",
+                "ph": 1,
                 "ts": 1000 + i,
                 "dur": 5,
                 "args": {"size": i * 10, "m": f"m{i // 10}"},

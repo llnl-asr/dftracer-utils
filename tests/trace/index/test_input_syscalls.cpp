@@ -61,7 +61,7 @@ dstd::String make_trace(int pid, int events) {
     for (int i = 0; i < events; ++i) {
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":"
-            "{},\"ts\":{},\"dur\":5,\"ph\":\"X\",\"args\":{\"hhash\":\"abc\","
+            "{},\"ts\":{},\"dur\":5,\"ph\":1,\"args\":{\"hhash\":\"abc\","
             "\"ret\":1024}}\n">(os, i, pid, pid, (1000 + i * 10));
     }
     return os;

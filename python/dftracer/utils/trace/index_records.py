@@ -14,10 +14,10 @@ class IndexRecords(Generic[T]):
     """The stored records of the aggregation index, one family per field."""
 
     regular: T
-    """The ``ph="X"`` events."""
+    """The ``ph=1`` events."""
 
     aggregated: T
     """The aggregated records, which carry arbitrary extra-key dimensions."""
 
     counters: T
-    """The ``ph="C"`` counters, system counters included."""
+    """The ``ph=2`` counters, system counters included."""

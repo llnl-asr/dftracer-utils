@@ -29,7 +29,7 @@ dstd::String write_trace(dstd::CStringView dir, int n, int events = EVENTS) {
     for (int i = 0; i < events; ++i)
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":"
-            "1,\"ph\":\"X\",\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
+            "1,\"ph\":1,\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
             "file_number_{}_{}\",\"size\":{},\"hhash\":\"a1b2c3d4e5f60718\","
             "\"level\":{}}}\n">(out, i, 1 + i % 4, 1000 + i * 10, n, i % 37,
                                 i % 4096, i % 3);

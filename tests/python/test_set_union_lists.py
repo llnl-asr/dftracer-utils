@@ -109,7 +109,7 @@ def test_view_and_dataframe_engines_agree(tmp_path):
                         "tid": 1,
                         "ts": 100 + i,
                         "dur": 5,
-                        "ph": "X",
+                        "ph": 1,
                         "args": {"v": v, "n": n},
                     }
                 )

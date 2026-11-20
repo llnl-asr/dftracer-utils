@@ -200,14 +200,6 @@ bool number(dstd::CStringView text, dstd::StringView key, std::uint64_t& out) {
     return true;
 }
 
-std::uint8_t phase_of(dstd::StringView letter) {
-    if (letter == "X") return 1;
-    if (letter == "C") return 2;
-    if (letter == "A") return 3;
-    if (letter == "M") return 4;
-    return 0;
-}
-
 Num classify(dstd::CStringView text) {
     Num n;
     if (text.view().find_first_of(".eE") != dstd::String::npos) {
@@ -252,9 +244,11 @@ Row parse_row(dstd::StringView line) {
     }
     row.cat = dstd::String(quoted(head, "cat"));
     row.name = dstd::String(quoted(head, "name"));
-    row.phase = phase_of(quoted(head, "ph"));
     row.host = dstd::String(quoted(args, "hhash"));
     row.fhash = dstd::String(quoted(args, "fhash"));
+    std::uint64_t phase = 0;
+    number(head, "ph", phase);
+    row.phase = static_cast<std::uint8_t>(phase);
     number(head, "pid", row.pid);
     number(head, "tid", row.tid);
     number(head, "ts", row.ts);
@@ -319,8 +313,7 @@ dstd::String make_trace(int n) {
         if (i % 20 == 19) {
             dstd::fmt_append<
                 "{\"id\":{},\"name\":\"meta\",\"cat\":\"dftracer\",\"ph\":"
-                "\"M\",\"ts\":{},\"args\":{\"version\":\"1.0\"}}\n">(text, i,
-                                                                     ts);
+                "4,\"ts\":{},\"args\":{\"version\":\"1.0\"}}\n">(text, i, ts);
             continue;
         }
         switch (i % 5) {
@@ -328,7 +321,7 @@ dstd::String make_trace(int n) {
             case 1:
                 dstd::fmt_append<
                     "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":{},"
-                    "\"tid\":{},\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{"
+                    "\"tid\":{},\"ph\":1,\"ts\":{},\"dur\":{},\"args\":{"
                     "\"ret\":{},\"offset\":{},\"hhash\":\"a1b2c3d4e5f60718\","
                     "\"fhash\":\"0123456789abcdef\"}}\n">(
                     text, i, pid, tid, ts, i * 3 % 71, (i * 13) % 4096,
@@ -337,21 +330,21 @@ dstd::String make_trace(int n) {
             case 2:
                 dstd::fmt_append<
                     "{\"id\":{},\"name\":\"app\",\"cat\":\"App\",\"pid\":{},"
-                    "\"tid\":{},\"ph\":\"C\",\"ts\":{},\"args\":{\"dur\":0.25,"
+                    "\"tid\":{},\"ph\":2,\"ts\":{},\"args\":{\"dur\":0.25,"
                     "\"user_pct\":41.25,\"n\":{},\"state\":\"r\"}}\n">(
                     text, i, pid, tid, ts, i % 7);
                 break;
             case 3:
                 dstd::fmt_append<
                     "{\"id\":{},\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":{},"
-                    "\"tid\":{},\"ph\":\"C\",\"ts\":{},\"args\":{\"user_pct\":"
+                    "\"tid\":{},\"ph\":2,\"ts\":{},\"args\":{\"user_pct\":"
                     "41.25,\"sys_pct\":8.5,\"mem\":123456789,\"level\":{}}}\n">(
                     text, i, pid, tid, ts, i % 4);
                 break;
             default:
                 dstd::fmt_append<
                     "{\"id\":{},\"name\":\"step\",\"cat\":\"App\",\"pid\":{},"
-                    "\"tid\":{},\"ph\":\"A\",\"ts\":{},\"dur\":{},\"args\":{"
+                    "\"tid\":{},\"ph\":3,\"ts\":{},\"dur\":{},\"args\":{"
                     "\"offset\":{},\"delta\":-{},\"count\":{}}}\n">(
                     text, i, pid, tid, ts, i % 11, 18446744073709551615ULL,
                     i % 9, i * 0.5);
@@ -550,12 +543,12 @@ dstd::String repeated_key_trace() {
     dstd::String text;
     text += "[\n";
     text +=
-        "{\"id\":0,\"name\":\"meta\",\"cat\":\"dftracer\",\"ph\":\"M\",\"ts\":"
+        "{\"id\":0,\"name\":\"meta\",\"cat\":\"dftracer\",\"ph\":4,\"ts\":"
         "1,\"args\":{\"version\":\"1.0\"}}\n";
     for (int i = 0; i < RECORDS; ++i) {
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,\"tid\":1,"
-            "\"ph\":\"C\",\"ts\":{},\"args\":{\"hhash\":\"h1\",\"used\":{},"
+            "\"ph\":2,\"ts\":{},\"args\":{\"hhash\":\"h1\",\"used\":{},"
             "\"used\":{},\"nested\":{\"CPP_APP\":{},\"CPP_APP\":{}}}}\n">(
             text, i + 1, 5000 + i * 7, 10 + i, 90 + i, 100 + i, 200 + i);
     }
@@ -886,8 +879,8 @@ TEST_SUITE("ChunkColumns") {
         for (int i = 0; i < RECORDS; ++i) {
             dstd::fmt_append<
                 "{\"id\":{},\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,\"tid\":"
-                "1,\"ph\":\"C\",\"ts\":{},\"args\":{\"ret\":{}">(
-                text, i, 1000 + i * 7, i);
+                "1,\"ph\":2,\"ts\":{},\"args\":{\"ret\":{}">(text, i,
+                                                             1000 + i * 7, i);
             if (i % 3 != 0) text += R"(,"fhash":"0123456789abcdef")";
             text += "}}\n";
         }

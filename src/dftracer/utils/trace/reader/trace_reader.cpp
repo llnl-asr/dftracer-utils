@@ -692,7 +692,7 @@ coro::AsyncGenerator<dstd::Result<JsonLine>> TraceReader::read_json(
 
     // chunk_prune_only path: dim_stats already proved every event with the
     // predicate field matches; we still need to skip events lacking the
-    // field (e.g., metadata "ph":"M" events). Field-presence probe is
+    // field (e.g., metadata "ph":4 events). Field-presence probe is
     // cheaper than full ValueMap eval.
     dstd::Vector<dstd::String> presence_check_paths;
     if (query && config.chunk_prune_only) {

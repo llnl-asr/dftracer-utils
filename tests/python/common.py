@@ -186,7 +186,7 @@ class Environment:
                 f'{{"name":"{name}","cat":"{cat}",'
                 f'"pid":{1000 + i % 4},"tid":{2000 + i % 8},'
                 f'"ts":{1000000 + i * 1000},"dur":{(i * 123 % 10000)},'
-                f'"ph":"X","args":{{"ret":{1024 * i},"hhash":"abc123","data":"'
+                f'"ph":1,"args":{{"ret":{1024 * i},"hhash":"abc123","data":"'
             )
             current_size = len(line)
             needed_padding = 0
@@ -225,7 +225,7 @@ class Environment:
                 f.write(
                     f'{{"name":"{name}","cat":"{cat}","pid":1,"tid":{1 + i % 3},'
                     f'"ts":{1000000 + i * 1000},"dur":{100 + i * 10},'
-                    f'"ph":"X","args":{{"ret":{1024 * (i + 1)},"hhash":"abc123"}}}}\n'
+                    f'"ph":1,"args":{{"ret":{1024 * (i + 1)},"hhash":"abc123"}}}}\n'
                 )
         self.test_files.append(file_path)
         return file_path
@@ -338,7 +338,7 @@ class Environment:
                     "tid": 2000 + i % 8,
                     "ts": 1000000 + i * 1000,
                     "dur": (i * 123) % 10000,
-                    "ph": "X",
+                    "ph": 1,
                     "args": {"ret": 1024 * i, "hhash": f"hash_{i}"},
                 }
 
@@ -378,10 +378,10 @@ class Environment:
         fhash = f"f{pid}"
         with gzip.open(file_path, "wt", encoding="utf-8") as f:
             f.write(
-                f'{{"name":"HH","ph":"M","pid":{pid},"tid":1,"args":{{"name":"host{pid}","value":"{hhash}"}}}}\n'
+                f'{{"name":"HH","ph":4,"pid":{pid},"tid":1,"args":{{"name":"host{pid}","value":"{hhash}"}}}}\n'
             )
             f.write(
-                f'{{"name":"FH","ph":"M","pid":{pid},"tid":1,"args":{{"name":"/data/file{pid}.dat","value":"{fhash}"}}}}\n'
+                f'{{"name":"FH","ph":4,"pid":{pid},"tid":1,"args":{{"name":"/data/file{pid}.dat","value":"{fhash}"}}}}\n'
             )
             for i in range(n):
                 name = io_names[i % len(io_names)]
@@ -389,7 +389,7 @@ class Environment:
                 f.write(
                     f'{{"name":"{name}","cat":"{cat}","pid":{pid},"tid":{1 + i % 3},'
                     f'"ts":{1000000 + i * 1000},"dur":{100 + i * 10},'
-                    f'"ph":"X","args":{{"ret":{1024 * (i + 1)},"hhash":"{hhash}","fhash":"{fhash}"}}}}\n'
+                    f'"ph":1,"args":{{"ret":{1024 * (i + 1)},"hhash":"{hhash}","fhash":"{fhash}"}}}}\n'
                 )
         self.test_files.append(file_path)
         return file_path

@@ -39,7 +39,7 @@ def tiny_trace(directory: str) -> str:
     path = os.path.join(directory, "t.pfw.gz")
     with gzip.open(path, "wt") as f:
         for i in range(8):
-            event = {"ph": "X", "name": "a", "cat": "C", "pid": 1, "tid": 1, "ts": i, "dur": 2}
+            event = {"ph": 1, "name": "a", "cat": "C", "pid": 1, "tid": 1, "ts": i, "dur": 2}
             f.write(json.dumps(event) + "\n")
     return path
 

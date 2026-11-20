@@ -296,7 +296,7 @@ dstd::String make_trace(dftu_utils_test::TestEnvironment& env, int n) {
     dstd::String lines;
     for (int i = 0; i < n; ++i) {
         dstd::fmt_append<
-            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
             "\"tid\":1,\"ts\":{},\"dur\":{}{}\n">(lines, (1000 + i * 100),
                                                   (10 + i), R"(,"args":{}})");
     }

@@ -66,7 +66,7 @@ def write_trace(root: str, events: int, files: int) -> None:
                 n = f * per_file + i
                 fh.write(
                     f'{{"name":"read","cat":"POSIX","pid":{1 + n % 4},"tid":1,"ts":{1000 + n},'
-                    f'"dur":{10 + (n * 7) % 53},"ph":"X","args":{{}}}}\n'
+                    f'"dur":{10 + (n * 7) % 53},"ph":1,"args":{{}}}}\n'
                 )
 
 

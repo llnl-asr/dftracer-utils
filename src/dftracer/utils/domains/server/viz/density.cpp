@@ -75,7 +75,7 @@ struct DensityBlock {
     double total;
     std::uint32_t depth;
     dstd::StringView group;  // group_by value; omitted from JSON when empty
-    bool counter = false;    // ph="C" block: carries a mean counter value
+    bool counter = false;    // ph=2 block: carries a mean counter value
     double value = 0;
 };
 
@@ -392,7 +392,7 @@ static dstd::String serve_density_from_summary(
         for (auto& [k, a] : dens)
             if (span_lanes.count((k.pid << 20) ^ k.tid)) a.depth = 1;
 
-    // Re-bucket the summary's ph="C" series onto this window's density columns
+    // Re-bucket the summary's ph=2 series onto this window's density columns
     // and fold them into the same density map, so the unfiltered/summary path
     // renders counters as ordinary event blocks like the live path. The summary
     // carries each series' emitting pid/tid (0 = node-level).
@@ -664,8 +664,8 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         threshold > 0 ? static_cast<std::size_t>((end - begin) / threshold) + 1
                       : 0;
 
-    // Pass 1 (in-window): one scan over ph="X" and ph="C". ph="X" events fold
-    // into density blocks (small) or stay raw (big); ph="C" events aggregate
+    // Pass 1 (in-window): one scan over ph=1 and ph=2. ph=1 events fold
+    // into density blocks (small) or stay raw (big); ph=2 events aggregate
     // into per-(name.arg) counter blocks on the same column grid, so counters
     // land in the same density map and render as ordinary events. The two
     // phases split as fused partition branches so a single decode feeds both.

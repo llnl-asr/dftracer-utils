@@ -67,7 +67,7 @@ dstd::String create_bloom_trace(TestEnvironment& env, int n,
     {
         dftu_utils_test::FileOut ofs(pfw);
         for (int i = 0; i < n; ++i) {
-            ofs << R"({"ph":"X","name":")" << (i % 2 ? "read" : "write")
+            ofs << R"({"ph":1,"name":")" << (i % 2 ? "read" : "write")
                 << R"(","cat":")" << (i % 3 ? "POSIX" : "STDIO")
                 << R"(","pid":)" << (1 + i % 4) << R"(,"tid":)" << (1 + i % 7)
                 << R"(,"ts":)" << (1000 + i * 100) << R"(,"dur":)" << (10 + i)
@@ -193,7 +193,7 @@ TEST_SUITE("BloomFold") {
         dstd::StringIntern intern;
         dstd::Vector<dstd::String> lines;
         for (int i = 0; i < 8; ++i)
-            lines.push_back(R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+            lines.push_back(R"({"ph":1,"name":"read","cat":"POSIX","pid":1,)"
                             R"("tid":1,"ts":)" +
                             dstd::to_string(i) +
                             R"(,"dur":1,"args":{"k":"v"}})");
@@ -350,7 +350,7 @@ TEST_SUITE("BloomFold") {
 
         dstd::Vector<dstd::String> lines;
         for (int i = 0; i < 8; ++i)
-            lines.push_back(R"({"ph":"X","name":"read","cat":"POSIX","pid":)" +
+            lines.push_back(R"({"ph":1,"name":"read","cat":"POSIX","pid":)" +
                             dstd::to_string(1 + i % 3) + R"(,"tid":1,"ts":)" +
                             dstd::to_string(i) +
                             R"(,"dur":1,"args":{"fhash":"fh1"}})");
@@ -410,9 +410,9 @@ TEST_SUITE("BloomFold") {
         unit.checkpoint_idx = 0;
 
         dstd::Vector<dstd::String> lines = {
-            R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/a.bin","value":"fh1"}})",
-            R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":1,"args":{"fhash":"fh1"}})",
-            R"({"ph":"X","name":"write","cat":"STDIO","pid":2,"tid":3,"ts":2,"dur":1,"args":{"fhash":"fh1"}})",
+            R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"name":"/data/a.bin","value":"fh1"}})",
+            R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":1,"args":{"fhash":"fh1"}})",
+            R"({"ph":1,"name":"write","cat":"STDIO","pid":2,"tid":3,"ts":2,"dur":1,"args":{"fhash":"fh1"}})",
         };
         dstd::StringIntern intern;
         auto events = events_of(lines, intern);
@@ -459,11 +459,11 @@ TEST_SUITE("BloomFold") {
 
         dstd::String text =
             dstd::String(
-                R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/a.bin","value":"fh1"}})") +
+                R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"name":"/data/a.bin","value":"fh1"}})") +
             "\n" +
-            R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":1,"args":{"fhash":"fh1"}})" +
+            R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":1,"args":{"fhash":"fh1"}})" +
             "\n" +
-            R"({"ph":"X","name":"write","cat":"STDIO","pid":2,"tid":3,"ts":2,"dur":1,"args":{"fhash":"fh1"}})" +
+            R"({"ph":1,"name":"write","cat":"STDIO","pid":2,"tid":3,"ts":2,"dur":1,"args":{"fhash":"fh1"}})" +
             "\n";
 
         dstd::StringIntern intern;
@@ -513,12 +513,12 @@ TEST_SUITE("BloomFold") {
             // per event name, so a second "write" event carries size as a float
             // to exercise the cross-name type fold (int64 + float64 ->
             // float64).
-            ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":2,"ts":100,"dur":5,)"
+            ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":2,"ts":100,"dur":5,)"
                 << R"("args":{"hostname":"h1","size":1024,"rate":3.5,)"
                 << R"("pos":{"x":1,"y":2},"tags":["a","b"],)"
                 << R"("fhash":"fh1","hhash":"hh1"}})"
                 << "\n";
-            ofs << R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":2,"ts":200,"dur":6,)"
+            ofs << R"({"ph":1,"name":"write","cat":"POSIX","pid":1,"tid":2,"ts":200,"dur":6,)"
                 << R"("args":{"size":2.5}})" << "\n";
         }
         dstd::String gz = pfw + ".gz";
@@ -666,7 +666,7 @@ TEST_SUITE("BloomFold - auto fields") {
             dftu_utils_test::FileOut ofs(pfw);
             for (int m = 0; m < 4; ++m)
                 for (int i = 0; i < 60; ++i)
-                    ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                    ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                         << m * 1000 + i << R"(,"dur":5,"args":{"size":)"
                         << m * 100 + i % 3 << R"(,"mode":"m)" << m
                         << R"(","fname":"/f/)" << m << "/" << i << R"("}})"

@@ -41,11 +41,11 @@ void write_trace(dstd::StringView gz_path, int pid, int reads, int writes) {
     {
         dftu_utils_test::FileOut o(plain);
         for (int j = 0; j < reads; ++j)
-            o << R"({"ph":"X","name":"read","cat":"POSIX","pid":)" << pid
+            o << R"({"ph":1,"name":"read","cat":"POSIX","pid":)" << pid
               << R"(,"tid":1,"ts":)" << (BASE_TS + j * 100) << R"(,"dur":)"
               << 10 + j % 7 << R"(,"args":{"hhash":"h"}})" << "\n";
         for (int j = 0; j < writes; ++j)
-            o << R"({"ph":"X","name":"fwrite","cat":"STDIO","pid":)" << pid
+            o << R"({"ph":1,"name":"fwrite","cat":"STDIO","pid":)" << pid
               << R"(,"tid":1,"ts":)" << (BASE_TS + 50000 + j * 100)
               << R"(,"dur":)" << 20 + j % 5 << R"(,"args":{"hhash":"h"}})"
               << "\n";

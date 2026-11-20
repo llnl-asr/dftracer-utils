@@ -64,10 +64,9 @@ dstd::String create_ns_pfw_gz(dstd::String dir) {
     gzFile f = gzopen(path.c_str(), "wb");
     if (f == nullptr) return "";
     gzputs(f, "[\n");
-    gzputs(
-        f,
-        "{\"id\":0,\"name\":\"CM\",\"cat\":\"dft\",\"pid\":0,\"tid\":0,"
-        "\"ph\":\"M\",\"args\":{\"name\":\"time_metric\",\"value\":\"NS\"}}\n");
+    gzputs(f,
+           "{\"id\":0,\"name\":\"CM\",\"cat\":\"dft\",\"pid\":0,\"tid\":0,"
+           "\"ph\":4,\"args\":{\"name\":\"time_metric\",\"value\":\"NS\"}}\n");
     for (int i = 1; i <= 200; ++i) {
         unsigned long long ts =
             5000000000ULL + static_cast<unsigned long long>(i) * 100000ULL;
@@ -77,7 +76,7 @@ dstd::String create_ns_pfw_gz(dstd::String dir) {
         std::snprintf(
             buf, sizeof(buf),
             "{\"id\":%d,\"name\":\"read\",\"cat\":\"posix\",\"pid\":1,"
-            "\"tid\":%d,\"ts\":%llu,\"dur\":%llu,\"ph\":\"X\"}\n",
+            "\"tid\":%d,\"ts\":%llu,\"dur\":%llu,\"ph\":1}\n",
             i, 1000 + i % 3, ts, dur);
         gzputs(f, buf);
     }
@@ -952,10 +951,10 @@ TEST_CASE("DFTracer Server - rebuilds stale index on changed source") {
     }
 }
 
-// /viz/density folds real ph="C" counter events into a counter_series section
-// alongside the ph="X" density blocks - both from one scan. group_by forces the
-// live path (the summary path carries no counters) without filtering ph="C".
-TEST_CASE("DFTracer Server - density surfaces ph=C counters as blocks") {
+// /viz/density folds real ph=2 counter events into a counter_series section
+// alongside the ph=1 density blocks - both from one scan. group_by forces the
+// live path (the summary path carries no counters) without filtering ph=2.
+TEST_CASE("DFTracer Server - density surfaces ph=2 counters as blocks") {
     auto binary = find_server_binary();
     if (binary.empty()) {
         MESSAGE("dftracer_server binary not found, skipping.");
@@ -976,7 +975,7 @@ TEST_CASE("DFTracer Server - density surfaces ph=C counters as blocks") {
         dstd::String ev =
             "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,\"ts\":" +
             dstd::to_string(1000 + i * 1000) +
-            ",\"dur\":10,\"ph\":\"X\",\"args\":{}}\n";
+            ",\"dur\":10,\"ph\":1,\"args\":{}}\n";
         gzputs(f, ev.c_str());
     }
     // Counter events: cpu utilization with two numeric args -> two series.
@@ -984,7 +983,7 @@ TEST_CASE("DFTracer Server - density surfaces ph=C counters as blocks") {
         dstd::String ev =
             "{\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":0,\"tid\":0,\"ts\":" +
             dstd::to_string(1000 + i * 2000) +
-            ",\"ph\":\"C\",\"args\":{"
+            ",\"ph\":2,\"args\":{"
             "\"user_pct\":" +
             dstd::to_string(40 + i) +
             ",\"idle_pct\":" + dstd::to_string(60 - i) + "}}\n";
@@ -1005,7 +1004,7 @@ TEST_CASE("DFTracer Server - density surfaces ph=C counters as blocks") {
     REQUIRE(!resp.empty());
     CHECK(extract_status_code(resp) == 200);
     auto body = extract_body(resp);
-    // ph="C" counters are aggregated into ordinary density blocks: one series
+    // ph=2 counters are aggregated into ordinary density blocks: one series
     // per (name.arg), flagged counter with the mean reading as value.
     CHECK(body.find("\"cpu.user_pct\"") != dstd::String::npos);
     CHECK(body.find("\"cpu.idle_pct\"") != dstd::String::npos);
@@ -1038,13 +1037,13 @@ TEST_CASE(
         dstd::String ev =
             "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,\"ts\":" +
             dstd::to_string(5000 + i * 1000) +
-            ",\"dur\":10,\"ph\":\"X\",\"args\":{}}\n";
+            ",\"dur\":10,\"ph\":1,\"args\":{}}\n";
         gzputs(f, ev.c_str());
     }
     for (int i = 0; i < 3; ++i)
         gzputs(f,
                "{\"name\":\"cudaLaunchKernel\",\"cat\":\"CUDA\",\"pid\":1,"
-               "\"tid\":2,\"ts\":0,\"dur\":7,\"ph\":\"X\",\"args\":{}}\n");
+               "\"tid\":2,\"ts\":0,\"dur\":7,\"ph\":1,\"args\":{}}\n");
     gzputs(f,
            "{\"name\":\"kernel\",\"cat\":\"CUDA_KERNEL\",\"pid\":1,"
            "\"tid\":2,\"ts\":0,\"dur\":9,\"ph\":3,\"args\":{}}\n");
@@ -1115,13 +1114,12 @@ TEST_CASE("DFTracer Server - untimed pages of many records") {
         gzputs(f, "[\n");
         gzputs(f,
                "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
-               "\"ts\":5000,\"dur\":10,\"ph\":\"X\",\"args\":{}}\n");
+               "\"ts\":5000,\"dur\":10,\"ph\":1,\"args\":{}}\n");
         for (int i = 1; i <= UNTIMED; ++i) {
             dstd::String ev = "{\"name\":\"" + name +
                               "\",\"cat\":\"CUDA\",\"pid\":1,\"tid\":2,"
                               "\"ts\":0,\"dur\":" +
-                              dstd::to_string(i) +
-                              ",\"ph\":\"X\",\"args\":{}}\n";
+                              dstd::to_string(i) + ",\"ph\":1,\"args\":{}}\n";
             gzputs(f, ev.c_str());
         }
         gzputs(f, "]\n");

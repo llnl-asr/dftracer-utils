@@ -40,12 +40,12 @@ dstd::String make_trace(int n) {
              "\",\"cat\":\"" + cats[k] +
              "\",\"pid\":" + dstd::to_string(1 + k) +
              ",\"tid\":1,\"ts\":" + dstd::to_string(1000 + i) +
-             ",\"dur\":" + dstd::to_string(durs[k]) + ",\"ph\":\"X\"}\n";
+             ",\"dur\":" + dstd::to_string(durs[k]) + ",\"ph\":1}\n";
         if (i % 50 == 0) {
             s += "{\"id\":" + dstd::to_string(i) +
                  ",\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":9,\"tid\":1,"
                  "\"ts\":" +
-                 dstd::to_string(1000 + i) + ",\"dur\":0,\"ph\":\"C\"}\n";
+                 dstd::to_string(1000 + i) + ",\"dur\":0,\"ph\":2}\n";
         }
     }
     return s;

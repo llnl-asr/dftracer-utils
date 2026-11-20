@@ -177,7 +177,7 @@ RowKeySource row_key_source(dstd::StringView sel, bool by_path = false);
 /// `select` projects a subset (top-level names or arg keys, bare or
 /// "args."-prefixed), and an empty
 /// `select` emits every column (the union of all args seen, null-filled where
-/// an event lacks a key). ph="M" metadata is skipped unless `keep_metadata` is
+/// an event lacks a key). ph=4 metadata is skipped unless `keep_metadata` is
 /// set (phase("metadata")), which emits the records as rows with their args
 /// flattened like any event's.
 ///
@@ -244,7 +244,7 @@ class NativeRowFold : public Fold {
     const dftracer::utils::dstd::StringIntern* intern_;
     dstd::Vector<dstd::String> select_;  // empty = every column
     double time_scale_;                  // ts/dur multiplier (1.0 = none)
-    bool keep_metadata_;                 // phase("metadata"): keep ph=M records
+    bool keep_metadata_;                 // phase("metadata"): keep ph=4 records
     bool by_path_;
     dstd::Vector<FoldEvent> events_;
 };

@@ -45,7 +45,7 @@ void write_events(dstd::CStringView gz, dstd::StringView cat, int n,
                 (!odd_cat.empty() && i >= n - 3) ? odd_cat : cat;
             ofs << R"({"id":)" << i << R"(,"name":"read","cat":")" << c
                 << R"(","pid":1,"tid":1,"ts":)" << (1000 + i)
-                << R"(,"dur":5,"ph":"X"})" << "\n";
+                << R"(,"dur":5,"ph":1})" << "\n";
         }
     }
     if (member_bytes)

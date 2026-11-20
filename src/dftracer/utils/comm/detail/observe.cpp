@@ -95,7 +95,7 @@ void Tracer::event(std::uint32_t world_rank, CallKind kind, std::uint64_t group,
                                                       pid_, number_);
     }
     dstd::fmt_append<
-        R"({"id":{},"name":"{}","cat":"comm","pid":{},"tid":{},"ts":{},"dur":{},"ph":"X",)">(
+        R"({"id":{},"name":"{}","cat":"comm","pid":{},"tid":{},"ts":{},"dur":{},"ph":1,)">(
         sink.buffer, next_id_++, call_name(kind), pid_, tid, begin_ns / 1000,
         dur_us);
     dstd::fmt_append<

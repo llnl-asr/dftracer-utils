@@ -250,7 +250,7 @@ bool fails_with(dstd::StringView q, dstd::Vector<dstd::String> words) {
 }
 
 dstd::String event(int ts, dstd::StringView args, int dur = 10) {
-    return R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":)" +
+    return R"({"ph":1,"name":"op","cat":"POSIX","pid":1,"tid":1,"ts":)" +
            dstd::to_string(ts) + R"(,"dur":)" + dstd::to_string(dur) +
            R"(,"args":{)" + dstd::String(args) + "}}";
 }
@@ -280,7 +280,7 @@ View view_of_lines(TestEnvironment& env, dstd::Vector<dstd::String> lines,
 dstd::Vector<dstd::String> null_dur_lines() {
     dstd::Vector<dstd::String> lines;
     for (int i = 0; i < 60; ++i) {
-        dstd::String rec = R"({"ph":"X","name":")" +
+        dstd::String rec = R"({"ph":1,"name":")" +
                            dstd::String(i % 2 ? "a" : "b") + R"(","pid":)" +
                            dstd::to_string(i % 4) + R"(,"tid":1,"ts":)" +
                            dstd::to_string(100 + i * 10);
@@ -374,7 +374,7 @@ TEST_SUITE("View duql pipeline") {
         const std::int64_t T0 = 1700000000123456;
         const std::int64_t DAY = 86400000000;
         const auto at = [](std::int64_t ts) {
-            return R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":)" +
+            return R"({"ph":1,"name":"op","cat":"POSIX","pid":1,"tid":1,"ts":)" +
                    dstd::to_string(ts) + R"(,"dur":10,"args":{}})";
         };
         const View v =
@@ -427,7 +427,7 @@ TEST_SUITE("View duql pipeline") {
         };
         const std::int64_t stamp = micros();
         const auto at = [](std::int64_t ts) {
-            return R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":)" +
+            return R"({"ph":1,"name":"op","cat":"POSIX","pid":1,"tid":1,"ts":)" +
                    dstd::to_string(ts) + R"(,"dur":10,"args":{}})";
         };
         const View v = view_of_lines(
@@ -568,14 +568,13 @@ TEST_SUITE("View duql pipeline") {
     TEST_CASE("parse adds a String column per named group") {
         TestEnvironment env(10);
         const auto named = [](int ts, dstd::StringView name) {
-            return dstd::String(R"({"ph":"X","name":")") + dstd::String(name) +
+            return dstd::String(R"({"ph":1,"name":")") + dstd::String(name) +
                    R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" +
                    dstd::to_string(ts) + R"(,"dur":10})";
         };
         const View v = view_of_lines(
-            env,
-            {named(1, "open64_17"), named(2, "read"), named(3, "close"),
-             R"({"ph":"X","cat":"POSIX","pid":1,"tid":1,"ts":4,"dur":10})"});
+            env, {named(1, "open64_17"), named(2, "read"), named(3, "close"),
+                  R"({"ph":1,"cat":"POSIX","pid":1,"tid":1,"ts":4,"dur":10})"});
         const auto run_parse = [&](dstd::StringView q) {
             return frame(v.duql(dstd::String(q) + " | sort ts"));
         };
@@ -1053,8 +1052,8 @@ TEST_SUITE("View duql aggregation") {
         TestEnvironment env(10);
         const View v = view_of_lines(
             env,
-            {R"({"ph":"X","name":"a","pid":1,"tid":1,"ts":100,"dur":0,"args":{}})",
-             R"({"ph":"X","name":"a","pid":1,"tid":1,"ts":200,"args":{}})"});
+            {R"({"ph":1,"name":"a","pid":1,"tid":1,"ts":100,"dur":0,"args":{}})",
+             R"({"ph":1,"name":"a","pid":1,"tid":1,"ts":200,"args":{}})"});
         const dataframe::DataFrame f = frame(v.duql("select dur | distinct"));
         REQUIRE(f.num_rows() == 2);
         const dataframe::Series& dur =
@@ -1662,7 +1661,7 @@ dstd::String sorted(const dataframe::DataFrame& f) {
 }
 
 dstd::String line(dstd::StringView cat, int ts, dstd::StringView args) {
-    return R"({"ph":"X","name":"op","cat":")" + dstd::String(cat) +
+    return R"({"ph":1,"name":"op","cat":")" + dstd::String(cat) +
            R"(","pid":1,"tid":1,"ts":)" + dstd::to_string(ts) +
            R"(,"dur":10,"args":{)" + dstd::String(args) + "}}";
 }
@@ -2446,7 +2445,7 @@ TEST_SUITE("View duql reshape determinism") {
             const char* tags[] = {R"(,"tags":["a","b"])", R"(,"tags":[])",
                                   R"(,"tags":["c"])", ""};
             for (int i = 0; i < RESHAPE_EVENTS; ++i)
-                o << R"({"ph":"X","name":")" << "abc"[i % 3]
+                o << R"({"ph":1,"name":")" << "abc"[i % 3]
                   << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)"
                   << 1000 + i * 100 << R"(,"dur":)" << (i * 37) % 101
                   << R"(,"args":{"n":)" << i << tags[i % 4] << "}}\n";
@@ -2704,7 +2703,7 @@ TEST_SUITE("View duql array and object functions") {
 TEST_SUITE("View duql array indexes and lists") {
     static View arrays_view(TestEnvironment & env) {
         auto line = [](int ts, dstd::StringView name, dstd::StringView args) {
-            return R"({"ph":"X","name":")" + dstd::String(name) +
+            return R"({"ph":1,"name":")" + dstd::String(name) +
                    R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" +
                    dstd::to_string(ts) + R"(,"dur":10,"args":{)" +
                    dstd::String(args) + "}}";
@@ -2719,7 +2718,7 @@ TEST_SUITE("View duql array indexes and lists") {
     TEST_CASE("an array holding a number too large for a double is a list") {
         TestEnvironment env(10);
         auto line = [](int ts, dstd::StringView name, dstd::StringView args) {
-            return R"({"ph":"X","name":")" + dstd::String(name) +
+            return R"({"ph":1,"name":")" + dstd::String(name) +
                    R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" +
                    dstd::to_string(ts) + R"(,"dur":10,"args":{)" +
                    dstd::String(args) + "}}";
@@ -2909,7 +2908,7 @@ TEST_SUITE("View duql session") {
         {
             dftu_utils_test::FileOut o(pfw);
             for (const auto& [pid, tid, ts, dur] : events)
-                o << R"({"ph":"X","name":"read","cat":"POSIX","pid":)" << pid
+                o << R"({"ph":1,"name":"read","cat":"POSIX","pid":)" << pid
                   << R"(,"tid":)" << tid << R"(,"ts":)" << ts << R"(,"dur":)"
                   << dur << "}\n";
         }

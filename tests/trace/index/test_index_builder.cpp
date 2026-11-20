@@ -95,8 +95,7 @@ dstd::String dftu_lines(int start_id, int count, dstd::StringView name = "op") {
                dstd::String(name) +
                "\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
                "\"ts\":" +
-               dstd::to_string(1000 + start_id + i) +
-               ",\"dur\":10,\"ph\":\"X\"}\n";
+               dstd::to_string(1000 + start_id + i) + ",\"dur\":10,\"ph\":1}\n";
     }
     return out;
 }

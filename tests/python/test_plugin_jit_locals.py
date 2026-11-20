@@ -29,7 +29,7 @@ def trace(tmp_path_factory):
             name = "read" if i % 2 else "write"
             fh.write(
                 f'{{"name":"{name}","cat":"POSIX","pid":{1 + i % 3},"tid":1,"ts":{1000 + i},'
-                f'"dur":{10 + i},"ph":"X","args":{{}}}}\n'
+                f'"dur":{10 + i},"ph":1,"args":{{}}}}\n'
             )
     return str(d)
 

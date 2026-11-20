@@ -551,7 +551,7 @@ struct FnameTrace {
         dstd::String pfw = env.dir() + "/fname.pfw";
         dftu_utils_test::FileOut ofs(pfw);
         for (int i = 0; i < 20; ++i)
-            ofs << R"({"ph":"X","name":"open","cat":"POSIX","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"open","cat":"POSIX","pid":1,"tid":1,)"
                 << R"("ts":)" << (1000 + i * 100) << R"(,"dur":)" << (5 + i)
                 << R"(,"args":{"fname":")" << (i % 4 == 0 ? "/a" : "/b")
                 << R"("}})" << "\n";
@@ -768,7 +768,7 @@ struct NestedTrace {
         dftu_utils_test::FileOut ofs(pfw);
         auto ev = [&](dstd::StringView name, dstd::StringView cat, int tid,
                       int ts, int dur) {
-            ofs << R"({"ph":"X","name":")" << name << R"(","cat":")" << cat
+            ofs << R"({"ph":1,"name":")" << name << R"(","cat":")" << cat
                 << R"(","pid":1,"tid":)" << tid << R"(,"ts":)" << ts
                 << R"(,"dur":)" << dur << R"(,"args":{}})"
                 << "\n";
@@ -1050,9 +1050,9 @@ TEST_SUITE("View - trace terminals") {
         const dstd::String pfw = env.dir() + "/dur_gap.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"ph":"X","name":"a","cat":"APP","pid":1,"tid":1,"ts":100,"dur":50,"args":{}})"
+            ofs << R"({"ph":1,"name":"a","cat":"APP","pid":1,"tid":1,"ts":100,"dur":50,"args":{}})"
                 << "\n"
-                << R"({"ph":"X","name":"b","cat":"APP","pid":1,"tid":2,"ts":150,"args":{}})"
+                << R"({"ph":1,"name":"b","cat":"APP","pid":1,"tid":2,"ts":150,"args":{}})"
                 << "\n";
         }
         const dstd::String gz = pfw + ".gz";
@@ -1095,9 +1095,9 @@ TEST_SUITE("View - trace terminals") {
         const dstd::String pfw = env.dir() + "/phased.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"ph":"X","name":"step","cat":"APP","pid":1,"tid":1,"ts":100,"dur":50,"args":{}})"
+            ofs << R"({"ph":1,"name":"step","cat":"APP","pid":1,"tid":1,"ts":100,"dur":50,"args":{}})"
                 << "\n"
-                << R"({"ph":"A","name":"folded","cat":"APP","pid":1,"tid":1,"ts":110,"dur":20,"args":{}})"
+                << R"({"ph":3,"name":"folded","cat":"APP","pid":1,"tid":1,"ts":110,"dur":20,"args":{}})"
                 << "\n";
         }
         const dstd::String gz = pfw + ".gz";
@@ -1260,7 +1260,7 @@ TEST_SUITE("View - trace terminals") {
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 4; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << 100 * i << R"(,"dur":10,"args":{"size":)" << i << "}}\n";
         }
         const dstd::String gz = pfw + ".gz";
@@ -1397,11 +1397,11 @@ dstd::String write_args_trace(TestEnvironment& env) {
     const dstd::String pfw = env.dir() + "/args.pfw";
     {
         dftu_utils_test::FileOut ofs(pfw);
-        ofs << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"args":{"x":1,"s":"a"}})"
+        ofs << R"({"ph":1,"name":"op","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"args":{"x":1,"s":"a"}})"
             << "\n"
-            << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":2,"dur":10,"args":{"x":null}})"
+            << R"({"ph":1,"name":"op","cat":"POSIX","pid":1,"tid":1,"ts":2,"dur":10,"args":{"x":null}})"
             << "\n"
-            << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":3,"dur":10,"args":{"x":3}})"
+            << R"({"ph":1,"name":"op","cat":"POSIX","pid":1,"tid":1,"ts":3,"dur":10,"args":{"x":3}})"
             << "\n";
     }
     const dstd::String gz = pfw + ".gz";
@@ -1561,11 +1561,11 @@ TEST_SUITE("View - aggregate types over an untyped arg") {
         const dstd::String absent_pfw = env.dir() + "/absent.pfw";
         {
             dftu_utils_test::FileOut ofs(absent_pfw);
-            ofs << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"args":{"x":1}})"
+            ofs << R"({"ph":1,"name":"op","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"args":{"x":1}})"
                 << "\n"
-                << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":2,"dur":10,"args":{"y":2}})"
+                << R"({"ph":1,"name":"op","cat":"POSIX","pid":1,"tid":1,"ts":2,"dur":10,"args":{"y":2}})"
                 << "\n"
-                << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":3,"dur":10,"args":{"x":3}})"
+                << R"({"ph":1,"name":"op","cat":"POSIX","pid":1,"tid":1,"ts":3,"dur":10,"args":{"x":3}})"
                 << "\n";
         }
         const dstd::String absent = absent_pfw + ".gz";
@@ -1628,7 +1628,7 @@ struct BadPartTrace {
         const dstd::String pfw = env.dir() + "/badpart.pfw";
         dftu_utils_test::FileOut ofs(pfw);
         auto ev = [&](int ts, dstd::StringView tail) {
-            ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,)"
                 << R"("ts":)" << ts << R"(,"dur":10,"args":{})" << tail
                 << "}\n";
         };
@@ -1658,10 +1658,9 @@ TEST_SUITE("View - malformed lines") {
         for (const dstd::String& line : lines)
             if (line.find("tru}") != dstd::String::npos) {
                 ++bad;
-                CHECK(
-                    line ==
-                    R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
-                    R"("ts":2,"dur":10,"args":{},"zz":tru})");
+                CHECK(line ==
+                      R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,)"
+                      R"("ts":2,"dur":10,"args":{},"zz":tru})");
             }
         CHECK(bad == 1);
     }
@@ -1684,13 +1683,12 @@ View batch_viewer(dstd::CStringView dir, dstd::SharedPtr<ScanCounter> counter) {
             dstd::String text;
             if (f == 0 && m == 0)
                 text +=
-                    R"({"ph":"M","name":"process_name","pid":1,"tid":0,"args":{"name":"app"}})"
+                    R"({"ph":4,"name":"process_name","pid":1,"tid":0,"args":{"name":"app"}})"
                     "\n";
             for (int i = 0; i < BATCH_PER_MEMBER; ++i) {
                 const int n = (f * BATCH_MEMBERS + m) * BATCH_PER_MEMBER + i;
-                text += dstd::String("{\"ph\":\"X\",\"name\":\"") +
-                        names[n % 4] + "\",\"cat\":\"" +
-                        (n % 4 < 2 ? "POSIX" : "STDIO") +
+                text += dstd::String("{\"ph\":1,\"name\":\"") + names[n % 4] +
+                        "\",\"cat\":\"" + (n % 4 < 2 ? "POSIX" : "STDIO") +
                         "\",\"pid\":" + dstd::to_string(1 + n % 5) +
                         ",\"tid\":1,\"ts\":" + dstd::to_string(1000 + n * 7) +
                         ",\"dur\":" + dstd::to_string(1 + (n * 37) % 500) +

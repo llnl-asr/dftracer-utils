@@ -34,7 +34,7 @@ def main() -> None:
                 keys.append(f'"k{path}":{value}')
             buf.write(
                 f'{{"id":{i},"name":"op{(i // 50) % 7}","cat":"C{i % 3}",'
-                f'"pid":{1 + i % 4},"tid":{10 + i % 4},"ph":"X","ts":{ts},'
+                f'"pid":{1 + i % 4},"tid":{10 + i % 4},"ph":1,"ts":{ts},'
                 f'"dur":{5 + i % 97},"args":{{{",".join(keys)}}}}}\n'
             )
             if buf.tell() >= a.member_bytes:

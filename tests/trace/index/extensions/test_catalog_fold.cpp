@@ -51,7 +51,7 @@ dstd::Vector<dstd::String> dftracer_lines() {
     dstd::Vector<dstd::String> out;
     for (int i = 0; i < RECORDS; ++i) {
         dstd::String l =
-            R"({"ph":"X","name":")" + dstd::String(i % 2 ? "read" : "write") +
+            R"({"ph":1,"name":")" + dstd::String(i % 2 ? "read" : "write") +
             R"(","cat":"POSIX","pid":1,"tid":)" + dstd::to_string(1 + i % 3) +
             R"(,"ts":)" + dstd::to_string(1000 + i * 10) +
             R"(,"dur":5,"args":{"fhash":"f)" + dstd::to_string(i % 4) +

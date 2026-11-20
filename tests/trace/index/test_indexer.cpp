@@ -81,10 +81,10 @@ void write_named_trace(dstd::CStringView gz, dstd::StringView name,
     const dstd::String plain = dstd::String(gz) + ".plain";
     {
         dftu_utils_test::FileOut out(plain);
-        out << R"({"ph":"M","name":"process_name","pid":1,"tid":1,"args":{"name":"p"}})"
+        out << R"({"ph":4,"name":"process_name","pid":1,"tid":1,"args":{"name":"p"}})"
             << "\n";
         for (int i = 0; i < count; ++i)
-            out << R"({"ph":"X","name":")" << name
+            out << R"({"ph":1,"name":")" << name
                 << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << 1000 + i * 100
                 << R"(,"dur":50,"args":{}})" << "\n";
     }

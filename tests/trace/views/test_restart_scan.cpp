@@ -58,7 +58,7 @@ Trace make_trace() {
             "\",\"cat\":\"POSIX\",\"pid\":" + dstd::to_string(1 + i % 4) +
             ",\"tid\":" + dstd::to_string(1 + i % 8) + ",\"ts\":" +
             dstd::to_string(1000 + i) + ",\"dur\":" + dstd::to_string(dur) +
-            ",\"ph\":\"X\",\"args\":{\"fhash\":\"" + fh +
+            ",\"ph\":1,\"args\":{\"fhash\":\"" + fh +
             "\",\"size\":" + dstd::to_string(i) + "}}\n");
         t.reads += read;
         t.dur_sum += dur;

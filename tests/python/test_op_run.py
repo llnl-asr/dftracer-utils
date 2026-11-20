@@ -80,7 +80,7 @@ class TestInlineInPlugin:
             for i in range(n):
                 f.write(
                     f'{{"name":"read","cat":"POSIX","pid":1,"tid":1,'
-                    f'"ts":{1000 + i},"dur":{i},"ph":"X","args":{{}}}}\n'
+                    f'"ts":{1000 + i},"dur":{i},"ph":1,"args":{{}}}}\n'
                 )
 
         pa = pytest.importorskip("pyarrow")

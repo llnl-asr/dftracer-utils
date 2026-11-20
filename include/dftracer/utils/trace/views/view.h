@@ -45,8 +45,9 @@ using dftracer::utils::dataframe::field::FieldAggExpr;
 using dftracer::utils::dataframe::field::FieldExpr;
 using duql::Query;
 
-/// `ph="X"` events, `ph="C"` counters, `ph="A"` aggregated (folded events),
-/// `ph="M"` metadata, or all (@ref Phase::Any "Any").
+/// `ph=1` events, `ph=2` counters, `ph=3` aggregated (folded events),
+/// `ph=4` metadata, or all (@ref Phase::Any "Any"). The letters X, C, A and M
+/// are the legacy form of 1 to 4 and are still read.
 enum class Phase { Events, Counters, Aggregated, Metadata, Any };
 
 /// One column of a (possibly composite) group-by key. `Arg` groups on an
@@ -292,8 +293,8 @@ class ExportSink {
 };
 
 /// The three record families of one aggregation index, read in a single pass:
-/// `regular` (ph="X" events), `aggregated` (aggregated records carrying
-/// arbitrary extra-key dims), and `counters` (ph="C" counters incl. system).
+/// `regular` (ph=1 events), `aggregated` (aggregated records carrying
+/// arbitrary extra-key dims), and `counters` (ph=2 counters incl. system).
 /// Returned by @ref View::collect_index_records.
 struct IndexRecords {
     dftracer::utils::dataframe::DataFrame regular;
@@ -918,7 +919,7 @@ class View : public dataframe::LazyOps<View> {
         Lazy, std::uint64_t checkpoint_size = 0, std::uint64_t part_size = 0,
         ProgressFn progress = {}) const;
 
-    /// Writes this viewer's aggregation as ph="C" counter events
+    /// Writes this viewer's aggregation as ph=2 counter events
     /// (a re-indexable counter trace).
     coro::CoroTask<dstd::Result<ExportStats>> sink_counters(
         ExportSink& sink) const;

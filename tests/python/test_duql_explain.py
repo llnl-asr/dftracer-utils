@@ -14,7 +14,7 @@ from dftracer.utils.duql import c, source
 
 def _trace(tmp_path):
     events = [
-        {"ph": "X", "name": n, "cat": "POSIX", "pid": 1, "tid": 1, "ts": 10 * i, "dur": d}
+        {"ph": 1, "name": n, "cat": "POSIX", "pid": 1, "tid": 1, "ts": 10 * i, "dur": d}
         for i, (n, d) in enumerate([("read", 5), ("write", 50), ("read", 500), ("read", 900)])
     ]
     path = tmp_path / "t.pfw.gz"

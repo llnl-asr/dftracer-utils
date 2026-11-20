@@ -304,7 +304,7 @@ dstd::String TestEnvironment::create_dft_test_file(int event_count) {
         ofs << R"({"id":)" << i << R"(,"pid":)" << (1000 + i) << R"(,"tid":)"
             << (2000 + i) << R"(,"name":")" << op_name << R"(")"
             << R"(,"cat":")" << op_cat << R"(")"
-            << R"(,"ph":"X")"
+            << R"(,"ph":1)"
             << R"(,"ts":)" << timestamp_us << R"(,"dur":)" << (100 + i * 10)
             << R"(,"args":{"ret":)" << size << R"(,"hhash":"abc123"})"
             << R"(})" << "\n";
@@ -334,14 +334,14 @@ dstd::String TestEnvironment::create_dft_multirun_gzip_file(
                         dstd::StringView extra) {
             ofs << R"({"id":1,"pid":)" << pid << R"(,"tid":)" << (pid * 10)
                 << R"(,"name":")" << name << R"(","cat":")" << cat
-                << R"(","ph":"X","ts":)" << ts << R"(,"dur":1,"args":{)"
-                << extra << R"(}})" << "\n";
+                << R"(","ph":1,"ts":)" << ts << R"(,"dur":1,"args":{)" << extra
+                << R"(}})" << "\n";
         };
         emit("start", "dftracer", start,
              R"("hhash":"abc123","exec_hash":"app","cmd_hash":"cmd","ppid":1)");
         for (int i = 0; i < 3; ++i)
             ofs << R"({"id":1,"pid":)" << pid << R"(,"tid":)" << (pid * 10)
-                << R"(,"name":"read","cat":"POSIX","ph":"X","ts":)"
+                << R"(,"name":"read","cat":"POSIX","ph":1,"ts":)"
                 << (start + static_cast<std::uint64_t>(i) * (run_us / 4))
                 << R"(,"dur":100,"args":{"hhash":"abc123","ret":1024}})"
                 << "\n";

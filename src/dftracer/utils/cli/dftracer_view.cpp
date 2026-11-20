@@ -175,7 +175,7 @@ class ViewArgParse : public cli::ArgParse {
             "0");
 
         parser().flag(counters, {"--counters"},
-                      "Emit the aggregation as ph=C counter events");
+                      "Emit the aggregation as ph=2 counter events");
 
         parser().flag(
             call_tree, {"--call-tree"},
@@ -193,9 +193,9 @@ class ViewArgParse : public cli::ArgParse {
 
         parser().option(
             phase, {"--phase"},
-            "Select events by phase: events (ph=X), counters (ph=C), "
+            "Select events by phase: events (ph=1), counters (ph=2), "
             "aggregated, "
-            "metadata (ph=M), any (every record, metadata included)");
+            "metadata (ph=4), any (every record, metadata included)");
 
         parser().option(record_schema, {"--schema"},
                         "Read records as this registered schema instead of the "

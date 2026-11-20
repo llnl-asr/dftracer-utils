@@ -33,7 +33,7 @@ def write_trace(directory, name="t.pfw.gz", n=50):
                         "cat": "POSIX",
                         "pid": 1,
                         "tid": 1,
-                        "ph": "X",
+                        "ph": 1,
                         "ts": 1000 + i,
                         "dur": 5,
                         "args": {"fhash": "f", "hhash": "h", "ret": 10},

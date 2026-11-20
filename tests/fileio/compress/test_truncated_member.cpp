@@ -44,9 +44,8 @@ std::size_t reference_complete_lines(dstd::Span<const std::uint8_t> comp) {
 dstd::String lines(int n) {
     dstd::String s;
     for (int i = 0; i < n; ++i)
-        s +=
-            dstd::fmt<"{\"id\":{},\"name\":\"read\",\"ph\":\"X\",\"ts\":{}}\n">(
-                i, i * 7);
+        s += dstd::fmt<"{\"id\":{},\"name\":\"read\",\"ph\":1,\"ts\":{}}\n">(
+            i, i * 7);
     return s;
 }
 

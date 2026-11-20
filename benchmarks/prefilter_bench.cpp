@@ -52,7 +52,7 @@ dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> make_lines(
             dftracer::utils::dstd::to_string(1000 + rng() % 64) + R"(,"ts":)" +
             dftracer::utils::dstd::to_string(1700000000000ULL + i * 37) +
             R"(,"dur":)" + dftracer::utils::dstd::to_string(rng() % 5000) +
-            R"(,"ph":"X","args":{"fname":"/p/lustre/scratch/u)" +
+            R"(,"ph":1,"args":{"fname":"/p/lustre/scratch/u)" +
             dftracer::utils::dstd::to_string(rng() % 8) + "/data/file_" +
             dftracer::utils::dstd::to_string(rng() % 256) + R"(.dat","size":)" +
             dftracer::utils::dstd::to_string(rng() % 1048576) +

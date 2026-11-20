@@ -107,12 +107,12 @@ dstd::String write_trace(dftu_utils_test::TestEnvironment& env,
     for (const TestEvent& e : events) {
         if (e.metadata) {
             lines +=
-                "{\"ph\":\"M\",\"name\":\"process_name\",\"cat\":\"dftracer\","
+                "{\"ph\":4,\"name\":\"process_name\",\"cat\":\"dftracer\","
                 "\"pid\":1,\"tid\":1,\"args\":{\"name\":\"app\"}}\n";
             continue;
         }
         dstd::fmt_append<
-            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
             "\"tid\":1,\"ts\":{},\"dur\":{}{}\n">(lines, e.ts, e.dur,
                                                   R"(,"args":{}})");
     }
@@ -539,7 +539,7 @@ dstd::String mixed_phase_lines() {
     dstd::String lines;
     for (int i = 0; i < 30; ++i) {
         dstd::fmt_append<
-            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
             "\"tid\":1,\"ts\":{},\"dur\":2{}\n">(lines, 1000 + i,
                                                  R"(,"args":{}})");
     }
@@ -550,9 +550,9 @@ dstd::String mixed_phase_lines() {
            "\"tid\":1,\"ts\":40,\"args\":{}}\n"
            "{\"name\":\"noph\",\"cat\":\"c\",\"pid\":1,\"tid\":1,"
            "\"ts\":10,\"dur\":5,\"args\":{}}\n"
-           "{\"ph\":\"M\",\"name\":\"process_name\",\"cat\":\"dftracer\","
+           "{\"ph\":4,\"name\":\"process_name\",\"cat\":\"dftracer\","
            "\"pid\":1,\"tid\":1,\"args\":{\"name\":\"app\"}}\n"
-           "{\"ph\":\"X\",\"name\":\"x\",\"cat\":\"c\",\"pid\":1,"
+           "{\"ph\":1,\"name\":\"x\",\"cat\":\"c\",\"pid\":1,"
            "\"tid\":1,\"ts\":300,\"dur\":20,\"args\":{}}\n";
 }
 

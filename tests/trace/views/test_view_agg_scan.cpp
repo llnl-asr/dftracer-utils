@@ -29,7 +29,7 @@ TEST_SUITE("View") {
             const char* names[] = {"read", "write", "open"};
             int ts = 1000;
             for (int i = 0; i < 90; ++i) {
-                ofs << R"({"ph":"X","name":")" << names[i % 3]
+                ofs << R"({"ph":1,"name":")" << names[i % 3]
                     << R"(","cat":"POSIX","pid":1,"tid":10,"ts":)" << ts
                     << R"(,"dur":200,"args":{}})" << "\n";
                 ts += 50;
@@ -164,7 +164,7 @@ TEST_SUITE("View") {
             const char* cats[] = {"POSIX", "STDIO"};
             int ts = 1000;
             for (int i = 0; i < 90; ++i) {
-                ofs << R"({"ph":"X","name":")" << names[i % 3] << R"(","cat":")"
+                ofs << R"({"ph":1,"name":")" << names[i % 3] << R"(","cat":")"
                     << cats[i % 2] << R"(","pid":1,"tid":10,"ts":)" << ts
                     << R"(,"dur":)" << (5 + (i % 17)) << R"(,"args":{"bytes":)"
                     << (i % 13) << R"(}})" << "\n";
@@ -326,11 +326,11 @@ TEST_SUITE("View") {
             dftu_utils_test::FileOut ofs(pfw);
             for (int pid : {1, 2, 3})
                 ofs << R"({"name":"PR","cat":"dftracer","pid":)" << pid
-                    << R"(,"tid":1,"ph":"M","args":{"name":"rank","value":")"
+                    << R"(,"tid":1,"ph":4,"args":{"name":"rank","value":")"
                     << (pid * 10) << R"("}})" << "\n";
             int ts = 1000;
             for (int i = 0; i < 60; ++i) {
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":)"
                     << (1 + i % 3) << R"(,"tid":10,"ts":)" << ts << R"(,"dur":)"
                     << (5 + i % 9) << R"(,"args":{}})" << "\n";
                 ts += 100;

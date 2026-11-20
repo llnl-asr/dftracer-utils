@@ -20,7 +20,7 @@ struct ViewDefinition {
     dstd::String name;            ///< View name.
     dstd::String description;     ///< Human-readable description.
     dstd::Optional<Query> query;  ///< Event filter (nullopt = match all).
-    /// Return ph=M metadata records; they bypass `query` unless one of the
+    /// Return ph=4 metadata records; they bypass `query` unless one of the
     /// two flags below is set.
     bool include_metadata = false;
     /// The scan returns metadata records alone (phase("metadata")), filtered

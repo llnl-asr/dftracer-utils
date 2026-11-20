@@ -165,10 +165,10 @@ TEST_SUITE("View duql joins") {
         {
             dftu_utils_test::FileOut o(pfw);
             for (int i = 0; i < 3; ++i)
-                o << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                o << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                   << 100 * (i + 1) << R"(,"dur":5,"args":{}})" << "\n";
             for (int i = 0; i < 2; ++i)
-                o << R"({"ph":"M","name":"FH","pid":1,"tid":1,"args":{"name":"/f)"
+                o << R"({"ph":4,"name":"FH","pid":1,"tid":1,"args":{"name":"/f)"
                   << i << R"(","value":")" << i << R"("}})" << "\n";
         }
         const dstd::String gz = pfw + ".gz";
@@ -176,19 +176,19 @@ TEST_SUITE("View duql joins") {
         dstd::fs::remove(pfw).discard();
         const View v = view_of(gz);
         const auto f = frame(v.duql(
-            R"(let fh = from all | where ph == "M" and name == "FH"; from fh | agg { n = count() })"));
+            R"(let fh = from all | where ph == 4 and name == "FH"; from fh | agg { n = count() })"));
         REQUIRE(f.num_rows() == 1);
         CHECK(bnum(f, 0, "n") == 2);
         const auto d = frame(v.duql(
-            R"(let fh = where ph == "M" and name == "FH"; from fh | agg { n = count() })"));
+            R"(let fh = where ph == 4 and name == "FH"; from fh | agg { n = count() })"));
         REQUIRE(d.num_rows() == 1);
         CHECK(bnum(d, 0, "n") == 0);
-        CHECK(frame(v.duql(R"(where ph == "M")")).num_rows() == 0);
+        CHECK(frame(v.duql(R"(where ph == 4)")).num_rows() == 0);
     }
 
     TEST_CASE("a correlated sub-query on a trace with no index yet") {
         const dstd::Vector<dstd::String> outers = {
-            "", "ph == \"X\" and ", "cat == \"POSIX\" and ", "pid == 1 and "};
+            "", "ph == 1 and ", "cat == \"POSIX\" and ", "pid == 1 and "};
         for (const auto& outer : outers) {
             CAPTURE(outer);
             TestEnvironment env(10);
@@ -206,7 +206,7 @@ TEST_SUITE("View duql joins") {
                     dur_of.push_back(dur);
                     sum[k] += dur;
                     ++cnt[k];
-                    o << R"({"ph":"X","name":")" << (k ? "write" : "read")
+                    o << R"({"ph":1,"name":")" << (k ? "write" : "read")
                       << R"(","cat":"POSIX","pid":1,"tid":)" << i << R"(,"ts":)"
                       << i << R"(,"dur":)" << dur << R"(,"args":{}})" << "\n";
                 }
@@ -819,7 +819,7 @@ TEST_SUITE("View duql joins") {
         dstd::Vector<Span> cl;
         OverlapData d;
         auto line = [&](dstd::StringView name, int id, const Span& s) {
-            return dstd::String(R"({"ph":"X","name":")") + dstd::String(name) +
+            return dstd::String(R"({"ph":1,"name":")") + dstd::String(name) +
                    R"(","cat":"c","pid":)" + dstd::to_string(s.pid) +
                    R"(,"tid":)" + dstd::to_string(id) + R"(,"ts":)" +
                    dstd::to_string(s.ts) + R"(,"dur":)" +

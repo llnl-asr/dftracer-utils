@@ -79,7 +79,7 @@ using Clock = std::chrono::steady_clock;
 constexpr const char* SMOKE_LINES =
     R"({"id":1,"name":"read","cat":"POSIX","pid":1,"tid":2,"ts":10,"dur":5,"ph":1,"args":{"hhash":"a","fhash":"b","size":4096,"o":{"x":1.5}}}
 {"name":"HH","ph":4,"type":1,"args":{"hhash":"e696ebc2","name":"node-0"}}
-{"name":"write","cat":"POSIX","pid":1,"tid":2,"ts":20,"ph":"X","args":{"fname":"/a/b","l":[1,2,null,true]}}
+{"name":"write","cat":"POSIX","pid":1,"tid":2,"ts":20,"ph":1,"args":{"fname":"/a/b","l":[1,2,null,true]}}
 )";
 
 struct Hash {

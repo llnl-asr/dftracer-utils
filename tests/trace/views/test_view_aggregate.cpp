@@ -161,11 +161,11 @@ dstd::String write_agg_trace(TestEnvironment& env) {
     {
         dftu_utils_test::FileOut ofs(pfw);
         for (int i = 0; i < 30; ++i)
-            ofs << R"({"ph":"X","name":")" << (i % 2 ? "pread" : "read")
+            ofs << R"({"ph":1,"name":")" << (i % 2 ? "pread" : "read")
                 << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << (1000 + i)
                 << R"(,"dur":500,"args":{"level":)" << i << R"(}})" << "\n";
         for (int i = 0; i < 20; ++i)
-            ofs << R"({"ph":"X","name":"fwrite","cat":"STDIO","pid":2,"tid":2,"ts":)"
+            ofs << R"({"ph":1,"name":"fwrite","cat":"STDIO","pid":2,"tid":2,"ts":)"
                 << (2000 + i * 5) << R"(,"dur":300,"args":{"level":)"
                 << (100 + i) << R"(}})" << "\n";
     }
@@ -446,7 +446,7 @@ TEST_SUITE("View") {
         {
             dftu_utils_test::FileOut ofs(pfw);
             auto event = [&](dstd::StringView name, int ts, std::uint64_t dur) {
-                ofs << R"({"ph":"X","name":")" << name
+                ofs << R"({"ph":1,"name":")" << name
                     << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << ts
                     << R"(,"dur":)" << dur << R"(,"args":{}})" << "\n";
             };
@@ -489,11 +489,11 @@ TEST_SUITE("View") {
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 10; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << (1000 + i * 10) << R"(,"dur":5,"args":{"level":)" << i
                     << R"(}})" << "\n";
             for (int i = 0; i < 4; ++i)
-                ofs << R"({"ph":"X","name":"seek","cat":"STDIO","pid":1,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"seek","cat":"STDIO","pid":1,"tid":1,"ts":)"
                     << (5000 + i * 10) << R"(,"dur":5,"args":{"level":)"
                     << (100 + i) << R"(}})" << "\n";
         }
@@ -1549,11 +1549,11 @@ TEST_SUITE("View") {
         dstd::String pfw = env.dir() + "/am.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
+            ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
                 << "\n"
-                << R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":99,"args":{}})"
+                << R"({"ph":1,"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":99,"args":{}})"
                 << "\n"
-                << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1200,"dur":20,"args":{}})"
+                << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1200,"dur":20,"args":{}})"
                 << "\n";
         }
         dstd::String gz = pfw + ".gz";
@@ -1584,15 +1584,15 @@ TEST_SUITE("View") {
         dstd::String pfw = env.dir() + "/rank.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"ph":"M","name":"PR","cat":"dftracer","pid":100,"tid":0,"args":{"name":"rank","value":"0"}})"
+            ofs << R"({"ph":4,"name":"PR","cat":"dftracer","pid":100,"tid":0,"args":{"name":"rank","value":"0"}})"
                 << "\n"
-                << R"({"ph":"M","name":"PR","cat":"dftracer","pid":200,"tid":0,"args":{"name":"rank","value":"1"}})"
+                << R"({"ph":4,"name":"PR","cat":"dftracer","pid":200,"tid":0,"args":{"name":"rank","value":"1"}})"
                 << "\n";
             for (int i = 0; i < 3; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":100,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":100,"tid":1,"ts":)"
                     << (1000 + i * 10) << R"(,"dur":5,"args":{}})" << "\n";
             for (int i = 0; i < 2; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":200,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":200,"tid":1,"ts":)"
                     << (2000 + i * 10) << R"(,"dur":5,"args":{}})" << "\n";
         }
         dstd::String gz = pfw + ".gz";
@@ -1771,22 +1771,22 @@ TEST_SUITE("View") {
     }
 
     TEST_CASE(
-        "View - phase(Events) vs phase(Counters) separate ph=X and ph=C") {
+        "View - phase(Events) vs phase(Counters) separate ph=1 and ph=2") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         dstd::String gz = create_trace_with_counters(env);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        // Events: the 10 ph=X reads, no counters.
+        // Events: the 10 ph=1 reads, no counters.
         StringSink ev;
         dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
                                 .phase(Phase::Events)
                                 .sink_json(ev)
                                 .get());
         CHECK(ev.lines().size() == 10);
-        CHECK(count_containing(ev.lines(), R"("ph":"C")") == 0);
+        CHECK(count_containing(ev.lines(), R"("ph":2)") == 0);
 
-        // Counters: the 2 ph=C events only.
+        // Counters: the 2 ph=2 events only.
         StringSink ct;
         dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
                                 .phase(Phase::Counters)
@@ -1797,7 +1797,7 @@ TEST_SUITE("View") {
     }
 
     TEST_CASE(
-        "View - export_counters emits re-parseable ph=C aggregate trace") {
+        "View - export_counters emits re-parseable ph=2 aggregate trace") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         // 30 POSIX reads, ts 1000..3900, dur 10..39.
@@ -1845,7 +1845,7 @@ TEST_SUITE("View") {
         {
             dftu_utils_test::FileOut ofs(pfw);
             auto ev = [&](dstd::StringView name, long ts, long dur) {
-                ofs << R"({"ph":"X","name":")" << name
+                ofs << R"({"ph":1,"name":")" << name
                     << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << ts
                     << R"(,"dur":)" << dur << R"(,"args":{}})" << "\n";
             };
@@ -1932,7 +1932,7 @@ TEST_SUITE("View") {
                                 dstd::StringView name = "e") {
         dftu_utils_test::FileOut ofs(pfw);
         for (const auto& [ts, dur] : iv) {
-            ofs << R"({"ph":"X","name":")" << name
+            ofs << R"({"ph":1,"name":")" << name
                 << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << ts
                 << R"(,"dur":)" << dur << R"(,"args":{}})" << "\n";
         }
@@ -2171,7 +2171,7 @@ TEST_SUITE("View") {
             dftu_utils_test::FileOut ofs(pfw);
             auto ev = [&](dstd::StringView type, dstd::StringView host,
                           dstd::StringView tag0, int v, long ts) {
-                ofs << R"({"ph":"X","name":"op","cat":"POSIX","type":")" << type
+                ofs << R"({"ph":1,"name":"op","cat":"POSIX","type":")" << type
                     << R"(","pid":1,"tid":1,"ts":)" << ts
                     << R"(,"dur":10,"args":{"meta":{"host":")" << host
                     << R"("},"tags":[")" << tag0 << R"(","y"],"n":{"v":)" << v
@@ -2239,11 +2239,11 @@ TEST_SUITE("View") {
             // Top-level type "mpi" on every record; four also carry an
             // unrelated args.type parameter (the shadowing trap).
             for (int i = 0; i < 4; ++i)
-                ofs << R"({"ph":"X","name":"kv","cat":"MPI","type":"mpi","pid":1,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"kv","cat":"MPI","type":"mpi","pid":1,"tid":1,"ts":)"
                     << (1000 + i) << R"(,"dur":5,"args":{"type":)" << (i + 1)
                     << R"(}})" << "\n";
             for (int i = 0; i < 6; ++i)
-                ofs << R"({"ph":"X","name":"send","cat":"MPI","type":"mpi","pid":1,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"send","cat":"MPI","type":"mpi","pid":1,"tid":1,"ts":)"
                     << (2000 + i) << R"(,"dur":5,"args":{"count":10}})" << "\n";
         }
         dstd::String gz = pfw + ".gz";
@@ -2283,12 +2283,12 @@ TEST_SUITE("View") {
         dstd::String pfw = env.dir() + "/time_metric.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"name":"CM","ph":"M","cat":"dftracer","pid":0,"tid":0,)"
+            ofs << R"({"name":"CM","ph":4,"cat":"dftracer","pid":0,"tid":0,)"
                    R"("args":{"name":"time_metric","value":"NS"}})"
                 << "\n";
             int ts = 1000;
             for (int i = 0; i < 20; ++i) {
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,)"
                        R"("tid":10,"ts":)"
                     << ts << R"(,"dur":5,"args":{}})" << "\n";
                 ts += 100;
@@ -2315,7 +2315,7 @@ TEST_SUITE("View") {
                 dftu_utils_test::FileOut ofs(plain);
                 if (first == 0) ofs << "[\n";
                 for (int i = first; i < first + 200; ++i)
-                    ofs << R"({"id":)" << i << R"(,"ph":"X","name":")" << name
+                    ofs << R"({"id":)" << i << R"(,"ph":1,"name":")" << name
                         << R"(","cat":")" << cat << R"(","pid":1,"tid":1,"ts":)"
                         << (ts_base + i * 100)
                         << R"(,"dur":50,"args":{"level":)" << i << "}}\n";

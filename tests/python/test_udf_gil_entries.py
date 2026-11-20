@@ -112,7 +112,7 @@ def test_expr_apply_and_eval_many(df, twice):
 
 def test_trace_viewer_duql(tmp_path, twice):
     events = [
-        {"ph": "X", "name": "read", "cat": "POSIX", "pid": 1, "tid": i, "ts": i, "dur": i % 97}
+        {"ph": 1, "name": "read", "cat": "POSIX", "pid": 1, "tid": i, "ts": i, "dur": i % 97}
         for i in range(ROWS)
     ]
     path = tmp_path / "t.pfw.gz"

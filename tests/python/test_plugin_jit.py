@@ -82,7 +82,7 @@ def _write_mixed_trace(path: str, n: int, cats) -> None:
             cat = cats[i % len(cats)]
             f.write(
                 f'{{"name":"read","cat":"{cat}","pid":1,"tid":1,'
-                f'"ts":{1000 + i * 100},"dur":{10 + i},"ph":"X","args":{{}}}}\n'
+                f'"ts":{1000 + i * 100},"dur":{10 + i},"ph":1,"args":{{}}}}\n'
             )
 
 
@@ -765,7 +765,7 @@ def test_jit_quantiles_per_key(tmp_path):
         for i in range(1, 1001):
             f.write(
                 f'{{"name":"read","cat":"POSIX","pid":1,"tid":1,'
-                f'"ts":{1000 + i},"dur":{i},"ph":"X","args":{{}}}}\n'
+                f'"ts":{1000 + i},"dur":{i},"ph":1,"args":{{}}}}\n'
             )
 
     plugins = Plugins([Lat])
@@ -925,7 +925,7 @@ def _write_named_trace(path: str, n: int, pids, names) -> None:
             name = names[i % len(names)]
             f.write(
                 f'{{"name":"{name}","cat":"POSIX","pid":{pid},"tid":1,'
-                f'"ts":{1000 + i},"dur":{10 + i},"ph":"X","args":{{}}}}\n'
+                f'"ts":{1000 + i},"dur":{10 + i},"ph":1,"args":{{}}}}\n'
             )
 
 
@@ -960,7 +960,7 @@ def _write_seq_trace(path: str, events) -> None:
         for pid, name, ts in events:
             f.write(
                 f'{{"name":"{name}","cat":"POSIX","pid":{pid},"tid":1,'
-                f'"ts":{ts},"dur":1,"ph":"X","args":{{}}}}\n'
+                f'"ts":{ts},"dur":1,"ph":1,"args":{{}}}}\n'
             )
 
 

@@ -246,11 +246,11 @@ TEST_SUITE("ViewMV") {
             dstd::String pfw = d + "/trace.pfw";
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 30; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,)"
                        R"("tid":1,"ts":)"
                     << (ts0 + i) << R"(,"dur":10,"args":{}})" << "\n";
             for (int i = 0; i < 20; ++i)
-                ofs << R"({"ph":"X","name":"fwrite","cat":"STDIO","pid":1,)"
+                ofs << R"({"ph":1,"name":"fwrite","cat":"STDIO","pid":1,)"
                        R"("tid":1,"ts":)"
                     << (ts0 + 1000 + i) << R"(,"dur":10,"args":{}})" << "\n";
             ofs.close();

@@ -41,11 +41,11 @@ dstd::String create_mixed_arg_trace(TestEnvironment& env) {
     dstd::String pfw = env.dir() + "/mixed_args.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < 25; ++i)
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i)
             << R"(,"args":{"x":)" << i << R"(}})" << "\n";
     for (int i = 0; i < 25; ++i)
-        ofs << R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (4000 + i * 100) << R"(,"dur":)" << (10 + i)
             << R"(,"args":{"y":)" << i << R"(}})" << "\n";
     ofs.close();
@@ -87,7 +87,7 @@ dstd::String create_args_trace(TestEnvironment& env, dstd::StringView name,
     const dstd::String pfw = env.dir() + "/" + dstd::String(name) + ".pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < 40; ++i) {
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{)";
         for (std::size_t k = 0; k < keys.size(); ++k)
             ofs << (k ? "," : "") << '"' << keys[k] << R"(":)" << i;
@@ -132,7 +132,7 @@ dstd::String create_distinct_trace(TestEnvironment& env,
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < DISTINCT_EVENTS; ++i) {
         static const char* const NAMES[] = {"read", "write", "open", "lseek"};
-        ofs << R"({"ph":"X","name":")" << NAMES[i % 4]
+        ofs << R"({"ph":1,"name":")" << NAMES[i % 4]
             << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << (1000 + i)
             << R"(,"dur":1,"run":")" << distinct_run(i) << R"(","metric":")"
             << distinct_metric(i) << R"(","val":)" << (i % 5) << "}\n";

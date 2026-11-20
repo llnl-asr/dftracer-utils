@@ -32,7 +32,7 @@ static dstd::String create_pfw_gz(TestEnvironment& env, int n) {
     dstd::String pfw = env.dir() + "/trace.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < n; ++i) {
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
             << "\n";
     }
@@ -49,17 +49,17 @@ static dstd::String create_pfw_gz(TestEnvironment& env, int n) {
 static dstd::String create_metadata_pfw_gz(TestEnvironment& env) {
     dstd::String pfw = env.dir() + "/meta.pfw";
     dftu_utils_test::FileOut ofs(pfw);
-    ofs << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"H1","name":"host1","value":"H1"}})"
+    ofs << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"hhash":"H1","name":"host1","value":"H1"}})"
         << "\n"
-        << R"({"name":"SH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"H1","name":"myapp","value":"EX01"}})"
+        << R"({"name":"SH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"hhash":"H1","name":"myapp","value":"EX01"}})"
         << "\n"
-        << R"({"name":"SH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"H1","name":"mycmd","value":"CM01"}})"
+        << R"({"name":"SH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"hhash":"H1","name":"mycmd","value":"CM01"}})"
         << "\n"
-        << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"H1","name":"/my/cwd","value":"CW01"}})"
+        << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"hhash":"H1","name":"/my/cwd","value":"CW01"}})"
         << "\n"
-        << R"({"name":"SH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"H1","name":"unused","value":"UNUSED01"}})"
+        << R"({"name":"SH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"hhash":"H1","name":"unused","value":"UNUSED01"}})"
         << "\n"
-        << R"({"name":"start","cat":"dftracer","pid":1,"tid":1,"ts":1000,"dur":0,"ph":"X","args":{"hhash":"H1","exec_hash":"EX01","cmd_hash":"CM01","cwd":"CW01","ppid":9}})"
+        << R"({"name":"start","cat":"dftracer","pid":1,"tid":1,"ts":1000,"dur":0,"ph":1,"args":{"hhash":"H1","exec_hash":"EX01","cmd_hash":"CM01","cwd":"CW01","ppid":9}})"
         << "\n"
         << R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":10,"args":{"hhash":"H1"}})"
         << "\n";
@@ -109,18 +109,18 @@ static dstd::String create_refused_gz(TestEnvironment& env) {
     dstd::String pfw = env.dir() + "/refused.pfw";
     {
         dftu_utils_test::FileOut ofs(pfw);
-        ofs << R"({"ph":"X","name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":5,"args":{"x":1e400}})"
+        ofs << R"({"ph":1,"name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":5,"args":{"x":1e400}})"
             << "\n"
-            << R"({"ph":"X","name":"b\q","cat":"P","pid":1,"tid":1,"ts":110,"dur":5})"
+            << R"({"ph":1,"name":"b\q","cat":"P","pid":1,"tid":1,"ts":110,"dur":5})"
             << "\n"
             << dstd::String(
-                   "{\"ph\":\"X\",\"name\":\"c\xff"
+                   "{\"ph\":1,\"name\":\"c\xff"
                    "d\",\"cat\":\"P\",\"pid\":1,\"tid\":1,\"ts\":120,"
                    "\"dur\":5}")
             << "\n"
-            << R"({"ph":"X","name":"d","cat":"P","pid":1,"tid":1,"ts":130,"dur":5,"args":{"n":123456789012345678901234567890}})"
+            << R"({"ph":1,"name":"d","cat":"P","pid":1,"tid":1,"ts":130,"dur":5,"args":{"n":123456789012345678901234567890}})"
             << "\n"
-            << R"({"ph":"X","name":"e","cat":"P","pid":1,"tid":1,"ts":140,"dur":5})"
+            << R"({"ph":1,"name":"e","cat":"P","pid":1,"tid":1,"ts":140,"dur":5})"
             << "\n";
     }
     dstd::String gz = pfw + ".gz";
@@ -134,7 +134,7 @@ static dstd::String create_refused_gz(TestEnvironment& env) {
 static dstd::String write_newline_split_trace(TestEnvironment& env,
                                               std::size_t& first_size) {
     auto line = [](int i) {
-        return R"({"name":"read","cat":"POSIX","ph":"X","pid":1,"tid":1,"ts":)" +
+        return R"({"name":"read","cat":"POSIX","ph":1,"pid":1,"tid":1,"ts":)" +
                dstd::to_string(1000 + i) + R"(,"dur":1,"args":{}})";
     };
     dstd::String first, second;
@@ -193,7 +193,7 @@ TEST_SUITE("ViewScanner") {
         dstd::Vector<dstd::String> lines;
         for (int i = 0; i < 5; ++i) {
             dstd::String line =
-                R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
+                R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
                 dstd::to_string(1000 + i) + R"(,"dur":1,"args":{"pad":")";
             if (i == 2) {
                 for (std::size_t k = 0; k < 9 * 1024 * 1024; ++k)
@@ -297,17 +297,17 @@ TEST_SUITE("ViewScanner") {
         dstd::String pfw = env.dir() + "/badmeta.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":1,"args":{}})"
+            ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":1,"args":{}})"
                 << "\n"
                 << dstd::String(
-                       "{\"name\":\"FH\",\"ph\":\"M\",\"args\":{"
+                       "{\"name\":\"FH\",\"ph\":4,\"args\":{"
                        "\"name\":\"/a\xffz\",\"value\":\"fh1\"}}")
                 << "\n"
                 << dstd::String(
-                       "{\"name\":\"HH\",\"ph\":\"M\",\"args\":{"
+                       "{\"name\":\"HH\",\"ph\":4,\"args\":{"
                        "\"name\":\"n\tm\",\"value\":\"hh1\"}}")
                 << "\n"
-                << R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":1,"args":{}})"
+                << R"({"ph":1,"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":1,"args":{}})"
                 << "\n";
         }
         dstd::String gz = pfw + ".gz";
@@ -323,7 +323,7 @@ TEST_SUITE("ViewScanner") {
         const auto output = collect_view_output(reader, input);
         REQUIRE(output.events.size() == 2);
         for (const auto& e : output.events)
-            CHECK(e.find(R"("ph":"M")") == dstd::String::npos);
+            CHECK(e.find(R"("ph":4)") == dstd::String::npos);
     }
 
     TEST_CASE(

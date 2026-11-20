@@ -104,7 +104,7 @@ TEST_SUITE("EventSource") {
         dstd::String buf;
         auto root = parse(
             p, buf,
-            R"({"ph":"X","name":"read","cat":"POSIX","pid":42,"tid":7,"ts":100,"dur":9,"args":{"fhash":"fh1","ret":4096,"level":"warn"}})");
+            R"({"ph":1,"name":"read","cat":"POSIX","pid":42,"tid":7,"ts":100,"dur":9,"args":{"fhash":"fh1","ret":4096,"level":"warn"}})");
         DomSource src(root);
 
         // top-level string, top-level int, args string, args int, missing.
@@ -121,7 +121,7 @@ TEST_SUITE("EventSource") {
         dstd::String buf;
         auto root = parse(
             p, buf,
-            R"({"ph":"X","name":"read","pid":1,"ts":10,"dur":3,"args":{"ret":8192,"offset":512}})");
+            R"({"ph":1,"name":"read","pid":1,"ts":10,"dur":3,"args":{"ret":8192,"offset":512}})");
         DomSource src(root);
 
         // Non-derived fields: agg_field is a plain top-then-args number.
@@ -138,9 +138,8 @@ TEST_SUITE("EventSource") {
     TEST_CASE("append_value writes the same bytes value returns") {
         simdjson::dom::parser p;
         dstd::String buf;
-        auto root =
-            parse(p, buf,
-                  R"({"ph":"X","name":"n","pid":123,"args":{"k":"v","m":9}})");
+        auto root = parse(
+            p, buf, R"({"ph":1,"name":"n","pid":123,"args":{"k":"v","m":9}})");
         DomSource src(root);
         for (const char* field : {"name", "pid", "k", "m", "absent"}) {
             dstd::String out = "pre|";
@@ -157,7 +156,7 @@ TEST_SUITE("EventSource") {
         dstd::String buf;
         auto root = parse(
             p, buf,
-            R"({"ph":"X","name":"read","cat":"POSIX","pid":42,"tid":7,"ts":100,"dur":9,"args":{"fhash":"fh1","hhash":"hh2","ret":4096,"rate":1.5,"path":"/x"}})");
+            R"({"ph":1,"name":"read","cat":"POSIX","pid":42,"tid":7,"ts":100,"dur":9,"args":{"fhash":"fh1","hhash":"hh2","ret":4096,"rate":1.5,"path":"/x"}})");
 
         dstd::StringIntern intern;
         FoldEvent ev = extract_fold_event(root, intern, /*needs_args=*/true);
@@ -203,7 +202,7 @@ TEST_SUITE("EventSource") {
         dstd::String buf;
         auto root = parse(
             p, buf,
-            R"({"ph":"X","name":"rdma_send","pid":9,"args":{"cqe.raw_ns":2850744041253792,"ibv.qp":4712,"mlx5.op":"SEND"}})");
+            R"({"ph":1,"name":"rdma_send","pid":9,"args":{"cqe.raw_ns":2850744041253792,"ibv.qp":4712,"mlx5.op":"SEND"}})");
 
         dstd::StringIntern intern;
         FoldEvent ev = extract_fold_event(root, intern, /*needs_args=*/true);
@@ -230,7 +229,7 @@ TEST_SUITE("EventSource") {
         dstd::String buf;
         auto root = parse(
             p, buf,
-            R"({"ph":"X","name":"n","args":{"ret":4096,"offset":512,"path":"/x","dur_d":1.5}})");
+            R"({"ph":1,"name":"n","args":{"ret":4096,"offset":512,"path":"/x","dur_d":1.5}})");
         DomSource src(root);
 
         dstd::Map<dstd::String, double> seen;

@@ -55,7 +55,7 @@ TEST_SUITE("View unified F filter") {
             for (int i = 0; i < 4000; ++i)
                 out << R"({"name":"read","cat":"POSIX","pid":1,"tid":7,"ts":)"
                     << 1000 + i * 10 << R"(,"dur":)" << 1000 + i
-                    << R"(,"ph":"X","args":{"pid":)" << 900 + i % 3
+                    << R"(,"ph":1,"args":{"pid":)" << 900 + i % 3
                     << R"(,"tid":5000,"dur":)" << i % 100 << "}}\n";
             for (int i = 0; i < 400; ++i)
                 out << R"({"name":"mmap","cat":"POSIX","pid":1,"tid":7,"ts":)"
@@ -95,7 +95,7 @@ TEST_SUITE("View unified F filter") {
             dftu_utils_test::FileOut out(plain);
             const auto rec = [&](int i, dstd::StringView size) {
                 out << R"({"name":"read","cat":"POSIX","pid":1,"tid":7,"ts":)"
-                    << 1000 + i * 10 << R"(,"dur":10,"ph":"X","args":{"size":)"
+                    << 1000 + i * 10 << R"(,"dur":10,"ph":1,"args":{"size":)"
                     << size << "}}\n";
             };
             for (int i = 0; i < 3000; ++i) rec(i, "5");
@@ -145,7 +145,7 @@ TEST_SUITE("View unified F filter") {
             dftu_utils_test::FileOut out(plain);
             const auto rec = [&](int i, dstd::StringView lat) {
                 out << R"({"name":"read","cat":"POSIX","pid":1,"tid":7,"ts":)"
-                    << 1000 + i * 10 << R"(,"dur":10,"ph":"X","args":{"lat":)"
+                    << 1000 + i * 10 << R"(,"dur":10,"ph":1,"args":{"lat":)"
                     << lat << "}}\n";
             };
             const char* small[] = {"1e-7", "2e-7", "3e-7"};
@@ -184,8 +184,8 @@ TEST_SUITE("View unified F filter") {
             dftu_utils_test::FileOut out(plain);
             const auto rec = [&](int i, dstd::StringView v) {
                 out << R"({"name":"read","cat":"POSIX","pid":1,"tid":7,"ts":)"
-                    << 1000 + i * 10 << R"(,"dur":10,"ph":"X","args":{"v":)"
-                    << v << "}}\n";
+                    << 1000 + i * 10 << R"(,"dur":10,"ph":1,"args":{"v":)" << v
+                    << "}}\n";
             };
             const char* ints[] = {"1", "2", "3"};
             for (int i = 0; i < 3000; ++i) rec(i, ints[i % 3]);

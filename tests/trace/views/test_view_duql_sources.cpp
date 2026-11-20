@@ -75,13 +75,13 @@ dstd::Vector<dstd::String> column(const dataframe::DataFrame& f,
 
 dstd::String meta(dstd::StringView name, dstd::StringView value,
                   dstd::StringView key) {
-    return R"({"ph":"M","name":")" + dstd::String(name) +
+    return R"({"ph":4,"name":")" + dstd::String(name) +
            R"(","pid":1,"tid":1,"args":{"name":")" + dstd::String(key) +
            R"(","value":")" + dstd::String(value) + R"("}})";
 }
 
 dstd::String event(int ts, dstd::StringView args, int dur = 10) {
-    return R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
+    return R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
            dstd::to_string(ts) + R"(,"dur":)" + dstd::to_string(dur) +
            R"(,"args":{)" + dstd::String(args) + "}}";
 }
@@ -172,7 +172,7 @@ TEST_SUITE("View duql sources") {
                   .find("fhash in (keys of files) (pushed)") !=
               dstd::String::npos);
         const dataframe::DataFrame d =
-            frame(v.duql("where ph != \"M\" | derive p = fhash -> files.path,"
+            frame(v.duql("where ph != 4 | derive p = fhash -> files.path,"
                          " h = hhash -> hosts.name,"
                          " c = exec_hash -> strings(shash).value"
                          " | select ts, p, h, c"));
@@ -183,7 +183,7 @@ TEST_SUITE("View duql sources") {
         CHECK(column(d, "c") ==
               dstd::Vector<dstd::String>{"laghos", "null", "null"});
         // A row set column typed only by its data (an args value) keeps it.
-        CHECK(column(frame(v.duql("where ph != \"M\" | derive r = pid -> "
+        CHECK(column(frame(v.duql("where ph != 4 | derive r = pid -> "
                                   "ranks.rank | select r")),
                      "r") == dstd::Vector<dstd::String>{"3", "3", "3"});
         CHECK(column(frame(v.duql("from ranks | derive x = rank | select x")),

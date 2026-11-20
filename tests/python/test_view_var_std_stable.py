@@ -29,7 +29,7 @@ def write_trace(tmp_path, shards=4, per_shard=6000, seed=5):
                 f.write(
                     json.dumps(
                         {
-                            "ph": "X",
+                            "ph": 1,
                             "name": name,
                             "cat": "POSIX",
                             "pid": 1,

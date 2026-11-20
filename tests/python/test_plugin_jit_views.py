@@ -38,7 +38,7 @@ def trace(tmp_path_factory):
     d = tmp_path_factory.mktemp("view_trace")
     with gzip.open(os.path.join(d, "t.pfw.gz"), "wt", encoding="utf-8") as fh:
         fh.write(
-            '{"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"ph":"X","args":{}}\n'
+            '{"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"ph":1,"args":{}}\n'
         )
     return str(d)
 

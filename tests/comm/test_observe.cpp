@@ -303,7 +303,7 @@ TEST_SUITE("comm observation") {
             CHECK(count_lines_with(text, R"("name":"barrier")") == 3);
             CHECK(count_lines_with(text, R"("name":"all_gather")") == 1);
             CHECK(count_lines_with(text, R"("cat":"comm")") == 4);
-            CHECK(count_lines_with(text, R"("ph":"X")") == 4);
+            CHECK(count_lines_with(text, R"("ph":1)") == 4);
             CHECK(count_lines_with(text, R"("status":"ok")") == 4);
             CHECK(count_lines_with(text, R"("seq":3,"bytes":24)") == 1);
         }

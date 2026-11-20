@@ -54,7 +54,7 @@ dstd::String write_rank(dstd::String dir, int file, std::uint64_t& dur_sum) {
                 if (dstd::String(c.name) == "fetch.block") dur_sum += dur;
                 dstd::fmt_append<
                     "{\"id\":{},\"pid\":{},\"tid\":{},\"name\":\"{}\",\"cat\":"
-                    "\"{}\",\"ph\":\"X\",\"ts\":{},\"dur\":{}{}\n">(
+                    "\"{}\",\"ph\":1,\"ts\":{},\"dur\":{}{}\n">(
                     ofs, id++, pid, pid, c.name, c.cat, ts, dur,
                     R"(,"args":{}})");
                 ts += dur;

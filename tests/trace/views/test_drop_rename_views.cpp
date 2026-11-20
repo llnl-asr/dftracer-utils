@@ -70,12 +70,11 @@ dstd::String shapes_trace(TestEnvironment& env) {
 dstd::String dft_trace(TestEnvironment& env) {
     dstd::String body;
     for (int i = 0; i < RECORDS; ++i)
-        body +=
-            R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
-            dstd::to_string(1000 + i * 100) + R"(,"dur":)" +
-            dstd::to_string(10 + i) + R"(,"args":{"size":)" +
-            dstd::to_string(i % 13) + R"(,"offset":)" + dstd::to_string(i) +
-            R"(}})" + "\n";
+        body += R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
+                dstd::to_string(1000 + i * 100) + R"(,"dur":)" +
+                dstd::to_string(10 + i) + R"(,"args":{"size":)" +
+                dstd::to_string(i % 13) + R"(,"offset":)" + dstd::to_string(i) +
+                R"(}})" + "\n";
     return gzip_of(env, "dft", body);
 }
 
@@ -274,7 +273,7 @@ TEST_SUITE("DropRenameViews") {
         REQUIRE_FALSE(declares(q, "args.offset"));
         REQUIRE(declares(f, "args.offset"));
 
-        const dstd::String base = "ph == \"X\"";
+        const dstd::String base = "ph == 1";
         const auto renamed = frame(q, base + " | rename off = args.offset");
         const auto renamed_full =
             frame(f, base + " | rename off = args.offset");
@@ -315,7 +314,7 @@ TEST_SUITE("DropRenameViews") {
             "count "
             "> 1 | lookup r on ts | sort ts";
         const dstd::String d =
-            "let r = where ph == \"X\" | select ts, rd = dur; where dur > 20 | "
+            "let r = where ph == 1 | select ts, rd = dur; where dur > 20 | "
             "lookup r on ts | sort ts";
         same_as_full(genesis_trace, "genesis", g);
         same_as_full(dft_trace, "dftracer", d);

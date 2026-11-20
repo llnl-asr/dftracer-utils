@@ -82,13 +82,13 @@ dstd::String abi_str(dftu_dataframe* df, std::int64_t row,
 dstd::String write_group_trace(TestEnvironment& env) {
     dstd::String pfw = env.dir() + "/grp.pfw";
     dftu_utils_test::FileOut ofs(pfw);
-    ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
+    ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
         << "\n";
-    ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":10,"args":{}})"
+    ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":10,"args":{}})"
         << "\n";
-    ofs << R"({"ph":"X","name":"write","cat":"POSIX","pid":2,"tid":1,"ts":1000,"dur":20,"args":{}})"
+    ofs << R"({"ph":1,"name":"write","cat":"POSIX","pid":2,"tid":1,"ts":1000,"dur":20,"args":{}})"
         << "\n";
-    ofs << R"({"ph":"X","name":"write","cat":"POSIX","pid":2,"tid":1,"ts":1100,"dur":20,"args":{}})"
+    ofs << R"({"ph":1,"name":"write","cat":"POSIX","pid":2,"tid":1,"ts":1100,"dur":20,"args":{}})"
         << "\n";
     ofs.close();
     dstd::String gz = pfw + ".gz";
@@ -107,17 +107,17 @@ dstd::String write_group_trace(TestEnvironment& env) {
 dstd::String write_argmax_trace(TestEnvironment& env) {
     dstd::String pfw = env.dir() + "/argmax.pfw";
     dftu_utils_test::FileOut ofs(pfw);
-    ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
+    ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
         << "\n";
-    ofs << R"({"ph":"X","name":"readv","cat":"POSIX","pid":1,"tid":1,"ts":1050,"dur":50,"args":{}})"
+    ofs << R"({"ph":1,"name":"readv","cat":"POSIX","pid":1,"tid":1,"ts":1050,"dur":50,"args":{}})"
         << "\n";
-    ofs << R"({"ph":"X","name":"pread","cat":"POSIX","pid":1,"tid":1,"ts":1200,"dur":20,"args":{}})"
+    ofs << R"({"ph":1,"name":"pread","cat":"POSIX","pid":1,"tid":1,"ts":1200,"dur":20,"args":{}})"
         << "\n";
-    ofs << R"({"ph":"X","name":"write","cat":"POSIX","pid":2,"tid":1,"ts":1000,"dur":5,"args":{}})"
+    ofs << R"({"ph":1,"name":"write","cat":"POSIX","pid":2,"tid":1,"ts":1000,"dur":5,"args":{}})"
         << "\n";
-    ofs << R"({"ph":"X","name":"writev","cat":"POSIX","pid":2,"tid":1,"ts":1010,"dur":30,"args":{}})"
+    ofs << R"({"ph":1,"name":"writev","cat":"POSIX","pid":2,"tid":1,"ts":1010,"dur":30,"args":{}})"
         << "\n";
-    ofs << R"({"ph":"X","name":"pwrite","cat":"POSIX","pid":2,"tid":1,"ts":1100,"dur":15,"args":{}})"
+    ofs << R"({"ph":1,"name":"pwrite","cat":"POSIX","pid":2,"tid":1,"ts":1100,"dur":15,"args":{}})"
         << "\n";
     ofs.close();
     dstd::String gz = pfw + ".gz";
@@ -134,7 +134,7 @@ dstd::String write_and_index(dstd::CStringView dir, dstd::StringView name,
     dstd::String pfw = dstd::String(dir) + "/" + dstd::String(name) + ".pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < n; ++i)
-        ofs << R"({"ph":"X","name":")" << name << R"(","cat":"POSIX","pid":)"
+        ofs << R"({"ph":1,"name":")" << name << R"(","cat":"POSIX","pid":)"
             << pid << R"(,"tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
             << (10 + i) << R"(,"args":{}})" << "\n";
     ofs.close();
@@ -364,10 +364,10 @@ TEST_SUITE("View C ABI") {
         const dstd::String pfw = env.dir() + "/hosts.pfw";
         {
             dftu_utils_test::FileOut o(pfw);
-            o << R"({"ph":"X","name":"op","cat":"io","pid":1,"tid":1,"ts":1,)"
+            o << R"({"ph":1,"name":"op","cat":"io","pid":1,"tid":1,"ts":1,)"
                  R"("dur":1,"args":{"hosts":[4,5]}})"
               << "\n"
-              << R"({"ph":"X","name":"op","cat":"io","pid":1,"tid":1,"ts":2,)"
+              << R"({"ph":1,"name":"op","cat":"io","pid":1,"tid":1,"ts":2,)"
                  R"("dur":1,"args":{"hosts":[6]}})"
               << "\n";
         }
@@ -653,7 +653,7 @@ TEST_SUITE("View C ABI") {
             dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"name":"EH","cat":"dftracer","type":1,"pid":1,"tid":1,"ph":4,"args":{"hhash":"ab"}})"
                 << "\n";
-            ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
+            ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
                 << "\n";
         }
         dstd::String gz = pfw + ".gz";

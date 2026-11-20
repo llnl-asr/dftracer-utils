@@ -629,19 +629,19 @@ dstd::String mixed_trace() {
             << R"(,"ts":)" << ts;
         switch (i % 6) {
             case 0:
-                out << R"(,"ph":"C","cat":"POSIX","name":"read","args":{)"
+                out << R"(,"ph":2,"cat":"POSIX","name":"read","args":{)"
                     << R"("dftu_cnt":3,"dur_sum":840,"dur_min":100,)"
                     << R"("dur_max":900,"ret_sum":12288,"ret_min":4096,)"
                     << R"("ret_max":8192,"offset_sum":6144,)"
                     << R"("offset_min":2048,"offset_max":4096})";
                 break;
             case 1:
-                out << R"(,"ph":"C","cat":"sys","name":"cpu","args":{)"
+                out << R"(,"ph":2,"cat":"sys","name":"cpu","args":{)"
                     << R"("dftu_cnt":2,"user_pct":)" << 10 + i
                     << R"(,"sys_pct":5,"delta":-)" << i % 5 << "}";
                 break;
             case 2:
-                out << R"(,"ph":"A","cat":"app","name":"step","dur":)" << 40 + i
+                out << R"(,"ph":3,"cat":"app","name":"step","dur":)" << 40 + i
                     << R"(,"args":{"dftu_cnt":2,"delta":-)" << i % 7
                     << R"(,"scale":0.5,"offset":)"
                     << (std::uint64_t{1} << 40) + static_cast<std::uint64_t>(i);
@@ -649,18 +649,18 @@ dstd::String mixed_trace() {
                 out << "}";
                 break;
             case 3:
-                out << R"(,"ph":"X","cat":"STDIO","name":"fread","dur":)"
+                out << R"(,"ph":1,"cat":"STDIO","name":"fread","dur":)"
                     << 20 + i << R"(,"args":{"ret":8192,"offset":)" << i
                     << R"(,"level":2,"fhash":"fedcba9876543210"})";
                 break;
             case 4:
-                out << R"(,"ph":"X","cat":"app","name":"compute","dur":)"
-                    << 5 + i << R"(,"args":{"iter":)" << i << R"(,"delta":-)"
-                    << i % 3 << R"(,"scale":2.25,)"
+                out << R"(,"ph":1,"cat":"app","name":"compute","dur":)" << 5 + i
+                    << R"(,"args":{"iter":)" << i << R"(,"delta":-)" << i % 3
+                    << R"(,"scale":2.25,)"
                     << R"("offset":)" << (std::uint64_t{1} << 50) + i << "}";
                 break;
             default:
-                out << R"(,"ph":"X","cat":"POSIX","name":"write","dur":)"
+                out << R"(,"ph":1,"cat":"POSIX","name":"write","dur":)"
                     << 30 + i << R"(,"args":{"ret":4096,"offset":)" << 2 * i
                     << R"(,"fhash":"0123456789abcdef"})";
                 break;
@@ -1207,7 +1207,7 @@ TEST_SUITE("AggQuery") {
         text << "[\n";
         for (int i = 0; i < COUNT; ++i)
             text << R"({"id":)" << i << R"(,"name":"r","cat":"c","pid":)"
-                 << 1 + i % 3 << R"(,"tid":1,"ph":"X","ts":)"
+                 << 1 + i % 3 << R"(,"tid":1,"ph":1,"ts":)"
                  << BASE_TS + std::uint64_t{1000} * i
                  << R"(,"dur":1,"args":{}})"
                  << "\n";
@@ -1252,7 +1252,7 @@ TEST_SUITE("AggQuery") {
         text << "[\n";
         for (int i = 0; i < TINY_EVENTS; ++i)
             text << R"({"id":)" << i << R"(,"name":"r","cat":"c","pid":1,)"
-                 << R"("tid":1,"ph":"X","ts":)" << BASE_TS + i
+                 << R"("tid":1,"ph":1,"ts":)" << BASE_TS + i
                  << R"(,"dur":1,"args":{}})" << "\n";
         text << "]\n";
         fx->files.push_back(dftu_utils_test::write_gz_trace(
@@ -1290,7 +1290,7 @@ TEST_SUITE("AggQuery") {
                               dstd::StringView args, int dur) {
             text << R"({"id":)" << pid << R"(,"name":")" << name
                  << R"(","cat":"app","pid":)" << pid << R"(,"tid":1,)"
-                 << R"("ph":"X","ts":)" << BASE_TS + std::uint64_t{1000} * pid
+                 << R"("ph":1,"ts":)" << BASE_TS + std::uint64_t{1000} * pid
                  << R"(,"dur":)" << dur << R"(,"args":)" << args << "}\n";
         };
         for (int i = 0; i < 90; ++i)
@@ -1306,7 +1306,7 @@ TEST_SUITE("AggQuery") {
         deep += "}";
         line(16, "odd", deep, 106);
         text << R"({"id":17,"name":"odd","cat":"app","pid":17,"tid":1,)"
-             << R"("ph":"X","ts":)" << BASE_TS << R"(,"dur":107,"args":{"x":)"
+             << R"("ph":1,"ts":)" << BASE_TS << R"(,"dur":107,"args":{"x":)"
              << "\n";
         for (int i = 0; i < 30; ++i)
             line(1 + i % 3, "good", R"({"n":)" + dstd::to_string(i) + "}", 10);

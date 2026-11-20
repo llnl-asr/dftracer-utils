@@ -168,14 +168,14 @@ as if one worker had indexed its slice alone. Make a different trace for each:
        for i in range(200):
            f.write(
                f'{{"name":"read","cat":"POSIX","pid":1,"tid":1,'
-               f'"ts":{1000 + i},"dur":{10 + i},"ph":"X","args":{{}}}}\n'
+               f'"ts":{1000 + i},"dur":{10 + i},"ph":1,"args":{{}}}}\n'
            )
 
    with gzip.open("shard-b/trace.pfw.gz", "wt") as f:
        for i in range(300):
            f.write(
                f'{{"name":"read","cat":"POSIX","pid":2,"tid":1,'
-               f'"ts":{2000 + i},"dur":{5 + i},"ph":"X","args":{{}}}}\n'
+               f'"ts":{2000 + i},"dur":{5 + i},"ph":1,"args":{{}}}}\n'
            )
 
 Index each shard with no coordination between them:

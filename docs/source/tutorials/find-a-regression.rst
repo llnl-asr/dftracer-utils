@@ -29,7 +29,7 @@ comparison needs to surface. Write both, in Python:
                dur = 10 + i + (posix_penalty if cat == "POSIX" else 0)
                f.write(
                    f'{{"name":"read","cat":"{cat}","pid":1,"tid":1,'
-                   f'"ts":{1000 + i},"dur":{dur},"ph":"X","args":{{}}}}\n'
+                   f'"ts":{1000 + i},"dur":{dur},"ph":1,"args":{{}}}}\n'
                )
 
    write_trace("baseline.pfw.gz", posix_penalty=0)

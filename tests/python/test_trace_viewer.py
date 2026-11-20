@@ -63,7 +63,7 @@ class TestTraceViewer:
             rows = [
                 {
                     "name": "CM",
-                    "ph": "M",
+                    "ph": 4,
                     "cat": "dftracer",
                     "pid": 0,
                     "tid": 0,
@@ -73,7 +73,7 @@ class TestTraceViewer:
             for i in range(10):
                 rows.append(
                     {
-                        "ph": "X",
+                        "ph": 1,
                         "name": "read",
                         "cat": "POSIX",
                         "pid": 1,
@@ -95,7 +95,7 @@ class TestTraceViewer:
             rows = [
                 {
                     "name": "CM",
-                    "ph": "M",
+                    "ph": 4,
                     "pid": 0,
                     "tid": 0,
                     "ts": 0,
@@ -103,7 +103,7 @@ class TestTraceViewer:
                 },
             ] + [
                 {
-                    "ph": "X",
+                    "ph": 1,
                     "name": "read",
                     "cat": "POSIX",
                     "pid": 1,
@@ -153,7 +153,7 @@ class TestTraceViewer:
             # not divide 5000, so alignment changes the first bucket.
             rows = [
                 {
-                    "ph": "X",
+                    "ph": 1,
                     "name": "read",
                     "cat": "posix",
                     "pid": 1,
@@ -186,7 +186,7 @@ class TestTraceViewer:
             rows = (
                 [
                     {
-                        "ph": "X",
+                        "ph": 1,
                         "name": "read",
                         "cat": "posix",
                         "pid": 1,
@@ -199,7 +199,7 @@ class TestTraceViewer:
                 ]
                 + [
                     {
-                        "ph": "C",
+                        "ph": 2,
                         "name": "cpu",
                         "cat": "sys",
                         "pid": 1,
@@ -211,7 +211,7 @@ class TestTraceViewer:
                 ]
                 + [
                     {
-                        "ph": "A",
+                        "ph": 3,
                         "name": "agg",
                         "cat": "posix",
                         "pid": 1,
@@ -224,7 +224,7 @@ class TestTraceViewer:
                 ]
                 + [
                     {
-                        "ph": "M",
+                        "ph": 4,
                         "name": "process_name",
                         "pid": 1,
                         "tid": 1,
@@ -242,8 +242,44 @@ class TestTraceViewer:
 
             assert count("events") == 5
             assert count("counters") == 3
-            assert count("aggregated") == 4  # ph="A" folded events, newly selectable
-            assert count("metadata") == 2  # ph="M" metadata, aggregated only when selected
+            assert count("aggregated") == 4  # ph=3 folded events, newly selectable
+            assert count("metadata") == 2  # ph=4 metadata, aggregated only when selected
+
+    def test_legacy_letter_phase_reads_like_integer_phase(self):
+        # Legacy traces write ph as a letter (X, C, A, M); the reader gives the
+        # same per-phase result as for the integer form (1, 2, 3, 4).
+        letters = {"events": "X", "counters": "C", "aggregated": "A", "metadata": "M"}
+        numbers = {"events": 1, "counters": 2, "aggregated": 3, "metadata": 4}
+        sizes = {"events": 5, "counters": 3, "aggregated": 4, "metadata": 2}
+
+        def rows(ph):
+            out = []
+            for phase, n in sizes.items():
+                for i in range(n):
+                    out.append(
+                        {
+                            "ph": ph[phase],
+                            "name": "n_%s" % phase,
+                            "cat": "posix",
+                            "pid": 1,
+                            "tid": 1,
+                            "ts": 1000 + i,
+                            "dur": 5,
+                            "args": {},
+                        }
+                    )
+            return out
+
+        with Environment(lines=1) as env:
+            counts = {}
+            for form, ph in (("letter", letters), ("number", numbers)):
+                gz = _make_trace(env, "legacy_%s.pfw.gz" % form, rows(ph))
+                counts[form] = {}
+                for phase in sizes:
+                    t = TraceViewer(gz).phase(phase).agg("count").collect().to_dict()
+                    counts[form][phase] = int(t["count"][0]) if t["count"] else 0
+            assert counts["number"] == sizes
+            assert counts["letter"] == counts["number"]
 
     def test_arrows_resolve_hashes_through_row_sets(self):
         # An arrow reads a hash field's row in a row set of the source, as a
@@ -251,7 +287,7 @@ class TestTraceViewer:
         with Environment(lines=1) as env:
             rows = [
                 {
-                    "ph": "M",
+                    "ph": 4,
                     "name": "FH",
                     "pid": 1,
                     "tid": 1,
@@ -259,7 +295,7 @@ class TestTraceViewer:
                     "args": {"name": "/data/f.dat", "value": "fa"},
                 },
                 {
-                    "ph": "M",
+                    "ph": 4,
                     "name": "HH",
                     "pid": 1,
                     "tid": 1,
@@ -267,7 +303,7 @@ class TestTraceViewer:
                     "args": {"name": "node01", "value": "h1"},
                 },
                 {
-                    "ph": "M",
+                    "ph": 4,
                     "name": "SH",
                     "pid": 1,
                     "tid": 1,
@@ -275,7 +311,7 @@ class TestTraceViewer:
                     "args": {"name": "/opt/laghos", "value": "e1"},
                 },
                 {
-                    "ph": "X",
+                    "ph": 1,
                     "name": "start",
                     "cat": "dftracer",
                     "pid": 1,
@@ -286,7 +322,7 @@ class TestTraceViewer:
                 },
             ] + [
                 {
-                    "ph": "X",
+                    "ph": 1,
                     "name": "read",
                     "cat": "posix",
                     "pid": 1,
@@ -333,7 +369,7 @@ class TestTraceViewer:
         with Environment(lines=1) as env:
             rows = [
                 {
-                    "ph": "X",
+                    "ph": 1,
                     "name": "read",
                     "cat": "posix",
                     "pid": 1,
@@ -365,7 +401,7 @@ class TestTraceViewer:
         with Environment(lines=1) as env:
             rows = [
                 {
-                    "ph": "X",
+                    "ph": 1,
                     "name": "read",
                     "cat": "posix",
                     "pid": 1,
@@ -392,7 +428,7 @@ class TestTraceViewer:
         with Environment(lines=1) as env:
             rows = [
                 {
-                    "ph": "X",
+                    "ph": 1,
                     "name": "read",
                     "cat": "posix",
                     "pid": 1,
@@ -431,7 +467,7 @@ class TestTraceViewer:
         # One (pid,tid) lane, nested: A[0,100) > B[10,40) > C[15,25).
         with Environment(lines=1) as env:
             rows = [
-                {"ph": "X", "name": n, "cat": "posix", "pid": 1, "tid": 1, "ts": t, "dur": d}
+                {"ph": 1, "name": n, "cat": "posix", "pid": 1, "tid": 1, "ts": t, "dur": d}
                 for n, t, d in [("A", 0, 100), ("B", 10, 30), ("C", 15, 10)]
             ]
             gz = _make_trace(env, "tree.pfw.gz", rows)
@@ -463,7 +499,7 @@ class TestTraceViewer:
     def test_containment_single_fold_both_outputs(self):
         with Environment(lines=1) as env:
             rows = [
-                {"ph": "X", "name": n, "cat": "posix", "pid": 1, "tid": 1, "ts": t, "dur": d}
+                {"ph": 1, "name": n, "cat": "posix", "pid": 1, "tid": 1, "ts": t, "dur": d}
                 for n, t, d in [("A", 0, 100), ("B", 10, 30), ("C", 15, 10)]
             ]
             gz = _make_trace(env, "both.pfw.gz", rows)
@@ -493,11 +529,11 @@ class TestTraceViewer:
         # rank 0 merges them. Result must equal a single pass over both files.
         with Environment(lines=1) as env:
             r1 = [
-                {"ph": "X", "name": n, "cat": "c", "pid": 1, "tid": 1, "ts": t, "dur": d}
+                {"ph": 1, "name": n, "cat": "c", "pid": 1, "tid": 1, "ts": t, "dur": d}
                 for n, t, d in [("A", 0, 100), ("B", 10, 30)]
             ]
             r2 = [
-                {"ph": "X", "name": n, "cat": "c", "pid": 2, "tid": 1, "ts": t, "dur": d}
+                {"ph": 1, "name": n, "cat": "c", "pid": 2, "tid": 1, "ts": t, "dur": d}
                 for n, t, d in [("A", 0, 50), ("C", 5, 20)]
             ]
             g1 = _make_trace(env, "rank1.pfw.gz", r1)
@@ -519,7 +555,7 @@ class TestTraceViewer:
         # One scan feeds a group_by agg AND a flamegraph branch.
         with Environment(lines=1) as env:
             rows = [
-                {"ph": "X", "name": n, "cat": "posix", "pid": 1, "tid": 1, "ts": t, "dur": d}
+                {"ph": 1, "name": n, "cat": "posix", "pid": 1, "tid": 1, "ts": t, "dur": d}
                 for n, t, d in [("A", 0, 100), ("B", 10, 30), ("C", 15, 10)]
             ]
             gz = _make_trace(env, "sess_tree.pfw.gz", rows)
@@ -611,7 +647,7 @@ class TestTraceViewer:
         with Environment(lines=1) as env:
             rows = [
                 {
-                    "ph": "X",
+                    "ph": 1,
                     "name": n,
                     "cat": "c",
                     "pid": 1,
@@ -723,7 +759,7 @@ class TestTraceViewer:
             TraceViewer(gz).group_by("cat").time_bucket(1000).agg("count").export_trace(out)
             with gzip.open(out, "rt") as fh:
                 events = [json.loads(line) for line in fh if line.strip()]
-            assert events and all(e.get("ph") == 2 for e in events)  # ph=C counters
+            assert events and all(e.get("ph") == 2 for e in events)  # ph=2 counters
 
     def test_export_aggregation_gzip_matches_plain(self, tmp_path):
         with Environment(lines=200) as env:
@@ -842,7 +878,7 @@ class TestTraceViewer:
             for name, n, dur in specs:
                 for i in range(n):
                     f.write(
-                        '{"ph":"X","name":"%s","cat":"POSIX","pid":1,"tid":1,'
+                        '{"ph":1,"name":"%s","cat":"POSIX","pid":1,"tid":1,'
                         '"ts":%d,"dur":%d,"args":{}}\n' % (name, 1000 + i, dur)
                     )
         with dftu_utils.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
@@ -868,21 +904,21 @@ class TestTraceViewer:
         gz = str(tmp_path / "sess.pfw.gz")
         with gzip.open(gz, "wt") as f:
             f.write(
-                '{"ph":"M","name":"PR","cat":"dftracer","pid":100,"tid":0,'
+                '{"ph":4,"name":"PR","cat":"dftracer","pid":100,"tid":0,'
                 '"args":{"name":"rank","value":"0"}}\n'
             )
             f.write(
-                '{"ph":"M","name":"PR","cat":"dftracer","pid":200,"tid":0,'
+                '{"ph":4,"name":"PR","cat":"dftracer","pid":200,"tid":0,'
                 '"args":{"name":"rank","value":"1"}}\n'
             )
             for i in range(3):
                 f.write(
-                    '{"ph":"X","name":"read","cat":"POSIX","pid":100,"tid":1,'
+                    '{"ph":1,"name":"read","cat":"POSIX","pid":100,"tid":1,'
                     '"ts":%d,"dur":5,"args":{}}\n' % (1000 + i)
                 )
             for i in range(2):
                 f.write(
-                    '{"ph":"X","name":"write","cat":"STDIO","pid":200,"tid":1,'
+                    '{"ph":1,"name":"write","cat":"STDIO","pid":200,"tid":1,'
                     '"ts":%d,"dur":7,"args":{}}\n' % (2000 + i)
                 )
         with dftu_utils.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
@@ -977,8 +1013,7 @@ class TestTraceViewer:
         gz = str(tmp_path / "e.pfw.gz")
         with gzip.open(gz, "wt") as f:
             f.write(
-                '{"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,'
-                '"ts":1000,"dur":5,"args":{}}\n'
+                '{"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":5,"args":{}}\n'
             )
         with dftu_utils.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
             ix.ensure()
@@ -993,21 +1028,21 @@ class TestTraceViewer:
         gz = str(tmp_path / "rank.pfw.gz")
         with gzip.open(gz, "wt") as f:
             f.write(
-                '{"ph":"M","name":"PR","cat":"dftracer","pid":100,"tid":0,'
+                '{"ph":4,"name":"PR","cat":"dftracer","pid":100,"tid":0,'
                 '"args":{"name":"rank","value":"0"}}\n'
             )
             f.write(
-                '{"ph":"M","name":"PR","cat":"dftracer","pid":200,"tid":0,'
+                '{"ph":4,"name":"PR","cat":"dftracer","pid":200,"tid":0,'
                 '"args":{"name":"rank","value":"1"}}\n'
             )
             for i in range(3):
                 f.write(
-                    '{"ph":"X","name":"read","cat":"POSIX","pid":100,"tid":1,'
+                    '{"ph":1,"name":"read","cat":"POSIX","pid":100,"tid":1,'
                     '"ts":%d,"dur":5,"args":{}}\n' % (1000 + i)
                 )
             for i in range(2):
                 f.write(
-                    '{"ph":"X","name":"read","cat":"POSIX","pid":200,"tid":1,'
+                    '{"ph":1,"name":"read","cat":"POSIX","pid":200,"tid":1,'
                     '"ts":%d,"dur":5,"args":{}}\n' % (2000 + i)
                 )
         with dftu_utils.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
@@ -1031,7 +1066,7 @@ class TestTraceViewer:
         with gzip.open(gz, "wt") as f:
             for i in range(100):
                 f.write(
-                    '{"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,'
+                    '{"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,'
                     '"ts":%d,"dur":%d,"args":{"ret":%d}}\n' % (1000 + i, 10 + i, 10 * (i + 1))
                 )
         with dftu_utils.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
@@ -1049,7 +1084,7 @@ class TestTraceViewer:
         with gzip.open(gz, "wt") as f:
             for i in range(100):
                 f.write(
-                    '{"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,'
+                    '{"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,'
                     '"ts":%d,"dur":%d,"args":{"size":%d}}\n' % (1000 + i, 10 + i, 100 * (i + 1))
                 )
         with dftu_utils.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
@@ -1090,12 +1125,11 @@ class TestTraceViewer:
         gz = str(tmp_path / "sec.pfw.gz")
         with gzip.open(gz, "wt") as f:
             f.write(
-                '{"ph":"M","name":"CM","pid":0,"tid":0,'
-                '"args":{"name":"time_metric","value":"SEC"}}\n'
+                '{"ph":4,"name":"CM","pid":0,"tid":0,"args":{"name":"time_metric","value":"SEC"}}\n'
             )
             for i in range(50):
                 f.write(
-                    '{"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,'
+                    '{"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,'
                     '"ts":%d,"dur":2,"args":{}}\n' % (100 + i)
                 )
         with dftu_utils.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
@@ -1125,7 +1159,7 @@ class TestTraceViewer:
         with Environment(lines=1) as env:
             rows = [
                 {
-                    "ph": "X",
+                    "ph": 1,
                     "name": "op",
                     "cat": "POSIX",
                     "type": typ,
@@ -1169,7 +1203,7 @@ class TestTraceViewer:
         with Environment(lines=1) as env:
             rows = [
                 {
-                    "ph": "X",
+                    "ph": 1,
                     "name": "kv",
                     "cat": "MPI",
                     "type": "mpi",  # top-level schema field
@@ -1182,7 +1216,7 @@ class TestTraceViewer:
                 for i in range(4)
             ] + [
                 {
-                    "ph": "X",
+                    "ph": 1,
                     "name": "send",
                     "cat": "MPI",
                     "type": "mpi",
@@ -1210,7 +1244,7 @@ class TestTraceViewer:
         with Environment(lines=1) as env:
             rows = [
                 {
-                    "ph": "X",
+                    "ph": 1,
                     "name": name,
                     "cat": "POSIX",
                     "pid": 1,
@@ -1265,7 +1299,7 @@ class TestTraceViewerSchema:
     def _rows(self):
         return [
             {
-                "ph": "X",
+                "ph": 1,
                 "name": "read",
                 "cat": "POSIX",
                 "pid": 1,
@@ -1285,7 +1319,7 @@ class TestTraceViewerSchema:
             # A second event name carries size as a float, so the type folds
             # (int64 + float64 -> float64) across names.
             {
-                "ph": "X",
+                "ph": 1,
                 "name": "write",
                 "cat": "POSIX",
                 "pid": 1,
@@ -1327,7 +1361,7 @@ class TestTraceViewerSchema:
                 env,
                 "f.pfw.gz",
                 [
-                    {"ph": "X", "name": "r", "cat": "POSIX", "pid": 1, "tid": 1, "ts": i, "dur": 1}
+                    {"ph": 1, "name": "r", "cat": "POSIX", "pid": 1, "tid": 1, "ts": i, "dur": 1}
                     for i in range(5)
                 ],
             )
@@ -1361,7 +1395,7 @@ class TestTraceViewerNestedArgs:
     def _rows(self):
         def ev(name, ts, dur, args):
             return {
-                "ph": "X",
+                "ph": 1,
                 "name": name,
                 "cat": "APP",
                 "pid": 1,
@@ -1443,7 +1477,7 @@ class TestFlamegraphGroup:
     def _rows(self):
         return [
             {
-                "ph": "X",
+                "ph": 1,
                 "name": "read",
                 "cat": "POSIX",
                 "pid": 1,
@@ -1453,7 +1487,7 @@ class TestFlamegraphGroup:
                 "args": {},
             },
             {
-                "ph": "X",
+                "ph": 1,
                 "name": "write",
                 "cat": "STDIO",
                 "pid": 2,
@@ -1606,7 +1640,7 @@ def test_rewritten_trace_reads_its_new_content(tmp_path):
             f.write("[\n")
             for i in range(n):
                 event = {"id": i, "name": "read", "cat": cat, "pid": 1, "tid": 1}
-                event.update({"ts": 1000 + i, "dur": 5, "ph": "X"})
+                event.update({"ts": 1000 + i, "dur": 5, "ph": 1})
                 f.write(json.dumps(event) + "\n")
 
     def rows(query):

@@ -109,7 +109,7 @@ TEST_SUITE("Fold") {
         simdjson::dom::parser parser;
 
         dstd::String a = padded(
-            R"({"ph":"X","name":"read","cat":"POSIX","pid":7,"tid":9,"ts":100,"dur":5,"args":{"fhash":"fhA"}})");
+            R"({"ph":1,"name":"read","cat":"POSIX","pid":7,"tid":9,"ts":100,"dur":5,"args":{"fhash":"fhA"}})");
         std::size_t a_size = a.size() - simdjson::SIMDJSON_PADDING;
         auto ra = parser.parse(a.data(), a_size, false);
         REQUIRE_FALSE(ra.error());
@@ -118,7 +118,7 @@ TEST_SUITE("Fold") {
         // Reuse the parser on a different document: this is what invalidates a
         // string_view held into the parser buffer.
         dstd::String b = padded(
-            R"({"ph":"X","name":"write","cat":"STDIO","pid":1,"tid":1,"ts":200,"dur":3,"args":{"fhash":"fhB"}})");
+            R"({"ph":1,"name":"write","cat":"STDIO","pid":1,"tid":1,"ts":200,"dur":3,"args":{"fhash":"fhB"}})");
         auto rb = parser.parse(b.data(), b.size() - simdjson::SIMDJSON_PADDING,
                                false);
         REQUIRE_FALSE(rb.error());
@@ -144,7 +144,7 @@ TEST_SUITE("Fold") {
         dstd::StringIntern intern;
         simdjson::dom::parser parser;
         dstd::String line = padded(
-            R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":1,"args":{"fhash":"fh1","size":4096,"mode":"r"}})");
+            R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":1,"args":{"fhash":"fh1","size":4096,"mode":"r"}})");
         auto r = parser.parse(line.data(),
                               line.size() - simdjson::SIMDJSON_PADDING, false);
         REQUIRE_FALSE(r.error());
@@ -182,7 +182,7 @@ TEST_SUITE("Fold") {
         simdjson::dom::parser parser;
         // 2^53 + 1 is the smallest positive integer a double cannot represent.
         dstd::String line = padded(
-            R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":1,"args":{"offset":9007199254740993,"ratio":0.5}})");
+            R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":1,"args":{"offset":9007199254740993,"ratio":0.5}})");
         auto r = parser.parse(line.data(),
                               line.size() - simdjson::SIMDJSON_PADDING, false);
         REQUIRE_FALSE(r.error());
@@ -245,12 +245,12 @@ TEST_SUITE("Fold") {
         dstd::String pfw = env.dir() + "/meta.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"node0","value":"hh1"}})"
+            ofs << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"name":"node0","value":"hh1"}})"
                 << "\n";
-            ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/a.bin","value":"fh1"}})"
+            ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"name":"/data/a.bin","value":"fh1"}})"
                 << "\n";
             for (int i = 0; i < 5; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << (100 + i) << R"(,"dur":2,"args":{"fhash":"fh1"}})"
                     << "\n";
         }
@@ -338,7 +338,7 @@ TEST_SUITE("Fold") {
         dstd::StringIntern intern;
         simdjson::dom::parser parser;
         dstd::String line = padded(
-            R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"hh9","name":"/data/x.bin","value":"fh7"}})");
+            R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"hhash":"hh9","name":"/data/x.bin","value":"fh7"}})");
         auto r = parser.parse(line.data(),
                               line.size() - simdjson::SIMDJSON_PADDING, false);
         REQUIRE_FALSE(r.error());
@@ -370,7 +370,7 @@ TEST_SUITE("Fold") {
         simdjson::dom::parser parser;
         // No cat, no args.
         dstd::String line =
-            padded(R"({"ph":"X","name":"n","pid":1,"tid":1,"ts":1})");
+            padded(R"({"ph":1,"name":"n","pid":1,"tid":1,"ts":1})");
         auto r = parser.parse(line.data(),
                               line.size() - simdjson::SIMDJSON_PADDING, false);
         REQUIRE_FALSE(r.error());
@@ -387,7 +387,7 @@ TEST_SUITE("Fold") {
         dstd::StringIntern intern;
         simdjson::dom::parser parser;
         dstd::String line = padded(
-            R"({"ph":"X","name":"n","pid":1,"tid":1,"ts":1,"args":{"dur":{"p99":7000},"hosts":["a","b"],"ok":true,"no":false,"nil":null,"x":[{"y":1.5}]}})");
+            R"({"ph":1,"name":"n","pid":1,"tid":1,"ts":1,"args":{"dur":{"p99":7000},"hosts":["a","b"],"ok":true,"no":false,"nil":null,"x":[{"y":1.5}]}})");
         auto r = parser.parse(line.data(),
                               line.size() - simdjson::SIMDJSON_PADDING, false);
         REQUIRE_FALSE(r.error());
@@ -414,7 +414,7 @@ TEST_SUITE("Fold") {
         dstd::StringIntern intern;
         simdjson::dom::parser parser;
         dstd::String line = padded(
-            R"({"ph":"X","name":"n","pid":1,"tid":1,"ts":1,"dur":42,"args":{"dur":{"p99":7000},"type":"arg"}})");
+            R"({"ph":1,"name":"n","pid":1,"tid":1,"ts":1,"dur":42,"args":{"dur":{"p99":7000},"type":"arg"}})");
         auto r = parser.parse(line.data(),
                               line.size() - simdjson::SIMDJSON_PADDING, false);
         REQUIRE_FALSE(r.error());
@@ -433,7 +433,7 @@ TEST_SUITE("Fold") {
         dstd::StringIntern intern;
         simdjson::dom::parser parser;
         dstd::String line = padded(
-            R"({"ph":"X","name":"n","pid":1,"tid":1,"ts":1,"args":{"hosts":["a","b","c"]}})");
+            R"({"ph":1,"name":"n","pid":1,"tid":1,"ts":1,"args":{"hosts":["a","b","c"]}})");
         auto r = parser.parse(line.data(),
                               line.size() - simdjson::SIMDJSON_PADDING, false);
         REQUIRE_FALSE(r.error());
@@ -452,9 +452,9 @@ TEST_SUITE("Fold") {
         dstd::StringIntern intern;
         simdjson::dom::parser parser;
         dstd::String wide = padded(
-            R"({"ph":"X","name":"read","cat":"POSIX","pid":7,"tid":9,"ts":100,"dur":5,"args":{"a":1,"b":2,"c":"x","d":null,"e":true,"f":3.5}})");
+            R"({"ph":1,"name":"read","cat":"POSIX","pid":7,"tid":9,"ts":100,"dur":5,"args":{"a":1,"b":2,"c":"x","d":null,"e":true,"f":3.5}})");
         dstd::String narrow = padded(
-            R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":2,"dur":1,"args":{"a":9}})");
+            R"({"ph":1,"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":2,"dur":1,"args":{"a":9}})");
         auto rw = parser.parse(wide.data(),
                                wide.size() - simdjson::SIMDJSON_PADDING, false);
         REQUIRE_FALSE(rw.error());

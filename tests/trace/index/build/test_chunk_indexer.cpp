@@ -25,11 +25,11 @@ static dstd::Pair<dstd::String, std::size_t> create_test_trace_gz(
         dftu_utils_test::FileOut ofs(plain_path);
 
         // Metadata events
-        ofs << R"({"name":"HH","ph":"M","args":{"hhash":"abc123","name":"testhost","value":"abc123"}})"
+        ofs << R"({"name":"HH","ph":4,"args":{"hhash":"abc123","name":"testhost","value":"abc123"}})"
             << "\n";
-        ofs << R"({"name":"FH","ph":"M","args":{"hhash":"abc123","name":"./data/file.h5","value":"def456"}})"
+        ofs << R"({"name":"FH","ph":4,"args":{"hhash":"abc123","name":"./data/file.h5","value":"def456"}})"
             << "\n";
-        ofs << R"({"name":"SH","ph":"M","args":{"hhash":"abc123","name":"my_app","value":"ghi789"}})"
+        ofs << R"({"name":"SH","ph":4,"args":{"hhash":"abc123","name":"my_app","value":"ghi789"}})"
             << "\n";
 
         // Regular events
@@ -42,7 +42,7 @@ static dstd::Pair<dstd::String, std::size_t> create_test_trace_gz(
             ofs << R"({"name":")" << names[i % 4] << R"(","cat":")"
                 << cats[i % 2] << R"(","pid":)" << (1000 + i % 3)
                 << R"(,"tid":)" << (2000 + i % 2) << R"(,"ts":)" << ts
-                << R"(,"dur":)" << dur << R"(,"ph":"X")"
+                << R"(,"dur":)" << dur << R"(,"ph":1)"
                 << R"(,"args":{"hhash":"abc123","fhash":"def456")"
                 << R"(,"level":)" << (i % 5) << R"(,"io":{"size":)"
                 << (1024 * (i + 1)) << R"(}})"
@@ -179,10 +179,10 @@ TEST_SUITE("ChunkIndexer") {
         {
             dftu_utils_test::FileOut ofs(plain_path);
             // Event without fhash (not all events are I/O)
-            ofs << R"({"name":"compute","cat":"APP","pid":1,"tid":1,"ts":1000,"dur":500,"ph":"X","args":{"hhash":"abc123"}})"
+            ofs << R"({"name":"compute","cat":"APP","pid":1,"tid":1,"ts":1000,"dur":500,"ph":1,"args":{"hhash":"abc123"}})"
                 << "\n";
             // Event with fhash
-            ofs << R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":2000,"dur":100,"ph":"X","args":{"hhash":"abc123","fhash":"def456"}})"
+            ofs << R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":2000,"dur":100,"ph":1,"args":{"hhash":"abc123","fhash":"def456"}})"
                 << "\n";
             ofs.close();
         }

@@ -50,13 +50,13 @@ dstd::String write_trace(dstd::CStringView dir, dstd::StringView name, int n,
         dstd::String out;
         for (int i = 0; i < n; ++i)
             dstd::fmt_append<
-                "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+                "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
                 "\"tid\":1,\"ts\":{}{}\n">(
                 out, start_us + static_cast<std::uint64_t>(i) * 1000,
                 R"(,"dur":100,"args":{}})");
         for (int i = 0; system && i < n; ++i)
             dstd::fmt_append<
-                "{\"ph\":\"C\",\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,"
+                "{\"ph\":2,\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,"
                 "\"tid\":1,\"ts\":{},\"args\":{\"hhash\":\"h1\",\"util\":{}}}"
                 "\n">(out, start_us + static_cast<std::uint64_t>(i) * 1000, i);
         dstd::fs::write_file(dstd::PathView(pfw), out).discard();

@@ -114,7 +114,7 @@ first - add ``time_bucket`` (microseconds) to a trace query. Combined with a
 
 For traces whose timestamps are not in microseconds, apply ``time_scale`` before
 ``time_bucket`` to normalize the unit. To write the bucketed rollup out as a
-re-indexable ``ph="C"`` counter trace rather than collecting it, use the counter
+re-indexable ``ph=2`` counter trace rather than collecting it, use the counter
 export described in :doc:`../analysis/aggregation`.
 
 Rank rows and look at neighbors: ``window``

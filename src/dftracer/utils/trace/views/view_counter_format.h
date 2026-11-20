@@ -10,11 +10,11 @@
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 
-// Emitting aggregate rows/groups as dftracer ph="C" counter events: group
+// Emitting aggregate rows/groups as dftracer ph=2 counter events: group
 // columns map to name/cat/pid/tid/ts, everything else becomes args.
 namespace dftracer::utils::trace::views::detail {
 
-// One aggregate group -> one ph="C" counter event JSON line. `keys` aligns to
+// One aggregate group -> one ph=2 counter event JSON line. `keys` aligns to
 // `group_cols` (nullopt for a null key), `values` to `value_cols`. The group
 // columns `entity_col` and `lane_col` give pid and tid, as
 // trace::index::entity_id.
@@ -25,7 +25,7 @@ dstd::String counter_line(dstd::Span<const dstd::String> group_cols,
                           dstd::StringView entity_col,
                           dstd::StringView lane_col);
 
-// Emit ph="C" counter events from a merged engine AggState (the distributed
+// Emit ph=2 counter events from a merged engine AggState (the distributed
 // counter-partial merge). Byte-matches emit_group_counter: finalizes the state,
 // then writes one event per group with its own args (spec value columns then
 // the present dyn columns, skipping args a group did not see).

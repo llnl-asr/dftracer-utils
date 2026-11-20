@@ -74,6 +74,35 @@ std::int64_t rows_named(const dataframe::DataFrame& df, dstd::StringView name) {
     return n;
 }
 
+// One record per phase repeated 1..4 times, with ph as letters or integers.
+dstd::String create_all_phases_trace(TestEnvironment& env, bool numeric_ph) {
+    const dstd::String pfw =
+        env.dir() + (numeric_ph ? "/phases_num.pfw" : "/phases_str.pfw");
+    const char* const letters[] = {"\"X\"", "\"C\"", "\"A\"", "\"M\""};
+    const char* const numbers[] = {"1", "2", "3", "4"};
+    {
+        dftu_utils_test::FileOut ofs(pfw);
+        for (int p = 0; p < 4; ++p)
+            for (int i = 0; i <= p; ++i)
+                ofs << R"({"name":"n)" << p << R"(","cat":"c","ph":)"
+                    << (numeric_ph ? numbers[p] : letters[p])
+                    << R"(,"pid":1,"tid":1,"ts":)" << (1000 + p * 10 + i)
+                    << R"(,"dur":3,"args":{}})" << "\n";
+    }
+    const dstd::String gz = pfw + ".gz";
+    dftu_utils_test::compress_file_to_gzip(pfw, gz);
+    dstd::fs::remove(pfw).discard();
+    return gz;
+}
+
+std::int64_t phase_rows(dstd::CStringView gz, dstd::CStringView idx,
+                        Phase phase) {
+    views::detail::scan::ScanPlan plan = views::detail::scan::phase(
+        views::detail::scan::from_file(dstd::String(gz), dstd::String(idx)),
+        phase);
+    return run(views::detail::scan::collect_frame(plan)).num_rows();
+}
+
 void check_metadata_variant(bool numeric_ph) {
     TestEnvironment env(200);
     const dstd::String gz = create_metadata_trace(env, numeric_ph);
@@ -152,6 +181,26 @@ TEST_SUITE("View - metadata phase row query") {
     }
 }
 
+TEST_SUITE("View - legacy letter phase") {
+    TEST_CASE("letter ph reads like integer ph for all four phases") {
+        const Phase phases[] = {Phase::Events, Phase::Counters,
+                                Phase::Aggregated, Phase::Metadata};
+        for (int p = 0; p < 4; ++p) {
+            std::int64_t rows[2] = {0, 0};
+            for (int form = 0; form < 2; ++form) {
+                TestEnvironment env(200);
+                const dstd::String gz = create_all_phases_trace(env, form == 1);
+                const dstd::String idx =
+                    dstd::String(determine_index_path(gz, ""));
+                prime_index(gz, idx);
+                rows[form] = phase_rows(gz, idx, phases[p]);
+            }
+            CHECK(rows[0] == p + 1);
+            CHECK(rows[1] == rows[0]);
+        }
+    }
+}
+
 namespace {
 
 // 40 threads, each named by a thread_name record just before its events, and
@@ -163,15 +212,15 @@ dstd::String create_threaded_trace(TestEnvironment& env) {
         dftu_utils_test::FileOut ofs(pfw);
         ofs << "[\n";
         for (int t = 0; t < 40; ++t) {
-            ofs << R"({"name":"thread_name","ph":"M","pid":1,"tid":)" << t
+            ofs << R"({"name":"thread_name","ph":4,"pid":1,"tid":)" << t
                 << R"(,"args":{"name":"t)" << t << R"("}})" << "\n";
             if (t % 10 == 0)
-                ofs << R"({"name":"FH","ph":"M","pid":1,"tid":)" << t
+                ofs << R"({"name":"FH","ph":4,"pid":1,"tid":)" << t
                     << R"(,"args":{"name":"/f)" << t << R"(","value":"h)" << t
                     << R"("}})" << "\n";
             for (int i = 0; i < 50; ++i)
                 ofs << R"({"name":")" << (t == 0 ? "open" : "read")
-                    << R"(","cat":"POSIX","ph":"X","pid":1,"tid":)" << t
+                    << R"(","cat":"POSIX","ph":1,"pid":1,"tid":)" << t
                     << R"(,"ts":)" << (t * 1000 + i) << R"(,"dur":1,"args":{}})"
                     << "\n";
         }
@@ -261,7 +310,7 @@ TEST_SUITE("View - metadata under pruning") {
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 2000; ++i)
-                ofs << R"({"name":"read","cat":"POSIX","ph":"X","pid":1,)"
+                ofs << R"({"name":"read","cat":"POSIX","ph":1,"pid":1,)"
                     << R"("tid":1,"ts":)" << i << R"(,"dur":1,"args":{}})"
                     << "\n";
         }
@@ -341,7 +390,7 @@ TEST_SUITE("View - metadata under pruning") {
             return count_with(t, true);
         };
         CHECK(dftu_utils_test::ok(count("")) == 2044);
-        CHECK(dftu_utils_test::ok(count_all(R"(ph == "M")")) == 44);
+        CHECK(dftu_utils_test::ok(count_all(R"(ph == 4)")) == 44);
         CHECK(dftu_utils_test::ok(count(R"(name == "thread_name")")) == 40);
         CHECK(dftu_utils_test::ok(count_all(R"(name == "thread_name")")) == 40);
         CHECK(dftu_utils_test::ok(count(R"(args.name == "t37")")) == 1);

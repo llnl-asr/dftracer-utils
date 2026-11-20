@@ -59,7 +59,7 @@ dstd::String create_dlio_pfw_gz(dftu_utils_test::TestEnvironment& env, int id,
                     << R"(,"tid":)" << tid << R"(,"name":")"
                     << labels.fetch_block_name << R"(","cat":")"
                     << labels.fetch_block_cat << R"(")"
-                    << R"(,"ph":"X","ts":)" << ts << R"(,"dur":)" << fb_dur
+                    << R"(,"ph":1,"ts":)" << ts << R"(,"dur":)" << fb_dur
                     << R"(,"args":{"hhash":"h1"}})"
                     << "\n";
                 ts += fb_dur;
@@ -70,7 +70,7 @@ dstd::String create_dlio_pfw_gz(dftu_utils_test::TestEnvironment& env, int id,
                     << R"(,"tid":)" << tid << R"(,"name":")"
                     << labels.fetch_iter_name << R"(","cat":")"
                     << labels.fetch_iter_cat << R"(")"
-                    << R"(,"ph":"X","ts":)" << ts << R"(,"dur":)" << fi_dur
+                    << R"(,"ph":1,"ts":)" << ts << R"(,"dur":)" << fi_dur
                     << R"(,"args":{"hhash":"h1"}})"
                     << "\n";
                 ts += fi_dur;
@@ -82,7 +82,7 @@ dstd::String create_dlio_pfw_gz(dftu_utils_test::TestEnvironment& env, int id,
                     << R"(,"tid":)" << tid << R"(,"name":")"
                     << labels.preprocess_name << R"(","cat":")"
                     << labels.preprocess_cat << R"(")"
-                    << R"(,"ph":"X","ts":)" << ts << R"(,"dur":)" << pre_dur
+                    << R"(,"ph":1,"ts":)" << ts << R"(,"dur":)" << pre_dur
                     << R"(,"args":{"hhash":"h1"}})"
                     << "\n";
                 ts += pre_dur;

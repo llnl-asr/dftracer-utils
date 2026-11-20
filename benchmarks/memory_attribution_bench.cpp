@@ -311,7 +311,7 @@ dstd::String trace_text(std::int64_t lines) {
     static const char* const NAMES[] = {"read", "write", "open", "close"};
     dstd::String out;
     for (std::int64_t i = 0; i < lines; ++i) {
-        out += R"({"ph":"X","name":")";
+        out += R"({"ph":1,"name":")";
         out += NAMES[i % 4];
         out += R"(","cat":"POSIX","pid":)" + dstd::to_string(i % 4);
         out += R"(,"tid":1,"ts":)" + dstd::to_string(1000 + i * 10);

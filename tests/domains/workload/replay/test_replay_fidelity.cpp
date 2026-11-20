@@ -54,7 +54,7 @@ void write_evenly_spaced_trace(dstd::String path, std::size_t n,
     for (std::size_t i = 0; i < n; ++i) {
         f << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX","pid":)" << pid
           << R"(,"tid":)" << pid << R"(,"ts":)" << (base_ts + i * step_us)
-          << R"(,"dur":10,"ph":"X","args":{}})";
+          << R"(,"dur":10,"ph":1,"args":{}})";
         if (i + 1 < n) f << ",";
         f << "\n";
     }

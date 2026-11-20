@@ -89,7 +89,7 @@ dstd::String write_trace(TestEnvironment& env) {
         int ts = 1000;
         for (const char* ev : EVENTS) {
             dstd::String line(ev);
-            line.insert(1, R"("ph":"X","pid":1,"tid":1,"ts":)" +
+            line.insert(1, R"("ph":1,"pid":1,"tid":1,"ts":)" +
                                dstd::to_string(ts) + R"(,"dur":10,)");
             out << line << "\n";
             ts += 100;
@@ -279,7 +279,7 @@ TEST_SUITE("duql paths") {
             int ts = 1000;
             for (const char* ev : RECORDS) {
                 dstd::String line(ev);
-                line.insert(1, R"("ph":"X","pid":1,"tid":1,"ts":)" +
+                line.insert(1, R"("ph":1,"pid":1,"tid":1,"ts":)" +
                                    dstd::to_string(ts) + R"(,"dur":10,)");
                 out << line << "\n";
                 ts += 100;
@@ -339,7 +339,7 @@ TEST_SUITE("duql paths") {
         const dstd::String plain = env.dir() + "/empty.pfw";
         {
             dftu_utils_test::FileOut out(plain);
-            out << R"({"ph":"X","pid":1,"tid":1,"ts":1,"dur":1,"name":"e","args":{"tags":[]}})"
+            out << R"({"ph":1,"pid":1,"tid":1,"ts":1,"dur":1,"name":"e","args":{"tags":[]}})"
                 << "\n";
         }
         const dstd::String gz = plain + ".gz";

@@ -24,7 +24,7 @@ def trace(tmp_path):
             f.write(
                 json.dumps(
                     {
-                        "ph": "X",
+                        "ph": 1,
                         "name": "n%d" % (i % 3),
                         "cat": "APP",
                         "pid": 1,

@@ -33,7 +33,7 @@ The pattern
 
    - ``merge_partials(partials)`` - a materialized-collect result, as a
      ``DataFrame``.
-   - ``merge_counter_partials(partials, sink)`` - the streamed ``ph="C"``
+   - ``merge_counter_partials(partials, sink)`` - the streamed ``ph=2``
      counter form, written to an ``ExportSink`` (C++-only; no Python binding).
 
 No rank rescans the trace files to produce the combined result.

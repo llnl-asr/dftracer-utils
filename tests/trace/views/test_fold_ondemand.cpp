@@ -117,11 +117,11 @@ DeepRead read_deep_small_stack(std::size_t depth, bool object, int where) {
     String line;
     if (where == 0)
         line =
-            R"({"ph":"X","name":"x","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"args":{"k":)" +
+            R"({"ph":1,"name":"x","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"args":{"k":)" +
             deep + "}}";
     else if (where == 1)
         line =
-            R"({"ph":"X","name":"x","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"deep":)" +
+            R"({"ph":1,"name":"x","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"deep":)" +
             deep + "}";
     else if (where == 2)
         line = R"({"id":7,"v":)" + deep + "}";
@@ -129,7 +129,7 @@ DeepRead read_deep_small_stack(std::size_t depth, bool object, int where) {
         line = "[" + deep + "]";
     else
         line =
-            R"({"ph":"X","name":"x","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"args":{"k":)" +
+            R"({"ph":1,"name":"x","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"args":{"k":)" +
             deep + "}}";
     const StringView closing = object ? "}}" : "]]";
     DeepRead out;
@@ -166,7 +166,7 @@ DepthRead read_depth(int where, std::size_t levels, bool object = true) {
     DepthRead out;
     if (where == 4) {
         const String line =
-            R"({"ph":"X","name":"x","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"args":{"k":)" +
+            R"({"ph":1,"name":"x","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"args":{"k":)" +
             deep + "}}";
         json::JsonParser parser;
         if (!parser.parse(line)) return out;
@@ -184,7 +184,7 @@ DepthRead read_depth(int where, std::size_t levels, bool object = true) {
     }
     const String line =
         where == 0
-            ? R"({"ph":"X","name":"x","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"args":{"k":)" +
+            ? R"({"ph":1,"name":"x","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"args":{"k":)" +
                   deep + "}}"
             : R"({"id":7,"v":)" + deep + "}";
     json::Document doc;
@@ -461,26 +461,26 @@ using dftracer::utils::trace::views::detail::FoldEventBuffer;
 // Records with top-level leaves of every kind around args and the other axis
 // keys, where the order of the schema leaves could differ between readers.
 const char* const SCHEMA_LINES[] = {
-    R"j({"id":1,"name":"read","cat":"POSIX","pid":1,"tid":2,"ts":3,"dur":4,"ph":"X","args":{"fhash":"f","hhash":"h","size":5,"io":{"off":1,"len":[1,{"k":"v"}],"e":{}},"flag":true,"nul":null,"neg":-5,"big":9223372036854775808,"d":2.5,"s":"x"}})j",
-    R"j({"ph":"X","args":{"a":1},"extra":7,"tail":"t","z":[1,2,3],"obj":{"p":{"q":[1,2,{"r":"z"}]},"e":[]}})j",
-    R"j({"extra":7,"obj":{"p":1},"ph":"X","args":{"a":1},"after":null})j",
-    R"j({"ph":"X","args":{},"extra":1})j",
-    R"j({"ph":"X","args":5,"extra":1})j",
-    R"j({"ph":"X","args":[1,2,{"a":1}],"extra":1})j",
-    R"j({"ph":"X","args":{"a":1},"args":{"b":{"c":2}},"x":1})j",
-    R"j({"ph":"X","args":3,"args":{"a":1},"x":1})j",
-    R"j({"ph":"X","args":{"a":1},"args":3,"x":1})j",
-    R"j({"ph":"X","args":{"a":1},"x":1,"x":"two","x":[1]})j",
-    R"j({"ph":"X","":1,"o":{"":2,"y":3},"e":[],"f":{}})j",
-    R"j({"ph":"X","args":{"fhash":{"a":1},"hhash":[1,2],"c":1}})j",
-    R"j({"ph":"X","args":{"fhash":5,"hhash":null,"c":[]}})j",
-    R"j({"ph":"X","name":"n","cat":"c","args":{"k":"v"},"cat":"d","name":"m"})j",
-    R"j({"args":{"a":1},"name":"n","cat":"c","ph":"X"})j",
-    R"j({"name":"n","args":{"a":{"b":{"c":1}}},"ph":"X","cat":"c"})j",
-    R"j({"ph":"X","args":{"big":123456789012345678901234567890,"u":18446744073709551615,"m":-9223372036854775808}})j",
-    R"j({"ph":"X","t":18446744073709551615,"b":-9223372036854775809,"f":1.5e3,"i":-3})j",
-    R"j({"ph":"M","name":"FH","args":{"name":"/a","value":"fh1"}})j",
-    R"j({"ph":"X","args":{"a.b":1,"a":{"b":2},"l":[[1,2],[3]]},"a.b":4,"a":{"b":{"c":5}}})j",
+    R"j({"id":1,"name":"read","cat":"POSIX","pid":1,"tid":2,"ts":3,"dur":4,"ph":1,"args":{"fhash":"f","hhash":"h","size":5,"io":{"off":1,"len":[1,{"k":"v"}],"e":{}},"flag":true,"nul":null,"neg":-5,"big":9223372036854775808,"d":2.5,"s":"x"}})j",
+    R"j({"ph":1,"args":{"a":1},"extra":7,"tail":"t","z":[1,2,3],"obj":{"p":{"q":[1,2,{"r":"z"}]},"e":[]}})j",
+    R"j({"extra":7,"obj":{"p":1},"ph":1,"args":{"a":1},"after":null})j",
+    R"j({"ph":1,"args":{},"extra":1})j",
+    R"j({"ph":1,"args":5,"extra":1})j",
+    R"j({"ph":1,"args":[1,2,{"a":1}],"extra":1})j",
+    R"j({"ph":1,"args":{"a":1},"args":{"b":{"c":2}},"x":1})j",
+    R"j({"ph":1,"args":3,"args":{"a":1},"x":1})j",
+    R"j({"ph":1,"args":{"a":1},"args":3,"x":1})j",
+    R"j({"ph":1,"args":{"a":1},"x":1,"x":"two","x":[1]})j",
+    R"j({"ph":1,"":1,"o":{"":2,"y":3},"e":[],"f":{}})j",
+    R"j({"ph":1,"args":{"fhash":{"a":1},"hhash":[1,2],"c":1}})j",
+    R"j({"ph":1,"args":{"fhash":5,"hhash":null,"c":[]}})j",
+    R"j({"ph":1,"name":"n","cat":"c","args":{"k":"v"},"cat":"d","name":"m"})j",
+    R"j({"args":{"a":1},"name":"n","cat":"c","ph":1})j",
+    R"j({"name":"n","args":{"a":{"b":{"c":1}}},"ph":1,"cat":"c"})j",
+    R"j({"ph":1,"args":{"big":123456789012345678901234567890,"u":18446744073709551615,"m":-9223372036854775808}})j",
+    R"j({"ph":1,"t":18446744073709551615,"b":-9223372036854775809,"f":1.5e3,"i":-3})j",
+    R"j({"ph":4,"name":"FH","args":{"name":"/a","value":"fh1"}})j",
+    R"j({"ph":1,"args":{"a.b":1,"a":{"b":2},"l":[[1,2],[3]]},"a.b":4,"a":{"b":{"c":5}}})j",
 };
 
 // The DOM reader and the on-demand reader give the same event, schema leaves
@@ -603,11 +603,11 @@ TEST_SUITE("FoldOnDemand") {
     TEST_CASE("whitespace after a value matches the DOM reader") {
         json::Document doc;
         const char* const lines[] = {
-            "{\"ph\":\"X\"  ,\"name\":\"a\" ,\"cat\" : \"b\"\t,\"ts\":1 "
+            "{\"ph\":1  ,\"name\":\"a\" ,\"cat\" : \"b\"\t,\"ts\":1 "
             ",\"dur\":2\n}",
             "{ \"ph\" : 1 , \"args\" : { \"s\" : \"v\" , \"fhash\" : "
             "\"f\"\r\n, \"n\" : 3 } }",
-            "{\"ph\":\"X\"   }",
+            "{\"ph\":1   }",
             "{\"ph\":1,\"args\":{\"esc\":\"a\\\"b\"  ,\"tail\":\"c\\\\\" }}",
         };
         for (const char* line : lines) check_line(doc, line, StringView());
@@ -1296,7 +1296,7 @@ TEST_SUITE("FoldOnDemand") {
 
     TEST_CASE("a value nested under the depth limit is still walked") {
         const String line =
-            R"({"ph":"X","name":"x","args":{"k":)" + nested(100, true) + "}}";
+            R"({"ph":1,"name":"x","args":{"k":)" + nested(100, true) + "}}";
         json::Document doc;
         auto value = doc.parse(line);
         REQUIRE(value.has_value());

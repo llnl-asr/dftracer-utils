@@ -86,17 +86,19 @@ dstd::String write_trace(dstd::CStringView dir, int seed, int events) {
     Lcg rng{static_cast<std::uint64_t>(seed) * 7919};
     dstd::String out;
     out += "[\n";
+    // The two spaces after each ph value keep every line the byte length of the
+    // old "ph":"X" form, so the recorded digests and chunk counts stay valid.
     for (int f = 0; f < 3; ++f)
         dstd::fmt_append<
-            "{\"name\":\"FH\",\"ph\":\"M\",\"pid\":1,\"tid\":1,\"args\":{"
+            "{\"name\":\"FH\",\"ph\":4  ,\"pid\":1,\"tid\":1,\"args\":{"
             "\"name\":\"{}\",\"value\":\"{}\"}}\n">(out, FILES[f], FHASH[f]);
     for (int h = 0; h < 2; ++h)
         dstd::fmt_append<
-            "{\"name\":\"HH\",\"ph\":\"M\",\"pid\":1,\"tid\":1,\"args\":{"
+            "{\"name\":\"HH\",\"ph\":4  ,\"pid\":1,\"tid\":1,\"args\":{"
             "\"name\":\"{}\",\"value\":\"{}\"}}\n">(out, HOSTS[h], HHASH[h]);
     for (int x = 0; x < 2; ++x)
         dstd::fmt_append<
-            "{\"name\":\"SH\",\"ph\":\"M\",\"pid\":1,\"tid\":1,\"args\":{"
+            "{\"name\":\"SH\",\"ph\":4  ,\"pid\":1,\"tid\":1,\"args\":{"
             "\"name\":\"{}\",\"value\":\"{}\"}}\n">(out, EXECS[x], SHASH[x]);
     std::uint64_t ts = 1000000 + static_cast<std::uint64_t>(seed) * 50000;
     int run_left = 0, name = 0, cat = 0, pid = 1, file = 0, host = 0;
@@ -113,7 +115,7 @@ dstd::String write_trace(dstd::CStringView dir, int seed, int events) {
         if (seed == 2 && i == events / 3)
             for (int t = 0; t < 2000; ++t)
                 dstd::fmt_append<
-                    "{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":{"
+                    "{\"name\":\"thread_name\",\"ph\":4  ,\"pid\":1,\"tid\":{"
                     "},\"args\":{\"name\":\"worker-{}\"}}\n">(out, 1000 + t, t);
         ts += 5 + rng.next() % 50;
         if (i == events / 2) ts += 400000;
@@ -132,7 +134,7 @@ dstd::String write_trace(dstd::CStringView dir, int seed, int events) {
         }
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"{}\",\"cat\":\"{}\",\"pid\":{},\"tid\":{},"
-            "\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{\"size\":{},\"fhash\":"
+            "\"ph\":1  ,\"ts\":{},\"dur\":{},\"args\":{\"size\":{},\"fhash\":"
             "\"{}\",\"hhash\":\"{}\",\"shash\":\"{}\"}}\n">(
             out, i, op, CATS[cat], pid, pid * 10, ts, dur, size, FHASH[file],
             HHASH[host], SHASH[pid % 2]);
@@ -683,12 +685,12 @@ TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
     for (const char* hash : {"aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"}) {
         dstd::String out;
         dstd::fmt_append<
-            "{\"name\":\"FH\",\"ph\":\"M\",\"pid\":1,\"tid\":1,\"args\":{"
+            "{\"name\":\"FH\",\"ph\":4  ,\"pid\":1,\"tid\":1,\"args\":{"
             "\"name\":\"/x\",\"value\":\"{}\"}}\n">(out, hash);
         for (int i = 0; i < 20; ++i)
             dstd::fmt_append<
                 "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
-                "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":5,\"args\":{"
+                "\"tid\":1,\"ph\":1  ,\"ts\":{},\"dur\":5,\"args\":{"
                 "\"fhash\":\"{}\"}}\n">(out, i, 1000 + i, hash);
         const auto plain =
             env.dir() + "/t" + dstd::to_string(traces.size()) + ".pfw";

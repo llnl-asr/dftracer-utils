@@ -81,25 +81,25 @@ struct Fixture {
                                : dstd::String();
                 };
                 for (int j = 0; j < READS; ++j)
-                    o << R"({"ph":"X","name":"read","cat":"POSIX","pid":)"
-                      << pid << R"(,"tid":1,"ts":)" << (BASE_TS + j * 100)
+                    o << R"({"ph":1,"name":"read","cat":"POSIX","pid":)" << pid
+                      << R"(,"tid":1,"ts":)" << (BASE_TS + j * 100)
                       << R"(,"dur":)" << read_dur(i, j) << R"(,"args":{)"
                       << host << R"(,"ret":)" << 512 * (1 + j % 4)
                       << extra_args(j % 2, j % 3) << "}}\n";
                 for (int j = 0; j < WRITES; ++j)
-                    o << R"({"ph":"X","name":"fwrite","cat":"STDIO","pid":)"
+                    o << R"({"ph":1,"name":"fwrite","cat":"STDIO","pid":)"
                       << pid << R"(,"tid":1,"ts":)"
                       << (BASE_TS + 10000 + j * 100) << R"(,"dur":)"
                       << write_dur(j) << R"(,"args":{)" << host
                       << extra_args(j % 2, j % 3) << "}}\n";
                 for (int e = 0; e < COUNTERS; ++e)
-                    o << R"({"ph":"C","name":"train","cat":"app","pid":)" << pid
+                    o << R"({"ph":2,"name":"train","cat":"app","pid":)" << pid
                       << R"(,"tid":1,"ts":)" << (BASE_TS + 20000 + e * 100)
                       << R"(,"args":{)" << host << R"(,"dur":5)"
                       << extra_args(e / 3, e % 3) << "}}\n";
                 if (mixed)
                     for (int e = 0; e < MIXED; ++e)
-                        o << R"({"ph":"C","name":"read","cat":"POSIX","pid":)"
+                        o << R"({"ph":2,"name":"read","cat":"POSIX","pid":)"
                           << pid << R"(,"tid":1,"ts":)"
                           << (BASE_TS + 30000 + e * 100) << R"(,"args":{)"
                           << host << R"(,"dur":7}})" << "\n";
@@ -498,7 +498,7 @@ TEST_SUITE("ViewPartials") {
         {
             dftu_utils_test::FileOut o(plain);
             for (int j = 0; j < 7; ++j)
-                o << R"({"ph":"X","name":"read","cat":"POSIX","pid":101,)"
+                o << R"({"ph":1,"name":"read","cat":"POSIX","pid":101,)"
                   << R"("tid":1,"ts":)" << (BASE_TS + j) << R"(,"dur":9,)"
                   << R"("args":{"hhash":"hosta"}})" << "\n";
         }

@@ -47,7 +47,7 @@ dstd::String write_trace(dstd::CStringView dir, dstd::StringView name,
         ts += 7 + static_cast<std::uint64_t>(i % 13);
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"op{}\",\"cat\":\"C{}\",\"pid\":{},\"tid\":{}"
-            ",\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{\"k{}\":{}}}\n">(
+            ",\"ph\":1,\"ts\":{},\"dur\":{},\"args\":{\"k{}\":{}}}\n">(
             out, i, (i / 50) % 7, i % 3, 1 + i % 4, 10 + i % 4, ts, 5 + i % 97,
             i % 600, i % 50);
     }

@@ -91,7 +91,7 @@
 
 // The View terminals: each lowers a ViewPlan onto the module pieces and runs a
 // pruned parallel scan. The scan Source lives in view_scan (gather_units +
-// make_vdef); the group/agg fold in view_aggregate; ph="C" emission in
+// make_vdef); the group/agg fold in view_aggregate; ph=2 emission in
 // view_counter_format; out-of-core spill in view_spill. A terminal is therefore
 // "gather units -> fan out a scan -> feed each batch to its own body (write /
 // fold / spill / write_chunk / branch-route)". The bodies differ on purpose;
@@ -2440,7 +2440,7 @@ coro::CoroTask<dstd::Result<dstd::String>> run_aggregate_partial(
     co_return encode_agg_partial(**state);
 }
 
-// Merge partials and emit each combined group as a ph="C" counter event.
+// Merge partials and emit each combined group as a ph=2 counter event.
 dstd::Result<ExportStats> merge_counters_partials(
     const ViewPlan& plan, dstd::Span<const dstd::StringView> partials,
     ExportSink& sink) {

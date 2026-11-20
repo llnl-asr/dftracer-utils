@@ -244,7 +244,7 @@ Python, ``Indexer(files=["trace.pfw.gz"]).rowset("files")`` returns the
 stored rows of an indexed trace as a DataFrame.
 
 A query with no ``from`` reads the source's ``data``: for a dftracer trace,
-every record but the ``ph: M`` metadata records. ``from all`` reads every
+every record but the ``ph: 4`` metadata records. ``from all`` reads every
 record.
 
 Name a condition with a macro

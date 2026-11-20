@@ -65,7 +65,7 @@ TEST_SUITE("detail stats via View") {
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 5; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,)"
                     << R"("tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
                     << (10 + i) << R"(,"args":{}})" << "\n";
             for (int i = 0; i < 3; ++i)
@@ -98,12 +98,12 @@ TEST_SUITE("detail stats via View") {
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 5; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,)"
                     << R"("tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
                     << (10 + i) << R"(,"args":{"ret":4096}})" << "\n";
             for (int k = 0; k < dftu_utils_test::REFUSED_KINDS; ++k)
                 ofs << dftu_utils_test::refused_line(
-                           k, R"("ph":"X","name":"odd","cat":"POSIX","pid":2,)"
+                           k, R"("ph":1,"name":"odd","cat":"POSIX","pid":2,)"
                               R"("tid":1,"ts":)" +
                                   dstd::to_string(3000 + k * 100) +
                                   R"(,"dur":)" + dstd::to_string(100 + k))

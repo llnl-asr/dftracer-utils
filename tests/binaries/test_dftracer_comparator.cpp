@@ -138,7 +138,7 @@ void write_scale_set(dstd::String dir, int files, bool variant) {
                                       static_cast<std::uint64_t>(i % 7) * 40 +
                                       (variant ? 30 : 0);
             text +=
-                R"({"id":)" + dstd::to_string(i) + R"(,"ph":"X","pid":)" +
+                R"({"id":)" + dstd::to_string(i) + R"(,"ph":1,"pid":)" +
                 dstd::to_string(pid) + R"(,"tid":)" +
                 dstd::to_string(pid * 10 + static_cast<std::uint64_t>(i % 2)) +
                 R"(,"name":")" + names[i % 3] + R"(","cat":"POSIX","ts":)" +
@@ -220,7 +220,7 @@ dstd::String write_filter_trace(dstd::String dir) {
     for (const Kind& k : kinds) {
         for (int i = 0; i < k.count; ++i, ++id) {
             text += R"({"id":)" + dstd::to_string(id) +
-                    R"(,"ph":"X","pid":7,"tid":8,"name":")" + k.name +
+                    R"(,"ph":1,"pid":7,"tid":8,"name":")" + k.name +
                     R"(","cat":")" + k.cat + R"(","ts":)" +
                     dstd::to_string(1000000000ULL + id * 1000ULL) +
                     R"(,"dur":100,"args":{"fhash":"f1")" +
@@ -342,9 +342,9 @@ TEST_SUITE("DFTracerComparator") {
                 const std::uint64_t dur =
                     (std::uint64_t{1} << 50) +
                     static_cast<std::uint64_t>((f * 7919 + i * 104729) % 9973);
-                text += R"({"id":)" + dstd::to_string(i) +
-                        R"(,"ph":"X","pid":)" + dstd::to_string(100 + f) +
-                        R"(,"tid":)" + dstd::to_string(i % 2) + R"(,"name":")" +
+                text += R"({"id":)" + dstd::to_string(i) + R"(,"ph":1,"pid":)" +
+                        dstd::to_string(100 + f) + R"(,"tid":)" +
+                        dstd::to_string(i % 2) + R"(,"name":")" +
                         (i % 3 == 0 ? "read" : "write") +
                         R"(","cat":"POSIX","ts":)" +
                         dstd::to_string(1000000000ULL + i * 400000ULL) +

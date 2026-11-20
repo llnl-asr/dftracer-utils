@@ -45,7 +45,7 @@ static dstd::String create_test_trace_file(dstd::CStringView dir,
         ofs << R"({"id":)" << i << R"(,"pid":)" << (1000 + i) << R"(,"tid":)"
             << (2000 + i) << R"(,"name":")" << op_name << R"(")"
             << R"(,"cat":"IO")"
-            << R"(,"ph":"C")"
+            << R"(,"ph":2)"
             << R"(,"ts":)" << timestamp_us << R"(,"dur":)" << (100 + i * 10)
             << R"(,"args":{"ret":)" << size << R"(})"
             << R"(})" << "\n";

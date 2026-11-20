@@ -364,7 +364,7 @@ Time-bucketed counters
 
 Add ``time_bucket(interval_us)`` to bucket events by time as well as by group -
 one aggregated row per (group, bucket). See :doc:`../data/time-windows`. To emit
-the rollup as a re-indexable ``ph="C"`` counter trace instead of collecting it:
+the rollup as a re-indexable ``ph=2`` counter trace instead of collecting it:
 
 .. tab-set::
 

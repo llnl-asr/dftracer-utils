@@ -126,7 +126,7 @@ class StreamRowFold : public Fold {
     dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_;
     dstd::Vector<dstd::String> select_;
     double time_scale_;
-    bool keep_metadata_;  // phase("metadata"): keep ph=M records
+    bool keep_metadata_;  // phase("metadata"): keep ph=4 records
     bool emit_dyn_;       // auto_numeric_metrics: emit per-batch dyn columns
     dstd::SharedPtr<const ViewPlan> branch_;
     // Set once the consumer let go; the fold then stops sending to it.

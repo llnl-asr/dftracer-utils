@@ -1592,7 +1592,7 @@ def test_sketch_quantile_matches_duql_merge(tmp_path):
     with gzip.open(trace, "wt") as f:
         for i in range(3000):
             f.write(
-                '{"ph":"X","name":"%s","cat":"c","pid":%d,"tid":1,"ts":%d,"dur":%d,"args":{}}\n'
+                '{"ph":1,"name":"%s","cat":"c","pid":%d,"tid":1,"ts":%d,"dur":%d,"args":{}}\n'
                 % ("abc"[i % 3], i % 7, i, rng.randint(1, 10**6))
             )
     tv = TraceViewer(trace, str(tmp_path / "idx"))

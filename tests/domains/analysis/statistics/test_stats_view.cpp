@@ -328,11 +328,11 @@ TEST_SUITE("stats via View") {
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 10; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1000,)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1000,)"
                        R"("tid":5000,"ts":)"
                     << (1000 + i * 10) << R"(,"dur":10,"args":{}})" << "\n";
             for (int i = 0; i < 6; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1001,)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1001,)"
                        R"("tid":5001,"ts":)"
                     << (2000 + i * 10) << R"(,"dur":10,"args":{}})" << "\n";
         }

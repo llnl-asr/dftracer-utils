@@ -19,7 +19,7 @@ class Snapshot;
 
 namespace dftracer::utils::trace::index::plan {
 
-/// The metadata (`ph="M"`) records a scan returns besides data events.
+/// The metadata (`ph=4`) records a scan returns besides data events.
 enum class MetadataUse : std::uint8_t {
     /// None: prune for the data events alone.
     None,

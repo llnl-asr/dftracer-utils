@@ -76,15 +76,15 @@ dstd::String mixed_fixture(bool no_phase_line) {
     if (no_phase_line)
         text += R"({"id":5,"name":"no_phase","cat":"POSIX"})"
                 "\n";
-    text += R"({"id":6,"name":"broken","ph":"X")"
+    text += R"({"id":6,"name":"broken","ph":1)"
             "\n";
-    text += R"({"id":12,"name":"cut","ph":"X","a":1e400,"b":{"c":1})"
+    text += R"({"id":12,"name":"cut","ph":1,"a":1e400,"b":{"c":1})"
             "\n";
     text += "\n";
     text += event_line(7, "C") + "\n";
     text += event_line(8, "M") + "\n";
     text += event_line(9, "X") + "\n";
-    text += R"({"id":11,"pid":1,"tid":1,"name":"odd","cat":"POSIX","ph":"X",)"
+    text += R"({"id":11,"pid":1,"tid":1,"name":"odd","cat":"POSIX","ph":1,)"
             R"("ts":1,"dur":1,"args":{"ret":1e400,"s":"a\q"}})"
             "\n";
     text += "]\n";

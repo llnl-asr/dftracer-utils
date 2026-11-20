@@ -526,7 +526,7 @@ TEST_SUITE("DFTracerView") {
         dstd::String pfw = dir + "/t.pfw";
         {
             dftu_utils_test::FileOut out(pfw);
-            out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{"fhash":"abc","bytes":4096}})"
+            out << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{"fhash":"abc","bytes":4096}})"
                 << "\n";
         }
         dstd::String gz = pfw + ".gz";
@@ -563,7 +563,7 @@ TEST_SUITE("DFTracerView") {
             dftu_utils_test::FileOut out(pfw);
             for (int k = 0; k < dftu_utils_test::REFUSED_KINDS; ++k)
                 out << dftu_utils_test::refused_line(
-                           k, R"("ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                           k, R"("ph":1,"name":"read","cat":"POSIX","pid":1,)"
                               R"("tid":1,"ts":1000,"dur":10)")
                     << "\n";
         }
@@ -600,7 +600,7 @@ TEST_SUITE("DFTracerView") {
         {
             dftu_utils_test::FileOut out(pfw);
             dstd::String line =
-                R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
+                R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,)"
                 R"("ts":1000,"dur":10,"args":{"ret":4096,"deep":)";
             line.append(100000, '[');
             line.append(100000, ']');
@@ -712,12 +712,12 @@ TEST_SUITE("DFTracerView") {
         const dstd::String pfw = env.dir() + "/files.pfw";
         {
             dftu_utils_test::FileOut o(pfw);
-            o << R"({"ph":"M","name":"FH","pid":1,"tid":1,"args":{"name":"/scratch/a","value":"f1"}})"
+            o << R"({"ph":4,"name":"FH","pid":1,"tid":1,"args":{"name":"/scratch/a","value":"f1"}})"
               << "\n"
-              << R"({"ph":"M","name":"FH","pid":1,"tid":1,"args":{"name":"/data/b","value":"f2"}})"
+              << R"({"ph":4,"name":"FH","pid":1,"tid":1,"args":{"name":"/data/b","value":"f2"}})"
               << "\n";
             for (int i = 0; i < 4; ++i)
-                o << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                o << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                   << 10 * (i + 1) << R"(,"dur":1,"args":{"fhash":"f)"
                   << 1 + i % 2 << "\"}}\n";
         }
@@ -730,12 +730,12 @@ TEST_SUITE("DFTracerView") {
                   {gz, "-q", R"(fhash -> files.path like "/scratch/%")"}, cap,
                   out) == 0);
         std::size_t events = 0;
-        for (std::size_t at = out.find(R"("ph":"X")"); at != dstd::String::npos;
-             at = out.find(R"("ph":"X")", at + 1))
+        for (std::size_t at = out.find(R"("ph":1)"); at != dstd::String::npos;
+             at = out.find(R"("ph":1)", at + 1))
             ++events;
         CHECK(events == 2);
         CHECK(out.find(R"("fhash":"f2")") == dstd::String::npos);
-        CHECK(out.find(R"("ph":"M")") == dstd::String::npos);
+        CHECK(out.find(R"("ph":4)") == dstd::String::npos);
     }
 
     TEST_CASE("--query prints the table of a group with --param") {
@@ -783,7 +783,7 @@ TEST_SUITE("DFTracerView") {
         {
             dftu_utils_test::FileOut o(pfw);
             for (int i = 0; i < 3; ++i)
-                o << R"({"ph":"X","name":"op","cat":"io","pid":1,"tid":1,)"
+                o << R"({"ph":1,"name":"op","cat":"io","pid":1,"tid":1,)"
                   << R"("ts":)" << 10 * (i + 1) << R"(,"dur":1,"args":)"
                   << (i == 1 ? R"({"hosts":[]})" : R"({"hosts":["a","b"]})")
                   << "}\n";

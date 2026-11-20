@@ -97,7 +97,7 @@ Other visualization routes
        boundaries. Param: ``ts_normalize`` (default ``1``). No time window
        needed; it looks at the whole trace.
    * - ``/api/viz/counters``
-     - Read/write bytes and I/O op counts per time bucket (``ph="C"``
+     - Read/write bytes and I/O op counts per time bucket (``ph=2``
        events). Extra: ``buckets`` (target bucket count, default ``800``,
        clamped to ``[16, 4000]``), ``duql``.
    * - ``/api/viz/proctree``

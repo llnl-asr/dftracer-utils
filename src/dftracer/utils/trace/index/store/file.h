@@ -133,7 +133,7 @@ struct PathStat {
     std::uint64_t count = 0;
 };
 
-/// One chunk's metadata (`ph="M"`) records. Context records are those other
+/// One chunk's metadata (`ph=4`) records. Context records are those other
 /// than the FH, HH and SH hash definitions: thread and process names, PR, CM.
 struct ChunkMetadata {
     std::uint64_t records = 0;

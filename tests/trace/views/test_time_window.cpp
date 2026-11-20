@@ -37,13 +37,13 @@ dstd::String write_trace(TestEnvironment& env, dstd::StringView name,
                          dstd::Vector<Event> events, std::size_t member_bytes) {
     dftu_utils_test::TextOut out;
     out << "[\n";
-    out << R"({"name":"thread_name","ph":"M","pid":1,"tid":1,)"
+    out << R"({"name":"thread_name","ph":4,"pid":1,"tid":1,)"
            R"("args":{"name":"main"}})"
         << "\n";
     int id = 0;
     for (const auto& e : events)
         out << R"({"id":)" << id++ << R"(,"name":"read","cat":"POSIX",)"
-            << R"("pid":1,"tid":1,"ph":"X","ts":)" << e.ts << R"(,"dur":)"
+            << R"("pid":1,"tid":1,"ph":1,"ts":)" << e.ts << R"(,"dur":)"
             << e.dur << R"(,"args":{"bytes":1}})" << "\n";
     out << "]\n";
     const auto plain = env.dir() + "/" + dstd::String(name) + ".pfw";

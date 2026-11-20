@@ -46,7 +46,7 @@ dstd::String member(int first) {
     for (int i = first; i < first + ROWS; ++i) {
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":"
-            "1,\"ts\":{},\"dur\":5,\"ph\":\"X\"}\n">(text, i, 1000 + i * 10);
+            "1,\"ts\":{},\"dur\":5,\"ph\":1}\n">(text, i, 1000 + i * 10);
     }
     return gzip_member(std::move(text));
 }
@@ -295,7 +295,7 @@ TEST_SUITE("LiveView") {
         const dstd::String gz = env.dir() + "/a.pfw.gz";
         const dstd::String m0 = member(0);
         const dstd::String line =
-            R"({"id":99,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":9000,"dur":5,"ph":"X"})";
+            R"({"id":99,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":9000,"dur":5,"ph":1})";
         const dstd::String open = gzip_member(line.substr(0, 20));
         const dstd::String rest = gzip_member(line.substr(20) + "\n");
         put(gz, m0);
@@ -356,8 +356,8 @@ TEST_SUITE("LiveView") {
         for (int i = 0; i < ROWS; ++i) {
             dstd::fmt_append<
                 "{\"id\":{},\"name\":\"late\",\"cat\":\"POSIX\",\"pid\":1,"
-                "\"tid\":1,\"ts\":{},\"dur\":5,\"ph\":\"X\"}\n">(late, 100 + i,
-                                                                 5000 + i * 10);
+                "\"tid\":1,\"ts\":{},\"dur\":5,\"ph\":1}\n">(late, 100 + i,
+                                                             5000 + i * 10);
         }
         const char* query = "where name in (from data | select name)";
         put(gz, m0);
@@ -382,7 +382,7 @@ TEST_SUITE("LiveView") {
         for (int i = 0; i < ROWS; ++i) {
             dstd::fmt_append<
                 "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
-                "\"tid\":1,\"ts\":{},\"dur\":5,\"ph\":\"X\",\"args\":{\"late\":"
+                "\"tid\":1,\"ts\":{},\"dur\":5,\"ph\":1,\"args\":{\"late\":"
                 "1}}\n">(late, 100 + i, 5000 + i * 10);
         }
         put(gz, m0);

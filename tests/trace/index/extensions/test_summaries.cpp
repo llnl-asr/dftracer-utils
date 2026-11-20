@@ -295,10 +295,10 @@ dstd::String write_trace(dftu_utils_test::TestEnvironment& env, int events) {
         dftu_utils_test::FileOut out(pfw);
         const char* cats[] = {"POSIX", "STDIO", "MPI"};
         for (int i = 0; i < events; ++i)
-            out << R"({"ph":"X","name":"op)" << (i * 7919) % 23
-                << R"(","cat":")" << cats[(i / 5) % 3] << R"(","pid":)"
-                << 100 + (i / 400) % 4 << R"(,"tid":)" << i % 6 << R"(,"ts":)"
-                << 1000 + i * 10 << R"(,"dur":5,"args":{}})"
+            out << R"({"ph":1,"name":"op)" << (i * 7919) % 23 << R"(","cat":")"
+                << cats[(i / 5) % 3] << R"(","pid":)" << 100 + (i / 400) % 4
+                << R"(,"tid":)" << i % 6 << R"(,"ts":)" << 1000 + i * 10
+                << R"(,"dur":5,"args":{}})"
                 << "\n";
     }
     const dstd::String gz = pfw + ".gz";

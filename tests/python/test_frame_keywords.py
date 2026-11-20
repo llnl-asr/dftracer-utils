@@ -40,7 +40,7 @@ def instances(tmp_path):
     path = str(tmp_path / "t.pfw.gz")
     with gzip.open(path, "wt") as f:
         f.write(
-            json.dumps({"ph": "X", "name": "a", "cat": "C", "pid": 1, "tid": 1, "ts": 1, "dur": 2})
+            json.dumps({"ph": 1, "name": "a", "cat": "C", "pid": 1, "tid": 1, "ts": 1, "dur": 2})
             + "\n"
         )
     df = DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})

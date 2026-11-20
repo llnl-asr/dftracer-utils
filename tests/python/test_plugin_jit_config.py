@@ -27,7 +27,7 @@ def _write(path, rows):
         for i, (name, d) in enumerate(rows):
             f.write(
                 f'{{"name":{json.dumps(name)},"cat":"POSIX","pid":1,"tid":1,'
-                f'"ts":{1000 + i},"dur":{d},"ph":"X","args":{{}}}}\n'
+                f'"ts":{1000 + i},"dur":{d},"ph":1,"args":{{}}}}\n'
             )
 
 

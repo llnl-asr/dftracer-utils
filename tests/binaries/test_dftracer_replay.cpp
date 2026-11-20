@@ -142,7 +142,7 @@ void create_sample_trace(dstd::StringView path, int event_count = 10) {
              << R"(,"name":"read","cat":"POSIX","pid":12345,"tid":12345,)";
         file << R"("ts":)" << (1000000 + i * 1000) << R"(,"dur":)"
              << (100 + i * 10);
-        file << R"(,"ph":"X","args":{"fhash":"hash)" << i << R"(","size":)"
+        file << R"(,"ph":1,"args":{"fhash":"hash)" << i << R"(","size":)"
              << (1024 * (i + 1));
         file << R"(,"level":1}})";
         if (i < event_count - 1) file << ",";
@@ -156,19 +156,19 @@ void create_multi_category_trace(dstd::StringView path) {
     GzTraceWriter file(path);
     file << "[\n";
     file
-        << R"({"id":1,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":1000000,"dur":1500,"ph":"X","args":{"size":1024}})"
+        << R"({"id":1,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":1000000,"dur":1500,"ph":1,"args":{"size":1024}})"
         << ",\n";
     file
-        << R"({"id":2,"name":"fopen","cat":"STDIO","pid":12345,"tid":12345,"ts":1002000,"dur":500,"ph":"X","args":{}})"
+        << R"({"id":2,"name":"fopen","cat":"STDIO","pid":12345,"tid":12345,"ts":1002000,"dur":500,"ph":1,"args":{}})"
         << ",\n";
     file
-        << R"({"id":3,"name":"write","cat":"POSIX","pid":12345,"tid":12345,"ts":1003000,"dur":2000,"ph":"X","args":{"size":2048}})"
+        << R"({"id":3,"name":"write","cat":"POSIX","pid":12345,"tid":12345,"ts":1003000,"dur":2000,"ph":1,"args":{"size":2048}})"
         << ",\n";
     file
-        << R"({"id":4,"name":"fread","cat":"STDIO","pid":12345,"tid":12345,"ts":1006000,"dur":800,"ph":"X","args":{"size":512}})"
+        << R"({"id":4,"name":"fread","cat":"STDIO","pid":12345,"tid":12345,"ts":1006000,"dur":800,"ph":1,"args":{"size":512}})"
         << ",\n";
     file
-        << R"({"id":5,"name":"open","cat":"POSIX","pid":12345,"tid":12345,"ts":1007500,"dur":300,"ph":"X","args":{}})"
+        << R"({"id":5,"name":"open","cat":"POSIX","pid":12345,"tid":12345,"ts":1007500,"dur":300,"ph":1,"args":{}})"
         << "\n";
     file << "]";
     file.close();

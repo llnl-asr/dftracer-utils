@@ -106,7 +106,7 @@ dstd::String make_homog_trace(dftu_utils_test::TestEnvironment& env,
     dstd::String ofs;
     for (int i = 0; i < n; ++i)
         dstd::fmt_append<
-            "{\"ph\":\"X\",\"name\":\"{}\",\"cat\":\"{}\",\"pid\":1,\"tid\":1,"
+            "{\"ph\":1,\"name\":\"{}\",\"cat\":\"{}\",\"pid\":1,\"tid\":1,"
             "\"ts\":{},\"dur\":{}{}\n">(ofs, name, cat, (1000 + i * 100),
                                         (10 + i), R"(,"args":{}})");
     dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();

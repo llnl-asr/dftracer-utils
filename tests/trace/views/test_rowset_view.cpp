@@ -32,16 +32,16 @@ dstd::String write_trace(TestEnvironment& env) {
     {
         dftu_utils_test::FileOut out(plain);
         for (int f = 0; f < FILES; ++f)
-            out << R"({"name":"FH","ph":"M","pid":1,"tid":1,"args":{"name":")"
+            out << R"({"name":"FH","ph":4,"pid":1,"tid":1,"args":{"name":")"
                 << path_of(f) << R"(","value":"k)" << f << "\"}}\n";
-        out << R"({"name":"HH","ph":"M","pid":1,"tid":1,"args":{"name":"node0","value":"h0"}})"
+        out << R"({"name":"HH","ph":4,"pid":1,"tid":1,"args":{"name":"node0","value":"h0"}})"
             << "\n";
-        out << R"({"name":"SH","ph":"M","pid":1,"tid":1,"args":{"name":"/opt/laghos","value":"e0"}})"
+        out << R"({"name":"SH","ph":4,"pid":1,"tid":1,"args":{"name":"/opt/laghos","value":"e0"}})"
             << "\n";
-        out << R"({"name":"start","cat":"dftracer","ph":"X","pid":1,"tid":1,"ts":1,"dur":0,"args":{"exec_hash":"e0"}})"
+        out << R"({"name":"start","cat":"dftracer","ph":1,"pid":1,"tid":1,"ts":1,"dur":0,"args":{"exec_hash":"e0"}})"
             << "\n";
         for (int i = 0; i < EVENTS; ++i)
-            out << R"({"name":"read","cat":"POSIX","ph":"X","pid":1,"tid":1,"ts":)"
+            out << R"({"name":"read","cat":"POSIX","ph":1,"pid":1,"tid":1,"ts":)"
                 << 10 + i << R"(,"dur":1,"args":{"fhash":"k)" << i / 2
                 << R"(","hhash":"h0"}})" << "\n";
     }

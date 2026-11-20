@@ -581,7 +581,7 @@ ViewScannerUtility::operator()(const ViewScannerInput& input) {
             }
 
             // Fast path: with no query and no metadata records, the only
-            // decision is to drop "ph":"M" records and emit the rest, so a
+            // decision is to drop "ph":4 records and emit the rest, so a
             // targeted phase probe replaces the full DOM parse. Fold mode needs
             // the full parse to build the FoldEvent, so it skips this.
             if (line_size > 0 && probe_lines) {

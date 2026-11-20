@@ -214,18 +214,18 @@ TEST_CASE(
     const dstd::String pfw = env.dir() + "/refused.pfw";
     {
         dftu_utils_test::FileOut ofs(pfw);
-        ofs << R"({"ph":"X","name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":5,"args":{"x":1e400}})"
+        ofs << R"({"ph":1,"name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":5,"args":{"x":1e400}})"
             << "\n"
-            << R"({"ph":"X","name":"b\q","cat":"P","pid":1,"tid":1,"ts":110,"dur":5})"
+            << R"({"ph":1,"name":"b\q","cat":"P","pid":1,"tid":1,"ts":110,"dur":5})"
             << "\n"
             << dstd::String(
-                   "{\"ph\":\"X\",\"name\":\"c\xff"
+                   "{\"ph\":1,\"name\":\"c\xff"
                    "d\",\"cat\":\"P\",\"pid\":1,\"tid\":1,\"ts\":120,"
                    "\"dur\":5}")
             << "\n"
-            << R"({"ph":"X","name":"d","cat":"P","pid":1,"tid":1,"ts":130,"dur":5,"args":{"n":123456789012345678901234567890}})"
+            << R"({"ph":1,"name":"d","cat":"P","pid":1,"tid":1,"ts":130,"dur":5,"args":{"n":123456789012345678901234567890}})"
             << "\n"
-            << R"({"ph":"X","name":"e","cat":"P","pid":1,"tid":1,"ts":140,"dur":5})"
+            << R"({"ph":1,"name":"e","cat":"P","pid":1,"tid":1,"ts":140,"dur":5})"
             << "\n";
     }
     const dstd::String gz = pfw + ".gz";
@@ -355,7 +355,7 @@ TEST_CASE(
     const dstd::String pfw = env.dir() + "/throw.pfw";
     {
         dftu_utils_test::FileOut ofs(pfw);
-        ofs << R"({"ph":"X","name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":5})"
+        ofs << R"({"ph":1,"name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":5})"
             << "\n";
     }
     const dstd::String gz = pfw + ".gz";

@@ -499,10 +499,10 @@ TEST_SUITE("View") {
         dstd::String pfw = env.dir() + "/collide.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,)"
                    R"("ts":1000,"dur":10,"args":{"name":"inner_read"}})"
                 << "\n";
-            ofs << R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"write","cat":"POSIX","pid":1,"tid":1,)"
                    R"("ts":1100,"dur":10,"args":{"name":"inner_write"}})"
                 << "\n";
         }
@@ -552,16 +552,16 @@ TEST_SUITE("View") {
         dstd::String pfw = env.dir() + "/nested.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"ph":"X","name":"hot","cat":"APP","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"hot","cat":"APP","pid":1,"tid":1,)"
                    R"("ts":1000,"dur":42,"args":{"dur":{"p99":7000},)"
                    R"("counters":{"X":{"p50":3}},"label":{"v":"A"},)"
                    R"("cqe.raw_ns":5}})"
                 << "\n";
-            ofs << R"({"ph":"X","name":"cold","cat":"APP","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"cold","cat":"APP","pid":1,"tid":1,)"
                    R"("ts":1010,"dur":20,"args":{"dur":{"p99":500},)"
                    R"("counters":{"X":{"p50":3}},"label":{"v":"B"}}})"
                 << "\n";
-            ofs << R"({"ph":"X","name":"flat","cat":"APP","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"flat","cat":"APP","pid":1,"tid":1,)"
                    R"("ts":2000,"dur":7,"args":{"run":1}})"
                 << "\n";
         }
@@ -649,21 +649,21 @@ TEST_SUITE("View") {
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 20; ++i)
-                ofs << R"({"ph":"X","name":"plain","cat":"APP","pid":2,)"
+                ofs << R"({"ph":1,"name":"plain","cat":"APP","pid":2,)"
                        R"("tid":1,"ts":)"
                     << 5000 + i * 100
                     << R"(,"dur":10,"args":{"label":)"
                        R"({"v":"P"}}})"
                     << "\n";
-            ofs << R"({"ph":"X","name":"hot","cat":"APP","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"hot","cat":"APP","pid":1,"tid":1,)"
                    R"("ts":1000,"dur":42,"args":{"label":{"v":"A"},)"
                    R"("f":1e400,"big":123456789012345678901234567890}})"
                 << "\n";
-            ofs << R"({"ph":"X","name":"mid","cat":"APP","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"mid","cat":"APP","pid":1,"tid":1,)"
                    R"("ts":1010,"dur":20,"args":{"label":{"v":"B"},)"
                    R"("s":"x\qy"}})"
                 << "\n";
-            ofs << "{\"ph\":\"X\",\"name\":\"cold\",\"cat\":\"APP\",\"pid\":1,"
+            ofs << "{\"ph\":1,\"name\":\"cold\",\"cat\":\"APP\",\"pid\":1,"
                    "\"tid\":1,\"ts\":1020,\"dur\":5,\"args\":{\"label\":"
                    "{\"v\":\"C\"},\"s\":\"p\xff"
                    "q\"}}\n";
@@ -700,7 +700,7 @@ TEST_SUITE("View") {
         dstd::String gz = create_trace_with_counters(env);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        // ph="C" cpu counters: (user_pct,idle_pct) = (40,60) and (80,20).
+        // ph=2 cpu counters: (user_pct,idle_pct) = (40,60) and (80,20).
         auto table = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .phase(Phase::Counters)
@@ -731,7 +731,7 @@ TEST_SUITE("View") {
         dstd::String gz = create_trace_with_counters(env);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        // ph="C" cpu counters: user_pct=(40,80), idle_pct=(60,20).
+        // ph=2 cpu counters: user_pct=(40,80), idle_pct=(60,20).
         auto table = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .phase(Phase::Counters)
@@ -756,7 +756,7 @@ TEST_SUITE("View") {
         "View - select a counter arg then group_by/agg over it (expr path)") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        // ph="X" events with no "cycles", plus ph="C" counters whose "cycles"
+        // ph=1 events with no "cycles", plus ph=2 counters whose "cycles"
         // arg is a string, so the selected column is String-typed. The Python
         // two-step .group_by(k).agg("count:cycles"/"sum:cycles") lowers to
         // group_agg_expr, which used to feed an invalid (non-numeric) evaluated
@@ -765,12 +765,12 @@ TEST_SUITE("View") {
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 4; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << (1000 + i * 100) << R"(,"dur":10,"args":{}})" << "\n";
             const char* vals[] = {"lots", "few", "some"};
             for (int i = 0; i < 6; ++i) {
                 const char* nm = (i % 2 == 0) ? "cpu" : "gpu";
-                ofs << R"({"ph":"C","name":")" << nm
+                ofs << R"({"ph":2,"name":")" << nm
                     << R"(","cat":"sys","pid":0,"tid":0,"ts":)"
                     << (2000 + i * 10) << R"(,"args":{"cycles":")"
                     << vals[i % 3] << R"("}})"
@@ -811,7 +811,7 @@ TEST_SUITE("View") {
             CHECK(name_counts["read"] == 4);
             CHECK(name_counts["cpu"] == 3);
             CHECK(name_counts["gpu"] == 3);
-            CHECK(nnull == 4);  // the 4 ph="X" rows lack "cycles"
+            CHECK(nnull == 4);  // the 4 ph=1 rows lack "cycles"
             CHECK(cyc_counts["lots"] == 2);
             CHECK(cyc_counts["few"] == 2);
             CHECK(cyc_counts["some"] == 2);
@@ -859,7 +859,7 @@ TEST_SUITE("View") {
         }
     }
 
-    TEST_CASE("View - sink_counters emits a ph=C event per group") {
+    TEST_CASE("View - sink_counters emits a ph=2 event per group") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         dstd::String gz = create_trace_with_counters(env);
@@ -893,7 +893,7 @@ TEST_SUITE("View") {
             dstd::String pfw(gz.view().substr(0, gz.size() - 3));  // drop ".gz"
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < n; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":")" << cat
+                ofs << R"({"ph":1,"name":"read","cat":")" << cat
                     << R"(","pid":)" << pid << R"(,"tid":1,"ts":)" << (1000 + i)
                     << R"(,"dur":5,"args":{}})" << "\n";
             ofs.close();
@@ -934,7 +934,7 @@ View dict_trace(TestEnvironment& env) {
     {
         dftu_utils_test::FileOut o(pfw);
         for (int i = 0; i < DICT_ROWS; ++i) {
-            o << R"({"ph":"X","name":"n)" << i % 2 << R"(","cat":"c)" << i % 3
+            o << R"({"ph":1,"name":"n)" << i % 2 << R"(","cat":"c)" << i % 3
               << R"(","pid":1,"tid":1,"ts":)" << 1000 + i * 10
               << R"(,"dur":5,"args":{"path":"p)" << i % 900 << '"';
             if (i % 2 == 0) o << R"(,"metric":"m)" << i % 3 << '"';

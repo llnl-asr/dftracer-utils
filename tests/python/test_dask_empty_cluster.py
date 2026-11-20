@@ -47,7 +47,7 @@ def test_distributed_index_without_workers_times_out(empty_client, tmp_path, mon
     monkeypatch.setenv("DFTRACER_UTILS_DASK_WORKER_TIMEOUT", "1")
     trace = tmp_path / "t.pfw.gz"
     with gzip.open(trace, "wt") as f:
-        f.write('[\n{"id":1,"name":"a","cat":"c","pid":1,"tid":1,"ts":1,"dur":1,"ph":"X"}\n')
+        f.write('[\n{"id":1,"name":"a","cat":"c","pid":1,"tid":1,"ts":1,"dur":1,"ph":1}\n')
     exc = _raises_within_limit(
         lambda: distributed_index(
             [str(trace)], index_dir=str(tmp_path / "idx.dftindex"), client=empty_client

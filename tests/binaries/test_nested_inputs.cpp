@@ -23,7 +23,7 @@ dstd::String trace(int file) {
     out << "[\n";
     for (int i = 0; i < EVENTS_PER_FILE; ++i)
         out << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX","pid":)"
-            << file + 1 << R"(,"tid":1,"ph":"X","ts":)" << 1000 + i * 10
+            << file + 1 << R"(,"tid":1,"ph":1,"ts":)" << 1000 + i * 10
             << R"(,"dur":3,"args":{"fname":"/data/f)" << file << R"("}})"
             << "\n";
     out << "]\n";

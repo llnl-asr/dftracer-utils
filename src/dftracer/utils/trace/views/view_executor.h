@@ -167,7 +167,7 @@ dstd::Result<dstd::Optional<dataframe::DataFrame>> run_reconstruct_if_cached(
 
 // Streaming, out-of-core counter aggregation under a per-worker memory budget
 // (plan.memory_budget): spill to sorted runs, k-way merge, and emit each group
-// as a ph="C" event. Peak memory is bounded; budget 0 stays purely in-memory.
+// as a ph=2 event. Peak memory is bounded; budget 0 stays purely in-memory.
 coro::CoroTask<dstd::Result<ExportStats>> run_export_counters(
     const ViewPlan& plan, ExportSink& sink);
 

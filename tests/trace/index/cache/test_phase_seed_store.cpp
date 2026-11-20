@@ -62,12 +62,12 @@ dstd::String trace_text(dstd::Span<const TestEvent> events) {
     for (const TestEvent& e : events) {
         if (e.metadata) {
             lines +=
-                "{\"ph\":\"M\",\"name\":\"process_name\",\"cat\":\"dftracer\","
+                "{\"ph\":4,\"name\":\"process_name\",\"cat\":\"dftracer\","
                 "\"pid\":1,\"tid\":1,\"args\":{\"name\":\"app\"}}\n";
             continue;
         }
         dstd::fmt_append<
-            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
             "\"tid\":1,\"ts\":{},\"dur\":{}{}\n">(lines, e.ts, e.dur,
                                                   R"(,"args":{}})");
     }

@@ -45,7 +45,7 @@ dstd::String write_trace(dstd::CStringView dir, int n, int events = EVENTS) {
     out << "[\n";
     for (int i = 0; i < events; ++i) {
         out << R"({"id":)" << i << R"(,"name":"op)" << (i + n) % 7
-            << R"(","cat":"POSIX","pid":1,"tid":1,"ph":"X","ts":)"
+            << R"(","cat":"POSIX","pid":1,"tid":1,"ph":1,"ts":)"
             << 1000 + i * 10 << R"(,"dur":3,"args":{}})" << "\n";
     }
     out << "]\n";

@@ -24,9 +24,9 @@ using namespace dftracer::utils::domains::server;
 
 namespace {
 
-// One .pfw line. Duration events (ph=X) carry per-name-distinct durations so no
+// One .pfw line. Duration events (ph=1) carry per-name-distinct durations so no
 // two names share a total (keeps the total-sorted output order deterministic).
-// A counter (ph=C, dur:0) is sprinkled in to exercise the has_dur path: the viz
+// A counter (ph=2, dur:0) is sprinkled in to exercise the has_dur path: the viz
 // stats fold counts a dur:0 event, and so must the stored per-chunk aggregate.
 dstd::String make_trace(int n) {
     const char* names[] = {"read", "write", "open"};
@@ -41,12 +41,12 @@ dstd::String make_trace(int n) {
              "\",\"cat\":\"" + cats[k] +
              "\",\"pid\":" + dstd::to_string(1 + k) +
              ",\"tid\":1,\"ts\":" + dstd::to_string(1000 + i) +
-             ",\"dur\":" + dstd::to_string(durs[k]) + ",\"ph\":\"X\"}\n";
+             ",\"dur\":" + dstd::to_string(durs[k]) + ",\"ph\":1}\n";
         if (i % 50 == 0) {
             s += "{\"id\":" + dstd::to_string(i) +
                  ",\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":9,\"tid\":1,"
                  "\"ts\":" +
-                 dstd::to_string(1000 + i) + ",\"dur\":0,\"ph\":\"C\"}\n";
+                 dstd::to_string(1000 + i) + ",\"dur\":0,\"ph\":2}\n";
         }
     }
     return s;

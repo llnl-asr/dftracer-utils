@@ -52,9 +52,9 @@ int check_index(const std::filesystem::path& dir) {
     const std::string trace = (dir / "trace.pfw.gz").string();
     {
         const std::string text =
-            R"({"id":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":5,"ph":"X","args":{}})"
+            R"({"id":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":5,"ph":1,"args":{}})"
             "\n"
-            R"({"id":2,"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":9,"dur":7,"ph":"X","args":{}})"
+            R"({"id":2,"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":9,"dur":7,"ph":1,"args":{}})"
             "\n";
         std::ofstream out(trace, std::ios::binary);
         out << gzip_stored(text);

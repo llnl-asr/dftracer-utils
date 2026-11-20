@@ -33,7 +33,7 @@ dstd::String trace_text(int n) {
         text += R"({"id":)" + dstd::to_string(i) +
                 R"(,"name":"op","cat":"POSIX","ts":)" +
                 dstd::to_string(1000 + i) +
-                R"(,"dur":10,"ph":"X"})"
+                R"(,"dur":10,"ph":1})"
                 "\n";
     }
     return text;

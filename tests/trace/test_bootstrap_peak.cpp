@@ -49,10 +49,9 @@ dstd::String big_trace_text() {
     for (int i = 0; i < BIG_EVENTS; ++i) {
         out << R"({"id":)" << i << R"(,"name":"op)" << i % 40
             << R"(","cat":"POSIX","pid":)" << 1 + i % 7 << R"(,"tid":)"
-            << 10 + i % 5 << R"(,"ph":"X","ts":)" << 1000 + i * 10
-            << R"(,"dur":)" << 3 + i % 50 << R"(,"args":{"fname":"/data/d)"
-            << i % 9 << "/f" << (i * 31) % 700 << R"(","size":)"
-            << (i * 17) % 4096;
+            << 10 + i % 5 << R"(,"ph":1,"ts":)" << 1000 + i * 10 << R"(,"dur":)"
+            << 3 + i % 50 << R"(,"args":{"fname":"/data/d)" << i % 9 << "/f"
+            << (i * 31) % 700 << R"(","size":)" << (i * 17) % 4096;
         out << R"(,"note":")" << note << R"("}})" << "\n";
     }
     out << "]\n";

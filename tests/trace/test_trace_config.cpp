@@ -155,7 +155,7 @@ TEST_SUITE("trace-config") {
             dstd::String body;
             const dstd::String member = refused_member(k);
             body += R"({"name":"CM","cat":"dftracer","pid":1,"tid":1,"ts":1,)"
-                    R"("ph":"M","args":{"name":"time_metric","value":"NS",)" +
+                    R"("ph":4,"args":{"name":"time_metric","value":"NS",)" +
                     member + "}}\n";
             for (int i = 0; i < 20; ++i) body += complete(i) + "\n";
             body += R"({"id":99,"name":"end","cat":"dftracer","pid":1,)"

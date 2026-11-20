@@ -61,7 +61,7 @@ TEST_SUITE("View") {
             const int pids[] = {1, 2, 3};
             int ts = 1000;
             for (int i = 0; i < 60; ++i) {
-                ofs << R"({"ph":"X","name":")" << names[i % 3]
+                ofs << R"({"ph":1,"name":")" << names[i % 3]
                     << R"(","cat":"POSIX","pid":)" << pids[i % 3]
                     << R"(,"tid":10,"ts":)" << ts << R"(,"dur":)"
                     << (5 + (i % 11)) << R"(,"args":{}})" << "\n";
@@ -97,7 +97,7 @@ TEST_SUITE("View") {
             const int pids[] = {1, 2};
             int ts = 1000;
             for (int i = 0; i < 80; ++i) {
-                ofs << R"({"ph":"X","name":")" << names[i % 3] << R"(","cat":")"
+                ofs << R"({"ph":1,"name":")" << names[i % 3] << R"(","cat":")"
                     << cats[i % 4] << R"(","pid":)" << pids[i % 2]
                     << R"(,"tid":10,"ts":)" << ts << R"(,"dur":)"
                     << (5 + (i % 13)) << R"(,"args":{}})" << "\n";
@@ -136,15 +136,15 @@ TEST_SUITE("View") {
         if (!dstd::fs::exists(gz4).value() || !dstd::fs::exists(gz5).value()) {
             dstd::String pfw4 = rdir + "/agg_engine_resolved_a.pfw";
             dftu_utils_test::FileOut ofs(pfw4);
-            ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/dirA/a.h5","value":"FA1"}})"
+            ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"name":"/data/dirA/a.h5","value":"FA1"}})"
                 << "\n"
-                << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"nodeA","value":"HA1"}})"
+                << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"name":"nodeA","value":"HA1"}})"
                 << "\n";
             const char* names[] = {"read", "write", "open"};
             const int pids[] = {1, 2};
             int ts = 1000;
             for (int i = 0; i < 30; ++i) {
-                ofs << R"({"ph":"X","name":")" << names[i % 3]
+                ofs << R"({"ph":1,"name":")" << names[i % 3]
                     << R"(","cat":"POSIX","pid":)" << pids[i % 2]
                     << R"(,"tid":10,"ts":)" << ts << R"(,"dur":)"
                     << (5 + (i % 11))
@@ -158,13 +158,13 @@ TEST_SUITE("View") {
             dstd::String pfw5 = rdir + "/agg_engine_resolved_b.pfw";
             dftu_utils_test::FileOut ofs5(pfw5);
             ofs5
-                << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/dirB/b.h5","value":"FB1"}})"
+                << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"name":"/data/dirB/b.h5","value":"FB1"}})"
                 << "\n"
-                << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"nodeB","value":"HB1"}})"
+                << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"name":"nodeB","value":"HB1"}})"
                 << "\n";
             ts = 1000;
             for (int i = 0; i < 20; ++i) {
-                ofs5 << R"({"ph":"X","name":")" << names[i % 3]
+                ofs5 << R"({"ph":1,"name":")" << names[i % 3]
                      << R"(","cat":"POSIX","pid":)" << pids[i % 2]
                      << R"(,"tid":10,"ts":)" << ts << R"(,"dur":)"
                      << (5 + (i % 7))
@@ -216,17 +216,17 @@ TEST_SUITE("View") {
         if (!dstd::fs::exists(gz6).value()) {
             dstd::String pfw6 = parity_sub("rank") + "/agg_engine_rank.pfw";
             dftu_utils_test::FileOut ofs(pfw6);
-            ofs << R"({"ph":"M","name":"PR","cat":"dftracer","pid":100,"tid":0,"args":{"name":"rank","value":"0"}})"
+            ofs << R"({"ph":4,"name":"PR","cat":"dftracer","pid":100,"tid":0,"args":{"name":"rank","value":"0"}})"
                 << "\n"
-                << R"({"ph":"M","name":"PR","cat":"dftracer","pid":200,"tid":0,"args":{"name":"rank","value":"1"}})"
+                << R"({"ph":4,"name":"PR","cat":"dftracer","pid":200,"tid":0,"args":{"name":"rank","value":"1"}})"
                 << "\n"
-                << R"({"ph":"M","name":"PR","cat":"dftracer","pid":300,"tid":0,"args":{"name":"rank","value":"2"}})"
+                << R"({"ph":4,"name":"PR","cat":"dftracer","pid":300,"tid":0,"args":{"name":"rank","value":"2"}})"
                 << "\n";
             const char* names[] = {"read", "write", "open"};
             const int pids[] = {100, 200, 300};
             int ts = 1000;
             for (int i = 0; i < 90; ++i) {
-                ofs << R"({"ph":"X","name":")" << names[i % 3]
+                ofs << R"({"ph":1,"name":")" << names[i % 3]
                     << R"(","cat":"POSIX","pid":)" << pids[i % 3]
                     << R"(,"tid":10,"ts":)" << ts << R"(,"dur":)"
                     << (5 + (i % 17)) << R"(,"args":{}})" << "\n";
@@ -255,14 +255,14 @@ TEST_SUITE("View") {
             dftu_utils_test::FileOut ofs(pfw7);
             int ts = 1000;
             for (int i = 0; i < 30; ++i) {
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,)"
                        R"("tid":10,"ts":)"
                     << ts << R"(,"dur":)" << (5 + (i % 11))
                     << R"(,"args":{"x":)" << (i % 5) << R"(}})" << "\n";
                 ts += 100;
             }
             for (int i = 0; i < 30; ++i) {
-                ofs << R"({"ph":"X","name":"write","cat":"STDIO","pid":2,)"
+                ofs << R"({"ph":1,"name":"write","cat":"STDIO","pid":2,)"
                        R"("tid":20,"ts":)"
                     << ts << R"(,"dur":)" << (5 + (i % 13))
                     << R"(,"args":{"y":)" << (i % 4) << R"(}})" << "\n";
@@ -697,15 +697,15 @@ TEST_SUITE("View") {
         if (!dstd::fs::exists(gz8).value()) {
             dstd::String pfw8 = ddir + "/agg_engine_dir.pfw";
             dftu_utils_test::FileOut ofs(pfw8);
-            ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/shared/f1.h5","value":"FS1"}})"
+            ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"name":"/data/shared/f1.h5","value":"FS1"}})"
                 << "\n"
-                << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/shared/f2.h5","value":"FS2"}})"
+                << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"name":"/data/shared/f2.h5","value":"FS2"}})"
                 << "\n";
             const char* fhs[] = {"FS1", "FS2"};
             const char* names[] = {"read", "write", "open"};
             int ts = 1000;
             for (int i = 0; i < 40; ++i) {
-                ofs << R"({"ph":"X","name":")" << names[i % 3]
+                ofs << R"({"ph":1,"name":")" << names[i % 3]
                     << R"(","cat":"POSIX","pid":1,"tid":10,"ts":)" << ts
                     << R"(,"dur":)" << (5 + (i % 11)) << R"(,"args":{"fhash":")"
                     << fhs[i % 2] << R"("}})" << "\n";
@@ -802,7 +802,7 @@ TEST_SUITE("View") {
             const char* names[] = {"read", "write"};
             int ts = 1000;
             for (int i = 0; i < 60; ++i) {
-                ofs << R"({"ph":"X","name":")" << names[i % 2]
+                ofs << R"({"ph":1,"name":")" << names[i % 2]
                     << R"(","cat":"POSIX","pid":1,"tid":10,"ts":)" << ts
                     << R"(,"dur":)" << (5 + (i % 13)) << R"(,"args":{"v":)"
                     << (i % 7) << R"(}})" << "\n";
@@ -856,7 +856,7 @@ TEST_SUITE("View") {
             const char* names[] = {"read", "write"};
             int ts = 1000;
             for (int i = 0; i < 60; ++i) {
-                ofs << R"({"ph":"X","name":")" << names[i % 2]
+                ofs << R"({"ph":1,"name":")" << names[i % 2]
                     << R"(","cat":"POSIX","pid":1,"tid":10,"ts":)" << ts
                     << R"(,"dur":)" << (5 + (i % 13)) << R"(,"args":{"ret":)"
                     << (100 + (i % 7) * 10) << R"(}})" << "\n";
@@ -915,7 +915,7 @@ TEST_SUITE("View") {
             const char* names[] = {"read", "write"};
             int ts = 1000;
             for (int i = 0; i < 60; ++i) {
-                ofs << R"({"ph":"X","name":")" << names[i % 2]
+                ofs << R"({"ph":1,"name":")" << names[i % 2]
                     << R"(","cat":"POSIX","pid":1,"tid":10,"ts":)" << ts
                     << R"(,"dur":)" << (5 + (i % 13)) << R"(,"args":{"n":{"v":)"
                     << (i % 9) << R"(}}})" << "\n";
@@ -1008,7 +1008,7 @@ TEST_SUITE("View") {
                                   R"({"k":0,"s":"","e":{}})", R"({})",
                                   R"({"k":null,"s":null,"e":null})"};
             for (int i = 0; i < 4; ++i)
-                ofs << R"({"ph":"X","name":")" << names[i]
+                ofs << R"({"ph":1,"name":")" << names[i]
                     << R"(","cat":"POSIX","pid":1,"tid":10,"ts":)"
                     << (1000 + 100 * i) << R"(,"dur":5,"args":)" << args[i]
                     << "}\n";

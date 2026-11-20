@@ -221,7 +221,7 @@ dstd::String write_events(dftu_utils_test::TestEnvironment& env,
         for (int i = 0; i < RECORDS; ++i)
             dstd::fmt_append<
                 "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\","
-                "\"pid\":1,\"tid\":1,\"ts\":{},\"dur\":1,\"ph\":\"X\","
+                "\"pid\":1,\"tid\":1,\"ts\":{},\"dur\":1,\"ph\":1,"
                 "\"args\":{\"v\":{},\"s\":\"k{}\"}}\n">(out, i, i, i, i / 300);
         dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
@@ -376,7 +376,7 @@ dstd::String write_untidy(dftu_utils_test::TestEnvironment& env,
                 args = "\"v\":null,";
             dstd::fmt_append<
                 "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\","
-                "\"pid\":1,\"tid\":1,\"ts\":{},\"dur\":1,\"ph\":\"X\","
+                "\"pid\":1,\"tid\":1,\"ts\":{},\"dur\":1,\"ph\":1,"
                 "\"args\":{{}\"s\":\"k\"}}\n">(out, i, i, args);
         }
         dstd::fs::write_file(dstd::PathView(plain), out).discard();

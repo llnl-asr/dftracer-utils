@@ -149,7 +149,7 @@ dstd::String write_trace(dstd::StringView dir, int file, std::uint64_t seed,
                 name = "fetch.iter";
                 dur = 200 + rng.below(1500);
             }
-            ofs << R"({"id":)" << i << R"(,"ph":"X","pid":)" << pid
+            ofs << R"({"id":)" << i << R"(,"ph":1,"pid":)" << pid
                 << R"(,"tid":)" << tid << R"(,"name":")" << name
                 << R"(","cat":")" << cat << R"(","ts":)" << ts << R"(,"dur":)"
                 << dur << R"(,"args":{)";
@@ -220,7 +220,7 @@ void write_dlio_traces(dstd::StringView dir) {
                     for (const auto& e : events) {
                         ofs << R"({"id":)" << id++ << R"(,"pid":)" << e.pid
                             << R"(,"tid":)" << tid << R"(,"name":")" << e.name
-                            << R"(","cat":")" << e.cat << R"(","ph":"X","ts":)"
+                            << R"(","cat":")" << e.cat << R"(","ph":1,"ts":)"
                             << ts << R"(,"dur":)" << e.dur
                             << R"(,"args":{"hhash":"h1"}})" << "\n";
                         ts += e.dur;

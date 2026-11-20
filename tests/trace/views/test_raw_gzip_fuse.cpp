@@ -62,18 +62,18 @@ ViewPlan count_plan(dstd::CStringView gz, dstd::CStringView idx) {
     return plan;
 }
 
-// FH/HH metadata (ph=M, cat "dftracer") plus data events (ph=X, POSIX/STDIO).
+// FH/HH metadata (ph=4, cat "dftracer") plus data events (ph=1, POSIX/STDIO).
 // The metadata must land in the row sets but NOT in a cat aggregation.
 dstd::String create_meta_trace(TestEnvironment& env) {
     dstd::String pfw = env.dir() + "/mt.pfw";
     {
         dftu_utils_test::FileOut ofs(pfw);
-        ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/a.bin","value":"fh1"}})"
+        ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"name":"/data/a.bin","value":"fh1"}})"
             << "\n";
-        ofs << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"node0","value":"hh1"}})"
+        ofs << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"name":"node0","value":"hh1"}})"
             << "\n";
         for (int i = 0; i < 20; ++i)
-            ofs << R"({"ph":"X","name":"read","cat":")"
+            ofs << R"({"ph":1,"name":"read","cat":")"
                 << (i % 3 ? "POSIX" : "STDIO") << R"(","pid":1,"tid":1,"ts":)"
                 << (100 + i) << R"(,"dur":2,"args":{"fhash":"fh1"}})" << "\n";
     }
@@ -194,7 +194,7 @@ TEST_SUITE("RawGzipFuse") {
         }
 
         // Per-consumer filtering: the aggregation from the one pass matches the
-        // eager path's groups (the data-event cats), and the ph="M" metadata is
+        // eager path's groups (the data-event cats), and the ph=4 metadata is
         // NOT counted as a "dftracer" group despite the folds being fed it.
         gmoracle::GroupMap proto = agg.map();
         CHECK(proto.size() == ref.size());
@@ -259,7 +259,7 @@ TEST_SUITE("RawGzipFuse") {
 
     // A full export of a first-touch file routes through run_export's
     // bootstrap: one raw-gzip pass streams every original line to the sink
-    // verbatim (both ph="M" metadata records and all data events, unlike the
+    // verbatim (both ph=4 metadata records and all data events, unlike the
     // indexed scanner which reconstructs only FH metadata) AND leaves a
     // complete bloom index behind.
     TEST_CASE("View.sink_json on a first-touch file bootstraps the data") {
@@ -278,8 +278,8 @@ TEST_SUITE("RawGzipFuse") {
 
         auto lines = boot.lines();
         CHECK(lines.size() == 20);
-        CHECK(count_containing(lines, R"("ph":"M")") == 0);
-        CHECK(count_containing(lines, R"("ph":"X")") == 20);
+        CHECK(count_containing(lines, R"("ph":4)") == 0);
+        CHECK(count_containing(lines, R"("ph":1)") == 20);
 
         StringSink all;
         dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
@@ -306,16 +306,16 @@ TEST_SUITE("RawGzipFuse") {
             dftu_utils_test::FileOut ofs(pfw);
             ofs << dstd::String(
                        "{\"name\":\"FH\",\"cat\":\"dftracer\",\"pid\":1,"
-                       "\"tid\":1,\"ph\":\"M\",\"args\":{\"name\":"
+                       "\"tid\":1,\"ph\":4,\"args\":{\"name\":"
                        "\"/a\xffz\",\"value\":\"fh1\"}}")
                 << "\n"
                 << dstd::String(
                        "{\"name\":\"HH\",\"cat\":\"dftracer\",\"pid\":1,"
-                       "\"tid\":1,\"ph\":\"M\",\"args\":{\"name\":"
+                       "\"tid\":1,\"ph\":4,\"args\":{\"name\":"
                        "\"n\tm\",\"value\":\"hh1\"}}")
                 << "\n";
             for (int i = 0; i < 5; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << (100 + i) << R"(,"dur":2,"args":{"fhash":"fh1"}})"
                     << "\n";
         }
@@ -331,7 +331,7 @@ TEST_SUITE("RawGzipFuse") {
                                 .get());
         const auto lines = boot.lines();
         CHECK(lines.size() == 5);
-        CHECK(count_containing(lines, R"("ph":"M")") == 0);
+        CHECK(count_containing(lines, R"("ph":4)") == 0);
     }
 
     TEST_CASE(
@@ -342,20 +342,20 @@ TEST_SUITE("RawGzipFuse") {
         dstd::String pfw = env.dir() + "/refused.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/a\q","value":"fh1","n":1e400}})"
+            ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"name":"/a\q","value":"fh1","n":1e400}})"
                 << "\n"
-                << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"h","value":"hh1","n":123456789012345678901234567890}})"
+                << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"name":"h","value":"hh1","n":123456789012345678901234567890}})"
                 << "\n"
-                << R"({"ph":"X","name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":5,"args":{"x":1e400}})"
+                << R"({"ph":1,"name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":5,"args":{"x":1e400}})"
                 << "\n"
-                << R"({"ph":"X","name":"b\q","cat":"P","pid":1,"tid":1,"ts":110,"dur":5})"
+                << R"({"ph":1,"name":"b\q","cat":"P","pid":1,"tid":1,"ts":110,"dur":5})"
                 << "\n"
                 << dstd::String(
-                       "{\"ph\":\"X\",\"name\":\"c\xff"
+                       "{\"ph\":1,\"name\":\"c\xff"
                        "d\",\"cat\":\"P\",\"pid\":1,\"tid\":1,\"ts\":120,"
                        "\"dur\":5}")
                 << "\n"
-                << R"({"ph":"X","name":"d","cat":"P","pid":1,"tid":1,"ts":130,"dur":5,"args":{"n":123456789012345678901234567890}})"
+                << R"({"ph":1,"name":"d","cat":"P","pid":1,"tid":1,"ts":130,"dur":5,"args":{"n":123456789012345678901234567890}})"
                 << "\n";
         }
         dstd::String gz = pfw + ".gz";
@@ -370,7 +370,7 @@ TEST_SUITE("RawGzipFuse") {
                                 .get());
         const auto lines = boot.lines();
         CHECK(lines.size() == 4);
-        CHECK(count_containing(lines, R"("ph":"M")") == 0);
+        CHECK(count_containing(lines, R"("ph":4)") == 0);
         CHECK(count_containing(lines, R"("name":"b\q")") == 1);
     }
 
@@ -527,13 +527,13 @@ dstd::String write_multi_member(dstd::CStringView dir, int members = 40,
             text += R"({"id":)" + dstd::to_string(ts) + R"(,"name":"op)" +
                     dstd::to_string(ts % 7) +
                     R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" +
-                    dstd::to_string(ts * 10) + R"(,"dur":5,"ph":"X"})" + "\n";
+                    dstd::to_string(ts * 10) + R"(,"dur":5,"ph":1})" + "\n";
         if (m % 5 == 4 && m + 1 < members) {
             const dstd::String tail = R"({"id":)" + dstd::to_string(ts) +
                                       R"(,"name":"cut","cat":"POSIX","pid":1,)"
                                       R"("tid":1,"ts":)" +
                                       dstd::to_string(ts * 10) +
-                                      R"(,"dur":5,"ph":"X"})" + "\n";
+                                      R"(,"dur":5,"ph":1})" + "\n";
             ++ts;
             text += tail.substr(0, tail.size() / 2);
             carry = tail.substr(tail.size() / 2);

@@ -22,7 +22,7 @@ to extensions, each with a manifest entry per file:
   chosen with ``IndexerOptions::extensions``
 - ``dft.stats`` - chunk and file statistics, built with the pruning
   extensions
-- ``dft.metadata`` - per chunk, the number of metadata (``ph="M"``) records
+- ``dft.metadata`` - per chunk, the number of metadata (``ph=4``) records
   and of context records (thread and process names, ``PR``, ``CM``), built
   with the pruning extensions
 - ``core.rowset`` - the rows of each row set of the file's record schema

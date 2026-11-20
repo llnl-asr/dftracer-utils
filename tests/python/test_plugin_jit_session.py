@@ -283,7 +283,7 @@ def _write_multi_arg_trace(path: str, rows) -> None:
         for i, (pid, dur, size, rank) in enumerate(rows):
             f.write(
                 f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":1,'
-                f'"ts":{1000 + i},"dur":{dur},"ph":"X",'
+                f'"ts":{1000 + i},"dur":{dur},"ph":1,'
                 f'"args":{{"size":{size},"rank":{rank},"mode":"r","tag":"x"}}}}\n'
             )
 

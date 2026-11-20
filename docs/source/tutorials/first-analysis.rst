@@ -46,7 +46,7 @@ gzip trace so the rest of the lesson has something to read:
            cat = "POSIX" if i % 2 else "STDIO"
            f.write(
                f'{{"name":"read","cat":"{cat}","pid":1,"tid":1,'
-               f'"ts":{1000 + i},"dur":{10 + i},"ph":"X","args":{{}}}}\n'
+               f'"ts":{1000 + i},"dur":{10 + i},"ph":1,"args":{{}}}}\n'
            )
 
 You now have ``trace.pfw.gz`` with 500 events, alternating between the

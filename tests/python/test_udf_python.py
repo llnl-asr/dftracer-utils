@@ -235,7 +235,7 @@ def test_jit_udf_runs_in_duql_by_name(tmp_path):
         return x / 2
 
     events = [
-        {"ph": "X", "name": "read", "cat": "POSIX", "pid": 1, "tid": i, "ts": i, "dur": i * 7}
+        {"ph": 1, "name": "read", "cat": "POSIX", "pid": 1, "tid": i, "ts": i, "dur": i * 7}
         for i in range(40)
     ]
     path = tmp_path / "t.pfw.gz"

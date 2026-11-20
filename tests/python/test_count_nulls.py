@@ -89,7 +89,7 @@ def test_trace_view_counted_field_counts_present_rows(tmp_path):
                         "tid": 1,
                         "ts": 100 + i,
                         "dur": 5,
-                        "ph": "X",
+                        "ph": 1,
                         "args": args,
                     }
                 )

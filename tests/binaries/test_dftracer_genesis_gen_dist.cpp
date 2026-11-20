@@ -310,7 +310,7 @@ TEST_CASE("a dftracer trace is still detected as dftracer") {
     const dstd::String trace = d.file("t.pfw.gz");
     dftu_utils_test::write_gz_trace(
         trace, R"({"id":1,"name":"read","cat":"POSIX","pid":1,"tid":1,)"
-               R"("ts":1,"dur":5,"ph":"X"})"
+               R"("ts":1,"dur":5,"ph":1})"
                "\n");
     trace::index::IndexerOptions o;
     o.index_dir = d.str();

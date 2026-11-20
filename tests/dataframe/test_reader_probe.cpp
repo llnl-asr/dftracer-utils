@@ -67,7 +67,7 @@ dstd::String write_text(dstd::StringView name, dstd::StringView text) {
 }
 
 const char* const JSONL =
-    "[\n{\"id\":1,\"name\":\"a\",\"ph\":\"X\"},\n{\"id\":2,\"name\":\"b\"}\n";
+    "[\n{\"id\":1,\"name\":\"a\",\"ph\":1},\n{\"id\":2,\"name\":\"b\"}\n";
 
 dstd::String claimed_name(dstd::StringView path, dstd::StringView forced = {}) {
     auto reader = claim_reader(path, forced);

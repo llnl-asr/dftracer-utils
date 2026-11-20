@@ -29,7 +29,7 @@ The plugin counts events per process, so the trace needs more than one
            pid = 2 if i % 3 == 0 else 1
            f.write(
                f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":1,'
-               f'"ts":{1000 + i},"dur":10,"ph":"X","args":{{}}}}\n'
+               f'"ts":{1000 + i},"dur":10,"ph":1,"args":{{}}}}\n'
            )
 
 That is 100 events for ``pid`` 2 (every third event) and 200 for ``pid`` 1.

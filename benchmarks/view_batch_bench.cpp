@@ -103,7 +103,7 @@ void write_trace(dstd::StringView gz, std::int64_t events, std::uint64_t seed) {
     };
     for (std::int64_t i = 0; i < events; ++i) {
         const std::size_t k = rng() % 6;
-        chunk += R"({"ph":"X","name":")";
+        chunk += R"({"ph":1,"name":")";
         chunk += names[k];
         chunk += R"(","cat":")";
         chunk += cats[k];

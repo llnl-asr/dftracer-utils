@@ -54,7 +54,7 @@ class ShardedView {
     aggregate(Configure configure) const;
 
     /// Aggregate a counter query across all shards, emitting the merged rows as
-    /// ph="C" counter events into `sink`.
+    /// ph=2 counter events into `sink`.
     coro::CoroTask<dstd::Result<ExportStats>> aggregate_counters(
         Configure configure, ExportSink& sink) const;
 

@@ -48,7 +48,7 @@ def _write(path, events):
             w_arg = "" if w is None else f',"w":{w}'
             fh.write(
                 f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":1,"ts":{ts},'
-                f'"dur":{dur},"ph":"X","args":{{"v":{v},"f":{f}{w_arg}}}}}\n'
+                f'"dur":{dur},"ph":1,"args":{{"v":{v},"f":{f}{w_arg}}}}}\n'
             )
 
 

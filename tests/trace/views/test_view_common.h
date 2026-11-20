@@ -85,12 +85,12 @@ inline dftracer::utils::dstd::String create_mixed_trace(
     dftracer::utils::dstd::String pfw = env.dir() + "/mixed.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < posix_n; ++i) {
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
             << "\n";
     }
     for (int i = 0; i < stdio_n; ++i) {
-        ofs << R"({"ph":"X","name":"fwrite","cat":"STDIO","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"fwrite","cat":"STDIO","pid":1,"tid":1,"ts":)"
             << (5000 + i * 100) << R"(,"dur":)" << (20 + i) << R"(,"args":{}})"
             << "\n";
     }
@@ -110,7 +110,7 @@ inline dftracer::utils::dstd::String create_multimember_trace(
     dftracer::utils::dstd::String pfw = env.dir() + "/mm.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < n; ++i) {
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
             << "\n";
     }
@@ -121,18 +121,18 @@ inline dftracer::utils::dstd::String create_multimember_trace(
     return gz;
 }
 
-// A trace with ph="X" events plus ph="C" counter events (aggregator style).
+// A trace with ph=1 events plus ph=2 counter events (aggregator style).
 inline dftracer::utils::dstd::String create_trace_with_counters(
     dftu_utils_test::TestEnvironment& env) {
     dftracer::utils::dstd::String pfw = env.dir() + "/ctr.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < 10; ++i)
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":10,"args":{}})" << "\n";
     // Two counter events reporting cpu percentages.
-    ofs << R"({"ph":"C","name":"cpu","cat":"sys","pid":0,"tid":0,"ts":1000,"args":{"user_pct":40,"idle_pct":60}})"
+    ofs << R"({"ph":2,"name":"cpu","cat":"sys","pid":0,"tid":0,"ts":1000,"args":{"user_pct":40,"idle_pct":60}})"
         << "\n";
-    ofs << R"({"ph":"C","name":"cpu","cat":"sys","pid":0,"tid":0,"ts":2000,"args":{"user_pct":80,"idle_pct":20}})"
+    ofs << R"({"ph":2,"name":"cpu","cat":"sys","pid":0,"tid":0,"ts":2000,"args":{"user_pct":80,"idle_pct":20}})"
         << "\n";
     ofs.close();
     dftracer::utils::dstd::String gz = pfw + ".gz";
@@ -141,7 +141,7 @@ inline dftracer::utils::dstd::String create_trace_with_counters(
     return gz;
 }
 
-// Many ph="C" counter events over two names (cpu, gpu), enough to span several
+// Many ph=2 counter events over two names (cpu, gpu), enough to span several
 // scan batches so a tiny memory budget forces multiple spills of each group.
 inline dftracer::utils::dstd::String create_bulk_counters(
     dftu_utils_test::TestEnvironment& env, int n) {
@@ -149,7 +149,7 @@ inline dftracer::utils::dstd::String create_bulk_counters(
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < n; ++i) {
         const char* nm = (i % 2 == 0) ? "cpu" : "gpu";
-        ofs << R"({"ph":"C","name":")" << nm
+        ofs << R"({"ph":2,"name":")" << nm
             << R"(","cat":"sys","pid":0,"tid":0,"ts":)" << (1000 + i * 100)
             << R"(,"args":{"util":)" << (i % 100) << R"(}})" << "\n";
     }
@@ -175,8 +175,8 @@ inline dftracer::utils::dstd::String create_counter_file(
     dftu_utils_test::FileOut ofs(pfw);
     int ts = 1000;
     for (int v : user_pcts) {
-        ofs << R"({"ph":"C","name":"cpu","cat":"sys","pid":0,"tid":0,"ts":)"
-            << ts << R"(,"args":{"user_pct":)" << v << R"(}})" << "\n";
+        ofs << R"({"ph":2,"name":"cpu","cat":"sys","pid":0,"tid":0,"ts":)" << ts
+            << R"(,"args":{"user_pct":)" << v << R"(}})" << "\n";
         ts += 1000;
     }
     ofs.close();

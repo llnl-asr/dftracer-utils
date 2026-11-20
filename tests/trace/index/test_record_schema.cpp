@@ -94,12 +94,12 @@ TEST_SUITE("Schemas") {
 
     TEST_CASE("detection picks the most specific matching schema") {
         const dstd::Vector<dstd::StringView> dft = {
-            R"({"id":1,"name":"read","cat":"POSIX","ph":"X","ts":1})", "[",
-            R"({"name":"FH","ph":"M","args":{"name":"/a","value":"1"}})"};
+            R"({"id":1,"name":"read","cat":"POSIX","ph":1,"ts":1})", "[",
+            R"({"name":"FH","ph":4,"args":{"name":"/a","value":"1"}})"};
         const dstd::Vector<dstd::StringView> plain = {R"({"op":"read"})",
                                                       R"({"op":"write"})"};
         const dstd::Vector<dstd::StringView> mixed = {
-            R"({"name":"read","ph":"X"})", R"({"op":"read"})"};
+            R"({"name":"read","ph":1})", R"({"op":"read"})"};
         CHECK(dftu_utils_test::ok_ref(detect_schema(dft)).id == "dftracer");
         CHECK(dftu_utils_test::ok_ref(detect_schema(plain)).id == "generic");
         CHECK(dftu_utils_test::ok_ref(detect_schema(mixed)).id == "generic");
@@ -119,7 +119,7 @@ TEST_SUITE("Schemas") {
         // The record parser reads a 24-digit integer, kind 2.
         for (int k : {0, 1, 3, 4, 5})
             owned.push_back(dftu_utils_test::refused_line(
-                k, R"("id":1,"name":"read","cat":"POSIX","ph":"X","ts":1)"));
+                k, R"("id":1,"name":"read","cat":"POSIX","ph":1,"ts":1)"));
         dstd::Vector<dstd::StringView> lines(owned.begin(), owned.end());
         CHECK(dftu_utils_test::ok_ref(detect_schema(lines)).id == "dftracer");
     }

@@ -24,7 +24,7 @@ def _make_trace(path):
             name, dur, ret = [("read", 10 + i, 100), ("write", 20 + i, 200), ("open", 5, 0)][i % 3]
             extra = "" if name == "open" else ', "ret": %d' % ret
             f.write(
-                '{"ph":"X","name":"%s","cat":"POSIX","pid":1,"tid":1,'
+                '{"ph":1,"name":"%s","cat":"POSIX","pid":1,"tid":1,'
                 '"ts":%d,"dur":%d,"args":{"fhash":"f%d"%s}}\n' % (name, 1000 + i, dur, i % 2, extra)
             )
 
@@ -94,7 +94,7 @@ def test_view_agg_tier_serves_offset_like_raw_scan(tmp_path):
             name = ("read", "write", "open")[i % 3]
             offset = "" if name == "open" else ', "offset": %d' % (100 + i)
             f.write(
-                '{"ph":"X","name":"%s","cat":"POSIX","pid":1,"tid":1,'
+                '{"ph":1,"name":"%s","cat":"POSIX","pid":1,"tid":1,'
                 '"ts":%d,"dur":10,"args":{"fhash":"f0"%s}}\n' % (name, 1000 + i, offset)
             )
     agg = str(tmp_path / "agg")
@@ -208,17 +208,17 @@ def test_collect_index_records_one_pass_returns_all_record_families(tmp_path):
     with gzip.open(p, "wt") as f:
         for i in range(20):
             f.write(
-                '{"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,'
+                '{"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,'
                 '"ts":%d,"dur":%d}\n' % (1000 + i, 10 + i)
             )
         for e in range(3):
             f.write(
-                '{"ph":"C","name":"train","cat":"app","pid":1,"tid":1,'
+                '{"ph":2,"name":"train","cat":"app","pid":1,"tid":1,'
                 '"ts":%d,"dur":5,"args":{"epoch":%d,"step":0}}\n' % (2000 + e, e)
             )
         for i in range(4):
             f.write(
-                '{"ph":"C","name":"cpu","cat":"sys","pid":0,"tid":0,'
+                '{"ph":2,"name":"cpu","cat":"sys","pid":0,"tid":0,'
                 '"ts":%d,"args":{"user_pct":%d}}\n' % (3000 + i, 40 + i)
             )
     idx = str(tmp_path / "idx")
@@ -262,7 +262,7 @@ def test_collect_index_records_cat_filter_matches_collect(tmp_path):
         for i in range(30):
             cat = "POSIX" if i % 3 else "STDIO"
             f.write(
-                '{"ph":"X","name":"read","cat":"%s","pid":1,"tid":1,'
+                '{"ph":1,"name":"read","cat":"%s","pid":1,"tid":1,'
                 '"ts":%d,"dur":%d}\n' % (cat, 1000 + i, 10 + i)
             )
     idx = str(tmp_path / "idx")
@@ -291,12 +291,12 @@ def _make_trace_with_fh(path, pid):
     with gzip.open(path, "wt") as f:
         fh = f"f{pid}"
         f.write(
-            '{"name":"FH","ph":"M","pid":%d,"tid":1,'
+            '{"name":"FH","ph":4,"pid":%d,"tid":1,'
             '"args":{"name":"/data/dir/file%d.dat","value":"%s"}}\n' % (pid, pid, fh)
         )
         for i in range(50):
             f.write(
-                '{"ph":"X","name":"read","cat":"POSIX","pid":%d,"tid":1,'
+                '{"ph":1,"name":"read","cat":"POSIX","pid":%d,"tid":1,'
                 '"ts":%d,"dur":%d,"args":{"ret":100,"fhash":"%s"}}\n' % (pid, 1000 + i, 10 + i, fh)
             )
 
@@ -360,7 +360,7 @@ def test_percentiles_from_view(tmp_path):
     with gzip.open(p, "wt") as f:
         for i in range(1000):  # dur = 1..1000
             f.write(
-                '{"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,'
+                '{"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,'
                 '"ts":%d,"dur":%d}\n' % (1000 + i, i + 1)
             )
     idx = str(tmp_path / "idx")
@@ -392,7 +392,7 @@ def test_skew_kurtosis_from_view(tmp_path):
     with gzip.open(p, "wt") as f:
         for i, v in enumerate(vals):
             f.write(
-                '{"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,'
+                '{"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,'
                 '"ts":%d,"dur":%d}\n' % (1000 + i, v)
             )
     idx = str(tmp_path / "idx")
@@ -415,13 +415,13 @@ def _make_trace_with_paths(path, pid, paths):
     with gzip.open(path, "wt") as f:
         for i, p in enumerate(paths):
             f.write(
-                '{"name":"FH","ph":"M","pid":%d,"tid":1,'
+                '{"name":"FH","ph":4,"pid":%d,"tid":1,'
                 '"args":{"name":"%s","value":"f%d_%d"}}\n' % (pid, p, pid, i)
             )
         for i, p in enumerate(paths):
             for j in range(10):
                 f.write(
-                    '{"ph":"X","name":"read","cat":"POSIX","pid":%d,"tid":1,'
+                    '{"ph":1,"name":"read","cat":"POSIX","pid":%d,"tid":1,'
                     '"ts":%d,"dur":%d,"args":{"ret":100,"fhash":"f%d_%d"}}\n'
                     % (pid, 1000 + j, 10 + j, pid, i)
                 )

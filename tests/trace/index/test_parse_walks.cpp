@@ -63,11 +63,14 @@ dstd::String write_trace(dstd::CStringView dir) {
         const int pid = 1 + i % 4;
         const int ts = 1000 + i * 10;
         dstd::fmt_append<"{\"id\":{}">(out, i);
+        // The two spaces after each ph value keep every line the byte length of
+        // the old "ph":"X" form, so the recorded digests and chunk counts stay
+        // valid.
         switch (shape_of(i)) {
             case 0:
                 dstd::fmt_append<
                     ",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":1,"
-                    "\"ph\":\"X\",\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/"
+                    "\"ph\":1  ,\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/"
                     "data/"
                     "f{}\",\"size\":{},\"fhash\":\"f00d\",\"hhash\":"
                     "\"a1b2c3d4e5f60718\",\"level\":{}}}\n">(
@@ -76,38 +79,38 @@ dstd::String write_trace(dstd::CStringView dir) {
             case 1:
                 dstd::fmt_append<
                     ",\"name\":\"compute\",\"cat\":\"APP\",\"pid\":{},\"tid\":"
-                    "2,\"ph\":\"X\",\"ts\":{},\"dur\":7}\n">(out, pid, ts);
+                    "2,\"ph\":1  ,\"ts\":{},\"dur\":7}\n">(out, pid, ts);
                 break;
             case 2:
                 dstd::fmt_append<
                     ",\"name\":\"write\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":"
-                    "1,\"ph\":\"X\",\"ts\":{},\"dur\":5,\"args\":{\"io\":{"
+                    "1,\"ph\":1  ,\"ts\":{},\"dur\":5,\"args\":{\"io\":{"
                     "\"off\":{},\"len\":512},\"hosts\":[\"n1\",\"n2\"],"
                     "\"note\":null,\"ratio\":0.5}}\n">(out, pid, ts, i);
                 break;
             case 3:
                 dstd::fmt_append<
                     ",\"name\":\"open\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":1,"
-                    "\"ph\":\"X\",\"ts\":{}{}\n">(out, pid, ts,
-                                                  R"(,"dur":1,"args":{}})");
+                    "\"ph\":1  ,\"ts\":{}{}\n">(out, pid, ts,
+                                                R"(,"dur":1,"args":{}})");
                 break;
             case 4:
                 dstd::fmt_append<
                     ",\"name\":\"close\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":"
-                    "1,\"ph\":\"X\",\"ts\":{},\"dur\":1,\"args\":7}\n">(
-                    out, pid, ts);
+                    "1,\"ph\":1  ,\"ts\":{},\"dur\":1,\"args\":7}\n">(out, pid,
+                                                                      ts);
                 break;
             case 5:
                 dstd::fmt_append<
                     ",\"name\":\"stat\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":3,"
-                    "\"ph\":\"X\",\"ts\":{},\"dur\":2,\"extra\":\"tag{}\","
+                    "\"ph\":1  ,\"ts\":{},\"dur\":2,\"extra\":\"tag{}\","
                     "\"meta\":{\"k\":[1,2],\"z\":null},\"args\":{\"fname\":\"/"
                     "d/s{}\",\"ret\":-{}}}\n">(out, pid, ts, i % 5, i % 11, i);
                 break;
             case 6:
                 dstd::fmt_append<
                     ",\"name\":\"seek\",\"cat\":\"STDIO\",\"pid\":\"7\","
-                    "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":2.5,\"args\":{"
+                    "\"tid\":1,\"ph\":1  ,\"ts\":{},\"dur\":2.5,\"args\":{"
                     "\"neg\":-3,\"big\":18446744073709551615,\"flag\":true,"
                     "\"off\":false,\"ratio\":1.25,\"tag\":\"x\"}}\n">(out, ts);
                 break;
@@ -315,8 +318,8 @@ TEST_SUITE("IndexParseWalks") {
     TEST_CASE("a malformed record drops only itself") {
         constexpr int GOOD = 3000;
         const dstd::String bad[] = {
-            R"({"id":1,"name":"cut","cat":"c","pid":1,"tid":1,"ph":"X","ts":5,"args":{"a":)",
-            R"({"id":2,"name":"quote","cat":"c","pid":1,"tid":1,"ph":"X","ts":6,"args":{"s":"a"b"}})",
+            R"({"id":1,"name":"cut","cat":"c","pid":1,"tid":1,"ph":1  ,"ts":5,"args":{"a":)",
+            R"({"id":2,"name":"quote","cat":"c","pid":1,"tid":1,"ph":1  ,"ts":6,"args":{"s":"a"b"}})",
             "not json at all",
             "[1,2,3]",
         };
@@ -325,7 +328,7 @@ TEST_SUITE("IndexParseWalks") {
         for (int i = 0; i < GOOD; ++i) {
             dstd::fmt_append<
                 "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
-                "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":2,\"args\":{\"size\":"
+                "\"tid\":1,\"ph\":1  ,\"ts\":{},\"dur\":2,\"args\":{\"size\":"
                 "{},\"huge\":123456789012345678901234567890,\"neg\":-5}}\n">(
                 out, i, 1000 + i, i);
             if (i % 600 == 0)
@@ -382,7 +385,7 @@ TEST_SUITE("IndexParseWalks") {
                         dftracer
                             ? dstd::fmt<
                                   "{\"id\":{},\"name\":\"read\",\"cat\":"
-                                  "\"POSIX\",\"pid\":1,\"tid\":1,\"ph\":\"X\","
+                                  "\"POSIX\",\"pid\":1,\"tid\":1,\"ph\":1  ,"
                                   "\"ts\":{},\"dur\":2,\"args\":{\"size\":{},"
                                   "\"tag\":\"plain\"}}\n">(i, 1000 + i, i)
                             : dstd::fmt<
@@ -391,7 +394,7 @@ TEST_SUITE("IndexParseWalks") {
                     if (i == GOOD / 2)
                         out += dftracer
                                    ? dstd::fmt<
-                                         "{}\"pid\":1,\"tid\":1,\"ph\":\"X\","
+                                         "{}\"pid\":1,\"tid\":1,\"ph\":1  ,"
                                          "\"ts\":5,{}{}}}\n">(
                                          R"({"id":9,"name":"odd","cat":"c",)",
                                          R"("dur":2,"args":{)", odd.fields)
@@ -456,20 +459,20 @@ TEST_SUITE("IndexParseWalks") {
             for (std::size_t i = 0; i < seen.size(); ++i)
                 CHECK(seen[i] == want[i]);
         };
-        const dstd::String g1 = R"({"ph":"X","name":"g1","ts":1})";
+        const dstd::String g1 = R"({"ph":1  ,"name":"g1","ts":1})";
         const dstd::String o1 =
-            R"({"ph":"X","name":"o1","ts":2,"args":{"big":1e400}})";
-        const dstd::String g2 = R"({"ph":"X","name":"g2","ts":3})";
+            R"({"ph":1  ,"name":"o1","ts":2,"args":{"big":1e400}})";
+        const dstd::String g2 = R"({"ph":1  ,"name":"g2","ts":3})";
         const dstd::String o2 =
-            R"({"ph":"X","name":"o2","ts":4,"args":{"s":"a\q"}})";
-        const dstd::String g3 = R"({"ph":"X","name":"g3","ts":6})";
-        const dstd::String g4 = R"({"ph":"X","name":"g4","ts":7})";
-        const dstd::String g5 = R"({"ph":"X","name":"g5","ts":8})";
+            R"({"ph":1  ,"name":"o2","ts":4,"args":{"s":"a\q"}})";
+        const dstd::String g3 = R"({"ph":1  ,"name":"g3","ts":6})";
+        const dstd::String g4 = R"({"ph":1  ,"name":"g4","ts":7})";
+        const dstd::String g5 = R"({"ph":1  ,"name":"g5","ts":8})";
         const dstd::String o3 =
-            R"({"ph":"X","name":"o3","ts":9,"args":{"n":18446744073709551616}})";
-        const dstd::String g6 = R"({"ph":"X","name":"g6","ts":10})";
+            R"({"ph":1  ,"name":"o3","ts":9,"args":{"n":18446744073709551616}})";
+        const dstd::String g6 = R"({"ph":1  ,"name":"g6","ts":10})";
         const dstd::String cut =
-            R"({"ph":"X","name":"cut","ts":5,"args":{"a":)";
+            R"({"ph":1  ,"name":"cut","ts":5,"args":{"a":)";
 
         std::size_t dom_parses = 0;
         check(run({g1, o1, g2, o2, g3, o3, g6}, dom_parses),
@@ -489,7 +492,7 @@ TEST_SUITE("IndexParseWalks") {
               {"D:" + g1, "R:" + o1, "D:" + g2});
 
         const dstd::String cut_nested =
-            R"({"ph":"X","name":"cut","ts":5,"a":1e400,"b":{"c":1})";
+            R"({"ph":1  ,"name":"cut","ts":5,"a":1e400,"b":{"c":1})";
         check(run({g1, cut_nested, g2}, dom_parses),
               {"D:" + g1, "R:" + cut_nested, "D:" + g2});
 
@@ -515,7 +518,7 @@ TEST_SUITE("IndexParseWalks") {
                 const dstd::String tag = dstd::fmt<"g{}">(id);
                 dstd::fmt_append<
                     "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
-                    "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":2,\"args\":{"
+                    "\"tid\":1,\"ph\":1  ,\"ts\":{},\"dur\":2,\"args\":{"
                     "\"tag\":\"{}\"}}\n">(out, id, 1000 + id, tag);
                 tags.push_back(tag);
                 ++id;
@@ -523,7 +526,7 @@ TEST_SUITE("IndexParseWalks") {
             const dstd::String tag = dstd::fmt<"o{}">(id);
             dstd::fmt_append<
                 "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
-                "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":2,\"args\":{\"tag\":"
+                "\"tid\":1,\"ph\":1  ,\"ts\":{},\"dur\":2,\"args\":{\"tag\":"
                 "\"{}\",{}}}\n">(out, id, 1000 + id, tag, odd[r % 3]);
             tags.push_back(tag);
             ++id;
@@ -556,7 +559,7 @@ TEST_SUITE("IndexParseWalks") {
         const auto record = [](dstd::StringView tag, int id) {
             return dstd::fmt<
                 "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
-                "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":2,\"args\":{\"tag\":"
+                "\"tid\":1,\"ph\":1  ,\"ts\":{},\"dur\":2,\"args\":{\"tag\":"
                 "\"{}\"}}">(id, 1000 + id, tag);
         };
         for (int i = 0; i < GOOD; ++i) {
@@ -598,8 +601,8 @@ TEST_SUITE("IndexParseWalks") {
         const auto record = [](int id, dstd::StringView extra) {
             return dstd::fmt<
                 "{}{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
-                "\"ph\":\"X\",\"ts\":{}{}{}}}">(R"({"id":)", id, 1000 + id,
-                                                R"(,"dur":2,"args":{)", extra);
+                "\"ph\":1  ,\"ts\":{}{}{}}}">(R"({"id":)", id, 1000 + id,
+                                              R"(,"dur":2,"args":{)", extra);
         };
         dstd::String out;
         out += "[\n";
@@ -626,10 +629,10 @@ TEST_SUITE("IndexParseWalks") {
         for (int i = 0; i < GOOD; ++i) {
             dstd::fmt_append<
                 "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
-                "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":2,\"args\":{\"a\":1}}"
+                "\"tid\":1,\"ph\":1  ,\"ts\":{},\"dur\":2,\"args\":{\"a\":1}}"
                 "\n">(out, i, 1000 + i);
             if (i == 10)
-                out += R"({"id":99,"name":"cut","ph":"X","a":1e400,"b":{"c":1})"
+                out += R"({"id":99,"name":"cut","ph":1  ,"a":1e400,"b":{"c":1})"
                        "\n";
         }
         out += "]\n";
@@ -650,7 +653,7 @@ TEST_SUITE("IndexParseWalks") {
         for (int i = 0; i < LINES; ++i) {
             dstd::fmt_append<
                 "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
-                "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":2,\"args\":{\"size\":"
+                "\"tid\":1,\"ph\":1  ,\"ts\":{},\"dur\":2,\"args\":{\"size\":"
                 "{}">(out, i, 1000 + i, i);
             if (i == 20)
                 dstd::fmt_append<",\"note\":\"{}{}">(
@@ -673,27 +676,27 @@ TEST_SUITE("IndexParseWalks") {
 
     TEST_CASE("the one-walk decode equals the old three-walk decode") {
         const dstd::String records[] = {
-            R"({"ph":"X","name":"n","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"args":{"a":1,"b":"x","fhash":"f","hhash":"h"}})",
-            R"({"ph":"X","name":"n","args":{"a":1},"cat":"c"})",
-            R"({"args":{"a":1},"ph":"X","name":"n","cat":"c","pid":5})",
-            R"({"ph":"X","args":{"a":1},"args":{"b":2}})",
-            R"({"ph":"X","args":{"a":1},"args":5})",
-            R"({"ph":"X","args":5,"args":{"a":1}})",
-            R"({"ph":"X","args":{}})",
-            R"({"ph":"X","args":{},"x":1})",
-            R"({"ph":"X","args":7,"x":[1,{"y":null}]})",
-            R"({"ph":"X","args":[1,2,{"z":true}]})",
-            R"({"ph":"X","args":"s","name":"n"})",
-            R"({"ph":"X","args":{"io":{"off":1,"len":[1,2,{"k":"v"}]},"e":{},"f":[],"n":null,"t":true,"d":0.5,"neg":-3}})",
-            R"({"ph":"X","name":"n","name":"m","ts":1,"ts":2,"pid":1,"pid":-1})",
+            R"({"ph":1  ,"name":"n","cat":"c","pid":1,"tid":2,"ts":3,"dur":4,"args":{"a":1,"b":"x","fhash":"f","hhash":"h"}})",
+            R"({"ph":1  ,"name":"n","args":{"a":1},"cat":"c"})",
+            R"({"args":{"a":1},"ph":1  ,"name":"n","cat":"c","pid":5})",
+            R"({"ph":1  ,"args":{"a":1},"args":{"b":2}})",
+            R"({"ph":1  ,"args":{"a":1},"args":5})",
+            R"({"ph":1  ,"args":5,"args":{"a":1}})",
+            R"({"ph":1  ,"args":{}})",
+            R"({"ph":1  ,"args":{},"x":1})",
+            R"({"ph":1  ,"args":7,"x":[1,{"y":null}]})",
+            R"({"ph":1  ,"args":[1,2,{"z":true}]})",
+            R"({"ph":1  ,"args":"s","name":"n"})",
+            R"({"ph":1  ,"args":{"io":{"off":1,"len":[1,2,{"k":"v"}]},"e":{},"f":[],"n":null,"t":true,"d":0.5,"neg":-3}})",
+            R"({"ph":1  ,"name":"n","name":"m","ts":1,"ts":2,"pid":1,"pid":-1})",
             R"({"name":"n","cat":"c","ts":1,"args":{"a":1}})",
             R"({"ph":1,"ts":-5,"pid":2.5,"tid":"7","dur":1.5})",
-            R"({"ph":"X","ts":18446744073709551615,"pid":-1,"dur":9223372036854775808})",
-            R"({"ph":"X","cat":5,"name":false,"type":3,"id":9})",
-            R"({"ph":"X","args":{"big":18446744073709551615,"huge":123456789012345678901234567890,"i":-9223372036854775808}})",
-            R"({"ph":"X","args":{"fhash":5,"hhash":{"a":1}}})",
-            R"({"ph":"X","args":{"fhash":"f","k":"v"},"fhash":"top","": 1})",
-            R"({"ph":"X","":{"a":1},"a":{"":2}})",
+            R"({"ph":1  ,"ts":18446744073709551615,"pid":-1,"dur":9223372036854775808})",
+            R"({"ph":1  ,"cat":5,"name":false,"type":3,"id":9})",
+            R"({"ph":1  ,"args":{"big":18446744073709551615,"huge":123456789012345678901234567890,"i":-9223372036854775808}})",
+            R"({"ph":1  ,"args":{"fhash":5,"hhash":{"a":1}}})",
+            R"({"ph":1  ,"args":{"fhash":"f","k":"v"},"fhash":"top","": 1})",
+            R"({"ph":1  ,"":{"a":1},"a":{"":2}})",
             R"({"ph":null,"name":"n"})",
             R"([1,2])",
         };

@@ -158,7 +158,7 @@ def _write_named(path, name, count=20):
         for i in range(count):
             f.write(
                 f'{{"name":"{name}","cat":"POSIX","pid":1,"tid":1,"ts":{1000000 + i * 1000},'
-                f'"dur":100,"ph":"X","args":{{}}}}\n'
+                f'"dur":100,"ph":1,"args":{{}}}}\n'
             )
 
 

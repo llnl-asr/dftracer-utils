@@ -22,12 +22,11 @@ constexpr const char* CHILD_CASE =
 dstd::String trace_text() {
     dstd::String text = "[\n";
     for (int i = 0; i < 8; ++i) {
-        text +=
-            R"({"id":)" + dstd::to_string(i + 1) +
-            R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ph":"X","ts":)" +
-            dstd::to_string(1000 + i * 100) +
-            R"(,"dur":10,"args":{"ret":0,"fhash":"a1b2c3d4e5f60718"}})"
-            "\n";
+        text += R"({"id":)" + dstd::to_string(i + 1) +
+                R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ph":1,"ts":)" +
+                dstd::to_string(1000 + i * 100) +
+                R"(,"dur":10,"args":{"ret":0,"fhash":"a1b2c3d4e5f60718"}})"
+                "\n";
     }
     text += "]\n";
     return text;

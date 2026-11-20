@@ -56,7 +56,7 @@ dstd::String write_trace(dstd::CStringView dir) {
     {
         dftu_utils_test::FileOut ofs(pfw);
         for (int i = 0; i < EVENTS; ++i)
-            ofs << R"({"ph":"X","name":"read","cat":"category_)" << (i % 500)
+            ofs << R"({"ph":1,"name":"read","cat":"category_)" << (i % 500)
                 << pad << R"(","pid":1,"tid":1,"ts":)" << (1000 + i * 10)
                 << R"(,"dur":)" << (5 + i % 17) << R"(,"args":{}})" << "\n";
     }

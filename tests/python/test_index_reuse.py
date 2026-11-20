@@ -31,15 +31,15 @@ def _write_trace(path, names, pid, count=40):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with gzip.open(path, "wt") as out:
         out.write(
-            f'{{"name":"HH","ph":"M","pid":{pid},"tid":1,"args":{{"name":"host","value":"hh"}}}}\n'
+            f'{{"name":"HH","ph":4,"pid":{pid},"tid":1,"args":{{"name":"host","value":"hh"}}}}\n'
         )
         out.write(
-            f'{{"name":"FH","ph":"M","pid":{pid},"tid":1,"args":{{"name":"/d/f","value":"ff"}}}}\n'
+            f'{{"name":"FH","ph":4,"pid":{pid},"tid":1,"args":{{"name":"/d/f","value":"ff"}}}}\n'
         )
         for i in range(count):
             out.write(
                 f'{{"name":"{names[i % len(names)]}","cat":"POSIX","pid":{pid},"tid":1,'
-                f'"ts":{1000000 + i * 1000},"dur":{100 + i},"ph":"X",'
+                f'"ts":{1000000 + i * 1000},"dur":{100 + i},"ph":1,'
                 f'"args":{{"ret":{i},"hhash":"hh","fhash":"ff"}}}}\n'
             )
 

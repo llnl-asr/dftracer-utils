@@ -70,7 +70,7 @@ aggregated output.
    * - ``filter(pred)`` / ``duql(pred)`` / ``query(pred)``
      - Keep events matching the :doc:`duql <duql>` (e.g. ``'dur >= 1000 and cat == "POSIX"'``) or a columnar expression (``col("dur") > 1000``). A plain field predicate with only filters before it is pushed to the index; otherwise it filters the plan's rows.
    * - ``phase(name)``
-     - Restrict to a record family: ``"events"`` (``ph="X"``), ``"counters"`` (``ph="C"``), ``"aggregated"`` (rollup records), ``"metadata"`` (``ph="M"``), or ``"any"``, which reads every record, metadata included, as rows the filters and aggregations see. Without a phase a viewer reads the record schema's ``data`` row set, which for dftracer traces leaves the metadata records out.
+     - Restrict to a record family: ``"events"`` (``ph=1``), ``"counters"`` (``ph=2``), ``"aggregated"`` (rollup records), ``"metadata"`` (``ph=4``), or ``"any"``, which reads every record, metadata included, as rows the filters and aggregations see. Without a phase a viewer reads the record schema's ``data`` row set, which for dftracer traces leaves the metadata records out.
    * - ``time_range(begin, end)``
      - Keep the events that start in ``[begin, end)``. The occupancy aggregates (``busy``, ``concurrency``, ``utilization``, ``active``) instead take every event that overlaps the window, clipped to it. Metadata records are not windowed.
    * - ``time_bucket(interval_us, normalize_to=None)``
@@ -156,9 +156,9 @@ one scan:
 .. code-block:: python
 
    records = TraceViewer(files).group_by("name").agg("count", "sum:dur").collect_index_records()
-   regular    = records.regular      # ph="X" events
+   regular    = records.regular      # ph=1 events
    aggregated = records.aggregated   # aggregated records (incl. extra-key dims)
-   counters   = records.counters     # ph="C" counters (incl. system)
+   counters   = records.counters     # ph=2 counters (incl. system)
 
 ``collect_index_records`` runs now; ``index_records(...)`` is its lazy form, a
 :class:`~dftracer.utils.LazyResult`.

@@ -16,7 +16,7 @@ def _events(seed: int, n: int):
     rng = random.Random(seed)
     return [
         {
-            "ph": "X",
+            "ph": 1,
             "name": "read",
             "cat": "POSIX",
             "pid": rng.randint(1, 3),

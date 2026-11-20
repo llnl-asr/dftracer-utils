@@ -112,7 +112,7 @@ dstd::Result<dstd::Optional<duql::Query>> effective_query(const ViewPlan& plan);
 bool metadata_rows(const ViewPlan& plan);
 
 // Build the scanner's ViewDefinition from a plan. `for_aggregation` drops
-// ph="M" metadata (aggregation ignores it); otherwise metadata follows the
+// ph=4 metadata (aggregation ignores it); otherwise metadata follows the
 // plan's include/emit flags. Every terminal starts from one of these two
 // shapes. The errors are those of effective_query.
 dstd::Result<ViewDefinition> make_vdef(const ViewPlan& plan,

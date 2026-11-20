@@ -26,7 +26,7 @@ def _member(i, base=0):
                     "tid": 1,
                     "ts": 1000 + n * 10,
                     "dur": 5,
-                    "ph": "X",
+                    "ph": 1,
                     "args": {},
                 }
             )
@@ -153,7 +153,7 @@ def _named(i, name):
         "tid": 1,
         "ts": 1000 + i,
         "dur": 5,
-        "ph": "X",
+        "ph": 1,
         "args": {},
     }
     return gzip.compress((json.dumps(row) + "\n").encode())
@@ -175,7 +175,7 @@ def _named(i, name):
         "tid": 1,
         "ts": 1000 + i,
         "dur": 5,
-        "ph": "X",
+        "ph": 1,
         "args": {},
     }
     return gzip.compress((json.dumps(row) + "\n").encode())

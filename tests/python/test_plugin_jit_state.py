@@ -47,7 +47,7 @@ def trace(tmp_path_factory):
             for pid, name, ts, dur, v in events[f * _PER_FILE : (f + 1) * _PER_FILE]:
                 fh.write(
                     f'{{"name":"{name}","cat":"POSIX","pid":{pid},"tid":1,"ts":{ts},'
-                    f'"dur":{dur},"ph":"X","args":{{"v":{v}}}}}\n'
+                    f'"dur":{dur},"ph":1,"args":{{"v":{v}}}}}\n'
                 )
     return str(d)
 
@@ -234,7 +234,7 @@ def test_list_ties_sort_by_value_text_under_any_worker_count(tmp_path):
                 n = f * 20 + i
                 fh.write(
                     f'{{"name":"x","cat":"POSIX","pid":1,"tid":1,"ts":{5000 + n // 3},'
-                    f'"dur":{100 + (n * 37) % 91},"ph":"X","args":{{}}}}\n'
+                    f'"dur":{100 + (n * 37) % 91},"ph":1,"args":{{}}}}\n'
                 )
 
     @jit.plugin

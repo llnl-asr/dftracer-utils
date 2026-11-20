@@ -41,7 +41,7 @@ dstd::String events(int first, int n, dstd::StringView cat,
         text += R"({"id":)" + dstd::to_string(i) + R"(,"name":")" +
                 dstd::String(name) + R"(","cat":")" + dstd::String(cat) +
                 R"(","pid":1,"tid":1,"ts":)" + dstd::to_string(1000 + i) +
-                R"(,"dur":5,"ph":"X"})" + "\n";
+                R"(,"dur":5,"ph":1})" + "\n";
     }
     return text;
 }
@@ -379,7 +379,7 @@ TEST_SUITE("ViewIndexGrow") {
         dstd::String text;
         text += R"({"id":9000,"name":"false)";
         text += dstd::String("\x1f\x8b\x08\x00", 3);
-        text += R"(","cat":"F","pid":1,"tid":1,"ts":9000,"dur":5,"ph":"X"})";
+        text += R"(","cat":"F","pid":1,"tid":1,"ts":9000,"dur":5,"ph":1})";
         text += "\n";
         append_bytes(gz, stored_member(text));
         append_bytes(gz, member(dir, events(MEMBER_EVENTS, MEMBER_EVENTS, "B",

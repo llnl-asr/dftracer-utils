@@ -296,6 +296,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- The comm observe trace writes `ph` as the integer `1`, as DFTracer does.
 - Rename `collect_typed` and `typed` to `collect_index_records` and `index_records` (C++ `View`, Python `TraceViewer`, `DaskTraceViewer`), which now return an `IndexRecords` with `regular`, `aggregated` and `counters` fields in place of a dict; the `dftracer_view` flag `--collect-typed` is now `--index-records`.
 - Speed up the dataframe ops that were slow against pandas 3.
   `DataFrame::column_index` looks a column up through a hash of the names that the first call on a frame of 16 or more columns builds (a frame grows by 8 bytes for it); a Python `DataFrame[name]` on a frame of 100k columns no longer scans the names.

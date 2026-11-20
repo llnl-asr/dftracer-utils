@@ -542,7 +542,7 @@ TEST_SUITE("ViewIndexParity") {
         const dstd::String plain = env.dir() + "/preagg.pfw";
         {
             dftu_utils_test::FileOut o(plain);
-            o << R"({"ph":"C","name":"pwrite","cat":"STDIO","pid":7,"tid":2,)"
+            o << R"({"ph":2,"name":"pwrite","cat":"STDIO","pid":7,"tid":2,)"
                  R"("ts":1000,"args":{"count":4,"dur_sum":40,"dur_min":5,)"
                  R"("dur_max":20,"ret_sum":4096,"offset_sum":8192}})"
               << "\n";
@@ -595,7 +595,7 @@ TEST_SUITE("ViewIndexParity") {
             {
                 dftu_utils_test::FileOut o(plain);
                 for (int k = 0; k < 4; ++k)
-                    o << R"({"ph":"C","name":"ctr","cat":"sys","pid":7,)"
+                    o << R"({"ph":2,"name":"ctr","cat":"sys","pid":7,)"
                       << R"("tid":1,"ts":)"
                       << (FILE_GAP * static_cast<std::uint64_t>(i + 1) +
                           static_cast<std::uint64_t>(k) * 100)
@@ -655,12 +655,12 @@ TEST_SUITE("ViewIndexParity") {
         {
             dftu_utils_test::FileOut o(plain);
             for (int k = 0; k < 2; ++k)
-                o << R"({"ph":"C","name":"pwrite","cat":"STDIO","pid":7,)"
+                o << R"({"ph":2,"name":"pwrite","cat":"STDIO","pid":7,)"
                   << R"("tid":2,"ts":)" << (1000 + k * 100)
                   << R"(,"args":{"count":4,"dur_sum":40,"dur_min":5,)"
                   << R"("dur_max":20}})" << "\n";
             for (int k = 0; k < 2; ++k)
-                o << R"({"ph":"X","name":"read","cat":"POSIX","pid":7,)"
+                o << R"({"ph":1,"name":"read","cat":"POSIX","pid":7,)"
                   << R"("tid":1,"ts":)" << (1200 + k * 100) << R"(,"dur":)"
                   << (10 + k * 20) << R"(,"args":{}})" << "\n";
         }
@@ -716,7 +716,7 @@ TEST_SUITE("ViewIndexParity") {
         {
             dftu_utils_test::FileOut o(plain);
             for (int i = 0; i < 12; ++i)
-                o << R"({"ph":"X","name":")" << (i % 3 == 0 ? "read" : "write")
+                o << R"({"ph":1,"name":")" << (i % 3 == 0 ? "read" : "write")
                   << R"(","cat":"POSIX",)"
                   << R"("pid":7,"tid":1,"ts":)" << (1000 + i * 10)
                   << R"(,"dur":)" << (10 + i) << R"(,"args":{"ret":)"

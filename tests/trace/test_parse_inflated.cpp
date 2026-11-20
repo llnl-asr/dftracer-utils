@@ -40,12 +40,12 @@ dstd::Vector<dstd::String> parse_names(dstd::StringView data,
 }
 
 dstd::String event(dstd::StringView name) {
-    return R"({"ph":"X","name":")" + dstd::String(name) +
+    return R"({"ph":1,"name":")" + dstd::String(name) +
            R"(","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":1})";
 }
 
 dstd::String long_event(dstd::StringView name, std::size_t line_bytes) {
-    const dstd::String head = R"({"ph":"X","name":")" + dstd::String(name) +
+    const dstd::String head = R"({"ph":1,"name":")" + dstd::String(name) +
                               R"(","cat":"POSIX","pid":1,"tid":1,"ts":1,)" +
                               R"("dur":1,"args":{"blob":")";
     const dstd::String tail = R"("}})";
@@ -105,9 +105,8 @@ TEST_SUITE("parse_buffer") {
     // only the complete records are parsed and the remainder is reported to
     // carry.
     TEST_CASE("a trailing partial line is not parsed but is carried") {
-        dstd::String data =
-            event("complete") + "\n" +
-            R"({"ph":"X","name":"partial","cat":"POS)";  // no \n
+        dstd::String data = event("complete") + "\n" +
+                            R"({"ph":1,"name":"partial","cat":"POS)";  // no \n
         std::size_t carry = 0;
         auto names = parse_names(data, carry);
         CHECK(has(names, "complete"));
@@ -150,7 +149,7 @@ TEST_SUITE("parse_buffer") {
                 data += event(want.back()) + "\n";
             }
             want.push_back("long" + dstd::to_string(round));
-            data += R"({"ph":"X","name":"long)" + dstd::to_string(round) +
+            data += R"({"ph":1,"name":"long)" + dstd::to_string(round) +
                     R"(","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":1,)" +
                     R"("args":{"blob":")" + blob + R"("}})" + "\n";
         }
@@ -190,7 +189,7 @@ TEST_SUITE("parse_buffer") {
             data += event(want.back()) + "\r\n";
         }
         data += "]\r\n";
-        const dstd::String partial = R"({"ph":"X","name":"cut","ca)";
+        const dstd::String partial = R"({"ph":1,"name":"cut","ca)";
         data += partial;
         strip_array_delimiters(data.data(), data.size());
         std::size_t carry = 0;

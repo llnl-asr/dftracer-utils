@@ -191,7 +191,7 @@ def write_trace(path, durs):
             f.write(
                 json.dumps(
                     {
-                        "ph": "X",
+                        "ph": 1,
                         "name": "read",
                         "cat": "POSIX",
                         "pid": 1,

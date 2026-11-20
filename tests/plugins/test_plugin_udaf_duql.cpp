@@ -40,7 +40,7 @@ namespace {
 constexpr int KEYS = 4;
 
 dstd::String event(int i) {
-    return R"({"ph":"X","name":"op)" + dstd::to_string(i % KEYS) +
+    return R"({"ph":1,"name":"op)" + dstd::to_string(i % KEYS) +
            R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" +
            dstd::to_string(1000 + 100 * i) + R"(,"dur":)" +
            dstd::to_string(10 + i) + R"(,"args":{}})";

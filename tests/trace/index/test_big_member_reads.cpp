@@ -78,7 +78,7 @@ Trace make_trace(std::size_t bytes, std::uint32_t seed) {
                   ",\"tid\":" + dstd::to_string(1 + i % 8) +
                   ",\"ts\":" + dstd::to_string(1000 + i) +
                   ",\"dur\":" + dstd::to_string(1 + i % 17) +
-                  ",\"ph\":\"X\",\"args\":{\"fh\":\"" + fh + "\"}}\n";
+                  ",\"ph\":1,\"args\":{\"fh\":\"" + fh + "\"}}\n";
     }
     return t;
 }

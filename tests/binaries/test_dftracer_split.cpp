@@ -404,7 +404,7 @@ TEST_SUITE("DFTracerSplit") {
 
         {
             dftu_utils_test::FileOut plain(input_dir(env) + "/plain.pfw");
-            plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\"}\n";
+            plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":1}\n";
         }
 
         dstd::String out_dir = env.dir() + "/split_plain";
@@ -426,7 +426,7 @@ TEST_SUITE("DFTracerSplit") {
 
         {
             dftu_utils_test::FileOut plain(input_dir(env) + "/plain.pfw");
-            plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\"}\n";
+            plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":1}\n";
         }
 
         dftu_utils_test::set_test_library_path(binary);

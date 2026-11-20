@@ -72,7 +72,7 @@ dstd::String write_trace(dstd::CStringView dir, int n,
         std::snprintf(fhash, sizeof fhash, "%016x", 0x1000 + i % 7);
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"{}\",\"cat\":\"{}\",\"pid\":{},\"tid\":{},"
-            "\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{\"ret\":{},\"offset\":"
+            "\"ph\":1,\"ts\":{},\"dur\":{},\"args\":{\"ret\":{},\"offset\":"
             "{},\"level\":{},\"hhash\":\"a1b2c3d4e5f60718\",\"fhash\":\"{}\"}}"
             "\n">(out, i, name, cat, 1 + i % 3, 1 + i % 2, 1000 + i * 997, dur,
                   (i * 13) % 4096, i * 512, i % 3, fhash);
@@ -357,7 +357,7 @@ TEST_SUITE("AggPartialsStore") {
             const int dur = 1 + i % 50;
             dstd::fmt_append<
                 "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
-                "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{"
+                "\"tid\":1,\"ph\":1,\"ts\":{},\"dur\":{},\"args\":{"
                 "\"hhash\":\"a1b2c3d4e5f60718\"{}}}\n">(
                 text, i, 1000 + i * 997, dur,
                 fhash.empty() ? dstd::String()

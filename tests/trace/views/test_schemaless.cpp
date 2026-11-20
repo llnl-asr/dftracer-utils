@@ -87,14 +87,15 @@ fields:
   cat: {type: string}
 )";
 
-// A dftracer event line, as the records of the dft_roles schema too.
+// A dftracer event line, as the records of the dft_roles schema too. The
+// size is padded to the length of a letter ph, which the member splits assume.
 dstd::String dft_line(int pid, int tid, dstd::StringView name, std::int64_t ts,
                       std::int64_t dur) {
     return R"({"id":1,"name":")" + dstd::String(name) +
            R"(","cat":"POSIX","pid":)" + dstd::to_string(pid) + R"(,"tid":)" +
            dstd::to_string(tid) + R"(,"ts":)" + dstd::to_string(ts) +
            R"(,"dur":)" + dstd::to_string(dur) +
-           R"(,"ph":"X","args":{"size":7}})";
+           R"(,"ph":1,"args":{"size":777}})";
 }
 
 // The aggregation of `p` by a full scan, the tier bypassed.
@@ -1017,7 +1018,7 @@ fields:
                 deep(std::min<std::size_t>(depth, 600000), true);
             const dstd::String arr = deep(depth, false);
             auto ev = [](dstd::StringView name, dstd::StringView extra) {
-                return R"({"ph":"X","name":")" + dstd::String(name) +
+                return R"({"ph":1,"name":")" + dstd::String(name) +
                        R"(","cat":"c","pid":1,"tid":1,"ts":10,"dur":2)" +
                        dstd::String(extra) + "}";
             };
@@ -1262,7 +1263,7 @@ fields:
         }
         dstd::Vector<dstd::String> dft;
         for (int i = 0; i < 20; ++i)
-            dft.push_back(R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+            dft.push_back(R"({"ph":1,"name":"read","cat":"POSIX","pid":1,)"
                           R"("tid":1,"ts":)" +
                           dstd::to_string(1000 + i) + R"(,"dur":5,"args":{)" +
                           R"("x":)" + dstd::to_string(i % 3) + R"(.5,"flag":)" +

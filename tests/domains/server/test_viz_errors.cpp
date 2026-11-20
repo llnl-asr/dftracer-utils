@@ -40,7 +40,7 @@ dstd::UniquePtr<Served> serve(dstd::StringView name) {
     for (int i = 0; i < 6; ++i)
         content += R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
                    dstd::to_string(1000 + i * 10) +
-                   R"(,"dur":100,"ph":"X","args":{"ret":4096}})" + "\n";
+                   R"(,"dur":100,"ph":1,"args":{"ret":4096}})" + "\n";
     content += "]\n";
     fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());

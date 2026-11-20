@@ -55,7 +55,7 @@ namespace {
 constexpr int ROWS = 12;
 
 dstd::String event(int ts, dstd::CStringView args, int dur) {
-    return R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":)" +
+    return R"({"ph":1,"name":"op","cat":"POSIX","pid":1,"tid":1,"ts":)" +
            dstd::to_string(ts) + R"(,"dur":)" + dstd::to_string(dur) +
            R"(,"args":{)" + args.c_str() + "}}";
 }

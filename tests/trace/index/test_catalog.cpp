@@ -35,7 +35,7 @@ dstd::String event(int i, dstd::StringView name, dstd::StringView args) {
     dstd::String o;
     dstd::fmt_append<
         "{\"id\":{},\"name\":\"{}\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":2,"
-        "\"ph\":\"X\",\"ts\":{},\"dur\":5,\"type\":\"x\",\"args\":{}}\n">(
+        "\"ph\":1,\"ts\":{},\"dur\":5,\"type\":\"x\",\"args\":{}}\n">(
         o, i, name, 1000 + i, args);
     return o;
 }
@@ -46,7 +46,7 @@ dstd::String event(int i, dstd::StringView name, dstd::StringView args) {
 dstd::String write_fixture(dstd::CStringView dir) {
     dstd::String body = "[\n";
     body +=
-        R"({"name":"FH","ph":"M","pid":1,"tid":1,"args":{"name":"/a","value":"abc"}})"
+        R"({"name":"FH","ph":4,"pid":1,"tid":1,"args":{"name":"/a","value":"abc"}})"
         "\n";
     for (int i = 0; i < 200; ++i) {
         dstd::String a;
@@ -691,7 +691,7 @@ TEST_SUITE("TopLevelShadow") {
             dstd::String o;
             dstd::fmt_append<
                 "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
-                "\"tid\":2,\"ph\":\"X\",\"ts\":{},\"dur\":5,\"type\":\"x\","
+                "\"tid\":2,\"ph\":1,\"ts\":{},\"dur\":5,\"type\":\"x\","
                 "\"foo\":\"top{}\",\"args\":{\"id\":{},\"cat\":\"ARG{}\","
                 "\"type\":\"arg{}\",\"foo\":\"arg{}\"}}\n">(
                 o, i, 1000 + i, i, 100000 + i, i, i, i);

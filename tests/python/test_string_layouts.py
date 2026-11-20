@@ -28,7 +28,7 @@ def _rows():
             args["path"] = "/f%d" % (i % 2)
         rows.append(
             {
-                "ph": "X",
+                "ph": 1,
                 "name": "op%d" % (i % 2),
                 "cat": CATS[i % 3],
                 "pid": 1,

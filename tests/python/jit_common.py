@@ -39,7 +39,7 @@ def write_trace(path: str, n: int, pids, files) -> None:
             fhash = files[i % len(files)]
             f.write(
                 f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":1,'
-                f'"ts":{1000 + i},"dur":{10 + i},"ph":"X",'
+                f'"ts":{1000 + i},"dur":{10 + i},"ph":1,'
                 f'"args":{{"fhash":"{fhash}","ret":{i}}}}}\n'
             )
 
@@ -49,7 +49,7 @@ def write_homog_trace(path: str, n: int, name: str, cat: str) -> None:
         for i in range(n):
             f.write(
                 f'{{"name":"{name}","cat":"{cat}","pid":1,"tid":1,'
-                f'"ts":{1000 + i * 100},"dur":{10 + i},"ph":"X","args":{{}}}}\n'
+                f'"ts":{1000 + i * 100},"dur":{10 + i},"ph":1,"args":{{}}}}\n'
             )
 
 
@@ -71,7 +71,7 @@ def write_dur_trace(path: str, events) -> None:
         for pid, dur, ts in events:
             f.write(
                 f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":1,'
-                f'"ts":{ts},"dur":{dur},"ph":"X","args":{{}}}}\n'
+                f'"ts":{ts},"dur":{dur},"ph":1,"args":{{}}}}\n'
             )
 
 
@@ -80,7 +80,7 @@ def write_pid_tid_trace(path: str, rows) -> None:
         for i, (pid, tid) in enumerate(rows):
             f.write(
                 f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":{tid},'
-                f'"ts":{1000 + i},"dur":1,"ph":"X","args":{{}}}}\n'
+                f'"ts":{1000 + i},"dur":1,"ph":1,"args":{{}}}}\n'
             )
 
 

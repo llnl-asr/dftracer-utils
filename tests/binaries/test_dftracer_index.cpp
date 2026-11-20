@@ -50,7 +50,7 @@ dstd::String find_index_binary() {
 
 void write_plain_pfw(dstd::StringView path) {
     dftu_utils_test::FileOut plain(path);
-    plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\","
+    plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":1,"
              "\"pid\":1,\"tid\":1,\"ts\":1,\"dur\":1}\n";
 }
 

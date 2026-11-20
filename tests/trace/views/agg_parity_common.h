@@ -184,7 +184,7 @@ inline dftracer::utils::dstd::String write_agg_engine_trace(
         const int tids[] = {10, 20};
         int ts = 1000;
         for (int i = 0; i < 90; ++i) {
-            ofs << R"({"ph":"X","name":")" << names[i % 3] << R"(","cat":")"
+            ofs << R"({"ph":1,"name":")" << names[i % 3] << R"(","cat":")"
                 << cats[i % 2] << R"(","pid":)" << pids[i % 3] << R"(,"tid":)"
                 << tids[i % 2] << R"(,"ts":)" << ts << R"(,"dur":)"
                 << (5 + (i % 17)) << R"(,"args":{}})" << "\n";

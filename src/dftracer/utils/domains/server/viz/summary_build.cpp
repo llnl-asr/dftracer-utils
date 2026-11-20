@@ -231,8 +231,8 @@ struct SumBuild {
     dstd::Vector<dstd::Vector<VizSummary::ForkEdge>> forks;
     dstd::Vector<dftracer::utils::dstd::StringViewMap<dstd::String>> hh_parts;
 
-    // Per-worker ph="C" counter samples: series key ("name\x1fkey") -> its
-    // family cat + a sparse map of fine-bucket -> {sum, count}. ph="C" is rare,
+    // Per-worker ph=2 counter samples: series key ("name\x1fkey") -> its
+    // family cat + a sparse map of fine-bucket -> {sum, count}. ph=2 is rare,
     // so this stays small; merged after the scan into
     // VizSummary::counter_series.
     struct CtrAccum {
@@ -419,7 +419,7 @@ static void fold_summary(std::size_t w, dstd::StringView event, SumBuild& b) {
             name0 = nr.get_string().value_unsafe();
     }
 
-    // ph="C" counter events carry no dur, so handle them before the dur gate:
+    // ph=2 counter events carry no dur, so handle them before the dur gate:
     // fold each numeric arg into its (name, key) series at this ts's fine
     // bucket. They are neither cells nor I/O counters.
     {
@@ -871,7 +871,7 @@ static coro::CoroTask<dstd::Result<void>> build_viz_summary(TraceIndex& index) {
     summary->long_threshold_us = b.enc_threshold_us;
     summary->fine_bucket_us = b.fine_bucket_us;
 
-    // Merge per-worker ph="C" samples by series key into sparse, ascending
+    // Merge per-worker ph=2 samples by series key into sparse, ascending
     // fine-bucket series.
     {
         dstd::HashMap<dstd::String, SumBuild::CtrAccum> merged;

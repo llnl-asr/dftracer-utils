@@ -153,7 +153,7 @@ def _write_name_only_trace(path: str, names) -> None:
         for i, name in enumerate(names):
             f.write(
                 f'{{"name":"{name}","cat":"POSIX","pid":1,"tid":1,'
-                f'"ts":{1000 + i},"dur":1,"ph":"X","args":{{}}}}\n'
+                f'"ts":{1000 + i},"dur":1,"ph":1,"args":{{}}}}\n'
             )
 
 
@@ -164,7 +164,7 @@ def _write_arg_trace(path: str, n: int, pids, tags) -> None:
             tag = tags[i % len(tags)]
             f.write(
                 f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":1,'
-                f'"ts":{1000 + i},"dur":1,"ph":"X",'
+                f'"ts":{1000 + i},"dur":1,"ph":1,'
                 f'"args":{{"size":{100 + i},"bw":{i * 0.5},'
                 f'"rank":{i % 3},"tag":"{tag}"}}}}\n'
             )
@@ -601,7 +601,7 @@ def _write_file_dur_trace(path: str, rows) -> None:
         for i, (pid, fhash, dur) in enumerate(rows):
             f.write(
                 f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":1,'
-                f'"ts":{1000 + i},"dur":{dur},"ph":"X",'
+                f'"ts":{1000 + i},"dur":{dur},"ph":1,'
                 f'"args":{{"fhash":"{fhash}"}}}}\n'
             )
 
@@ -643,7 +643,7 @@ def _write_tid_dur_trace(path: str, rows) -> None:
         for i, (pid, tid, dur) in enumerate(rows):
             f.write(
                 f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":{tid},'
-                f'"ts":{1000 + i},"dur":{dur},"ph":"X","args":{{}}}}\n'
+                f'"ts":{1000 + i},"dur":{dur},"ph":1,"args":{{}}}}\n'
             )
 
 
@@ -724,7 +724,7 @@ def _write_row_trace(path: str, rows) -> None:
         for pid, fhash, tid, dur, ts in rows:
             f.write(
                 f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":{tid},'
-                f'"ts":{ts},"dur":{dur},"ph":"X",'
+                f'"ts":{ts},"dur":{dur},"ph":1,'
                 f'"args":{{"fhash":"{fhash}"}}}}\n'
             )
 
@@ -927,7 +927,7 @@ def _write_join_trace(path: str, rows) -> None:
         for i, (pid, cat, dur) in enumerate(rows):
             f.write(
                 f'{{"name":"read","cat":"{cat}","pid":{pid},"tid":1,'
-                f'"ts":{1000 + i},"dur":{dur},"ph":"X","args":{{}}}}\n'
+                f'"ts":{1000 + i},"dur":{dur},"ph":1,"args":{{}}}}\n'
             )
 
 

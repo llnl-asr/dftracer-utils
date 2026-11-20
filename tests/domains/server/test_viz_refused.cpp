@@ -97,7 +97,7 @@ void event(dstd::String& out, int pid, int ts, int dur,
            dstd::CStringView args) {
     out += R"({"name":"read","cat":"POSIX","pid":)" + dstd::to_string(pid) +
            R"(,"tid":1,"ts":)" + dstd::to_string(ts) + R"(,"dur":)" +
-           dstd::to_string(dur) + R"(,"ph":"X","args":)" + args.c_str() + "}\n";
+           dstd::to_string(dur) + R"(,"ph":1,"args":)" + args.c_str() + "}\n";
 }
 
 constexpr int ODD_FIRST_PID = 21;
@@ -320,8 +320,8 @@ fields:
         for (int k = 0; k < dftu_utils_test::REFUSED_KINDS; ++k) {
             const dstd::String n = dstd::to_string(k);
             t += R"({"name":"EH","cat":"PROV","pid":1,"tid":1,"ts":)" +
-                 dstd::to_string(1000 + k) + R"(,"ph":"M","args":{"id":"e)" +
-                 n + R"(","type":"structure","store":"file","uri":"/u)" + n +
+                 dstd::to_string(1000 + k) + R"(,"ph":4,"args":{"id":"e)" + n +
+                 R"(","type":"structure","store":"file","uri":"/u)" + n +
                  R"(",)" + dftu_utils_test::refused_member(k) + "}}\n";
         }
         t += "]\n";

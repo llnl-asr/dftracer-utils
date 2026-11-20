@@ -66,7 +66,7 @@ struct ViewPlan {
     dstd::Optional<duql::Query> query;
     dstd::Optional<dstd::Pair<double, double>> time_range;
     // Default spans every phase of the source's data; callers that want only
-    // ph="X" events (or only ph="C") say so with .phase().
+    // ph=1 events (or only ph=2) say so with .phase().
     Phase phase = Phase::Any;
     /// Set by an explicit phase(Any): metadata records are records like any
     /// other, kept, emitted, filtered and aggregated (duql's `all`).
@@ -95,7 +95,7 @@ struct ViewPlan {
     dstd::Vector<GroupKey> group_by;
     dstd::Vector<AggSpec> agg;
     /// Aggregate every numeric args.* field as a dynamic per-group metric
-    /// (skipping metadata/pre-aggregated args). This is how ph="C" counters
+    /// (skipping metadata/pre-aggregated args). This is how ph=2 counters
     /// aggregate without naming the fields up front. With `numeric_arg_aggs`
     /// empty it emits one bare-named per-arg mean column (legacy). With
     /// reductions listed, it emits one `<op>_<arg>` column per (arg,

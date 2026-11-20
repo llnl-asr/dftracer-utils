@@ -168,7 +168,7 @@ TEST_SUITE("ChunkExtractor") {
         const dstd::String plain = env.dir() + "/plain.pfw.gz";
         {
             dftu_utils_test::FileOut out(plain);
-            out << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\"}\n";
+            out << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":1}\n";
         }
 
         auto input =

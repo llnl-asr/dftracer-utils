@@ -27,7 +27,7 @@ void write_counter_file(dstd::CStringView path, dstd::StringView name,
     int ts = 1000;
     for (int u : utils) {
         dstd::String line =
-            "{\"ph\":\"X\",\"name\":\"" + dstd::String(name) +
+            "{\"ph\":1,\"name\":\"" + dstd::String(name) +
             "\",\"cat\":\"sys\",\"pid\":0,\"tid\":0,\"ts\":" +
             dstd::to_string(ts) +
             ",\"dur\":10,\"args\":{\"util\":" + dstd::to_string(u) + "}}\n";
@@ -38,14 +38,14 @@ void write_counter_file(dstd::CStringView path, dstd::StringView name,
     gzclose(gz);
 }
 
-// Write one complete (ph="X") event with an explicit [ts, ts+dur) interval.
+// Write one complete (ph=1) event with an explicit [ts, ts+dur) interval.
 void write_event_file(dstd::CStringView path, dstd::StringView name,
                       std::uint64_t ts, std::uint64_t dur) {
     gzFile gz = gzopen(path.c_str(), "wb");
     REQUIRE(gz != nullptr);
     gzputs(gz, "[\n");
     dstd::String line =
-        "{\"ph\":\"X\",\"name\":\"" + dstd::String(name) +
+        "{\"ph\":1,\"name\":\"" + dstd::String(name) +
         "\",\"cat\":\"io\",\"pid\":0,\"tid\":0,\"ts\":" + dstd::to_string(ts) +
         ",\"dur\":" + dstd::to_string(dur) + "}\n";
     gzputs(gz, line.c_str());

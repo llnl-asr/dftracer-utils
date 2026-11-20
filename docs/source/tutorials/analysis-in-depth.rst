@@ -32,7 +32,7 @@ separate. Write three event kinds, each with its own duration:
            name = NAMES[i % 3]
            f.write(
                f'{{"name":"{name}","cat":"POSIX","pid":1,"tid":1,'
-               f'"ts":{1000 + i},"dur":{DURS[name]},"ph":"X","args":{{}}}}\n'
+               f'"ts":{1000 + i},"dur":{DURS[name]},"ph":1,"args":{{}}}}\n'
            )
 
 This is 300 events: 100 each of ``read`` (dur 100), ``write`` (dur 200), and

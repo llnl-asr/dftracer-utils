@@ -243,7 +243,7 @@ Progress Tracking
        "tasks": [
            {"name": "iter_lines", "state": "completed",
             "execution_duration_ms": 12.3, "queued_duration_ms": 0.1,
-            "progress_pct": 100.0, ...},
+            "progress_pct": 100.0},  # and more keys
        ],
        "errors": [],
    }

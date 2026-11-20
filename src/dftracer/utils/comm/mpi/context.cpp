@@ -43,6 +43,51 @@ dstd::Vector<dstd::Thread> g_retired;
 std::once_flag g_retired_hook;
 bool g_exit_hook = false;
 
+/// A thread of @ref Context::run_helper and whether it let go of its body.
+struct Helper {
+    dstd::Thread thread;
+    dstd::SharedPtr<std::atomic<bool>> done;
+};
+std::mutex g_helpers_mutex;
+dstd::Vector<Helper> g_helpers;
+std::once_flag g_helpers_hook;
+
+/// Joins the helpers that are done, and waits for the rest until @p until_ns.
+/// Gives whether any is left.
+bool join_helpers(std::uint64_t until_ns) noexcept {
+    for (;;) {
+        dstd::Vector<Helper> finished;
+        bool left = false;
+        {
+            std::lock_guard<std::mutex> lock(g_helpers_mutex);
+            for (auto at = g_helpers.begin(); at != g_helpers.end();) {
+                if (at->done->load(std::memory_order_acquire)) {
+                    finished.push_back(std::move(*at));
+                    at = g_helpers.erase(at);
+                } else {
+                    left = true;
+                    ++at;
+                }
+            }
+        }
+        for (Helper& helper : finished) helper.thread.join();
+        if (!left || dstd::steady_now_ns() >= until_ns) return left;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+/// A helper still in MPI after the wait waits for a peer that never came, and
+/// the stopping context ends that job with MPI_Abort, so it is left running.
+void join_helpers_at_shutdown() noexcept {
+    const std::uint64_t until =
+        dstd::steady_now_ns() +
+        common::constants::comm_settings::MPI_NATIVE_DRAIN_MS * 1'000'000;
+    if (!join_helpers(until)) return;
+    std::lock_guard<std::mutex> lock(g_helpers_mutex);
+    for (Helper& helper : g_helpers) helper.thread.detach();
+    g_helpers.clear();
+}
+
 /// Waits for every thread that @ref retire kept to leave, which is after it
 /// freed what it held.
 void join_retired() noexcept {
@@ -324,6 +369,24 @@ void Context::shutdown_all() {
         g_live.clear();
     }
     for (const auto& context : live) context->shutdown(true);
+}
+
+void Context::run_helper(Job body, dstd::StringView name) {
+    std::call_once(g_helpers_hook, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches,
+                                &join_helpers_at_shutdown);
+    });
+    join_helpers(0);
+    auto done = dstd::make_shared<std::atomic<bool>>(false);
+    dstd::Thread thread(
+        [run = std::move(body), done]() mutable {
+            run();
+            run = Job();
+            done->store(true, std::memory_order_release);
+        },
+        name);
+    std::lock_guard<std::mutex> lock(g_helpers_mutex);
+    g_helpers.push_back(Helper{std::move(thread), std::move(done)});
 }
 
 void Context::submit(Job job) {

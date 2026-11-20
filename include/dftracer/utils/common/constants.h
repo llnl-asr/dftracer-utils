@@ -120,6 +120,10 @@ inline constexpr std::uint64_t MPI_CHUNK_BYTES = std::uint64_t{1} << 30;
 /// How long a stopping MPI context waits for native requests that no peer
 /// matched before it ends the job.
 inline constexpr std::uint64_t MPI_NATIVE_DRAIN_MS = 1000;
+/// Test builds only: milliseconds a thread that made a communicator waits
+/// after it handed the result on, before it lets go of what it holds.
+inline constexpr const char* MPI_TEST_CREATE_LINGER_MS_ENV =
+    "DFTRACER_UTILS_COMM_MPI_TEST_CREATE_LINGER_MS";
 /// How long a deadline waits for the members to say whether they reached the
 /// call that timed out.
 inline constexpr std::uint64_t MPI_ARRIVAL_PROBE_MS = 200;

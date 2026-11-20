@@ -1061,6 +1061,18 @@ if(DFTRACER_UTILS_ENABLE_MPI AND DFTRACER_UTILS_BUILD_SHARED)
     endforeach()
   endforeach()
 
+  if(DFTRACER_UTILS_TEST_PROBES)
+    # A thread that made a communicator and still holds the backend when the
+    # run ends must be joined before the memory exit check counts.
+    add_test(NAME comm/mpi/create_linger_np2
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2 ${MPIEXEC_PREFLAGS}
+                     $<TARGET_FILE:comm_mpi_test_mpi_collectives> "-tc=sixty splits*")
+    set_tests_properties(
+      comm/mpi/create_linger_np2
+      PROPERTIES TIMEOUT 300 ENVIRONMENT
+                 "DFTU_TEST_NP=2;DFTRACER_UTILS_COMM_MPI_TEST_CREATE_LINGER_MS=300;DFTRACER_UTILS_MEMORY_EXIT_CHECK=1")
+  endif()
+
   # A native collective that a peer never matches cannot be cancelled: the call
   # fails at once, and the context ends the job with MPI_Abort when it stops.
   add_executable(comm_mpi_native_probe comm/mpi/native_probe.cpp)

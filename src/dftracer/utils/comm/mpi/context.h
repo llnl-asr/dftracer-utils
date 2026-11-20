@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <mpi.h>
@@ -24,7 +25,9 @@ namespace dftracer::utils::comm::mpi {
  * Every MPI call after construction runs on the progress thread. The progress
  * thread issues calls, tests the requests it watches and polls the pollers,
  * and never runs code of the program: whatever a caller must run goes through
- * @ref complete, which a second thread runs in order.
+ * @ref complete, which a second thread runs in order. Work that waits for
+ * other processes, such as making a communicator, runs on a helper thread of
+ * @ref run_helper instead.
  *
  * The threads hold the context, so it outlives them, and the handle that
  * @ref make gives stops them when its last copy goes, on any thread: a thread
@@ -108,6 +111,13 @@ class Context {
 
     /// Stops the threads of every live context, for the exit hook.
     static void shutdown_all();
+
+    /// Runs @p body on a thread of its own named @p name. The thread lets go
+    /// of @p body before it counts as done; done threads are joined when the
+    /// next one starts, and the shutdown joins the rest, waiting
+    /// MPI_NATIVE_DRAIN_MS for those still in MPI before it leaves them to
+    /// the end of the job.
+    static void run_helper(Job body, dstd::StringView name);
 
     /// Builds the context; use @ref make.
     Context() = default;

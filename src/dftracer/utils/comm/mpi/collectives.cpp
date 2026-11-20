@@ -3,6 +3,7 @@
 #include <dftracer/utils/comm/collective.h>
 #include <dftracer/utils/comm/mpi/collectives.h>
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -18,6 +19,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
+#include <thread>
 #include <utility>
 
 namespace dftracer::utils::comm::mpi {
@@ -144,6 +146,16 @@ struct Delivering {
 };
 
 thread_local const Delivering* t_delivering = nullptr;
+
+#ifdef DFTRACER_UTILS_TEST_PROBES
+void linger_after_create() {
+    const std::uint64_t ms =
+        common::Env::get<std::uint64_t>(
+            common::constants::comm_settings::MPI_TEST_CREATE_LINGER_MS_ENV)
+            .value_or(0);
+    if (ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+}
+#endif
 
 /// What a deadline collects from the members.
 struct Probe {
@@ -438,16 +450,18 @@ class Impl : public backend::Collectives,
     void begin_create(const GroupPtr& group) {
         group->state = Group::Creating;
         context_->native_begin();
-        dstd::Thread worker(
+        Context::run_helper(
             [self = shared_from_this(), group] {
                 MPI_Comm comm = MPI_COMM_NULL;
                 const int rc = self->make_comm(*group, comm);
                 self->context_->submit([self, group, comm, rc] {
                     self->created(group, comm, rc);
                 });
+#ifdef DFTRACER_UTILS_TEST_PROBES
+                linger_after_create();
+#endif
             },
             "comm_mpi_create");
-        worker.detach();
     }
 
     /// Makes the communicator of @p group over its members in group order, so

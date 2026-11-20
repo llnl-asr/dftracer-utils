@@ -12,7 +12,7 @@ import pytest
 import dftracer.utils as dft
 from dftracer.utils.dftracer_utils_ext import _process_memory_budget
 
-from .common import valgrind_io_threads
+from .common import valgrind_capped_threads
 
 HOST_CPUS = 16
 HOST_BUDGET = 8 << 30
@@ -62,7 +62,7 @@ def test_forked_child_with_inherited_state_takes_the_share() -> None:
         max_workers=1, mp_context=ctx, initializer=dft.apply_worker_share, initargs=(4,)
     ) as pool:
         threads, io_threads, budget = pool.submit(_observe, 0).result()
-    assert (threads, io_threads) == (HOST_CPUS // 4, valgrind_io_threads(HOST_CPUS // 4))
+    assert (threads, io_threads) == (HOST_CPUS // 4, valgrind_capped_threads(HOST_CPUS // 4))
     assert budget == HOST_BUDGET // 4
 
 
@@ -72,7 +72,7 @@ def test_spawned_child_takes_the_share() -> None:
         max_workers=1, mp_context=ctx, initializer=dft.apply_worker_share, initargs=(4,)
     ) as pool:
         threads, io_threads, budget = pool.submit(_observe, 0).result()
-    assert (threads, io_threads) == (HOST_CPUS // 4, valgrind_io_threads(HOST_CPUS // 4))
+    assert (threads, io_threads) == (HOST_CPUS // 4, valgrind_capped_threads(HOST_CPUS // 4))
     assert budget == HOST_BUDGET // 4
 
 
@@ -127,9 +127,11 @@ def _check_split(client, expected_workers: int, io: bool = True) -> None:
     seen = client.run(_threads_on_worker)
     assert len(seen) == expected_workers
     for threads, io_threads, budget in seen.values():
-        assert threads == HOST_CPUS // expected_workers
+        # A worker that had a runtime resizes it, which Valgrind caps.
+        share = HOST_CPUS // expected_workers
+        assert threads in (share, valgrind_capped_threads(share))
         # The I/O pool of a runtime that exists only grows.
-        assert not io or io_threads == valgrind_io_threads(threads)
+        assert not io or io_threads == valgrind_capped_threads(threads)
         assert budget == HOST_BUDGET // expected_workers
 
 

@@ -6207,14 +6207,15 @@ class StatsCursor final : public Cursor {
 dstd::Result<CursorChain> lower_cursor_chain(
     dstd::SharedPtr<const Source> source_ptr,
     dstd::Span<const dstd::SharedPtr<const LazyOp>> ops, std::uint64_t budget,
-    const dstd::SharedPtr<RunCounters>& counters,
-    AnalyzeRun* analyze = nullptr) {
+    const dstd::SharedPtr<RunCounters>& counters, AnalyzeRun* analyze = nullptr,
+    bool whole = false) {
     const Source& source = *source_ptr;
     const dstd::Vector<dstd::String> names = source.names();
 
     PlannedScan planned = plan_scan_request(ops, budget);
     ScanRequest& req = planned.req;
     req.counters = counters;
+    req.whole = whole && ops.empty();
     const dstd::Vector<dstd::String> projection = req.projection;
     const dstd::Vector<std::size_t>& cand_pos = planned.cand_pos;
 
@@ -6293,13 +6294,50 @@ dstd::Result<CursorChain> lower_cursor_chain(
     return chain;
 }
 
+// A frame of no rows with the columns of the plan's output schema, or none when
+// the schema cannot vouch for every one: the source may return columns beyond
+// it, an op computes columns it does not type (a frame op, a plugin node), or a
+// column has no type that can be rebuilt.
+dstd::Optional<DataFrame> empty_result_frame(const LazyFrame& lf) {
+    if (lf.has_undeclared_columns()) return dstd::nullopt;
+    for (const auto& op : detail::PlanAccess::ops(lf))
+        if (std::holds_alternative<FrameOp>(op->node) ||
+            std::holds_alternative<NodeOp>(op->node))
+            return dstd::nullopt;
+    const Schema schema = lf.output_schema();
+    if (schema.fields.empty()) return dstd::nullopt;
+    DataFrame frame;
+    for (const Field& field : schema.fields) {
+        const DataType& dt = field.type;
+        static constexpr std::uint64_t NO_BYTES = 0;
+        if (field.name == REST_COLUMN || !dt.fields.empty())
+            return dstd::nullopt;
+        Series column;
+        if (dt.id != TypeId::Unknown && byte_width(dt.id).has_value())
+            column = Series::flat(dt.id, &NO_BYTES, 0);
+        else if (dt.id == TypeId::String)
+            column = Series::strings(dstd::Span<const dstd::StringView>());
+        else
+            return dstd::nullopt;
+        dftu_series* h = column.handle();
+        h->set_time_unit(dt.time_unit());
+        h->set_timezone(dt.timezone());
+        h->set_decimal(dt.decimal_precision(), dt.decimal_scale());
+        h->set_fixed_size(dt.fixed_size());
+        frame.names.push_back(dstd::SharedString(field.name));
+        frame.columns.push_back(std::move(column));
+    }
+    return frame;
+}
+
 // The pull driver: demand up, data down, one morsel at a time. A stage that
 // must wait co_awaits inside next(), so the worker is never parked. Abandoning
 // this generator drops the chain, and dropping the source cursor is the scan
 // early-out (~StreamViewCursor stops and wakes the producer).
 coro::AsyncGenerator<dstd::Result<DataFrame>> drive_cursor_chain(
-    CursorChain chain, std::int64_t rows) {
+    CursorChain chain, std::int64_t rows, dstd::Optional<LazyFrame> empty) {
     NameCache cache;
+    bool any = false;
     for (;;) {
         auto task = chain.cursor->next(rows);
         auto m = co_await std::move(task);
@@ -6311,9 +6349,14 @@ coro::AsyncGenerator<dstd::Result<DataFrame>> drive_cursor_chain(
         auto out = frame_from_morsel(std::move(**m), cache, chain.schema,
                                      chain.cursor->out_names());
         const bool failed = !out;
+        any = true;
         co_yield std::move(out);
         if (failed) break;
     }
+    if (any || !empty) co_return;
+    // No morsel came, so no frame names the columns: the plan's schema does.
+    if (auto typed = empty_result_frame(*empty))
+        co_yield dstd::Result<DataFrame>(std::move(*typed));
 }
 
 }  // namespace
@@ -6322,7 +6365,8 @@ namespace {
 
 coro::AsyncGenerator<dstd::Result<DataFrame>> stream_plan(
     PlanParts plan, std::uint64_t memory_budget, std::int64_t batch_size,
-    const dstd::SharedPtr<RunCounters>& counters) {
+    const dstd::SharedPtr<RunCounters>& counters,
+    dstd::Optional<LazyFrame> empty = dstd::nullopt, bool whole = false) {
     // 0 resolves to auto (~1/3 RAM), same policy as View.
     const std::uint64_t budget = memory::resolve_spill_budget(memory_budget);
     const std::int64_t eff_rows =
@@ -6335,8 +6379,8 @@ coro::AsyncGenerator<dstd::Result<DataFrame>> stream_plan(
     memory::PoolHandle pool = memory::detail::Manager::get().root().child(
         "query", memory::PoolKind::Results);
     memory::detail::Scope scope{pool ? *pool : memory::detail::current_pool()};
-    auto lowered =
-        lower_cursor_chain(std::move(plan.source), plan.ops, budget, counters);
+    auto lowered = lower_cursor_chain(std::move(plan.source), plan.ops, budget,
+                                      counters, nullptr, whole);
     if (!lowered) return failed_stream(lowered.error());
     CursorChain chain = std::move(*lowered);
     chain.pool = std::move(pool);
@@ -6344,7 +6388,7 @@ coro::AsyncGenerator<dstd::Result<DataFrame>> stream_plan(
     // parallel drain has miscompiled frames before (project_coro_threadlocal_
     // parser_pitfall), and it would delay the chain's destruction past the
     // consumer's last pull, which is the scan early-out.
-    return drive_cursor_chain(std::move(chain), eff_rows);
+    return drive_cursor_chain(std::move(chain), eff_rows, std::move(empty));
 }
 
 }  // namespace
@@ -6511,7 +6555,7 @@ bool may_expand(const LazyOp& op) {
 
 coro::CoroTask<dstd::Result<DataFrame>> collect_plan(
     PlanParts plan, std::uint64_t memory_budget, std::int64_t batch_size,
-    dstd::SharedPtr<RunCounters> counters) {
+    dstd::SharedPtr<RunCounters> counters, dstd::Optional<LazyFrame> empty) {
     // A resident source runs whole-column, matching eager, unless an op can
     // make more than it reads or the frame is past half the automatic budget
     // (a sort or a group-by holds about its input again). An explicit
@@ -6528,9 +6572,11 @@ coro::CoroTask<dstd::Result<DataFrame>> collect_plan(
         }
     }
     const std::uint64_t budget = memory::resolve_spill_budget(memory_budget);
-    auto draining = drain_stream(
-        stream_plan(std::move(plan), memory_budget, batch_size, counters),
-        budget);
+    const bool whole = batch_size <= 0;
+    auto draining =
+        drain_stream(stream_plan(std::move(plan), memory_budget, batch_size,
+                                 counters, std::move(empty), whole),
+                     budget);
     co_return co_await std::move(draining);
 }
 
@@ -6844,7 +6890,7 @@ coro::CoroTask<dstd::Result<DataFrame>> collect_owned(LazyFrame plan,
     }
     auto collecting =
         collect_plan(finish_tree(std::move(tree)), budget, batch_size,
-                     detail::PlanAccess::run_counters(plan));
+                     detail::PlanAccess::run_counters(plan), plan);
     auto collected = co_await std::move(collecting);
     if (collected) apply_index_names(index, *collected);
     co_return collected;
@@ -6912,11 +6958,12 @@ coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_all(
     // the roots run at once and split each one's spill budget between them.
     dstd::Vector<coro::CoroTask<dstd::Result<DataFrame>>> runs;
     runs.reserve(trees.size());
-    for (PlannedTree& t : trees) {
+    for (std::size_t i = 0; i < trees.size(); ++i) {
+        PlannedTree& t = trees[i];
         const std::uint64_t budget =
             common::share_spill_budget(t.memory_budget, trees.size());
-        runs.push_back(
-            collect_plan(finish_tree(std::move(t)), budget, 0, nullptr));
+        runs.push_back(collect_plan(finish_tree(std::move(t)), budget, 0,
+                                    nullptr, plans[i]));
     }
     auto results = co_await coro::when_all(std::move(runs));
     dstd::Vector<DataFrame> frames;

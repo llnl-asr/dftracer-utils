@@ -169,6 +169,11 @@ struct ScanRequest {
     /// can and reports the rest No.
     dstd::Vector<Expr> filters;
     std::int64_t limit = -1;  ///< Slice pushdown hint; -1 means no limit.
+    /// The scan feeds a collect with no operator in between, so morsel size
+    /// only adds overhead: a source that already holds the rows decoded may
+    /// hand them out in few large morsels. False when an operator runs per
+    /// morsel or the plan streams.
+    bool whole = false;
     /// The resolved @ref LazyFrame budget (bytes); a streaming source may use
     /// it to bound its own in-flight buffering. Most sources ignore it.
     std::uint64_t memory_budget = 0;

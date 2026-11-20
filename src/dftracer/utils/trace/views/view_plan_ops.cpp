@@ -37,6 +37,7 @@
 #include <dftracer/utils/trace/index/store/root_layout.h>
 #include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/table/table_source.h>
 #include <dftracer/utils/trace/time_metric_event.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
@@ -442,6 +443,23 @@ ScanPlan from_files(dstd::Vector<ViewFile> files) {
     for (auto& f : files)
         if (f.index_path.empty())
             f.index_path = internal::determine_index_path(f.file_path, "");
+    {
+        dstd::Vector<table::TableInput> inputs;
+        inputs.reserve(files.size());
+        for (const auto& f : files)
+            inputs.push_back(table::TableInput{f.file_path, f.index_path});
+        auto tables = table::open_table_inputs(
+            dstd::Span<const table::TableInput>(inputs.data(), inputs.size()));
+        if (!tables)
+            return failed_plan(dstd::make_shared<detail::ViewPlan>(),
+                               tables.error());
+        if (*tables) {
+            auto plan = dstd::make_shared<detail::ViewPlan>();
+            plan->files = std::move(files);
+            plan->table = std::move(**tables);
+            return plan;
+        }
+    }
     if (auto checked = check_readers(
             dstd::Span<const ViewFile>(files.data(), files.size()));
         !checked)

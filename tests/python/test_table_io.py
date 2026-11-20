@@ -600,6 +600,24 @@ def test_folder_parts_may_differ_in_content_but_not_in_names_and_dtypes(tmp_path
     folder = tmp_path / "parts"
     folder.mkdir()
     write_table(
+        pd.DataFrame({"c": pd.Categorical(["a", "b"], categories=["a", "b"])}),
+        str(folder / "part-0.pfw.gz"),
+        name="t",
+    )
+    write_table(
+        pd.DataFrame({"c": pd.Categorical(["z", "a"], categories=["z", "a"])}),
+        str(folder / "part-1.pfw.gz"),
+        name="t",
+    )
+    back = read_pandas(str(folder))
+    assert back["c"].tolist() == ["a", "b", "z", "a"]
+    assert list(back["c"].cat.categories) == ["a", "b", "z"]
+
+
+def test_folder_parts_must_agree_on_elem_and_order(tmp_path):
+    folder = tmp_path / "parts"
+    folder.mkdir()
+    write_table(
         pd.DataFrame({"o": pd.Series([None, None], dtype=object)}),
         str(folder / "part-0.pfw.gz"),
         name="t",
@@ -609,8 +627,18 @@ def test_folder_parts_may_differ_in_content_but_not_in_names_and_dtypes(tmp_path
         str(folder / "part-1.pfw.gz"),
         name="t",
     )
-    back = read_pandas(str(folder))
-    assert back["o"].tolist() == [None, None, {1}, {2, 3}]
+    with pytest.raises(ValueError, match="differ.*elem"):
+        read_pandas(str(folder))
+    ordered = tmp_path / "ordered"
+    ordered.mkdir()
+    for n, flag in enumerate((False, True)):
+        write_table(
+            pd.DataFrame({"c": pd.Categorical(["a"], categories=["a", "b"], ordered=flag)}),
+            str(ordered / f"part-{n}.pfw.gz"),
+            name="t",
+        )
+    with pytest.raises(ValueError, match="differ.*ordered"):
+        read_pandas(str(ordered))
 
 
 def test_dask_failure_leaves_nothing(tmp_path):

@@ -16,6 +16,7 @@ naming the first op it cannot take.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 from enum import Enum
@@ -42,6 +43,7 @@ from .._dataframe import DataFrame, PhaseArg, TimeUnitArg
 from .._enums import coerce_bytes, coerce_duration
 from .._expr import Agg, Expr, Named, SelectItem
 from .._lazyframe import BoundColumn, LazyFrame, LazyResult, collect_all
+from .._table import _carry_header, _table_header, _typed_empty
 from ..schemas import JsonValue, RecordSchema, schema_id
 from ._index_records import IndexRecords
 from ._lazy import LazyOps
@@ -56,6 +58,7 @@ _plan_columns = _ext.LazyFrame.schema
 
 if TYPE_CHECKING:
     from .._enums import DType
+    from .._table import Header
     from ..dftracer_utils_ext import Scalar
     from ..plugins import Plugins
     from ..runtime import Runtime
@@ -63,6 +66,27 @@ if TYPE_CHECKING:
 
 
 DuqlParam = Union[bool, int, float, str, Sequence[Union[bool, int, float, str]]]
+
+
+_F = TypeVar("_F", bound=Callable[..., object])
+
+
+def _trace_only(fn: _F) -> _F:
+    """Marks a trace op: on a viewer over table files it raises."""
+
+    name = getattr(fn, "__name__", "op")
+
+    @functools.wraps(fn)
+    def wrapper(self: TraceViewer, *args: object, **kwargs: object) -> object:
+        if _ext.TraceViewer.is_table(self):
+            raise _ext.DFTUtilsValueError(
+                f"TraceViewer.{name}() reads trace events, and these files are "
+                "dftu.table files; a table takes filter, select, with_columns, drop, rename, "
+                "sort_by, head, slice, group_by, agg, collect, lazy, schema and columns"
+            )
+        return fn(self, *args, **kwargs)
+
+    return cast(_F, wrapper)
 
 
 class Phase(str, Enum):
@@ -121,7 +145,9 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
     files only, so open such a file with :func:`dftracer.utils.scan_file`. An
     unknown name raises ``DFTUtilsValueError`` listing the known ones."""
 
-    __slots__ = ("_rt", "_pl")
+    __slots__ = ("_rt", "_pl", "_th")
+    if TYPE_CHECKING:
+        _th: Header | None
 
     # The native type builds a viewer from its files; its factories build this
     # class directly (_bind_types), so a call here reads ``files`` and returns
@@ -145,6 +171,12 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         else:
             out = _ext.TraceViewer.__new__(TraceViewer)
             _ext.TraceViewer.__init__(out, files, index_dir, format)
+            if _ext.TraceViewer.is_table(out):
+                if record_schema is not None:
+                    raise _ext.DFTUtilsValueError(
+                        "record_schema applies to trace files, and these files are dftu.table files"
+                    )
+                out._th = _table_header(list(_ext.TraceViewer.table_files(out)[0]))
         if record_schema is not None:
             out = _ext.TraceViewer.record_schema(out, schema_id(record_schema))
         if runtime is not None:
@@ -160,6 +192,18 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         format: str | None = None,
     ) -> None:
         pass
+
+    def _is_table(self) -> bool:
+        return bool(_ext.TraceViewer.is_table(self))
+
+    @property
+    def _header(self) -> Header | None:
+        """The merged table header while every op so far keeps the table's
+        columns as they were; None for a trace or a derived plan."""
+        try:
+            return self._th
+        except AttributeError:
+            return None
 
     @property
     def _runtime(self) -> Runtime | None:
@@ -194,18 +238,30 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         """:meth:`lazy`, for an op the viewer absorbs: a scan adds columns per
         batch, so a name the schema does not list may still be a column."""
         out = self.lazy()
-        out._open = True
+        out._open = not self._is_table()
         return out
 
-    def _absorbed(self, plan: LazyFrame) -> TraceViewer:
-        return self._trace(_ext.TraceViewer.with_lazy(self, plan))
+    def _absorbed(self, plan: LazyFrame, keep: bool = False) -> TraceViewer:
+        out = self._trace(_ext.TraceViewer.with_lazy(self, plan))
+        if keep:
+            out._th = self._header
+        return out
 
     # -- absorbed LazyFrame ops ----------------------------------------------------
     def filter(self, predicate: str | Expr) -> TraceViewer:
         """Keep events matching ``predicate``: a duql string, or an
         expression. An expression filters events, pushed to the index, while
         it is a plain field predicate and nothing but filters came before it;
-        otherwise it filters this plan's rows."""
+        otherwise it filters this plan's rows.
+
+        Over table files it takes an expression and filters their rows; the
+        index of a table prunes chunks for it when the index is fresh."""
+        if self._is_table():
+            if not isinstance(predicate, Expr):
+                raise _ext.DFTUtilsValueError(
+                    "a table filters with an expression such as col('x') > 1, not a duql string"
+                )
+            return self._absorbed(self._plan().filter(predicate), keep=True)
         if isinstance(predicate, Expr):
             if _ext.TraceViewer.filters_events(self):
                 try:
@@ -215,6 +271,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
             return self._absorbed(self._plan().filter(predicate))
         return self._trace(_ext.TraceViewer.filter(self, predicate))
 
+    @_trace_only
     def duql(self, text: str, **params: DuqlParam) -> TraceViewer:
         """Run the duql pipeline ``text`` with ``params`` bound to its
         ``$name`` parameters (bool, int, float or str, or a list of them for
@@ -224,6 +281,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         the plan, one row per line."""
         return self._trace(_ext.TraceViewer.duql(self, text, params))
 
+    @_trace_only
     def explain_duql(self, text: str, **params: DuqlParam) -> str:
         """The plan :meth:`duql` builds, one step per line, without scanning.
         ``text`` starting with ``explain analyze`` also runs the plan and adds
@@ -237,9 +295,11 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         is not an envelope field (``"size"``, ``"dur.p99"``) reads its
         ``args.<name>`` column, as in :meth:`filter`."""
         names = [i for i in items if isinstance(i, str)]
-        if items and len(names) == len(items):
+        if items and len(names) == len(items) and not self._is_table():
             return self._trace(_ext.TraceViewer.select(self, names))
-        return self._absorbed(self._plan().select(*items))
+        return self._absorbed(
+            self._plan().select(*items), keep=len(names) == len(items) and self._is_table()
+        )
 
     def with_column(self, name: str, expr: Expr) -> TraceViewer:
         return self._absorbed(self._plan().with_column(name, expr))
@@ -251,22 +311,22 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         return False
 
     def drop(self, *names: str | Sequence[str]) -> TraceViewer:
-        return self._absorbed(self._plan().drop(*names))
+        return self._absorbed(self._plan().drop(*names), keep=True)
 
     def rename(self, names: Sequence[str] | Mapping[str, str]) -> TraceViewer:
         return self._absorbed(self._plan().rename(names))
 
     def sort_by(self, name: str, descending: bool = False, nulls_last: bool = True) -> TraceViewer:
-        return self._absorbed(self._plan().sort_by(name, descending, nulls_last))
+        return self._absorbed(self._plan().sort_by(name, descending, nulls_last), keep=True)
 
     def topk(self, name: str, k: int, largest: bool = True) -> TraceViewer:
-        return self._absorbed(self._plan().topk(name, k, largest))
+        return self._absorbed(self._plan().topk(name, k, largest), keep=True)
 
     def head(self, n: int = 5) -> TraceViewer:
-        return self._absorbed(self._plan().head(n))
+        return self._absorbed(self._plan().head(n), keep=True)
 
     def slice(self, offset: int, length: int) -> TraceViewer:
-        return self._absorbed(self._plan().slice(offset, length))
+        return self._absorbed(self._plan().slice(offset, length), keep=True)
 
     def __getitem__(self, key: object) -> BoundColumn | TraceViewer:
         """:meth:`LazyFrame.__getitem__` over this viewer: a list of names or a
@@ -284,21 +344,24 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
 
     def offset(self, n: int) -> TraceViewer:
         """Skip the first ``n`` rows."""
-        return self._absorbed(self._plan().slice(n, (1 << 63) - 1))
+        return self._absorbed(self._plan().slice(n, (1 << 63) - 1), keep=True)
 
     def auto_spill(self) -> TraceViewer:
-        return self._absorbed(self._plan().auto_spill())
+        return self._absorbed(self._plan().auto_spill(), keep=True)
 
     # -- trace builders -------------------------------------------------------------
+    @_trace_only
     def phase(self, phase: PhaseArg) -> TraceViewer:
         return self._trace(_ext.TraceViewer.phase(self, phase))
 
+    @_trace_only
     def time_range(self, begin: float, end: float) -> TraceViewer:
         """Keep the events that start in ``[begin, end)``. Busy, concurrency,
         utilization and active take every event overlapping the window,
         clipped to it; utilization divides by ``end - begin``."""
         return self._trace(_ext.TraceViewer.time_range(self, float(begin), float(end)))
 
+    @_trace_only
     def time_bucket(
         self,
         interval_us: int | float | str,
@@ -311,6 +374,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         us = int(round(coerce_duration(interval_us, 1e6, "interval_us")))
         return self._trace(_ext.TraceViewer.time_bucket(self, us, normalize_to))
 
+    @_trace_only
     def resolution(self, cell: int | float | str) -> TraceViewer:
         """The grid the occupancy aggregates (busy, concurrency, utilization,
         active) snap interval edges to; a bare number is microseconds. 0 is the
@@ -318,18 +382,23 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         us = int(round(coerce_duration(cell, 1e6, "resolution")))
         return self._trace(_ext.TraceViewer.resolution(self, us))
 
+    @_trace_only
     def time_unit(self, unit: TimeUnitArg) -> TraceViewer:
         return self._trace(_ext.TraceViewer.time_unit(self, unit))
 
+    @_trace_only
     def time_scale(self, ns_ratio: float) -> TraceViewer:
         return self._trace(_ext.TraceViewer.time_scale(self, ns_ratio))
 
+    @_trace_only
     def rollup_root(self, path: str) -> TraceViewer:
         return self._trace(_ext.TraceViewer.rollup_root(self, path))
 
+    @_trace_only
     def views_root(self, path: str) -> TraceViewer:
         return self._trace(_ext.TraceViewer.views_root(self, path))
 
+    @_trace_only
     def memory_budget(self, nbytes: int | str) -> TraceViewer:
         """Spill budget for the scan and the plan; bytes or a unit string."""
         return self._trace(_ext.TraceViewer.memory_budget(self, coerce_bytes(nbytes, "nbytes")))
@@ -342,6 +411,9 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         flat: list[str] = []
         for k in keys:
             flat.extend([k] if isinstance(k, str) else k)
+        if self._is_table():
+            # A table groups as a LazyFrame does: the result takes its aggregates.
+            return cast("TraceViewer", self.lazy().group_by(flat))
         return self._trace(_ext.TraceViewer.group_by(self, *flat))
 
     def agg(self, *specs: str | Agg) -> TraceViewer:
@@ -350,6 +422,8 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         (``F.dur.sum()``, ``F.dur.busy(resolution="1ms")``, ``F.any.mean()``)."""
         if not specs:
             raise TypeError("agg() needs at least one aggregate")
+        if self._is_table():
+            return cast("TraceViewer", self.lazy().group_by([]).agg(*cast("Any", specs)))
         strings, wildcard, grid = agg_specs(specs)
         tv = self
         if grid is not None:
@@ -367,6 +441,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
 
     aggregate = agg
 
+    @_trace_only
     def agg_numeric_args(self, *reductions: str) -> TraceViewer:
         """Aggregate every discovered numeric arg: no reductions gives one mean
         column per arg; op names give one ``<op>_<arg>`` column each."""
@@ -391,12 +466,30 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
                 }
                 yield cls(**cast("Dict[str, Scalar]", values))
 
+    def collect(self, batch_size: int = 0) -> DataFrame:
+        """Run the plan and materialize a :class:`DataFrame`. This holds the
+        whole result in memory: filter or aggregate first to bound it, or use
+        :meth:`stream`. Over table files, a result whose columns are still
+        the table's carries a header made for it (its fields and row count),
+        so ``to_pandas()`` restores the table's dtypes exactly; any other
+        result has no header."""
+        plan = self.lazy()
+        frame = plan.collect(batch_size)
+        if self._is_table() and frame.num_rows == 0 and not frame._names():
+            typed = _typed_empty(plan.schema)
+            if typed is not None:
+                frame = typed
+        header = self._header
+        return frame if header is None else _carry_header(frame, header)
+
     # -- inspection -------------------------------------------------------------------
     @property
     def columns(self) -> list[str]:
         """Output column names without running the plan. A file whose index
         holds no path catalog is scanned once first, so every path it holds is
         listed."""
+        if self._is_table():
+            return self.lazy().columns
         _scan_columns(self)
         try:
             plan = self._pl
@@ -408,15 +501,19 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
     def schema(self) -> dict[str, DType]:
         """Output column names and dtypes without running the plan; raises when
         the files have no one record schema."""
+        if self._is_table():
+            return self.lazy().schema
         _ext.TraceViewer.columns(self)
         return self._schema_plan().schema
 
+    @_trace_only
     def column_info(self) -> dict[str, str]:
         """Every column the index knows, mapped to its type name (``"int64"``
         / ``"float64"`` / ``"string"``), with a ``resolved.*`` alias per hash
         column. Reads index metadata only."""
         return dict(_ext.TraceViewer.column_info(self))
 
+    @_trace_only
     def schema_tree(self) -> dict[str, JsonValue]:
         """The paths the files hold, from the index without scanning, nested by
         ``.`` segments: each node maps a segment to a dict with ``type`` (the
@@ -436,6 +533,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
                     node[key] = leaf[key]
         return cast("dict[str, JsonValue]", tree)
 
+    @_trace_only
     def time_metric(self) -> str:
         """The trace's own time unit (``"us"``/``"ns"``/``"ms"``/``"sec"``)."""
         return str(_ext.TraceViewer.time_metric(self))
@@ -448,6 +546,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         return "<TraceViewer>\n" + plan
 
     # -- terminals ---------------------------------------------------------------------
+    @_trace_only
     def call_tree(
         self,
         partition: Sequence[str] = ("pid", "tid"),
@@ -459,6 +558,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         ``[ts, ts+dur)`` intervals within each lane of ``partition``."""
         return self._new(_ext.TraceViewer.call_tree(self, list(partition), ts, dur, name))
 
+    @_trace_only
     def flamegraph(
         self,
         partition: Sequence[str] = ("pid", "tid"),
@@ -474,6 +574,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
             _ext.TraceViewer.flamegraph(self, list(partition), ts, dur, name, list(group))
         )
 
+    @_trace_only
     def containment(
         self,
         partition: Sequence[str] = ("pid", "tid"),
@@ -486,6 +587,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         ct, fg = _ext.TraceViewer.containment(self, list(partition), ts, dur, name, list(group))
         return LazyResult([self._new(ct), self._new(fg)], lambda f: Containment(f[0], f[1]))
 
+    @_trace_only
     def flamegraph_partial(
         self,
         partition: Sequence[str] = ("pid", "tid"),
@@ -507,6 +609,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         """The flamegraph node frame of every rank's partial (no scan)."""
         return _ext.merge_flamegraph_partials(list(partials))
 
+    @_trace_only
     def aggregate_partial(self) -> LazyResult[bytes]:
         """A mergeable partial of this aggregation for a distributed run;
         merge with :meth:`merge_partials`."""
@@ -514,19 +617,23 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
             [self._new(_ext.TraceViewer.aggregate_partial(self))], lambda f: partial_bytes(f[0])
         )
 
+    @_trace_only
     def merge_partials(self, partials: Sequence[bytes]) -> DataFrame:
         """This aggregation's result from every rank's partial (no scan)."""
         return _ext.TraceViewer.merge_partials(self, list(partials))
 
+    @_trace_only
     def materialize_partials(self, partials: Sequence[bytes]) -> None:
         """Write this aggregation's rollup from every rank's partial."""
         _ext.TraceViewer.materialize_partials(self, list(partials), self._runtime)
 
+    @_trace_only
     def reconstruct_if_cached(self) -> DataFrame | None:
         """This aggregation from its rollup, or ``None`` when none serves it."""
         out = _ext.TraceViewer.reconstruct_if_cached(self)
         return out
 
+    @_trace_only
     def index_records(
         self,
         shard_begin: int = 0,
@@ -544,6 +651,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
 
         return LazyResult([], finish)
 
+    @_trace_only
     def collect_index_records(
         self,
         shard_begin: int = 0,
@@ -558,6 +666,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
     @overload
     def sink_json(self, path: str, lazy: Literal[True]) -> LazyResult[dict[str, JsonValue]]: ...
 
+    @_trace_only
     def sink_json(
         self, path: str, lazy: bool = False
     ) -> dict[str, JsonValue] | LazyResult[dict[str, JsonValue]]:
@@ -587,6 +696,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         lazy: Literal[True],
     ) -> LazyResult[dict[str, JsonValue]]: ...
 
+    @_trace_only
     def materialize(
         self,
         checkpoint_size: int | str = 0,
@@ -609,6 +719,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         result: LazyResult[dict[str, JsonValue]] = LazyResult([], finish)
         return result if lazy else result.collect()
 
+    @_trace_only
     def export_trace(
         self,
         path: str,
@@ -638,6 +749,7 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
     @overload
     def statistics(self, lazy: Literal[True]) -> LazyResult[dict[str, JsonValue]]: ...
 
+    @_trace_only
     def statistics(self, lazy: bool = False) -> Any:
         """Count, mean and stddev of ``dur`` and the ``ts`` range of the
         selected events."""
@@ -645,12 +757,14 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         result = LazyResult([plan], lambda f: stats_row(f[0]))
         return result if lazy else result.collect()
 
+    @_trace_only
     def compare(self, variant: TraceViewer) -> LazyFrame:
         """This viewer's ``group_by`` + ``agg`` applied to ``variant``'s events
         too, joined on the group key: the keys, ``l_`` / ``r_`` per metric and
         ``delta_`` / ``pct_``. Both sides over the same files share one scan."""
         return self._new(_ext.TraceViewer.compare(self, variant))
 
+    @_trace_only
     def mv_source(self) -> list[str]:
         """The materialized-view files that would serve this query, or ``[]``."""
         return list(_ext.TraceViewer.mv_source(self))

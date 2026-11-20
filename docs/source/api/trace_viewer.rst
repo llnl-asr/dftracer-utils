@@ -53,6 +53,55 @@ matches nothing is a view of no rows; a missing path with no wildcard raises at
 directory explicitly; omit it to use the sidecar convention. An optional
 :class:`~dftracer.utils.runtime.Runtime` controls the thread pool.
 
+Table files
+-----------
+
+A file whose first line has ``ph`` 4, ``name`` ``"dftu.table"`` and
+``args.format`` ``"dftu.table"`` is a typed table (see
+:doc:`/guides/data/save-tables`). ``TraceViewer`` reads one table, a folder of
+parts, or a list of them as a table; a set that mixes tables and traces raises
+``DFTUtilsValueError`` and names one file of each kind. A first line that
+claims the format but is malformed, or has an unknown ``format_version``,
+raises and is never read as a trace.
+
+A table takes ``filter`` (with an expression, not a duql string), ``select``,
+``with_columns``, ``drop``, ``rename``, ``sort_by``, ``head``, ``slice``,
+``group_by`` (which returns the ``LazyFrame`` group-by), ``agg``, ``collect``,
+``lazy``, ``schema`` and ``columns``. The trace ops (``phase``,
+``time_range``, ``time_bucket``, ``flamegraph``, ``call_tree``,
+``containment``, ``index_records``, ``statistics`` and the rest) raise
+``DFTUtilsValueError``.
+
+Parts must agree on field names, dtypes, ``ordered``, ``elem``,
+``arrow_type`` and index names, or the viewer raises before any row is read.
+Ordered categories must also have the same labels in the same order.
+Unordered categories are unified in first-seen order. The parts of a folder are
+read in part-number order (``part-2`` before ``part-10``), and the folders of a
+list keep the order of their first file.
+
+A projected read converts only the selected columns; a malformed value in
+another column is reported only when that column is read. Every line is still
+checked as JSON in every mode, and a read of the whole file counts its rows
+against the header, so a cut or damaged file is an error and never a short
+result. A read that skips chunks by an index does not see the chunks it skips.
+
+The read decodes only the columns the plan uses. With no filter and no index it
+is one parallel decode of each file. With a filter it reads in bounded batches
+and applies the whole predicate to each. When the index of a file is fresh
+(same mtime, size and schema) that also records that the Indexer read every row of the file clean (valid JSON, every declared field, as many rows as the header says), a filter that compares a column with a number or
+a string (``==``, ``<``, ``<=``, ``>``, ``>=``, ``is_in``, joined by ``&`` or
+``|``) reads only the chunks the index cannot rule out; any other filter, and a
+stale, missing or foreign index, reads every chunk. A read never builds or
+changes an index: ``Indexer(files).build()`` indexes table files like traces.
+Pruning never changes a result. A float column holding NaN or infinity stores
+them as the strings ``"NaN"`` and ``"Infinity"``, so its chunks have no bounds
+and a filter on it does not prune.
+
+``collect()`` holds the whole result in memory. A result whose columns are the
+table's own (a filter, a projection, a sort, ``head``) carries a header made
+for it, so ``to_pandas()`` restores the exact dtypes; a result with a computed
+column or an aggregate has no header.
+
 The fluent builder
 ------------------
 

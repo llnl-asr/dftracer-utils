@@ -42,6 +42,9 @@ struct GzipBuildArtifacts {
     bool has_open_line = false;
     /// A chunk indexed before these artifacts starts inside a line.
     bool has_mid_line_chunk = false;
+    /// The whole file is a dftu.table that read clean (see
+    /// table_rows_complete).
+    bool table_rows_complete = false;
 };
 
 /// Optional slice of a multi-member gzip file. When set, the indexer

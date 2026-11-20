@@ -10,6 +10,7 @@
 #include <dftracer/utils/python/frame/dataframe.h>
 #include <dftracer/utils/python/trace/table_codec.h>
 #include <dftracer/utils/trace/table/table_codec.h>
+#include <dftracer/utils/trace/table/table_source.h>
 
 using dftracer::utils::python::core::guard;
 using dftracer::utils::python::core::py_unwrap;
@@ -95,6 +96,27 @@ PyObject *read_table_py(PyObject *, PyObject *args) {
     });
 }
 
+// _table_read_counters(reset) -> dict
+PyObject *read_counters_py(PyObject *, PyObject *arg) {
+    const int reset = PyObject_IsTrue(arg);
+    if (reset < 0) return nullptr;
+    const auto c = trace::table::read_counters();
+    if (reset) trace::table::reset_read_counters();
+    return Py_BuildValue(
+        "{s:K,s:K,s:K,s:K,s:K,s:K}", "chunks_read",
+        static_cast<unsigned long long>(c.chunks_read), "chunks_skipped",
+        static_cast<unsigned long long>(c.chunks_skipped), "indexed_files",
+        static_cast<unsigned long long>(c.indexed_files), "streamed_files",
+        static_cast<unsigned long long>(c.streamed_files), "direct_files",
+        static_cast<unsigned long long>(c.direct_files), "bytes_decoded",
+        static_cast<unsigned long long>(c.bytes_decoded));
+}
+
+PyMethodDef COUNTERS_DEF = {
+    "_table_read_counters", read_counters_py, METH_O,
+    "_table_read_counters(reset) -> dict\n\nWhat the table reads of this "
+    "process did; reset zeroes them after the read."};
+
 PyMethodDef WRITE_DEF = {
     "_write_table", write_table_py, METH_VARARGS,
     "_write_table(frame, path, header_json, raw_columns, level, threads) -> "
@@ -107,7 +129,7 @@ PyMethodDef READ_DEF = {
 }  // namespace
 
 int dftracer::utils::python::trace::init_table_codec(PyObject *m) {
-    PyMethodDef *defs[] = {&WRITE_DEF, &READ_DEF};
+    PyMethodDef *defs[] = {&WRITE_DEF, &READ_DEF, &COUNTERS_DEF};
     for (PyMethodDef *def : defs) {
         PyObject *fn = PyCFunction_NewEx(def, nullptr, nullptr);
         if (!fn) return -1;

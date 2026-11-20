@@ -11,7 +11,6 @@ frames to and from the native frame.
 
 from __future__ import annotations
 
-import glob
 import json
 import math
 import os
@@ -19,7 +18,7 @@ import re
 import shutil
 import tempfile
 import types
-from typing import TYPE_CHECKING, Any, Protocol, Union, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, Sequence, Union, cast, runtime_checkable
 
 from . import dftracer_utils_ext as _ext
 from ._dataframe import DataFrame, _bound
@@ -28,6 +27,8 @@ if TYPE_CHECKING:
     import numpy as np
     import pandas as pd
     import pyarrow as pa
+
+    from ._enums import DType
 
     PathLike = Union[str, "os.PathLike[str]"]
     JsonValue = Union[None, bool, int, float, str, list["JsonValue"], dict[str, "JsonValue"]]
@@ -38,7 +39,6 @@ if TYPE_CHECKING:
 
 FORMAT = "dftu.table"
 FORMAT_VERSION = 1
-_PART_GLOB = "*.pfw.gz"
 _FLOAT_TEXT = {"NaN": math.nan, "Infinity": math.inf, "-Infinity": -math.inf}
 _INT64_MAX = 2**63 - 1
 
@@ -626,15 +626,6 @@ def _restore(name: str, arr: pa.Array, field: dict[str, Any]) -> Column:
     raise TypeError(f"dtype {field['dtype']} cannot be restored")
 
 
-def _read_one(path: str, threads: int) -> tuple[DataFrame, Header]:
-    frame, header_text = _ext._read_table(path, threads)
-    header: Header = json.loads(header_text)
-    names = [str(f["name"]) for f in header["fields"]]
-    if len(set(names)) != len(names):
-        raise ValueError(f"{path}: duplicate field names {names}")
-    return _bound(frame), header
-
-
 def _exact_pandas(frame: DataFrame, header: Header) -> pd.DataFrame | None:
     """The exact pandas frame a table header describes, or None when a column of
     ``frame`` no longer has the name or Arrow type the header implies."""
@@ -659,29 +650,54 @@ def _exact_pandas(frame: DataFrame, header: Header) -> pd.DataFrame | None:
     return df
 
 
-def _schema(header: Header) -> tuple[list[tuple[str, str]], list[str]]:
-    """What parts of a folder must share: field names and dtypes, and the index.
-    Categories and ``elem`` depend on a part's content, so they may differ."""
-    fields = [(str(f["name"]), str(f["dtype"])) for f in header["fields"]]
-    return fields, list(header.get("index") or [])
-
-
 def _merged_header(headers: list[Header]) -> Header:
     """The header of the concatenated parts: the first part's, with the total
-    row count, the union of each field's categories, and ``elem`` from any part."""
+    row count and each category field's labels unified in first-seen order. The
+    native reader has checked that the parts agree on names, dtypes, ordered,
+    elem, arrow_type and index names."""
     merged: Header = json.loads(json.dumps(headers[0]))
     merged["nrows"] = sum(int(h["nrows"]) for h in headers)
     for position, field in enumerate(merged["fields"]):
+        if "categories" not in field:
+            continue
+        known = list(field["categories"])
+        seen = set(map(repr, known))
         for h in headers[1:]:
-            other = h["fields"][position]
-            if "categories" in field:
-                known = list(field["categories"])
-                field["categories"] = known + [
-                    c for c in other.get("categories", []) if c not in known
-                ]
-            if "elem" in other and "elem" not in field:
-                field["elem"] = other["elem"]
+            for c in h["fields"][position].get("categories", []):
+                if repr(c) not in seen:
+                    seen.add(repr(c))
+                    known.append(c)
+        field["categories"] = known
     return merged
+
+
+def _table_header(texts: list[str]) -> Header:
+    """The merged header of table files whose header args are ``texts``."""
+    headers: list[Header] = [json.loads(t) for t in texts]
+    for h in headers:
+        names = [str(f["name"]) for f in h["fields"]]
+        if len(set(names)) != len(names):
+            raise ValueError(f"duplicate field names {names}")
+    return _merged_header(headers)
+
+
+def _result_header(frame: DataFrame, header: Header) -> Header | None:
+    """The header for ``frame``, a result of table rows: ``header``'s fields that
+    are the frame's columns, in the frame's order, with the frame's row count.
+    None when a column of the frame is not a field of the header, which means
+    the plan made it."""
+    by_name = {str(f["name"]): f for f in header["fields"]}
+    names = frame._names()
+    if any(n not in by_name for n in names):
+        return None
+    out: Header = {**header}
+    out["fields"] = [by_name[n] for n in names]
+    out["nrows"] = frame.num_rows
+    index = [i for i in header.get("index") or []]
+    if not all(i in by_name and i in names for i in index):
+        out["index"] = []
+        out["index_names"] = []
+    return out
 
 
 def _with_header(frame: DataFrame, header: Header) -> DataFrame:
@@ -693,8 +709,40 @@ def _with_header(frame: DataFrame, header: Header) -> DataFrame:
     return frame
 
 
-def read_table(path: PathLike, *, threads: int = 0) -> DataFrame:
+def _typed_empty(schema: dict[str, DType]) -> DataFrame | None:
+    """A frame of no rows with the columns of ``schema``, or None when a dtype is
+    not one a table reads. A streamed plan that filters every row out sends no
+    morsel, so its collect has no columns of its own."""
+    _, _, pa = _libs()
+    from ._enums import DType as Kind
+
+    arrow = {
+        Kind.BOOL: pa.bool_(),
+        Kind.INT64: pa.int64(),
+        Kind.UINT64: pa.uint64(),
+        Kind.FLOAT64: pa.float64(),
+        Kind.STRING: pa.string(),
+    }
+    if not schema or any(t not in arrow for t in schema.values()):
+        return None
+    table = pa.table({n: pa.array([], type=arrow[t]) for n, t in schema.items()})
+    return DataFrame.from_arrow(table)
+
+
+def _carry_header(frame: DataFrame, header: Header | None) -> DataFrame:
+    """``frame`` carrying the header made for it, when ``header`` still describes
+    its columns."""
+    if header is None:
+        return frame
+    own = _result_header(frame, header)
+    return frame if own is None else _with_header(frame, own)
+
+
+def read_table(path: PathLike | Sequence[PathLike]) -> DataFrame:
     """Read a table written by :func:`write_table` into a dftracer.utils frame.
+
+    This is ``TraceViewer(path).collect()`` for a table file, a folder of table
+    parts, a glob or a list of them: one reader serves them all.
 
     The columns are the engine's native types: Int64, Uint64, Float64, Bool and
     String, with a null for NA (NaN stays a float value). A category column
@@ -709,8 +757,9 @@ def read_table(path: PathLike, *, threads: int = 0) -> DataFrame:
     (a filter, a join) has no header, a frame changed in place drops it, and an explicit ``arrow``,
     ``nullable`` or ``index`` argument of ``to_pandas`` ignores it.
 
-    A folder reads every ``*.pfw.gz`` in it in name order and concatenates the
-    parts, which must agree on their field names, dtypes and index.
+    The parts of a folder are read in part-number order and must agree on their
+    field names, dtypes, ordered, elem, arrow_type and index names; unordered
+    categories are unified in first-seen order.
 
     Raises ``DFTUtilsParseError`` for another format, an unknown
     ``format_version``, a row that misses a field or holds a value its dtype
@@ -720,23 +769,14 @@ def read_table(path: PathLike, *, threads: int = 0) -> DataFrame:
     for a cell that is no category label or a set or list cell that is no JSON
     array.
     """
-    path = os.fspath(path)
-    if not os.path.isdir(path):
-        frame, header = _read_one(path, threads)
-        return _with_header(frame, header)
-    parts = sorted(glob.glob(os.path.join(path, _PART_GLOB)))
-    if not parts:
-        raise ValueError(f"{path} holds no {_PART_GLOB} table parts")
-    frames: list[DataFrame] = []
-    headers: list[Header] = []
-    for part in parts:
-        frame, header = _read_one(part, threads)
-        if headers and _schema(header) != _schema(headers[0]):
-            raise ValueError(f"{part}: its fields differ from those of {parts[0]}")
-        frames.append(frame)
-        headers.append(header)
-    whole = frames[0] if len(frames) == 1 else frames[0].concat(*frames[1:])
-    return _with_header(whole, _merged_header(headers))
+    from .trace._viewer import TraceViewer
+
+    viewer = TraceViewer(path if not isinstance(path, os.PathLike) else os.fspath(path))
+    if not viewer._is_table():
+        if isinstance(path, (str, os.PathLike)) and os.path.isdir(path):
+            raise ValueError(f"{path} holds no dftu.table files")
+        raise _ext.DFTUtilsParseError(f"{path} is not a dftu.table file")
+    return viewer.collect()
 
 
 class TableWriter:

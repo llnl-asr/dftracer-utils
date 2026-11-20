@@ -53,10 +53,8 @@ inline void literal_to_string(dstd::String& os, const LiteralNode& lit) {
                                  std::is_same_v<T, std::uint64_t>) {
                 os += dstd::int_text(v);
             } else if constexpr (std::is_same_v<T, double>) {
-                char buf[32];
-                const char* end =
-                    dstd::to_chars_general(buf, buf + sizeof(buf), v, 6);
-                os.append(buf, static_cast<std::size_t>(end - buf));
+                // The shortest text that reads back as `v`.
+                os += dstd::double_text(v);
             }
         },
         lit.value);

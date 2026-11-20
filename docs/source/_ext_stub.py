@@ -1556,6 +1556,12 @@ def _read_table(path: str, threads: int) -> tuple[PublicDataFrame, str]:
     ...
 
 
+def _table_read_counters(reset: bool) -> dict[str, int]:
+    """What the table reads of this process did: chunks read and skipped by an
+    index, and files read indexed, streamed or whole; ``reset`` zeroes them."""
+    ...
+
+
 def collect_all(
     plans: Sequence[PublicLazyFrame], runtime: RuntimeArg = None
 ) -> list[PublicDataFrame]:
@@ -1726,6 +1732,12 @@ class TraceViewer:
         ...
     def filters_events(self) -> bool:
         """True while a filter still selects raw events. Reads no index."""
+        ...
+    def is_table(self) -> bool:
+        """True when the files are dftu.table files."""
+        ...
+    def table_files(self) -> tuple[list[str], list[str]]:
+        """The header args (JSON text) and the path of each table file, in read order."""
         ...
     def call_tree(
         self,
@@ -2175,6 +2187,7 @@ _EXPORTS = (
     "_dataframe_from_columns",
     "_write_table",
     "_read_table",
+    "_table_read_counters",
     "collect_all",
     "merge_flamegraph_partials",
     "duql_canonical",

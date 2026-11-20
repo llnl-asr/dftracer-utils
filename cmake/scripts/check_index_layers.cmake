@@ -45,6 +45,8 @@ set(ALLOWED
   "index/extensions/rowset_fold.cpp|trace/views/event_source.h"
   "index/extensions/rowset_fold.h|trace/views/fold.h"
   "index/gzip/gzip_indexer.cpp|index/build/index_visitor.h"
+  # a table file is recognised by its header as the index pass reads it
+  "index/build/table_rows.cpp|trace/table/table_header.h"
   "index/gzip/gzip_indexer.h|index/build/index_visitor.h"
   "index/gzip/checkpoint_indexer.h|index/build/index_visitor.h"
   "index/schemas/dft/bloom_core.h|index/build/chunk_indexer.h"

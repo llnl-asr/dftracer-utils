@@ -275,13 +275,15 @@ void run_tool(const Tool& tool) {
     REQUIRE(dstd::fs::create_directories(out).has_value());
     const auto args = tool.args(in, idx, out);
 
+    // A view reads line 1 of every input once, to tell a table from a trace.
+    const std::size_t probe = tool.name == "view" ? 1 : 0;
     const auto cold =
         run_once(binary, args, dir.file("cold.log"), roots, inputs);
-    check_run("cold", tool.name, cold, inputs, tool.name == "index" ? 1 : 2,
-              roots.size());
+    check_run("cold", tool.name, cold, inputs,
+              (tool.name == "index" ? 1 : 2) + probe, roots.size());
     const auto warm =
         run_once(binary, args, dir.file("warm.log"), roots, inputs);
-    check_run("warm", tool.name, warm, inputs, 1, roots.size());
+    check_run("warm", tool.name, warm, inputs, 1 + probe, roots.size());
 }
 
 }  // namespace

@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_PLAN_H
 
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -62,6 +63,9 @@ ExportStats counted(const ViewPlan& plan, ExportStats st);
 /// struct captures it; each builder copies and mutates one field.
 struct ViewPlan {
     dstd::Vector<ViewFile> files;
+    /// Set when `files` are table files: the plan then reads them through this
+    /// source, and the trace fields below mean nothing.
+    dstd::SharedPtr<const dataframe::Source> table;
 
     dstd::Optional<duql::Query> query;
     dstd::Optional<dstd::Pair<double, double>> time_range;

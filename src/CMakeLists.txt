@@ -317,6 +317,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/build/batch_builder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/build/file_group.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/build/new_members.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/build/table_rows.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/build/resolver.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/build/index_write_lock.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/build/resolve_and_build.cpp
@@ -479,7 +480,9 @@ set(DFTRACER_UTILS_TRACE_SOURCES
 
     # Table codec
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/table/table_header.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/table/table_decode.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/table/table_reader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/table/table_source.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/table/table_writer.cpp)
 
 set(DFTRACER_UTILS_ARROW_SOURCES

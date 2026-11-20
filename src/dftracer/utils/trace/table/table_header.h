@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_TABLE_TABLE_HEADER_H
 #define DFTRACER_UTILS_TRACE_TABLE_TABLE_HEADER_H
 
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -29,13 +30,29 @@ struct Field {
     Kind kind = Kind::String;
     unsigned bits = 64;    ///< width of an integer dtype
     bool nulls_ok = true;  ///< false for a numpy integer or bool dtype
+    // What parts of one table must share, as the header spells it.
+    dstd::String dtype;
+    dstd::String elem;
+    dstd::String arrow_type;
+    bool ordered = false;
+    // The category labels as JSON text, in header order, and their dtype.
+    dstd::Vector<dstd::String> categories;
+    dstd::String categories_dtype;
 };
 
 struct Header {
     dstd::String table;
     std::int64_t nrows = 0;
     dstd::Vector<Field> fields;
+    dstd::Vector<dstd::String> index;  ///< the index level names
 };
+
+/// The reason two headers cannot be parts of one table, or none when they can:
+/// the fields must agree on name, dtype, ordered, elem, arrow_type and the
+/// kind the reader decodes, in order, and the index names must be equal.
+/// Ordered categories must also have the same labels in the same order, and
+/// the same categories_dtype; unordered ones may differ (they are unified).
+dstd::Optional<dstd::String> disagreement(const Header& a, const Header& b);
 
 /// Reads the args object of a header record. Refuses another format, an
 /// unknown format_version, a missing nrows or fields, and a dtype the codec

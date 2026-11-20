@@ -39,6 +39,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/record_schema.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/table/table_source.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/trace/views/live_view.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -800,6 +801,33 @@ PyObject* tv_filters_events(PyObject* self, PyObject*) {
     return PyBool_FromLong(tv_of(self).filters_events());
 }
 
+PyObject* tv_is_table(PyObject* self, PyObject*) {
+    return PyBool_FromLong(tv_of(self).is_table());
+}
+
+// (headers, paths): the header args JSON and the path of each table file, in
+// read order.
+PyObject* tv_table_files(PyObject* self, PyObject*) {
+    const auto source = tv_of(self).table_source();
+    if (!source) {
+        PyErr_SetString(PyExc_ValueError, "the viewer does not read tables");
+        return nullptr;
+    }
+    const auto headers = trace::table::table_headers(*source);
+    const auto paths = trace::table::table_paths(*source);
+    PyObject* h = str_list_dstd(headers);
+    if (!h) return nullptr;
+    PyObject* p = str_list_dstd(paths);
+    if (!p) {
+        Py_DECREF(h);
+        return nullptr;
+    }
+    PyObject* pair = PyTuple_Pack(2, h, p);
+    Py_DECREF(h);
+    Py_DECREF(p);
+    return pair;
+}
+
 PyObject* tv_call_tree(PyObject* self, PyObject* args, PyObject* kwds) {
     trace::views::ContainmentArgs a;
     if (!parse_containment(args, kwds, false, a)) return nullptr;
@@ -1190,6 +1218,10 @@ PyMethodDef tv_methods[] = {
      "True when the plan absorbs into an aggregating scan."},
     {"filters_events", tv_filters_events, METH_NOARGS,
      "True while a filter still selects raw events (reads no index)."},
+    {"is_table", tv_is_table, METH_NOARGS,
+     "True when the files are dftu.table files."},
+    {"table_files", tv_table_files, METH_NOARGS,
+     "(headers, paths) of the table files, in read order."},
     {"call_tree", DFTU_PYCFUNCTION(tv_call_tree), METH_VARARGS | METH_KEYWORDS,
      "Plan of the events plus level/parent_id."},
     {"flamegraph", DFTU_PYCFUNCTION(tv_flamegraph),

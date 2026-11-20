@@ -27,7 +27,9 @@ Write and read
    profile = read_table("profile.pfw.gz")
 
 A path ending in ``.gz`` is a multi-member gzip file, which ``read_table``
-decodes in parallel. ``read_table`` returns a dftracer.utils ``DataFrame``, so
+decodes in parallel. ``read_table(path)`` is ``TraceViewer(path).collect()``:
+to filter a table before it is in memory, or to read it from an index, use
+:class:`~dftracer.utils.trace.TraceViewer` itself (see :doc:`/api/trace_viewer`). ``read_table`` returns a dftracer.utils ``DataFrame``, so
 the rest of the engine works on it directly:
 
 .. code-block:: python
@@ -98,7 +100,7 @@ Dask
 ----
 
 ``write_table`` of a Dask ``DataFrame`` writes a folder with one table file per
-partition, and ``read_table`` of that folder reads them back in name order.
+partition, and ``read_table`` of that folder reads them back in part-number order.
 
 .. code-block:: python
 

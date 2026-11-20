@@ -1037,6 +1037,14 @@ class View : public dataframe::LazyOps<View> {
     dstd::Result<dstd::String> materialize_dir() const;
     dstd::Result<void> register_materialized(dstd::StringView dir) const;
 
+    /// Whether the files are dftu.table files: the plan then reads them as a
+    /// table, so the trace builders (phase, time range, time buckets, group
+    /// keys, trace aggregates and terminals) do not apply to it. A set of
+    /// files that mixes tables and traces is an error kept as @ref status.
+    bool is_table() const;
+    /// The source of a table view, else null.
+    dstd::SharedPtr<const dataframe::Source> table_source() const;
+
     /// The plan: the trace scan as a source plus the ops above it.
     const dataframe::LazyFrame& lazy() const { return lf_; }
     View with_lazy(dataframe::LazyFrame lf) const;

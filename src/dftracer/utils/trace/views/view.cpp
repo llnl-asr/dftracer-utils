@@ -525,8 +525,17 @@ detail::scan::ScanPlan scanned_plan(const dataframe::LazyFrame& lf) {
 
 View::View() : View(dstd::make_shared<detail::ViewPlan>()) {}
 
-View::View(detail::ScanPlan plan) : plan_(), lf_(detail::scan::collect(plan)) {
-    plan_ = scanned_plan(lf_);
+View::View(detail::ScanPlan plan)
+    : plan_(),
+      lf_(plan->table ? dataframe::LazyFrame::scan(plan->table)
+                      : detail::scan::collect(plan)) {
+    plan_ = plan->table ? std::move(plan) : scanned_plan(lf_);
+}
+
+bool View::is_table() const { return plan_ && plan_->table; }
+
+dstd::SharedPtr<const dataframe::Source> View::table_source() const {
+    return plan_ ? plan_->table : nullptr;
 }
 
 View::View(detail::ScanPlan plan, dataframe::LazyFrame lf)

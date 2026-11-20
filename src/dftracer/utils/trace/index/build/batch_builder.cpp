@@ -460,6 +460,10 @@ static coro::CoroTask<void> parse_and_write_worker(
                         // every member is parsed. Bloom needs none.
                         if (driver) {
                             driver->seal();
+                            if (!is_appending)
+                                job.artifacts.table_rows_complete =
+                                    driver->table_rows_complete(
+                                        job.artifacts.total_lines);
                             result.dropped_lines = driver->dropped_lines();
                             if (result.dropped_lines > 0)
                                 DFTRACER_UTILS_LOG_WARN(

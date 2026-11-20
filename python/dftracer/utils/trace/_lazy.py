@@ -400,12 +400,6 @@ class LazyOps(_ext.TraceViewer):
         """Per-column summary statistics (schema is data-dependent)."""
         return self.lazy().describe()
 
-    def collect(self, batch_size: int = 0) -> DataFrame:
-        """Run the pipeline and materialize a :class:`DataFrame`. ``batch_size``
-        is the chunk a streaming source is pulled in; ``0`` (the default) is
-        auto, and runs a resident source whole-column, as the eager path."""
-        return self.lazy().collect(batch_size)
-
     def collect_async(self, batch_size: int = 0) -> TaskHandle[DataFrame]:
         """Start :meth:`collect` on the native pool and return at once.
 

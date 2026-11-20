@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/trace/table/table_header.h>
 
@@ -17,15 +18,20 @@ struct RawField {
     dstd::String name;
     dstd::String dtype;
     dstd::String elem;
+    dstd::String arrow_type;
+    bool ordered = false;
     Labels labels = Labels::Str;
+    dstd::Vector<dstd::String> categories;
+    dstd::String categories_dtype;
 };
 
-Labels labels_of(json::Value& categories) {
+Labels labels_of(json::Value& categories, dstd::Vector<dstd::String>& texts) {
     bool strs = false;
     bool ints = false;
     bool floats = false;
     bool other = false;
     categories.for_each_element([&](json::Value v) {
+        texts.emplace_back(v.raw());
         switch (v.type()) {
             case json::Value::Type::String:
                 strs = true;
@@ -65,6 +71,12 @@ bool read_width(dstd::StringView digits, unsigned& bits) {
 dstd::Optional<Field> resolve(const RawField& raw) {
     Field f;
     f.name = raw.name;
+    f.dtype = raw.dtype;
+    f.elem = raw.elem;
+    f.arrow_type = raw.arrow_type;
+    f.ordered = raw.ordered;
+    f.categories = raw.categories;
+    f.categories_dtype = raw.categories_dtype;
     dstd::StringView base(raw.dtype);
     bool suffixed = false;
     if (const auto open = base.find('['); open != dstd::StringView::npos) {
@@ -160,6 +172,10 @@ dstd::Result<Header> parse_header(json::Value& args) {
             }
             h.nrows = *n;
             has_nrows = true;
+        } else if (key == "index") {
+            v.for_each_element([&](json::Value iv) {
+                if (auto s = iv.as_string()) h.index.emplace_back(*s);
+            });
         } else if (key == "fields") {
             has_fields = true;
             v.for_each_element([&](json::Value fv) {
@@ -180,8 +196,16 @@ dstd::Result<Header> parse_header(json::Value& args) {
                         }
                     } else if (fk == "elem") {
                         if (auto s = x.as_string()) raw.elem = dstd::String(*s);
+                    } else if (fk == "arrow_type") {
+                        if (auto s = x.as_string())
+                            raw.arrow_type = dstd::String(*s);
+                    } else if (fk == "ordered") {
+                        if (auto b = x.as_bool()) raw.ordered = *b;
                     } else if (fk == "categories") {
-                        raw.labels = labels_of(x);
+                        raw.labels = labels_of(x, raw.categories);
+                    } else if (fk == "categories_dtype") {
+                        if (auto s = x.as_string())
+                            raw.categories_dtype = dstd::String(*s);
                     }
                 });
                 if (!named || !typed) {
@@ -211,6 +235,47 @@ dstd::Result<Header> parse_header(json::Value& args) {
         h.fields.push_back(std::move(*field));
     }
     return h;
+}
+
+}  // namespace dftracer::utils::trace::table::detail
+
+namespace dftracer::utils::trace::table::detail {
+
+dstd::Optional<dstd::String> disagreement(const Header& a, const Header& b) {
+    if (a.fields.size() != b.fields.size())
+        return dstd::fmt<"{} fields against {}">(a.fields.size(),
+                                                 b.fields.size());
+    for (std::size_t i = 0; i < a.fields.size(); ++i) {
+        const Field& x = a.fields[i];
+        const Field& y = b.fields[i];
+        if (x.name != y.name)
+            return dstd::fmt<"field {} is named {} against {}">(
+                i, dstd::StringView(x.name), dstd::StringView(y.name));
+        const dstd::StringView name(x.name);
+        if (x.dtype != y.dtype)
+            return dstd::fmt<"field {} has dtype {} against {}">(
+                name, dstd::StringView(x.dtype), dstd::StringView(y.dtype));
+        if (x.ordered != y.ordered)
+            return dstd::fmt<"field {} is ordered in one and not in the other">(
+                name);
+        if (x.ordered && x.categories != y.categories)
+            return dstd::fmt<"field {} is ordered with other categories">(name);
+        if (x.ordered && x.categories_dtype != y.categories_dtype)
+            return dstd::fmt<
+                "field {} is ordered with another categories "
+                "dtype">(name);
+        if (x.elem != y.elem)
+            return dstd::fmt<"field {} has elem '{}' against '{}'">(
+                name, dstd::StringView(x.elem), dstd::StringView(y.elem));
+        if (x.arrow_type != y.arrow_type)
+            return dstd::fmt<"field {} has arrow_type '{}' against '{}'">(
+                name, dstd::StringView(x.arrow_type),
+                dstd::StringView(y.arrow_type));
+        if (x.kind != y.kind || x.bits != y.bits)
+            return dstd::fmt<"field {} holds labels of another kind">(name);
+    }
+    if (a.index != b.index) return dstd::String("the index names differ");
+    return dstd::nullopt;
 }
 
 }  // namespace dftracer::utils::trace::table::detail

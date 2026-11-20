@@ -33,6 +33,7 @@
 #include <dftracer/utils/python/store/store.h>
 #include <dftracer/utils/python/trace/distribution.h>
 #include <dftracer/utils/python/trace/streaming_iterator.h>
+#include <dftracer/utils/python/trace/table_codec.h>
 #include <dftracer/utils/python/trace/trace_viewer.h>
 #include <dftracer/utils/python/trace/trace_writer.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/system_metrics.h>
@@ -332,6 +333,7 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
         return NULL;
     if (dftracer::utils::python::trace::init_trace_viewer(m) < 0) return NULL;
     if (dftracer::utils::python::trace::init_trace_writer(m) < 0) return NULL;
+    if (dftracer::utils::python::trace::init_table_codec(m) < 0) return NULL;
     if (dftracer::utils::python::plugins::init_plugin_host(m) < 0) return NULL;
     if (dftracer::utils::python::frame::init_op_runner(m) < 0) return NULL;
     if (dftracer::utils::python::frame::init_ops(m) < 0) return NULL;

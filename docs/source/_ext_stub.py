@@ -1538,6 +1538,24 @@ def _dataframe_from_columns(
     ...
 
 
+def _write_table(
+    frame: PublicDataFrame,
+    path: str,
+    header_json: str,
+    raw_columns: Sequence[str],
+    level: int,
+    threads: int,
+) -> None:
+    """Write a native frame as a dftu.table file; ``header_json`` is the args of
+    the header record and a path ending in ``.gz`` is compressed."""
+    ...
+
+
+def _read_table(path: str, threads: int) -> tuple[PublicDataFrame, str]:
+    """Read a dftu.table file into a native frame and the args of its header."""
+    ...
+
+
 def collect_all(
     plans: Sequence[PublicLazyFrame], runtime: RuntimeArg = None
 ) -> list[PublicDataFrame]:
@@ -2156,6 +2174,8 @@ _EXPORTS = (
     "_dataframe_from_bytes",
     "_dataframe_from_arrow",
     "_dataframe_from_columns",
+    "_write_table",
+    "_read_table",
     "collect_all",
     "merge_flamegraph_partials",
     "duql_canonical",

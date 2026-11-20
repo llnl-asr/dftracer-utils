@@ -115,6 +115,9 @@ set(TRACE_TEST_SOURCES
 
     # Writer
     writer/test_trace_writer.cpp
+
+    # Table codec
+    table/test_table_codec.cpp
 )
 
 # These read counters that exist only when DFTRACER_UTILS_TEST_PROBES is ON.

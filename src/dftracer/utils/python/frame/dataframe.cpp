@@ -2156,6 +2156,15 @@ PyObject* wrap_dataframe(dftracer::utils::dataframe::DataFrame&& batch) {
     return make_dataframe(std::move(batch));
 }
 
+bool unwrap_dataframe(PyObject* obj,
+                      dftracer::utils::dataframe::DataFrame& out) {
+    const DataFrameObject* self =
+        dftracer::utils::python::core::as_native<DataFrameObject>(obj);
+    if (!self) return false;
+    out = to_dataframe(self);
+    return true;
+}
+
 int init_dataframe(PyObject* m) {
     DataFrame_as_mapping.mp_subscript = DataFrame_subscript;
     DataFrame_as_sequence.sq_contains = DataFrame_contains;
